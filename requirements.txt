@@ -1,12 +1,23 @@
+# Core Data Processing
+pandas>=2.1.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+openpyxl>=3.1.0
+
+# Configuration Management
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
 # Dashboard
 dash>=2.14.0
 dash-bootstrap-components>=1.5.0
 plotly>=5.17.0
 
-# Data Processing
-pandas>=2.1.0
+# Utilities
+tqdm>=4.66.0
 
-# Configuration
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-python-dotenv>=1.0.0
+# Development
+black>=23.12.0
+flake8>=6.1.0
+mypy>=1.7.0

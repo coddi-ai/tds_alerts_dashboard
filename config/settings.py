@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     )
     
     # API Keys
-    openai_api_key: str = Field(..., description="OpenAI API key for recommendations")
+    openai_api_key: str = Field(default="", description="OpenAI API key for recommendations")
     
     # Paths
     data_root: Path = Field(default=Path("data/oil"), description="Root data directory")

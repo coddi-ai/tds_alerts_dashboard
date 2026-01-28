@@ -5,6 +5,7 @@ Run this file to start the dashboard server.
 """
 
 import sys
+import os
 from pathlib import Path
 import logging
 
@@ -52,13 +53,17 @@ register_reports_callbacks(app)
 
 
 if __name__ == '__main__':
-    # Run server
-    # For production, use a WSGI server like Gunicorn instead
-    logger.info("Starting Multi-Technical-Alerts Dashboard...")
-    logger.info(f"Dashboard accessible at http://127.0.0.1:8050")
+    # Get host and port from environment or use defaults
+    host = os.getenv('DASHBOARD_HOST', '0.0.0.0')
+    port = int(os.getenv('DASHBOARD_PORT', '8050'))
+    debug = os.getenv('DEBUG', 'False').lower() == 'true'
     
-    app.run_server(
-        host='127.0.0.1',  # Use localhost instead of 0.0.0.0 for Windows compatibility
-        port=8050,
-        debug=True  # Set to False in production
+    # Run server
+    logger.info("Starting Multi-Technical-Alerts Dashboard...")
+    logger.info(f"Dashboard accessible at http://{host}:{port}")
+    
+    app.run(
+        host=host,
+        port=port,
+        debug=debug
     )

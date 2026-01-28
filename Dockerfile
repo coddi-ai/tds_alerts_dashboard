@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY config/ ./config/
 COPY dashboard/ ./dashboard/
+COPY src/ ./src/
 COPY data/ ./data/
-COPY .env.example .env
 
 RUN mkdir -p logs
 
