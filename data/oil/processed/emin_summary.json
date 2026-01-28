@@ -1,0 +1,14 @@
+{
+  "client": "EMIN",
+  "total_samples": 5626,
+  "status_distribution": {
+    "Normal": 3533,
+    "Alerta": 1272,
+    "Anormal": 821
+  },
+  "total_units": 212,
+  "date_range": {
+    "min": "2023-04-03T00:00:00",
+    "max": "2025-10-25T03:00:00"
+  }
+}

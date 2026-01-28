@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oil-analysis-dashboard
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - DASHBOARD_HOST=0.0.0.0
+      - DASHBOARD_PORT=8050
+      - DATA_ROOT=/app/data/oil
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+    ports:
+      - "8050:8050"
+    restart: unless-stopped
