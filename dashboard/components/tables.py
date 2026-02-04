@@ -21,6 +21,13 @@ def create_limits_table(df: pd.DataFrame) -> dash_table.DataTable:
     if df.empty:
         return html.Div("No limits data available", className="text-muted p-3")
     
+    # Apply title() to machine and component names
+    df = df.copy()
+    if 'machine' in df.columns:
+        df['machine'] = df['machine'].str.title()
+    if 'component' in df.columns:
+        df['component'] = df['component'].str.title()
+    
     return dash_table.DataTable(
         id='limits-table',
         columns=[
@@ -90,6 +97,10 @@ def create_priority_table(df: pd.DataFrame) -> dash_table.DataTable:
                                'components_anormal', 'components_alerta', 
                                'latest_sample_date']].copy()
     
+    # Apply title() to unit_id
+    if 'unit_id' in display_df.columns:
+        display_df['unit_id'] = display_df['unit_id'].str.title()
+    
     return dash_table.DataTable(
         id='priority-table',
         columns=[
@@ -149,6 +160,13 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
     """
     if df.empty:
         return html.Div("Select a machine to view details", className="text-muted p-3")
+    
+    # Apply title() to unitId and componentName
+    df = df.copy()
+    if 'unitId' in df.columns:
+        df['unitId'] = df['unitId'].str.title()
+    if 'componentName' in df.columns:
+        df['componentName'] = df['componentName'].str.title()
     
     # Dynamic columns based on available data
     columns = []

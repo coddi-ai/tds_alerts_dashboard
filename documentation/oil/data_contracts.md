@@ -1,654 +1,380 @@
-# Data Contracts Documentation
+# Data Contracts - Oil Analysis Data Product
 
-**Multi-Technical-Alerts - Oil Analysis Data Specifications**
+**Version**: 2.0  
+**Last Updated**: February 3, 2026  
+**Owner**: Oil Analysis Data Product Team
 
 ---
 
 ## 📋 Table of Contents
 
-1. [Data Architecture Overview](#data-architecture-overview)
-2. [Data Layers](#data-layers)
-3. [Schema Definitions](#schema-definitions)
-4. [Data Transformations](#data-transformations)
-5. [Aggregation Logic](#aggregation-logic)
-6. [File Usage Guide](#file-usage-guide)
-7. [Auxiliary Data Files](#auxiliary-data-files)
+1. [Overview](#overview)
+2. [Data Layer Architecture](#data-layer-architecture)
+3. [Bronze Layer](#bronze-layer)
+4. [Silver Layer](#silver-layer)
+5. [Golden Layer](#golden-layer)
+6. [Schema Definitions](#schema-definitions)
+7. [S3 Storage](#s3-storage)
+8. [Data Quality Rules](#data-quality-rules)
 
 ---
 
-## 🏗️ Data Architecture Overview
+## 🎯 Overview
 
-The system implements a **medallion architecture** (Bronze → Silver → Gold) for data processing:
+This document defines the data contracts for the Oil Analysis Data Product, specifying the schema, format, and location of data at each processing layer (Bronze → Silver → Golden). These contracts ensure consistent data structure for downstream consumers.
 
-```
-Raw Lab Reports (Bronze)
-    ↓ [Harmonization & Validation]
-Unified Oil Samples (Silver)
-    ↓ [Classification & AI Analysis]
-Dashboard-Ready Data (Gold)
-```
+**Data Product Purpose**: Process raw oil analysis laboratory results into actionable maintenance insights with AI-powered recommendations.
 
-**Key Principle**: Each layer serves a specific purpose with increasing levels of refinement and business value.
+**Primary Consumers**:
+- S3-based data consumers
+- Business Intelligence tools
+- Data analysts
+- Fusion Service (aggregates multiple data products)
+
+**Processing Modes**:
+1. **Historical**: One-time bulk processing with Stewart Limits calculation
+2. **Incremental**: Daily processing using existing Stewart Limits
 
 ---
 
-## 📂 Data Layers
+## 🏗️ Data Layer Architecture
 
-### **Bronze Layer: Raw Data** (`data/oil/raw/`)
+### Local Storage
 
-**Purpose**: Immutable archive of original laboratory reports
-
-**Structure**:
 ```
-data/oil/raw/
-├── cda/                    # Client: CDA (Finning Laboratory)
-│   ├── {unitId}_YYYYMM.xlsx
-│   └── metadata.json       # Ingestion tracking
-└── emin/                   # Client: EMIN (ALS Laboratory)
-    ├── muestrasAlsHistoricos.parquet
-    └── metadata.json
+data/
+├── bronze/                       # Bronze Layer (Immutable source data)
+│   ├── cda/                      # CDA client raw files
+│   │   ├── T-09.xlsx             # Finning Lab format
+│   │   ├── T-10.xlsx
+│   │   └── ...
+│   └── emin/                     # EMIN client raw files
+│       ├── muestrasAlsHistoricos.parquet  # ALS Lab format
+│       └── Equipamiento.parquet
+│
+├── silver/                       # Silver Layer (Harmonized, validated)
+│   ├── CDA.parquet               # Standardized CDA data
+│   └── EMIN.parquet              # Standardized EMIN data
+│
+├── golden/                       # Golden Layer (Analysis-ready outputs)
+│   ├── cda/
+│   │   ├── classified.parquet         # Classified oil analysis reports
+│   │   ├── machine_status.parquet     # Aggregated machine health status
+│   │   └── stewart_limits.parquet     # Statistical thresholds for CDA
+│   └── emin/
+│       ├── classified.parquet
+│       ├── machine_status.parquet
+│       └── stewart_limits.parquet
+│
+└── essays_elements.xlsx          # Auxiliary: Essay metadata and mappings
 ```
+
+### S3 Storage (Auto-synced)
+
+```
+s3://{BUCKET_NAME}/MultiTechnique Alerts/oil/
+├── silver/
+│   ├── CDA.parquet
+│   └── EMIN.parquet
+└── golden/
+    ├── cda/
+    │   ├── classified.parquet
+    │   ├── machine_status.parquet
+    │   └── stewart_limits.parquet
+    └── emin/
+        ├── classified.parquet
+        ├── machine_status.parquet
+        └── stewart_limits.parquet
+```
+
+---
+
+## 📥 Bronze Layer
+
+**Purpose**: Immutable storage of raw laboratory data  
+**Update Frequency**: 
+- Historical: One-time bulk load
+- Incremental: Daily/Weekly new files  
+**Retention**: Indefinite (source of truth)  
+**Format**: Original laboratory format (Excel or Parquet)
+
+### Location
+
+```
+Local: data/bronze/{client}/
+S3: Not uploaded (raw data stays local)
+```
+
+### CDA Client (Finning Laboratory)
+
+**Format**: Excel (.xlsx)  
+**Source**: Finning Laboratory reports  
+**Naming**: `T-{month}.xlsx` (e.g., T-09.xlsx)
 
 **Characteristics**:
-- **Immutable**: Never modified after ingestion
-- **Source-specific**: Maintains original lab format
-- **Complete**: Contains all columns from lab reports
+- One file per month
+- Contains multiple oil samples
+- Variable essay columns (laboratory-dependent)
 
-**Key Differences Between Sources**:
+### EMIN Client (ALS Laboratory)
 
-| Aspect | CDA (Finning) | EMIN (ALS) |
-|--------|---------------|------------|
-| Format | Excel (.xlsx) | Parquet |
-| File Organization | One file per unit | Consolidated file |
-| Essay Structure | Wide format (one column per essay) | Nested format (testName1, testValue1, ...) |
-| Completeness | Missing `componentHours`, `oilWeight` | Missing `oilWeight` |
+**Format**: Parquet (.parquet)  
+**Source**: ALS Laboratory  
+**Files**:
+- `muestrasAlsHistoricos.parquet` - Oil sample results
+- `Equipamiento.parquet` - Equipment metadata
 
----
+**Characteristics**:
+- Nested format with testName/testValue pairs
+- Historical data in single file
+- Machine metadata in separate file
 
-### **Silver Layer: Processed Data** (`data/oil/processed/`)
+### Contract Guarantees
 
-**Purpose**: Harmonized, validated, standardized data ready for analysis
-
-**Structure**:
-```
-data/oil/processed/
-├── cda.parquet              # Standardized CDA data
-├── emin.parquet             # Standardized EMIN data
-└── stewart_limits.json      # Statistical thresholds
-```
-
-**Schema**: See [Silver Schema Definition](#silver-schema-oil-samples)
-
-**Transformations Applied**:
-1. Column renaming to standard schema
-2. Essay name normalization (via `essays_elements.xlsx`)
-3. Name standardization (lowercase, no accents)
-4. Cardinality reduction (mapping similar names)
-5. Date parsing and validation
-6. Client tagging
+✅ **Immutability**: Files never modified after ingestion  
+✅ **Completeness**: All source columns preserved  
+✅ **Traceability**: Original formats maintained
 
 ---
 
-### **Gold Layer: Analytics-Ready Data** (`data/oil/to_consume/`)
+## 🔄 Silver Layer
 
-**Purpose**: Pre-classified, AI-enhanced data optimized for dashboards
+**Purpose**: Harmonized, validated data with standardized schema  
+**Update Frequency**: After each Bronze processing  
+**Retention**: Keep latest + historical for trend analysis  
+**Format**: Parquet (columnar, compressed)
 
-**Structure**:
+### Location
+
 ```
-data/oil/to_consume/
-├── cda/
-│   ├── classified_reports.parquet       # Reports with AI recommendations
-│   ├── machine_status_current.parquet   # Latest machine health
-│   └── component_summary.parquet        # Component-level aggregates
-└── emin/
-    ├── classified_reports.parquet
-    ├── machine_status_current.parquet
-    └── component_summary.parquet
+Local: data/silver/{CLIENT}.parquet
+S3: s3://{BUCKET}/MultiTechnique Alerts/oil/silver/{CLIENT}.parquet
 ```
 
-**Schema**: See [Gold Schema Definitions](#gold-schema-classified-reports)
+### Files
+
+- `CDA.parquet` - Harmonized CDA oil analysis data
+- `EMIN.parquet` - Harmonized EMIN oil analysis data
+
+### Schema
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `client` | string | Client identifier | 'CDA', 'EMIN' |
+| `sampleNumber` | string | Unique sample ID | 'CDA-2024-001' |
+| `sampleDate` | date | Sample collection date | '2024-01-15' |
+| `unitId` | string | Equipment unit ID | 'CAT-001' |
+| `machineName` | string | Normalized machine type | 'camion', 'pala' |
+| `machineModel` | string | Machine model | 'CAT 797F' |
+| `machineBrand` | string | Machine brand | 'Caterpillar' |
+| `machineHours` | float | Operating hours | 15420.5 |
+| `machineSerialNumber` | string | Machine serial | 'ABC123' |
+| `componentName` | string | Component analyzed (original with position) | 'motor diesel', 'mando final izquierdo' |
+| `componentNameNormalized` | string | Component normalized for Stewart Limits | 'motor diesel', 'mando final' |
+| `componentHours` | float | Component hours | 8230.0 |
+| `componentSerialNumber` | string | Component serial | 'ENG456' |
+| `oilMeter` | float | Oil meter reading | 1250.5 |
+| `oilBrand` | string | Oil brand | 'Mobil' |
+| `oilType` | string | Oil type | '15W40' |
+| `oilWeight` | string | Oil weight | '15W-40' |
+| `previousSampleNumber` | string | Previous sample ID | 'CDA-2023-998' |
+| `previousSampleDate` | date | Previous sample date | '2023-12-20' |
+| `daysSincePrevious` | int | Days between samples | 26 |
+| `group_element` | string | Essay group | 'Desgaste', 'Contaminacion' |
+| **Essay Columns** | float | Essay values (dynamic) | |
+| `Hierro` | float | Iron content (ppm) | 45.3 |
+| `Cobre` | float | Copper content (ppm) | 12.1 |
+| `Silicio` | float | Silicon content (ppm) | 8.7 |
+| ... | float | (21 total essay columns) | |
+
+### Quality Rules
+
+✅ Valid date formats (YYYY-MM-DD)  
+✅ Essay values >= 0  
+✅ Component hours <= Machine hours  
+✅ No duplicate sample numbers  
+✅ All essay columns present (filled with 0 if missing)
+
+**Note on Component Names**:
+- `componentName`: Preserves original granularity (e.g., "mando final izquierdo", "mando final derecho", "maza izquierda")
+- `componentNameNormalized`: Grouped version for Stewart Limits calculation (e.g., "mando final", "maza")
+- Golden layer reports use original `componentName` for detailed visibility
+- Stewart Limits use `componentNameNormalized` to ensure sufficient sample size
 
 ---
 
-## 📐 Schema Definitions
+## 🏆 Golden Layer
 
-### **Silver Schema: Oil Samples**
+**Purpose**: Analysis-ready outputs with classifications, AI recommendations, and aggregations  
+**Update Frequency**: After each Silver processing  
+**Retention**: Keep all historical snapshots  
+**Format**: Parquet (columnar, compressed)
 
-This is the **standardized schema** used across all clients after preprocessing.
+### Location
 
-```python
-{
-    # ========== Identifiers ==========
-    "sampleNumber": str,              # Unique sample identifier from lab
-    "client": str,                    # "CDA" or "EMIN"
-    
-    # ========== Temporal ==========
-    "sampleDate": datetime,           # When sample was collected
-    
-    # ========== Equipment Hierarchy ==========
-    "unitId": str,                    # Business unit / Equipment ID (e.g., "CDA_001")
-    "machineName": str,               # Standardized machine type (e.g., "camion", "pala")
-    "machineModel": str,              # Model designation (e.g., "789D", "D11T")
-    "machineBrand": str,              # Manufacturer (e.g., "caterpillar")
-    "machineSerialNumber": str,       # Factory serial number
-    "machineHours": float,            # Operating hours at sample time
-    
-    # ========== Component ==========
-    "componentName": str,             # Standardized component name (e.g., "motor diesel", "transmision")
-    "componentSerialNumber": str,     # Component serial number
-    "componentHours": float,          # Component-specific operating hours (may be null for some sources)
-    
-    # ========== Oil Information ==========
-    "oilMeter": float,                # Oil operating hours
-    "oilBrand": str,                  # Oil manufacturer
-    "oilType": str,                   # Oil specification (e.g., "SAE 15W-40")
-    "oilWeight": str,                 # Viscosity grade (may be null for some sources)
-    
-    # ========== Chemical Essays ==========
-    # One column per essay element (e.g., "Hierro", "Cobre", "Silicio")
-    # Values are float (ppm or percentage)
-    # Column names are standardized Spanish names from essays_elements.xlsx
-    "Hierro": float,
-    "Cobre": float,
-    "Silicio": float,
-    # ... (30+ additional essay columns)
-}
+```
+Local: data/golden/{client}/
+S3: s3://{BUCKET}/MultiTechnique Alerts/oil/golden/{client}/
 ```
 
-**Important Notes**:
-- All name fields (`machineName`, `componentName`, `machineBrand`) are **lowercase, no accents**
-- `unitId` uses **underscore** instead of hyphen (e.g., "CDA_001" not "CDA-001")
-- Essay columns are **dynamic** based on `essays_elements.xlsx` mapping
-- Missing values are represented as `NaN` or `None`
+### Files per Client
 
----
+#### 1. Classified Reports (`classified.parquet`)
 
-### **Gold Schema: Classified Reports**
-
-This schema extends the Silver schema with classification and AI-generated insights.
-
-```python
-{
-    # ========== All Silver Schema Fields ==========
-    # (All fields from Silver schema are preserved)
-    
-    # ========== Classification Results ==========
-    "reportStatus": str,              # "Normal", "Alerta", or "Anormal"
-    "severityScore": int,             # Sum of essay points (0-15+)
-    "essaysBreached": int,            # Count of essays exceeding limits
-    "requiresAction": bool,           # True if status != "Normal"
-    
-    # ========== AI Analysis ==========
-    "aiPrompt": str or None,          # Prompt sent to GPT-4 (None for Normal reports)
-    "aiRecommendation": str,          # AI-generated maintenance recommendation
-    "classificationTimestamp": datetime,  # When classification was performed
-    
-    # ========== Report-Level Metadata ==========
-    "numericReportStatus": int,       # 0=Normal, 1=Alerta, 2=Anormal (for aggregation)
-}
-```
-
----
-
-### **Gold Schema: Machine Status Current**
-
-Aggregated view of the latest status for each machine.
-
-```python
-{
-    # ========== Machine Identification ==========
-    "unitId": str,                    # Equipment identifier
-    "client": str,                    # "CDA" or "EMIN"
-    "machineName": str,               # Standardized machine type
-    
-    # ========== Machine Status ==========
-    "machineStatus": str,             # "Normal", "Alerta", or "Anormal"
-    "totalNumericStatus": int,        # Sum of all component numeric statuses
-    
-    # ========== Component Breakdown ==========
-    "componentsTotal": int,           # Total monitored components
-    "componentsNormal": int,          # Components in Normal status
-    "componentsAlerta": int,          # Components in Alerta status
-    "componentsAnormal": int,         # Components in Anormal status
-    
-    # ========== Temporal Metadata ==========
-    "lastSampleDate": datetime,       # Most recent sample across all components
-    "daysInactive": int,              # Days since last sample
-    
-    # ========== Actions ==========
-    "priorityActions": list[str],     # List of recommended actions
-    "updatedAt": datetime,            # When this summary was generated
-}
-```
-
----
-
-## 🔄 Data Transformations
-
-### **Step 1: Bronze → Silver (Harmonization)**
-
-#### **Transformation: CDA Data (Finning Lab)**
-
-**Input Format**: Excel files with wide-format essays
-```
-| ID de equipo | No. de control | Fecha | Hierro | Cobre | Silicio | ...
-|--------------|----------------|-------|--------|-------|---------|----
-| CDA-001      | LAB123456      | ...   | 25.3   | 12.1  | 8.5     | ...
-```
-
-**Process**:
-1. **Column Renaming**: Map Spanish column names to standard schema
-   ```python
-   'ID de equipo' → 'unitId'
-   'No. de control de laboratorio' → 'sampleNumber'
-   'Compartimento' → 'componentName'
-   # ... (see notebook for full mapping)
-   ```
-
-2. **Essay Name Standardization**: Apply `essays_elements.xlsx` mapping
-   ```python
-   'Fe' → 'Hierro'
-   'Cu' → 'Cobre'
-   'Si' → 'Silicio'
-   ```
-
-3. **Name Normalization**:
-   ```python
-   # Apply nameProtocol function
-   - Remove accents: "Transmisión" → "transmision"
-   - Lowercase: "MOTOR DIESEL" → "motor diesel"
-   ```
-
-4. **Cardinality Reduction**:
-   ```python
-   # Apply reduceCardinalityNames function
-   "mando final izquierdo" → "mando final"
-   "mando final derecho" → "mando final"
-   "CAT" → "caterpillar"
-   ```
-
-5. **Client Tagging**: Add `client = 'CDA'`
-
-6. **ID Format Standardization**: Replace hyphens with underscores
-   ```python
-   "CDA-001" → "CDA_001"
-   ```
-
-**Output**: Parquet file at `processed/cda.parquet`
-
----
-
-#### **Transformation: EMIN Data (ALS Lab)**
-
-**Input Format**: Parquet with nested essay structure
-```
-| sampleNumber | equipment_tag | testName1 | testValue1 | testName2 | testValue2 | ...
-|--------------|---------------|-----------|------------|-----------|------------|----
-| ALS987654    | EMIN-120      | Hierro    | 28.5       | Cobre     | 10.2       | ...
-```
-
-**Process**:
-1. **Column Renaming**: Map ALS-specific names to standard schema
-   ```python
-   'equipment_tag' → 'unitId'
-   'collectionData_dateSampled' → 'sampleDate'
-   'compartment_name' → 'componentName'
-   # ... (see notebook for full mapping)
-   ```
-
-2. **Essay Unpivoting**: Transform nested testName/testValue pairs to columns
-   ```python
-   # Melt testName columns
-   df_names = melt(id_vars=['sampleNumber'], value_vars=[testName1, testName2, ...])
-   
-   # Melt testValue columns  
-   df_values = melt(id_vars=['sampleNumber'], value_vars=[testValue1, testValue2, ...])
-   
-   # Merge and pivot
-   df_essays = merge(df_names, df_values).pivot(index='sampleNumber', columns='testName', values='testValue')
-   ```
-
-3. **Value Cleaning**:
-   ```python
-   # Remove hyphens indicating null: '-' → NaN
-   # Replace commas with periods: '12,5' → '12.5'
-   # Handle detection limits: '<0.05' → 0, '>0.05' → 0.1
-   # Convert to numeric, coerce errors to NaN
-   ```
-
-4. **Name Normalization**: Same `nameProtocol` and `reduceCardinalityNames` as CDA
-
-5. **Client Tagging**: Add `client = 'EMIN'`
-
-**Output**: Parquet file at `processed/emin.parquet`
-
----
-
-### **Step 2: Compute Stewart Limits (Silver → Silver)**
-
-**Input**: Combined processed data from all clients
-**Output**: `processed/stewart_limits.json`
-
-**Process**:
-1. **Group by**: `client → machineName → componentName → essayName`
-
-2. **Filter**: Only include essays with >3 unique values
-
-3. **Calculate Percentiles**:
-   ```python
-   normal_threshold = ceil(quantile(0.90))    # 90th percentile
-   alert_threshold = ceil(quantile(0.95))     # 95th percentile
-   critic_threshold = ceil(quantile(0.98))    # 98th percentile
-   ```
-
-4. **Enforce Monotonicity**:
-   ```python
-   if alert <= normal:
-       alert = normal + 1
-   if critic <= alert:
-       critic = alert + 1
-   ```
-
-**Output Structure**:
-```json
-{
-  "CDA": {
-    "camion": {
-      "motor diesel": {
-        "Hierro": {
-          "threshold_normal": 30.0,
-          "threshold_alert": 45.0,
-          "threshold_critic": 60.0
-        },
-        "Cobre": { ... }
-      }
-    }
-  },
-  "EMIN": { ... }
-}
-```
-
----
-
-### **Step 3: Silver → Gold (Classification & AI)**
-
-#### **Transformation: Essay-Level Thresholding**
-
-**Process**:
-1. For each essay in a report, compare value against Stewart Limits:
-   ```python
-   if value >= critic_threshold:
-       status = 'Critico'
-       points = 5
-   elif value >= alert_threshold:
-       status = 'Condenatorio'
-       points = 3
-   elif value >= normal_threshold:
-       status = 'Marginal'
-       points = 1
-   else:
-       status = None
-       points = 0
-   ```
-
-2. Create `essays_broken` DataFrame with all essays exceeding `threshold_normal`
-
----
-
-#### **Transformation: Report-Level Classification**
-
-**Process**:
-1. Sum essay points: `essaySum = Σ(essay_points)`
-
-2. Apply thresholds:
-   ```python
-   if essaySum < 3:
-       reportStatus = 'Normal'
-   elif essaySum >= 5:
-       reportStatus = 'Anormal'
-   else:
-       reportStatus = 'Alerta'
-   ```
-
-3. Count breached essays: `essaysBreached = len(essays_broken)`
-
----
-
-#### **Transformation: AI Recommendation Generation**
-
-**Process**:
-1. **Skip Normal Reports**: If `reportStatus == 'Normal'`, skip AI call (cost optimization)
-
-2. **Construct Prompt**:
-   ```python
-   prompt = f"""
-   Analiza una muestra para el siguiente equipo:
-   Componente: {componentName}
-   Máquina: {machineName} - {machineModel}
-   
-   Los valores de la muestra son:
-   {essays_broken}  # Table of elemento, valor, limite transgredido, valor_limite
-   """
-   ```
-
-3. **Call OpenAI API**:
-   - Model: `gpt-4o-mini`
-   - Temperature: `0.9`
-   - Context: System prompt defining expert mechanical engineer role
-   - Few-shot examples: 3 example analyses for calibration
-
-4. **Store Response**: Save prompt and recommendation in Gold layer
-
-**Parallelization**: Uses `ThreadPoolExecutor` with 18 workers for concurrent processing
-
----
-
-## 📊 Aggregation Logic
-
-### **Machine Status Aggregation**
-
-**Goal**: Determine overall machine health from component-level reports
-
-**Process**:
-1. **Get Latest Reports**: For each `(unitId, componentName)` pair, select most recent `sampleDate`
-
-2. **Map to Numeric**:
-   ```python
-   numericReportStatus = {
-       'Normal': 0,
-       'Alerta': 1,
-       'Anormal': 2
-   }
-   ```
-
-3. **Sum Across Components**:
-   ```python
-   totalNumericStatus = Σ(numericReportStatus for each component)
-   ```
-
-4. **Classify Machine**:
-   ```python
-   if totalNumericStatus < 2:
-       machineStatus = 'Normal'
-   elif totalNumericStatus >= 4:
-       machineStatus = 'Anormal'
-   else:
-       machineStatus = 'Alerta'
-   ```
-
-**Example**:
-- Machine CDA_001 has 3 components:
-  - Motor Diesel: Anormal (2 points)
-  - Transmision: Normal (0 points)
-  - Hidraulico: Alerta (1 point)
-- Total: 2 + 0 + 1 = 3 points → **machineStatus = 'Alerta'**
-
----
-
-## 📖 File Usage Guide
-
-### **When to Use Each Layer**
-
-| Use Case | Layer | File | Reason |
-|----------|-------|------|--------|
-| Audit original data | Bronze | `raw/cda/*.xlsx` | Immutable source of truth |
-| Reprocess from scratch | Bronze | `raw/emin/*.parquet` | Start pipeline fresh |
-| Train new Stewart Limits | Silver | `processed/{client}.parquet` | Clean, standardized data |
-| Query historical essays | Silver | `processed/{client}.parquet` | Fast columnar access |
-| Build new dashboard | Gold | `to_consume/{client}/classified_reports.parquet` | Pre-classified, ready to visualize |
-| Fleet health summary | Gold | `to_consume/{client}/machine_status_current.parquet` | Aggregated view |
-| Component filtering | Gold | `to_consume/{client}/component_summary.parquet` | Fast filter dropdowns |
-
----
-
-### **Column Availability by Layer**
-
-| Column Category | Bronze (Raw) | Silver (Processed) | Gold (Classified) |
-|-----------------|--------------|-------------------|-------------------|
-| Equipment metadata | ✅ | ✅ | ✅ |
-| Essay values | ✅ | ✅ | ✅ |
-| Standardized names | ❌ | ✅ | ✅ |
-| Stewart Limits | ❌ | ❌ (separate file) | ❌ (separate file) |
-| reportStatus | ❌ | ❌ | ✅ |
-| AI recommendations | ❌ | ❌ | ✅ |
-| Machine status | ❌ | ❌ | ✅ (separate file) |
-
----
-
-## 📎 Auxiliary Data Files
-
-### **essays_elements.xlsx**
-
-**Location**: `data/oil/essays_elements.xlsx`
-
-**Purpose**: Master mapping for chemical essay names across different lab formats
+**Purpose**: Oil analysis reports with essay classifications, report status, and AI recommendations
 
 **Schema**:
-```python
-{
-    "Element": str,                # Short code (e.g., "Fe", "Cu", "Si")
-    "ElementNameSpanish": str,     # Standardized Spanish name (e.g., "Hierro", "Cobre")
-    "ElementNameEnglish": str,     # English translation (e.g., "Iron", "Copper")
-    "GroupElement": str,           # Category for visualization grouping (e.g., "Metales de Desgaste")
-}
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| **Base Columns** | | (All Silver layer columns including componentName and componentNameNormalized) | |
+| `essay_status_{essay}` | string | Essay classification | 'Normal', 'Marginal', 'Condenatorio', 'Critico' |
+| `breached_essays` | list[string] | Essays exceeding thresholds | ['Hierro', 'Cobre'] |
+| `essay_score` | int | Total essay points | 8 |
+| `report_status` | string | Overall report status | 'Normal', 'Alerta', 'Anormal' |
+| `ai_recommendation` | string | AI-generated maintenance advice | 'Se recomienda...' |
+| `ai_analysis` | string | AI analysis of breached essays | 'Niveles elevados de...' |
+
+**Essay Status Values**:
+- `Normal`: Below 90th percentile
+- `Marginal`: Between 90th-95th percentile
+- `Condenatorio`: Between 95th-98th percentile
+- `Critico`: Above 98th percentile
+
+**Report Status Logic**:
+- `Normal`: essay_score < 3
+- `Alerta`: 3 <= essay_score < 5
+- `Anormal`: essay_score >= 5
+
+**Sample Count**: ~6,000-7,000 reports per client
+
+---
+
+#### 2. Machine Status (`machine_status.parquet`)
+
+**Purpose**: Aggregated current health status per equipment unit
+
+**Schema**:
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `client` | string | Client identifier | 'CDA' |
+| `unitId` | string | Equipment unit ID | 'CAT-001' |
+| `machineName` | string | Machine type | 'camion' |
+| `machineModel` | string | Machine model | 'CAT 797F' |
+| `componentName` | string | Component (original granularity) | 'mando final izquierdo' |
+| `lastSampleNumber` | string | Most recent sample | 'CDA-2024-100' |
+| `lastSampleDate` | date | Most recent date | '2024-02-01' |
+| `lastReportStatus` | string | Latest status | 'Alerta' |
+| `totalSamples` | int | Total samples for unit | 45 |
+| `normalCount` | int | Normal reports | 38 |
+| `alertaCount` | int | Alert reports | 5 |
+| `anormalCount` | int | Abnormal reports | 2 |
+| `avgEssayScore` | float | Average essay score | 2.3 |
+| `lastAiRecommendation` | string | Latest AI recommendation | 'Programar...' |
+
+**Sample Count**: ~200-250 machines per client
+
+---
+
+#### 3. Stewart Limits (`stewart_limits.parquet`)
+
+**Purpose**: Statistical thresholds for essay classification (per client)
+
+**Schema**:
+
+| Column | Type | Description | Example |
+|--------|------|-------------|---------|
+| `client` | string | Client identifier | 'CDA' |
+| `machine` | string | Normalized machine name | 'camion' |
+| `component` | string | Component name (normalized/grouped) | 'mando final' |
+| `essay` | string | Essay name | 'Hierro' |
+| `threshold_normal` | float | 90th percentile | 45.2 |
+| `threshold_alert` | float | 95th percentile | 58.7 |
+| `threshold_critic` | float | 98th percentile | 72.1 |
+
+**Calculation**:
+- Based on historical data for each client independently
+- Prevents data leakage between clients
+- Recalculated in historical mode, loaded in incremental mode
+- **Component Grouping**: Uses `componentNameNormalized` to group similar components (e.g., "mando final izquierdo" + "mando final derecho" → "mando final") ensuring sufficient sample size for statistical validity
+
+**Sample Count**: ~300-500 limit combinations per client
+
+---
+
+## ☁️ S3 Storage
+
+### Upload Behavior
+
+- **Automatic**: Uploads after each client completes processing
+- **Independent**: CDA and EMIN upload separately
+- **Resilient**: Partial failures don't block other clients
+
+### Upload Scope
+
+✅ **Uploaded**:
+- Silver layer: `{CLIENT}.parquet`
+- Golden layer: All 3 files per client
+
+❌ **Not Uploaded**:
+- Bronze layer (raw data stays local)
+- Auxiliary files (`essays_elements.xlsx`)
+
+### S3 Paths
+
+```
+s3://{BUCKET_NAME}/MultiTechnique Alerts/oil/silver/{CLIENT}.parquet
+s3://{BUCKET_NAME}/MultiTechnique Alerts/oil/golden/{client}/classified.parquet
+s3://{BUCKET_NAME}/MultiTechnique Alerts/oil/golden/{client}/machine_status.parquet
+s3://{BUCKET_NAME}/MultiTechnique Alerts/oil/golden/{client}/stewart_limits.parquet
 ```
 
-**Usage**:
-1. **Harmonization**: Map lab-specific essay names to `ElementNameSpanish`
-2. **Validation**: Ensure only mapped essays are included in Silver layer
-3. **Dashboard Grouping**: Use `GroupElement` to organize radar charts
+### Configuration
 
-**Example Rows**:
-| Element | ElementNameSpanish | ElementNameEnglish | GroupElement |
-|---------|-------------------|-------------------|--------------|
-| Fe | Hierro | Iron | Metales de Desgaste |
-| Cu | Cobre | Copper | Metales de Desgaste |
-| Si | Silicio | Silicon | Contaminantes |
-| Vis40 | Viscosidad cinemática @ 40°C | Kinematic Viscosity @ 40°C | Propiedades Físicas |
-
-**Important**: Rows with `NaN` values are dropped during processing (incomplete mappings)
-
----
-
-### **stewart_limits.json**
-
-**Location**: `data/oil/processed/stewart_limits.json`
-
-**Purpose**: Statistical thresholds for essay breach detection
-
-**Structure**: See [Step 2: Compute Stewart Limits](#step-2-compute-stewart-limits-silver--silver)
-
-**Usage**:
-1. **Classification Pipeline**: Compare essay values against thresholds
-2. **Dashboard Visualizations**: Display limit lines on charts
-3. **Threshold Management**: Update when new data significantly changes distributions
-
-**Access Pattern**:
-```python
-# Get limits for specific context
-limits = stewart_limits[client][machineName][componentName][essayName]
-normal = limits['threshold_normal']
-alert = limits['threshold_alert']
-critic = limits['threshold_critic']
+Required environment variables in `.env`:
+```bash
+ACCESS_KEY=your_aws_access_key
+SECRET_KEY=your_aws_secret_key
+BUCKET_NAME=your_bucket_name
+AWS_S3_PREFIX=MultiTechnique Alerts/oil/
 ```
 
 ---
 
-## 🔄 Data Update Workflow
+## ✅ Data Quality Rules
 
-### **Incremental Update Process**
+### Bronze Layer
+- ❌ No validation (accept as-is from laboratories)
 
-1. **Ingest New Raw Data**:
-   - Add new Excel/Parquet files to `raw/{client}/`
-   - Update `metadata.json` with file hash and row count
+### Silver Layer
+- ✅ All dates in ISO format (YYYY-MM-DD)
+- ✅ Essay values >= 0
+- ✅ Component hours <= Machine hours
+- ✅ No duplicate sample numbers
+- ✅ All expected essay columns present
+- ✅ Machine names normalized
 
-2. **Reprocess Silver Layer**:
-   - Re-run harmonization on all raw files
-   - Validate schema compliance
-   - Overwrite `processed/{client}.parquet`
-
-3. **Recalculate Stewart Limits** (Optional):
-   - Only if new data significantly changes distributions
-   - Recalculate from full Silver layer
-   - Overwrite `stewart_limits.json`
-
-4. **Regenerate Gold Layer**:
-   - Run classification on new Silver data
-   - Call AI for non-Normal reports
-   - Append to `classified_reports.parquet` (with deduplication by `sampleNumber`)
-   - Recalculate `machine_status_current.parquet`
-
-5. **Refresh Dashboards**:
-   - Dashboards automatically read latest Gold layer files
+### Golden Layer
+- ✅ Every sample has essay_status for all essays
+- ✅ Every sample has report_status
+- ✅ essay_score matches essay classifications
+- ✅ AI recommendations present for Alerta/Anormal reports
+- ✅ Machine status aggregations match classified reports
 
 ---
 
-## 🛡️ Data Quality Rules
+## 📝 Change Log
 
-### **Validation Checks**
+### Version 2.0 (February 3, 2026)
+- Simplified folder structure: bronze/silver/golden
+- Changed from `{client}_classified.parquet` to `golden/{client}/classified.parquet`
+- Added S3 auto-upload functionality
+- Split Stewart Limits per client (no more shared file)
+- Removed Excel exports (Parquet only)
+- Updated to use client-specific folders in golden layer
 
-1. **Sample Validity**:
-   - Filter machines with <100 total samples (insufficient data for limits)
-   - Filter components with <100 total samples
-
-2. **Essay Validity**:
-   - Only process essays mapped in `essays_elements.xlsx`
-   - Ignore essays with ≤3 unique values (not enough variance)
-
-3. **Temporal Validity**:
-   - Ensure `sampleDate` is valid datetime
-   - Flag samples with `sampleDate` in future
-
-4. **Value Validity**:
-   - Essay values must be numeric
-   - Negative values flagged for review (except specific cases)
-
----
-
-## 📏 Data Retention
-
-- **Bronze Layer**: **Permanent** (historical archive)
-- **Silver Layer**: **Retained** until superseded by reprocessing
-- **Gold Layer**: **Rolling** (retain last 2 years for dashboards, archive older data)
-
----
-
-## 🔐 Client Isolation
-
-**Critical Rule**: All processing maintains strict client separation
-
-- Bronze: Separate directories
-- Silver: Separate files
-- Gold: Separate directories
-- Stewart Limits: Separate nested dictionaries
-- Dashboards: Pre-filtered by client before rendering
-
-**No cross-client data sharing or comparison is permitted**.
-
----
-
-## 📞 Support
-
-For schema questions or data issues, refer to:
-- **[Project Documentation](project_documentation.md)**: Business logic details
-- **[Dashboard Documentation](dashboard_documentation.md)**: Consumption patterns
+### Version 1.0 (January 2026)
+- Initial data contracts
+- Three-layer architecture (raw/processed/to_consume)
+- Shared Stewart Limits file

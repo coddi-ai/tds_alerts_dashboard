@@ -70,16 +70,8 @@ logs/
 *.log
 
 # Data files (keep structure, ignore content)
-data/oil/raw/*/*
-data/oil/processed/*
-data/oil/to_consume/*
-!data/oil/raw/.gitkeep
-!data/oil/processed/.gitkeep
-!data/oil/to_consume/.gitkeep
-alerts_dashboard_production/
+notebooks/
 
-# Keep essays_elements.xlsx
-!data/oil/essays_elements.xlsx
 
 # Docker
 *.pid

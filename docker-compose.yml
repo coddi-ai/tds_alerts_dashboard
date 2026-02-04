@@ -11,6 +11,9 @@ services:
     volumes:
       - ./data:/app/data:ro
       - ./logs:/app/logs
+      - ./dashboard:/app/dashboard
+      - ./config:/app/config
+      - ./src:/app/src
     ports:
       - "8050:8050"
     restart: unless-stopped

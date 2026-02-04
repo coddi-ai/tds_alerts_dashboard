@@ -75,35 +75,37 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",")]
         return v
     
-    def get_raw_path(self, client: str) -> Path:
-        """Get raw data path for a client."""
-        return self.data_root / "raw" / client.lower()
+    def get_bronze_path(self, client: str) -> Path:
+        """Get bronze (raw) data path for a client."""
+        return self.data_root / "bronze" / client.lower()
     
-    def get_to_consume_path(self, client: str) -> Path:
-        """Get to_consume data path for a client."""
-        return self.data_root / "to_consume" / f"{client.upper()}.parquet"
+    def get_silver_path(self, client: str) -> Path:
+        """Get silver (harmonized) data path for a client."""
+        return self.data_root / "silver" / f"{client.upper()}.parquet"
     
-    def get_processed_path(self) -> Path:
-        """Get processed data path."""
-        return self.data_root / "processed"
+    def get_golden_path(self, client: str) -> Path:
+        """Get golden (analysis-ready) data path for a client."""
+        return self.data_root / "golden" / client.lower()
     
-    def get_stewart_limits_path(self) -> Path:
-        """Get Stewart limits JSON path."""
-        return self.get_processed_path() / "stewart_limits.json"
+    def get_classified_reports_path(self, client: str) -> Path:
+        """Get classified reports path for a client."""
+        return self.get_golden_path(client) / "classified.parquet"
+    
+    def get_machine_status_path(self, client: str) -> Path:
+        """Get machine status path for a client."""
+        return self.get_golden_path(client) / "machine_status.parquet"
+    
+    def get_stewart_limits_path(self, client: str) -> Path:
+        """Get Stewart limits path for a client."""
+        return self.get_golden_path(client) / "stewart_limits.parquet"
     
     def create_directories(self) -> None:
         """Create necessary directories if they don't exist."""
-        # Create logs directory
+        # Create logs directory (writable)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create data directories
-        for client in self.clients:
-            self.get_raw_path(client).mkdir(parents=True, exist_ok=True)
-        
-        self.get_processed_path().mkdir(parents=True, exist_ok=True)
-        
-        # Create to_consume directory
-        (self.data_root / "to_consume").mkdir(parents=True, exist_ok=True)
+        # Note: Data directories (bronze, silver, golden) are managed by the data pipeline
+        # and mounted read-only in Docker, so we don't create them here
 
 
 # Global settings instance

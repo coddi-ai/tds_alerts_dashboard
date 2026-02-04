@@ -9,7 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict
 from src.utils.logger import get_logger
-from src.processing.name_normalization import normalize_dataframe_names
+from src.data.component_normalizer import add_component_normalization
 
 logger = get_logger(__name__)
 
@@ -294,8 +294,8 @@ def apply_full_transformation(
     else:
         raise ValueError(f"Unknown client: {client}")
     
-    # Normalize names
-    df = normalize_dataframe_names(df)
+    # Add component normalization (must be done before other enhancements that might use it)
+    df = add_component_normalization(df)
     
     # Add Phase 1 enhancements
     df = add_group_elements(df, essays_mapping_df)

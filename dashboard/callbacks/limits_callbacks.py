@@ -30,14 +30,14 @@ def register_limits_callbacks(app):
             return [], None
         
         settings = get_settings()
-        limits_file = settings.get_stewart_limits_path().with_suffix('.parquet')
+        # Load Stewart limits for specific client from golden layer
+        limits_file = settings.get_stewart_limits_path(client)
         
         if not limits_file.exists():
             return [], None
         
         try:
             df = safe_read_parquet(limits_file)
-            df = df[df['client'] == client]
             
             machines = sorted(df['machine'].unique().tolist())
             options = [{'label': m, 'value': m} for m in machines]
@@ -61,14 +61,14 @@ def register_limits_callbacks(app):
             return [], None
         
         settings = get_settings()
-        limits_file = settings.get_stewart_limits_path().with_suffix('.parquet')
+        # Load Stewart limits for specific client from golden layer
+        limits_file = settings.get_stewart_limits_path(client)
         
         if not limits_file.exists():
             return [], None
         
         try:
             df = safe_read_parquet(limits_file)
-            df = df[df['client'] == client]
             
             if machine:
                 df = df[df['machine'] == machine]
@@ -97,17 +97,14 @@ def register_limits_callbacks(app):
         
         settings = get_settings()
         
-        # Load Stewart Limits
-        limits_file = settings.get_stewart_limits_path().with_suffix('.parquet')
+        # Load Stewart Limits for specific client from golden layer
+        limits_file = settings.get_stewart_limits_path(client)
         
         if not limits_file.exists():
             return html.Div("No limits data available", className="text-warning p-3")
         
         try:
             df = safe_read_parquet(limits_file)
-            
-            # Filter by client
-            df = df[df['client'] == client]
             
             # Filter by machine if selected
             if machine:
@@ -128,10 +125,3 @@ def register_limits_callbacks(app):
             
         except Exception as e:
             return html.Div(f"Error loading limits: {str(e)}", className="text-danger p-3")
-        df = df[df['client'] == client]
-        
-        if machine:
-            df = df[df['machine'] == machine]
-        
-        components = sorted(df['component'].unique())
-        return [{'label': c, 'value': c} for c in components]

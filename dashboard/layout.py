@@ -125,12 +125,6 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             # Tabs
             dbc.Tabs([
                 dbc.Tab(
-                    create_limits_tab(),
-                    label="Stewart Limits",
-                    tab_id="tab-limits",
-                    className="pt-3"
-                ),
-                dbc.Tab(
                     create_machines_tab(),
                     label="Machines Overview",
                     tab_id="tab-machines",
@@ -141,8 +135,14 @@ def create_main_dashboard(user_data: dict) -> html.Div:
                     label="Reports Detail",
                     tab_id="tab-reports",
                     className="pt-3"
+                ),
+                dbc.Tab(
+                    create_limits_tab(),
+                    label="Stewart Limits",
+                    tab_id="tab-limits",
+                    className="pt-3"
                 )
-            ], id='main-tabs', active_tab='tab-limits')
+            ], id='main-tabs', active_tab='tab-machines')
             
         ], fluid=True)
     ])
