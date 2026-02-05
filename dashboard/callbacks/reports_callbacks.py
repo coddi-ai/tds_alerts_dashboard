@@ -43,7 +43,7 @@ def register_reports_callbacks(app):
             return [], None
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             logger.error(f"File not found: {reports_file}")
@@ -52,7 +52,7 @@ def register_reports_callbacks(app):
         try:
             df = safe_read_parquet(reports_file)
             familias = sorted(df['machineName'].dropna().unique().tolist())
-            options = [{'label': f, 'value': f} for f in familias]
+            options = [{'label': f.title(), 'value': f} for f in familias]
             
             # Check if navigation state provides a familia
             if nav_state and nav_state.get('familia'):
@@ -91,7 +91,7 @@ def register_reports_callbacks(app):
             return [], None
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             return [], None
@@ -101,7 +101,7 @@ def register_reports_callbacks(app):
             df = df[df['machineName'] == familia]
             
             equipos = sorted(df['unitId'].dropna().unique().tolist())
-            options = [{'label': e, 'value': e} for e in equipos]
+            options = [{'label': e.title(), 'value': e} for e in equipos]
             
             # Check if navigation state provides an equipo
             if nav_state and nav_state.get('equipo'):
@@ -143,7 +143,7 @@ def register_reports_callbacks(app):
             return [], None, None
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             return [], None, None
@@ -153,7 +153,7 @@ def register_reports_callbacks(app):
             df = df[(df['machineName'] == familia) & (df['unitId'] == equipo)]
             
             components = sorted(df['componentName'].dropna().unique().tolist())
-            options = [{'label': c, 'value': c} for c in components]
+            options = [{'label': c.title(), 'value': c} for c in components]
             
             # Check if navigation state provides a component
             if nav_state and nav_state.get('component'):
@@ -196,7 +196,7 @@ def register_reports_callbacks(app):
             return [], None
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         logger.info(f"Looking for file: {reports_file}")
         
@@ -271,8 +271,8 @@ def register_reports_callbacks(app):
                    "No recommendation", [], "No data")
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
-        limits_file = settings.get_stewart_limits_path()
+        reports_file = settings.get_classified_reports_path(client)
+        limits_file = settings.get_stewart_limits_path(client)
         
         logger.info(f"Reports file: {reports_file}, exists: {reports_file.exists()}")
         
@@ -352,8 +352,8 @@ def register_reports_callbacks(app):
         essays = essays[:6]
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
-        limits_file = settings.get_stewart_limits_path()
+        reports_file = settings.get_classified_reports_path(client)
+        limits_file = settings.get_stewart_limits_path(client)
         
         if not reports_file.exists():
             return Figure()
@@ -377,10 +377,12 @@ def register_reports_callbacks(app):
                 subplot_titles=[f"{essay}" for essay in essays]
             )
             
-            # Get limits for this component
+            # Get limits for this component (use normalized name for lookup)
             if limits:
                 familia = history.iloc[0]['machineName']
-                comp_limits = limits.get(client, {}).get(familia, {}).get(component, {})
+                # Use componentNameNormalized if available, fallback to componentName
+                component_normalized = history.iloc[0].get('componentNameNormalized', component)
+                comp_limits = limits.get(client, {}).get(familia, {}).get(component_normalized, {})
             else:
                 comp_limits = {}
             
@@ -487,6 +489,11 @@ def create_sample_info_card(sample):
         'Normal': 'success'
     }.get(sample.get('report_status', 'Normal'), 'secondary')
     
+    # Apply title() to equipment and component names
+    equipo_display = str(sample.get('unitId', 'N/A')).title()
+    component_display = str(sample.get('componentName', 'N/A')).title()
+    familia_display = str(sample.get('machineName', 'N/A')).title()
+    
     return dbc.Card([
         dbc.CardBody([
             html.H5(f"Sample: {sample.get('sampleNumber', 'N/A')}", className="mb-3"),
@@ -494,9 +501,9 @@ def create_sample_info_card(sample):
                 dbc.Col([
                     html.P([
                         html.Strong("Client: "), f"{sample.get('client', 'N/A')}", html.Br(),
-                        html.Strong("Familia: "), f"{sample.get('machineName', 'N/A')}", html.Br(),
-                        html.Strong("Equipo: "), f"{sample.get('unitId', 'N/A')}", html.Br(),
-                        html.Strong("Component: "), f"{sample.get('componentName', 'N/A')}", html.Br(),
+                        html.Strong("Familia: "), f"{familia_display}", html.Br(),
+                        html.Strong("Equipo: "), f"{equipo_display}", html.Br(),
+                        html.Strong("Component: "), f"{component_display}", html.Br(),
                     ])
                 ], width=6),
                 dbc.Col([
@@ -564,20 +571,37 @@ def create_radar_charts_by_group(sample, limits, df):
         # Group essays by GroupElement
         group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()
         
-        # Get limits for this component
+        # Order groups: Desgaste, Aditivos, then others alphabetically
+        priority_groups = ['Desgaste', 'Aditivos']
+        ordered_groups = []
+        
+        # Add priority groups first (if they exist)
+        for group in priority_groups:
+            if group in group_mapping:
+                ordered_groups.append(group)
+        
+        # Add remaining groups alphabetically
+        remaining_groups = sorted([g for g in group_mapping.keys() if g not in priority_groups])
+        ordered_groups.extend(remaining_groups)
+        
+        # Get limits for this component (use normalized name for lookup)
         machine = sample.get('machineName', '')
         component = sample.get('componentName', '')
+        component_normalized = sample.get('componentNameNormalized', component)
         client = sample.get('client', '')
         
-        if limits and client in limits and machine in limits[client] and component in limits[client][machine]:
-            comp_limits = limits[client][machine][component]
+        if limits and client in limits and machine in limits[client] and component_normalized in limits[client][machine]:
+            comp_limits = limits[client][machine][component_normalized]
         else:
             return html.P("No limits available for radar charts", className="text-muted")
         
         # Create radar charts
         charts = []
         
-        for group_name, essays in group_mapping.items():
+        # Iterate through groups in specified order
+        for group_name in ordered_groups:
+            essays = group_mapping[group_name]
+            
             # Filter essays that exist in sample and have limits
             valid_essays = [e for e in essays if e in sample.index and pd.notna(sample[e]) and e in comp_limits]
             
@@ -800,8 +824,8 @@ def create_value_analysis_table(sample, limits):
                     'componentName', 'componentHours', 'componentSerialNumber',
                     'oilMeter', 'oilBrand', 'oilType', 'oilWeight',
                     'previousSampleNumber', 'previousSampleDate', 'daysSincePrevious',
-                    'group_element', 'essays_broken', 'severity_score', 'report_status',
-                    'breached_essays', 'ai_recommendation', 'ai_generated_at',
+                    'group_element', 'essay_score', 'report_status',
+                    'breached_essays', 'ai_recommendation', 'ai_analysis',
                     'unitId_generated', 'componentName_generated', 'sampleDate_generated', 
                     'client_generated', 'sampleDate_str'}
     

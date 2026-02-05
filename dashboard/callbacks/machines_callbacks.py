@@ -42,8 +42,8 @@ def register_machines_callbacks(app):
         
         settings = get_settings()
         
-        # Load machine status data
-        machine_file = settings.get_processed_path() / f"{client.lower()}_machine_status.parquet"
+        # Load machine status data from golden layer
+        machine_file = settings.get_machine_status_path(client)
         
         if not machine_file.exists():
             from plotly.graph_objects import Figure
@@ -64,7 +64,7 @@ def register_machines_callbacks(app):
             
             # Machine options for detail selector - add "All Machines" option
             machines = sorted(df['unit_id'].unique().tolist())
-            machine_options = [{'label': 'All Machines', 'value': 'ALL'}] + [{'label': m, 'value': m} for m in machines]
+            machine_options = [{'label': 'All Machines', 'value': 'ALL'}] + [{'label': m.title(), 'value': m} for m in machines]
             
             return pie_chart, priority_table, machine_options, machine_options[1:]  # Nav options without "All"
             
@@ -90,8 +90,8 @@ def register_machines_callbacks(app):
         
         settings = get_settings()
         
-        # Load classified reports
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        # Load classified reports from golden layer
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             return "", "No reports data available"
@@ -131,11 +131,12 @@ def register_machines_callbacks(app):
             # Create header
             if unit_id != 'ALL':
                 machine_info = machine_df.iloc[0]
+                machine_type_display = str(machine_info.get('machineName', 'N/A')).title()
                 header = html.Div([
                     html.H5(header_text, className="mb-2"),
                     html.P([
                         f"Client: {machine_info.get('client', 'N/A')} | ",
-                        f"Machine Type: {machine_info.get('machineName', 'N/A')} | ",
+                        f"Machine Type: {machine_type_display} | ",
                         f"Total Components: {len(latest_samples)}"
                     ], className="text-muted")
                 ])
@@ -165,7 +166,7 @@ def register_machines_callbacks(app):
             return []
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             return []
@@ -175,7 +176,7 @@ def register_machines_callbacks(app):
             df = df[df['unitId'] == unit_id]
             
             components = sorted(df['componentName'].unique().tolist())
-            return [{'label': c, 'value': c} for c in components]
+            return [{'label': c.title(), 'value': c} for c in components]
             
         except:
             return []
@@ -195,7 +196,7 @@ def register_machines_callbacks(app):
             return Figure(), Figure()
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             from plotly.graph_objects import Figure
@@ -265,7 +266,7 @@ def register_machines_callbacks(app):
             return html.Div("Please select a client", className="text-muted p-3")
         
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             return html.Div("No reports data available", className="text-warning p-3")
@@ -302,12 +303,16 @@ def register_machines_callbacks(app):
                 status_color = 'danger' if row['report_status'] == 'Anormal' else 'warning'
                 status_icon = '🔴' if row['report_status'] == 'Anormal' else '🟡'
                 
+                # Apply title() to display names
+                unit_display = str(row['unitId']).title()
+                component_display = str(row['componentName']).title()
+                
                 # Create component card
                 card = dbc.Card([
                     dbc.CardHeader([
                         html.Div([
                             html.Span(f"{status_icon} ", style={'fontSize': '1.2em'}),
-                            html.Strong(f"{row['unitId']} - {row['componentName']}"),
+                            html.Strong(f"{unit_display} - {component_display}"),
                             html.Span(
                                 f" {row['report_status']}",
                                 className=f"badge bg-{status_color} ms-2"
@@ -364,7 +369,7 @@ def register_machines_callbacks(app):
         
         # Get familia (machineName) for the selected equipment
         settings = get_settings()
-        reports_file = settings.get_processed_path() / f"{client.lower()}_classified.parquet"
+        reports_file = settings.get_classified_reports_path(client)
         
         if not reports_file.exists():
             raise PreventUpdate

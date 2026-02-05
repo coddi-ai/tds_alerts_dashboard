@@ -198,7 +198,7 @@ fig.update_layout(
 
 ### **Data Requirements**
 
-**Primary File**: `processed/stewart_limits.json`
+**Primary File**: `processed/stewart_limits.parquet`
 
 **Access Pattern**:
 ```python
@@ -1169,9 +1169,9 @@ else:
 
 | Section | Primary File | Additional Data |
 |---------|-------------|-----------------|
-| Section 1 | `classified_reports.parquet` | `stewart_limits.json`, `essays_elements.xlsx` |
+| Section 1 | `classified_reports.parquet` | `stewart_limits.parquet`, `essays_elements.xlsx` |
 | Section 2 | `classified_reports.parquet` | None (uses `aiRecommendation` field) |
-| Section 3 | `classified_reports.parquet` (historical) | `stewart_limits.json` |
+| Section 3 | `classified_reports.parquet` (historical) | `stewart_limits.parquet` |
 | Section 4 | `classified_reports.parquet` (current + previous) | None |
 
 ---
@@ -1182,14 +1182,14 @@ else:
 
 | Dashboard Tab | Section | Required Files | Required Columns |
 |---------------|---------|----------------|------------------|
-| **Tab 1** | Limits Table | `stewart_limits.json` or `.parquet` | `client`, `machineName`, `componentName`, `essayName`, `threshold_*` |
+| **Tab 1** | Limits Table | `stewart_limits.parquet` | `client`, `machineName`, `componentName`, `essayName`, `threshold_*` |
 | **Tab 2.1** | Machine Pie + Priority | `machine_status_current.parquet` | `machineStatus`, `totalNumericStatus`, `unitId` |
 | **Tab 2.2** | Machine Detail | `machine_status_current.parquet` + `classified_reports.parquet` | All machine columns + component status details |
 | **Tab 2.3** | Report Distribution | `classified_reports.parquet` | `reportStatus`, `componentName` |
 | **Tab 2.4** | Component Detail | `classified_reports.parquet` | `unitId`, `componentName`, `sampleDate`, `reportStatus`, `aiRecommendation` |
-| **Tab 3.1** | Radar Charts | `classified_reports.parquet` + `stewart_limits.json` + `essays_elements.xlsx` | All essay columns, limits, `GroupElement` |
+| **Tab 3.1** | Radar Charts | `classified_reports.parquet` + `stewart_limits.parquet` + `essays_elements.xlsx` | All essay columns, limits, `GroupElement` |
 | **Tab 3.2** | AI Recommendations | `classified_reports.parquet` | `aiRecommendation`, `reportStatus`, `severityScore`, `essaysBreached` |
-| **Tab 3.3** | Time Series | `classified_reports.parquet` (historical) + `stewart_limits.json` | Essay columns, `sampleDate`, `unitId`, `componentName` |
+| **Tab 3.3** | Time Series | `classified_reports.parquet` (historical) + `stewart_limits.parquet` | Essay columns, `sampleDate`, `unitId`, `componentName` |
 | **Tab 3.4** | Historical Comparison | `classified_reports.parquet` (current + previous) | Essay columns, `sampleDate` |
 
 ---
@@ -1236,8 +1236,7 @@ def load_data():
     df_classified = pd.read_parquet(f'data/oil/to_consume/{client.lower()}/classified_reports.parquet')
     df_machine_status = pd.read_parquet(f'data/oil/to_consume/{client.lower()}/machine_status_current.parquet')
     
-    with open('data/oil/processed/stewart_limits.json') as f:
-        stewart_limits = json.load(f)
+    stewart_limits = pd.read_parquet('data/oil/processed/stewart_limits.parquet')
     
     essays = pd.read_excel('data/oil/essays_elements.xlsx').dropna()
 
@@ -1331,7 +1330,7 @@ if __name__ == '__main__':
 1. Tab 1 (Limits) → Select machine and component
 2. Review threshold values → Verify reasonableness
 3. If needed: Re-run Stewart Limits calculation with adjusted percentiles
-4. Update `stewart_limits.json`
+4. Update `stewart_limits.parquet`
 5. Refresh dashboard
 
 **Time**: 10 minutes per machine-component pair

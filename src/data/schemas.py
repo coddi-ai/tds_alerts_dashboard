@@ -3,12 +3,13 @@ Pydantic data models for Multi-Technical-Alerts.
 
 Defines schemas for:
 - OilSample: Silver layer (harmonized data)
-- ClassifiedReport: Gold layer (classified with AI recommendations)
-- MachineStatus: Machine aggregation
+- ClassifiedReport: Golden layer (classified with AI recommendations)
+- MachineStatus: Machine aggregation from golden layer
+- StewartLimits: Statistical thresholds for essay classification
 """
 
-from datetime import datetime
-from typing import Optional, List, Dict
+from datetime import datetime, date
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 import pandas as pd
 
@@ -18,48 +19,58 @@ class OilSample(BaseModel):
     Schema for harmonized oil sample (Silver layer).
     
     All data from different labs (CDA, EMIN) is transformed to this schema.
+    Based on DATA_CONTRACTS.md Silver Layer specification.
     """
     # Identifiers
-    sample_number: str = Field(..., description="Unique sample identifier")
-    unit_id: str = Field(..., description="Machine/unit ID")
-    component: str = Field(..., description="Component name (harmonized)")
+    client: str = Field(..., description="Client identifier (CDA, EMIN)")
+    sampleNumber: str = Field(..., description="Unique sample ID")
+    sampleDate: date = Field(..., description="Sample collection date")
+    unitId: str = Field(..., description="Equipment unit ID")
+    machineName: str = Field(..., description="Normalized machine type (camion, pala, etc.)")
+    machineModel: Optional[str] = Field(None, description="Machine model")
+    machineBrand: Optional[str] = Field(None, description="Machine brand")
+    machineHours: Optional[float] = Field(None, description="Operating hours")
+    machineSerialNumber: Optional[str] = Field(None, description="Machine serial number")
     
-    # Dates
-    sample_date: datetime = Field(..., description="Sample collection date")
-    previous_sample_number: Optional[str] = Field(None, description="Previous sample number for this unit/component")
-    previous_sample_date: Optional[datetime] = Field(None, description="Previous sample date")
-    days_since_previous: Optional[int] = Field(None, description="Days since previous sample")
+    # Component information
+    componentName: str = Field(..., description="Component analyzed (motor diesel, transmision, etc.)")
+    componentNameNormalized: str = Field(..., description="Component normalized for Stewart Limits (mando final, motor diesel, etc.)")
+    componentHours: Optional[float] = Field(None, description="Component hours")
+    componentSerialNumber: Optional[str] = Field(None, description="Component serial number")
     
-    # Hours
-    component_hours: Optional[float] = Field(None, description="Component operating hours")
+    # Oil information
+    oilMeter: Optional[float] = Field(None, description="Oil meter reading")
+    oilBrand: Optional[str] = Field(None, description="Oil brand")
+    oilType: Optional[str] = Field(None, description="Oil type")
+    oilWeight: Optional[str] = Field(None, description="Oil weight")
     
-    # Essay values (all numeric, harmonized names)
-    essays: Dict[str, float] = Field(default_factory=dict, description="Essay name → value mapping")
+    # Previous sample tracking
+    previousSampleNumber: Optional[str] = Field(None, description="Previous sample ID")
+    previousSampleDate: Optional[date] = Field(None, description="Previous sample date")
+    daysSincePrevious: Optional[int] = Field(None, description="Days between samples")
     
-    # Metadata
-    client: str = Field(..., description="Client name (CDA or EMIN)")
-    lab: str = Field(..., description="Laboratory name")
-    group_element: Optional[str] = Field(None, description="Group classification for radar charts (Phase 1)")
+    # Essay classification
+    group_element: Optional[str] = Field(None, description="Essay group (Desgaste, Contaminacion, etc.)")
+    
+    # Essay values (21 total essay columns as dynamic fields)
+    # These would be individual fields: Hierro, Cobre, Silicio, etc.
     
     model_config = {
         "json_schema_extra": {
             "example": {
-                "sample_number": "12345",
-                "unit_id": "WO-001",
-                "component": "motor",
-                "sample_date": "2024-01-15T00:00:00",
-                "previous_sample_number": "12340",
-                "previous_sample_date": "2023-12-15T00:00:00",
-                "days_since_previous": 31,
-                "component_hours": 1500.5,
-                "essays": {
-                    "hierro": 25.3,
-                    "cobre": 10.2,
-                    "cromo": 2.1,
-                    "viscosidad_40": 95.5
-                },
                 "client": "CDA",
-                "lab": "Finning",
+                "sampleNumber": "CDA-2024-001",
+                "sampleDate": "2024-01-15",
+                "unitId": "CAT-001",
+                "machineName": "camion",
+                "machineModel": "CAT 797F",
+                "machineBrand": "Caterpillar",
+                "machineHours": 15420.5,
+                "componentName": "motor diesel",
+                "componentHours": 8230.0,
+                "previousSampleNumber": "CDA-2023-998",
+                "previousSampleDate": "2023-12-20",
+                "daysSincePrevious": 26,
                 "group_element": "Desgaste"
             }
         }
@@ -68,44 +79,64 @@ class OilSample(BaseModel):
 
 class ClassifiedReport(BaseModel):
     """
-    Schema for classified oil report (Gold layer).
+    Schema for classified oil report (Golden layer).
     
-    Includes classification results and AI recommendations.
+    Includes all Silver layer columns plus classification results and AI recommendations.
+    Based on DATA_CONTRACTS.md Golden Layer classified.parquet specification.
     """
-    # From OilSample
-    sample_number: str
-    unit_id: str
-    component: str
-    sample_date: datetime
+    # All columns from Silver layer (base columns)
     client: str
+    sampleNumber: str
+    sampleDate: date
+    unitId: str
+    machineName: str
+    machineModel: Optional[str] = None
+    machineBrand: Optional[str] = None
+    machineHours: Optional[float] = None
+    machineSerialNumber: Optional[str] = None
+    componentName: str
+    componentNameNormalized: str
+    componentHours: Optional[float] = None
+    componentSerialNumber: Optional[str] = None
+    oilMeter: Optional[float] = None
+    oilBrand: Optional[str] = None
+    oilType: Optional[str] = None
+    oilWeight: Optional[str] = None
+    previousSampleNumber: Optional[str] = None
+    previousSampleDate: Optional[date] = None
+    daysSincePrevious: Optional[int] = None
+    group_element: Optional[str] = None
     
-    # Classification results
-    essays_broken: int = Field(..., description="Number of essays exceeding thresholds")
-    severity_score: int = Field(..., description="Total severity points (1=Marginal, 3=Condenatorio, 5=Critico)")
-    report_status: str = Field(..., description="Classification: Normal, Alerta, or Anormal")
-    breached_essays: List[Dict[str, any]] = Field(default_factory=list, description="List of essays that exceeded thresholds")
+    # Essay columns (dynamic - Hierro, Cobre, Silicio, etc. - 21 total)
+    # These are in the actual DataFrame as individual columns
     
-    # AI recommendation
+    # Essay classification results (essay_status_{essay} columns)
+    # Format: essay_status_Hierro, essay_status_Cobre, etc.
+    # Values: 'Normal', 'Marginal', 'Condenatorio', 'Critico'
+    
+    # Classification summary
+    breached_essays: List[str] = Field(default_factory=list, description="Essays exceeding thresholds")
+    essay_score: int = Field(default=0, description="Total essay points")
+    report_status: str = Field(default="Normal", description="Overall report status: Normal, Alerta, Anormal")
+    
+    # AI-generated insights
     ai_recommendation: Optional[str] = Field(None, description="AI-generated maintenance recommendation")
-    ai_generated_at: Optional[datetime] = Field(None, description="Timestamp of AI generation")
+    ai_analysis: Optional[str] = Field(None, description="AI analysis of breached essays")
     
     model_config = {
         "json_schema_extra": {
             "example": {
-                "sample_number": "12345",
-                "unit_id": "WO-001",
-                "component": "motor",
-                "sample_date": "2024-01-15T00:00:00",
                 "client": "CDA",
-                "essays_broken": 2,
-                "severity_score": 4,
+                "sampleNumber": "CDA-2024-001",
+                "sampleDate": "2024-01-15",
+                "unitId": "CAT-001",
+                "machineName": "camion",
+                "componentName": "motor diesel",
+                "breached_essays": ["Hierro", "Cobre"],
+                "essay_score": 8,
                 "report_status": "Alerta",
-                "breached_essays": [
-                    {"essay": "hierro", "value": 45.2, "threshold": "Condenatorio", "limit": 40.0, "points": 3},
-                    {"essay": "cobre", "value": 18.5, "threshold": "Marginal", "limit": 15.0, "points": 1}
-                ],
-                "ai_recommendation": "Se observa incremento en hierro y cobre, indicando desgaste progresivo...",
-                "ai_generated_at": "2024-01-15T10:30:00"
+                "ai_recommendation": "Se recomienda programar inspección preventiva...",
+                "ai_analysis": "Niveles elevados de hierro y cobre indican desgaste progresivo..."
             }
         }
     }
@@ -113,44 +144,84 @@ class ClassifiedReport(BaseModel):
 
 class MachineStatus(BaseModel):
     """
-    Schema for machine-level status aggregation.
+    Schema for machine-level status aggregation (Golden layer).
     
-    Combines all components of a machine into overall health status.
+    Aggregated current health status per equipment unit.
+    Based on DATA_CONTRACTS.md Golden Layer machine_status.parquet specification.
     """
-    unit_id: str
-    client: str
-    latest_sample_date: datetime
+    client: str = Field(..., description="Client identifier")
+    unitId: str = Field(..., description="Equipment unit ID")
+    machineName: str = Field(..., description="Machine type (camion, pala, etc.)")
+    machineModel: Optional[str] = Field(None, description="Machine model")
+    componentName: str = Field(..., description="Component name")
+    componentNameNormalized: str = Field(..., description="Component normalized for Stewart Limits")
     
-    # Aggregated classification
-    overall_status: str = Field(..., description="Worst status across all components")
-    total_components: int = Field(..., description="Number of components analyzed")
-    components_normal: int = Field(default=0, description="Count of Normal components")
-    components_alerta: int = Field(default=0, description="Count of Alerta components")
-    components_anormal: int = Field(default=0, description="Count of Anormal components")
+    # Latest sample information
+    lastSampleNumber: str = Field(..., description="Most recent sample ID")
+    lastSampleDate: date = Field(..., description="Most recent sample date")
+    lastReportStatus: str = Field(..., description="Latest status: Normal, Alerta, Anormal")
     
-    # Priority ranking
-    priority_score: int = Field(..., description="Priority score for maintenance (higher = more urgent)")
+    # Aggregated counts
+    totalSamples: int = Field(..., description="Total samples for this unit/component")
+    normalCount: int = Field(default=0, description="Count of Normal reports")
+    alertaCount: int = Field(default=0, description="Count of Alerta reports")
+    anormalCount: int = Field(default=0, description="Count of Anormal reports")
     
-    # Component details
-    component_details: List[Dict[str, any]] = Field(default_factory=list, description="Status of each component")
+    # Average metrics
+    avgEssayScore: float = Field(default=0.0, description="Average essay score")
+    
+    # AI insights
+    lastAiRecommendation: Optional[str] = Field(None, description="Latest AI recommendation")
     
     model_config = {
         "json_schema_extra": {
             "example": {
-                "unit_id": "WO-001",
                 "client": "CDA",
-                "latest_sample_date": "2024-01-15T00:00:00",
-                "overall_status": "Anormal",
-                "total_components": 3,
-                "components_normal": 1,
-                "components_alerta": 1,
-                "components_anormal": 1,
-                "priority_score": 9,
-                "component_details": [
-                    {"component": "motor", "status": "Anormal", "severity_score": 8},
-                    {"component": "transmision", "status": "Alerta", "severity_score": 4},
-                    {"component": "hidraulico", "status": "Normal", "severity_score": 0}
-                ]
+                "unitId": "CAT-001",
+                "machineName": "camion",
+                "machineModel": "CAT 797F",
+                "componentName": "motor diesel",
+                "lastSampleNumber": "CDA-2024-100",
+                "lastSampleDate": "2024-02-01",
+                "lastReportStatus": "Alerta",
+                "totalSamples": 45,
+                "normalCount": 38,
+                "alertaCount": 5,
+                "anormalCount": 2,
+                "avgEssayScore": 2.3,
+                "lastAiRecommendation": "Programar inspección preventiva..."
+            }
+        }
+    }
+
+
+class StewartLimits(BaseModel):
+    """
+    Schema for Stewart Limits (Golden layer).
+    
+    Statistical thresholds for essay classification per client.
+    Based on DATA_CONTRACTS.md Golden Layer stewart_limits.parquet specification.
+    """
+    client: str = Field(..., description="Client identifier")
+    machine: str = Field(..., description="Normalized machine name")
+    component: str = Field(..., description="Component name")
+    essay: str = Field(..., description="Essay name")
+    
+    # Thresholds (percentiles)
+    threshold_normal: float = Field(..., description="90th percentile threshold")
+    threshold_alert: float = Field(..., description="95th percentile threshold (Marginal/Condenatorio)")
+    threshold_critic: float = Field(..., description="98th percentile threshold (Critico)")
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "client": "CDA",
+                "machine": "camion",
+                "component": "motor diesel",
+                "essay": "Hierro",
+                "threshold_normal": 45.2,
+                "threshold_alert": 58.7,
+                "threshold_critic": 72.1
             }
         }
     }

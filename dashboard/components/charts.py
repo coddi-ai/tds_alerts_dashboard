@@ -22,7 +22,7 @@ def create_status_pie_chart(df: pd.DataFrame) -> go.Figure:
     Create pie chart showing machine status distribution.
     
     Args:
-        df: DataFrame with machine statuses
+        df: DataFrame with machine statuses (Golden layer - Machine Status schema)
     
     Returns:
         Plotly figure
@@ -30,6 +30,7 @@ def create_status_pie_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return go.Figure()
     
+    # Use 'overall_status' column
     status_counts = df['overall_status'].value_counts()
     
     fig = go.Figure(data=[go.Pie(

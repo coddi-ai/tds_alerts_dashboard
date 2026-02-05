@@ -216,9 +216,9 @@ To update dashboard data:
 
 ```bash
 # Replace processed data files
-cp new_cda_summary.json data/oil/processed/
-cp new_emin_summary.json data/oil/processed/
-cp new_stewart_limits.json data/oil/processed/
+cp new_cda_classified.parquet data/oil/processed/
+cp new_emin_classified.parquet data/oil/processed/
+cp new_stewart_limits.parquet data/oil/processed/
 
 # Restart dashboard
 docker-compose restart
@@ -271,11 +271,11 @@ docker stats oil-dashboard
 
 ## 📊 Data Format
 
-The dashboard expects processed data in JSON format:
+The dashboard expects processed data in Parquet format:
 
-- `data/oil/processed/cda_summary.json` - CDA lab results
-- `data/oil/processed/emin_summary.json` - EMIN lab results  
-- `data/oil/processed/stewart_limits.json` - Stewart limit definitions
+- `data/oil/processed/cda_classified.parquet` - CDA lab results
+- `data/oil/processed/emin_classified.parquet` - EMIN lab results  
+- `data/oil/processed/stewart_limits.parquet` - Stewart limit definitions
 
 See `documentation/data_contracts.md` for detailed schemas.
 
