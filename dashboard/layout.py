@@ -102,49 +102,140 @@ def create_navbar(user_data: dict) -> dbc.Navbar:
     )
 
 
+def create_placeholder_content(section_name: str) -> html.Div:
+    """
+    Create placeholder content for sections under development.
+    
+    Args:
+        section_name: Name of the section being developed
+    
+    Returns:
+        Placeholder div with "In Progress" message
+    """
+    return html.Div([
+        dbc.Card([
+            dbc.CardBody([
+                html.Div([
+                    html.I(className="fas fa-tools fa-3x mb-3 text-muted"),
+                    html.H3("In Progress", className="text-muted"),
+                    html.P(
+                        f"The {section_name} section is currently under development.",
+                        className="text-muted mb-2"
+                    ),
+                    html.P(
+                        "This feature will be available soon. Check the migration plan for timeline.",
+                        className="text-muted small"
+                    )
+                ], className="text-center py-5")
+            ])
+        ])
+    ], className="mt-4")
+
+
 def create_main_dashboard(user_data: dict) -> html.Div:
     """
-    Create main dashboard layout.
+    Create main dashboard layout with multi-section navigation.
     
     Args:
         user_data: User information dictionary
     
     Returns:
-        Main dashboard layout
+        Main dashboard layout with left menu and content area
     """
     # Get clients user has access to
     available_clients = user_data.get('clients', [])
     
+    # Define navigation structure
+    navigation_items = [
+        {
+            'section': 'overview',
+            'label': 'Overview',
+            'icon': 'fas fa-tachometer-alt',
+            'subsections': [
+                {'id': 'overview-general', 'label': 'General', 'tab': create_machines_tab}
+            ]
+        },
+        {
+            'section': 'monitoring',
+            'label': 'Monitoring',
+            'icon': 'fas fa-chart-line',
+            'subsections': [
+                {'id': 'monitoring-alerts-general', 'label': 'Alerts > General', 'tab': lambda: create_placeholder_content('Alerts - General')},
+                {'id': 'monitoring-alerts-detail', 'label': 'Alerts > Detail', 'tab': lambda: create_placeholder_content('Alerts - Detail')},
+                {'id': 'monitoring-telemetry', 'label': 'Telemetry', 'tab': lambda: create_placeholder_content('Telemetry')},
+                {'id': 'monitoring-mantentions', 'label': 'Mantentions', 'tab': lambda: create_placeholder_content('Mantentions')},
+                {'id': 'monitoring-oil', 'label': 'Oil', 'tab': create_reports_tab}
+            ]
+        },
+        {
+            'section': 'limits',
+            'label': 'Limits',
+            'icon': 'fas fa-sliders-h',
+            'subsections': [
+                {'id': 'limits-oil', 'label': 'Oil', 'tab': create_limits_tab},
+                {'id': 'limits-telemetry', 'label': 'Telemetry', 'tab': lambda: create_placeholder_content('Telemetry Limits')}
+            ]
+        }
+    ]
+    
+    # Build left menu
+    menu_items = []
+    for section in navigation_items:
+        # Section header
+        menu_items.append(
+            html.Div([
+                html.I(className=f"{section['icon']} me-2"),
+                html.Span(section['label'], className="fw-bold")
+            ], className="text-white mb-2 mt-3")
+        )
+        
+        # Subsections
+        for subsection in section['subsections']:
+            menu_items.append(
+                dbc.Button(
+                    subsection['label'],
+                    id={'type': 'nav-button', 'index': subsection['id']},
+                    color="link",
+                    className="text-start text-white-50 w-100 mb-1 ps-4",
+                    style={"textDecoration": "none", "fontSize": "0.9rem"}
+                )
+            )
+    
+    left_menu = html.Div([
+        html.Div([
+            html.H5("Navigation", className="text-white mb-3"),
+            html.Hr(className="bg-white"),
+            *menu_items
+        ], className="p-3")
+    ], style={
+        "width": "250px",
+        "backgroundColor": "#2c3e50",
+        "minHeight": "calc(100vh - 80px)",
+        "position": "fixed",
+        "left": 0,
+        "top": "80px"
+    })
+    
+    # Content area
+    content_area = html.Div([
+        # Client selector
+        create_client_selector(available_clients),
+        
+        # Dynamic content
+        html.Div(id='section-content', className="mt-3")
+        
+    ], style={
+        "marginLeft": "250px",
+        "padding": "20px"
+    })
+    
     return html.Div([
         create_navbar(user_data),
+        left_menu,
+        content_area,
         
-        dbc.Container([
-            # Client selector
-            create_client_selector(available_clients),
-            
-            # Tabs
-            dbc.Tabs([
-                dbc.Tab(
-                    create_machines_tab(),
-                    label="Machines Overview",
-                    tab_id="tab-machines",
-                    className="pt-3"
-                ),
-                dbc.Tab(
-                    create_reports_tab(),
-                    label="Reports Detail",
-                    tab_id="tab-reports",
-                    className="pt-3"
-                ),
-                dbc.Tab(
-                    create_limits_tab(),
-                    label="Stewart Limits",
-                    tab_id="tab-limits",
-                    className="pt-3"
-                )
-            ], id='main-tabs', active_tab='tab-machines')
-            
-        ], fluid=True)
+        # Store for active section
+        dcc.Store(id='active-section-store', data='overview-general')
     ])
 
 

@@ -71,6 +71,7 @@ logs/
 
 # Data files (keep structure, ignore content)
 notebooks/
+data/
 
 
 # Docker
