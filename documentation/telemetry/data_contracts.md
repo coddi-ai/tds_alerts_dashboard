@@ -37,14 +37,14 @@ This document defines the data contracts for the Telemetry Data Product, which p
 ```
 data/
 └── telemetry/
-    ├── silver/                    # Harmonized sensor data
+    ├── silver/                              # Harmonized sensor data
     │   └── {client}/
-    │       ├── gps.parquet        # GPS location data
-    │       └── telemetry.parquet  # Sensor readings & alerts
-    └── golden/                    # Analysis-ready outputs
+    │       ├── telemetry_values_wide.parquet  # Sensor values (wide format)
+    │       └── telemetry_states.parquet       # Equipment states (long format)
+    └── golden/                              # Analysis-ready outputs
         └── {client}/
-            ├── alerts_data.csv    # Generated alerts
-            └── data_rules.csv     # Alert trigger rules
+            ├── alerts_data.csv              # Generated alerts
+            └── limits_config.parquet        # Alert trigger rules & thresholds
 ```
 
 ---
@@ -64,85 +64,80 @@ Local: data/telemetry/silver/{client}/
 
 ---
 
-### 1. GPS Data (`gps.parquet`)
+### 1. Main Telemetry Values Table (`telemetry_values_wide.parquet`)
 
-**Purpose**: Equipment location tracking
+**Purpose**: Wide-format sensor readings with GPS data for efficient querying
 
 **Schema**:
 
-| Column | Type | Description | Example |
-|--------|------|-------------|---------|
-| `TimeStart` | datetime64[ns] | Timestamp of GPS reading | `2025-01-01 00:00:00` |
-| `unitId` | string | Equipment unit identifier | `'CAT-001'` |
-| `GPSLat` | float | Latitude coordinate | `-30.2` |
-| `GPSLon` | float | Longitude coordinate | `-71.1` |
-| `GPSElevation` | float | Elevation in meters | `900.1` |
+| Column   | Type           | Description                      | Example           |
+|----------|----------------|----------------------------------|-------------------|
+| `Fecha`  | datetime64[ns] | Timestamp of the record          | `2024-02-05 12:00:00` |
+| `Unit`   | category       | Machine or unit identifier       | `'Frankie_V2'`    |
+| `Feature1` | float32      | Sensor value for Feature1        | `12.5`            |
+| `Feature2` | float32      | Sensor value for Feature2        | `7.8`             |
+| `...`    | float32        | Additional sensor values         | `...`             |
+| `FeatureN` | float32      | Sensor value for FeatureN        | `3.2`             |
+| `GPSLat` | float32        | Latitude coordinate              | `-30.2`           |
+| `GPSLon` | float32        | Longitude coordinate             | `-71.1`           |
+| `GPSElevation` | float32  | Elevation in meters              | `900.1`           |
+
+**Common Features** (sensor columns):
+- `EngCoolTemp`: Engine coolant temperature
+- `EngOilPres`: Engine oil pressure
 
 **Quality Rules**:
 - ✅ Valid datetime format
-- ✅ Latitude: -90 to 90
-- ✅ Longitude: -180 to 180
-- ✅ Elevation: reasonable range for mining operations
-- ✅ No duplicate timestamps per unit
+- ✅ Unit is categorical (memory optimized)
+- ✅ All sensor values are float32 (memory optimized)
+- ✅ GPS coordinates within valid ranges (Lat: -31 to -30, Lon: -72 to -70)
+- ✅ No duplicate (Fecha, Unit) combinations
 
 **Use Cases**:
-- Equipment location mapping
-- Geofencing and zone monitoring
-- Route optimization
-- Availability tracking
+- Time-series analysis of sensor data
+- Multi-variable correlation analysis
+- Equipment location tracking
+- Efficient filtering and aggregations
 
 ---
 
-### 2. Telemetry Data (`telemetry.parquet`)
+### 2. States Table (`telemetry_states.parquet`)
 
-**Purpose**: Sensor readings with alert evaluation
+**Purpose**: Lightweight table tracking equipment operational and load states
 
 **Schema**:
 
-| Column | Type | Description | Example |
-|--------|------|-------------|---------|
-| `Fecha` | datetime64[ns] | Timestamp of sensor reading | `2025-01-01 00:00:00` |
-| `Unit` | string | Equipment unit identifier | `'CAT-001'` |
-| `Estado` | string | Operational state | `'Ralenti'`, `'Operacional'` |
-| `EstadoCarga` | string | Payload state | `'Sin Carga'`, `'Cargado'` |
-| `Trigger` | string | Monitored sensor/feature | `'EngCoolTemp'`, `'EngOilPres'` |
-| `Valor_Tendencia` | float | Sensor value at timestamp | `95.0` |
-| `Alerta_Generada` | int | Alert flag (0 or 1) | `0`, `1` |
-| `Limit_Lower` | float | Lower threshold for trigger | `80.0` |
-| `Limit_Upper` | float | Upper threshold for trigger | `110.0` |
+| Column      | Type           | Description                          | Example           |
+|-------------|----------------|--------------------------------------|-------------------|
+| `Fecha`     | datetime64[ns] | Timestamp of the record              | `2024-02-05 12:00:00` |
+| `Unit`      | category       | Machine or unit identifier           | `'Frankie_V2'`    |
+| `Estado`    | category       | Operational state                    | `'Operacional'`   |
+| `EstadoCarga` | category     | Load state                           | `'Cargado'`       |
 
-**Operational States**:
+**Operational States** (`Estado`):
 - `Ralenti`: Idle state (engine running, no load)
 - `Operacional`: Active operation (engine running with load)
 - `Apagado`: Shut down
 - `Mantencion`: Under maintenance
 
-**Payload States**:
+**Payload States** (`EstadoCarga`):
 - `Sin Carga`: Empty / No payload
 - `Cargado`: Loaded with payload
 - `Cargando`: Loading in progress
 - `Descargando`: Unloading in progress
 
-**Common Triggers** (Examples):
-- `EngCoolTemp`: Engine coolant temperature
-- `EngOilPres`: Engine oil pressure
-- `TransOilTemp`: Transmission oil temperature
-- `HydOilTemp`: Hydraulic oil temperature
-- `FuelLevel`: Fuel level
-- `BatteryVolt`: Battery voltage
-
-**Alert Logic**:
-```
-Alerta_Generada = 1 IF Valor_Tendencia < Limit_Lower OR Valor_Tendencia > Limit_Upper
-Alerta_Generada = 0 OTHERWISE
-```
-
 **Quality Rules**:
 - ✅ Valid datetime format
-- ✅ `Alerta_Generada` in {0, 1}
-- ✅ `Limit_Lower` <= `Limit_Upper`
-- ✅ Non-null values for critical columns
+- ✅ All string columns stored as categorical (memory optimized)
 - ✅ Estado and EstadoCarga from predefined lists
+- ✅ No duplicate (Fecha, Unit) combinations
+- ✅ Non-null values for all columns
+
+**Use Cases**:
+- Join with values table to get state context
+- Filter data by operational mode
+- State transition analysis
+- Equipment availability reporting
 
 ---
 
@@ -196,37 +191,42 @@ Local: data/telemetry/golden/{client}/
 
 ---
 
-### 2. Data Rules (`data_rules.csv`)
+### 2. Limits Configuration Table (`limits_config.parquet`)
 
-**Purpose**: Configuration of alert thresholds per trigger and state
+**Purpose**: Static reference table defining alert thresholds per feature, unit, and state combination
 
 **Schema**:
 
-| Column | Type | Description | Example |
-|--------|------|-------------|---------|
-| `Trigger` | string | Sensor/feature name | `'EngCoolTemp'` |
-| `Estado` | string | Operational state | `'Operacional'`, `'Ralenti'` |
-| `EstadoCarga` | string | Payload state | `'Cargado'`, `'Sin Carga'` |
-| `Limit_Lower` | float | Lower threshold | `80.0` |
-| `Limit_Upper` | float | Upper threshold | `110.0` |
-| `System` | string | Associated system | `'Engine'` |
-| `SubSystem` | string | Associated subsystem | `'Radiator'` |
+| Column       | Type     | Description                        | Example           |
+|--------------|----------|------------------------------------|-------------------|
+| `Unit`       | category | Machine or unit identifier         | `'Frankie_V2'`    |
+| `Feature`    | category | Variable name (sensor feature)     | `'EngCoolTemp'`   |
+| `Estado`     | category | Operational state                  | `'Operacional'`   |
+| `EstadoCarga` | category | Load state                        | `'Cargado'`       |
+| `Limit_Lower` | float32 | Lower threshold for the feature    | `80.0`            |
+| `Limit_Upper` | float32 | Upper threshold for the feature    | `110.0`           |
 
-**Example Rules**:
-
-```csv
-Trigger,Estado,EstadoCarga,Limit_Lower,Limit_Upper,System,SubSystem
-EngCoolTemp,Operacional,Cargado,75,105,Engine,Radiator
-EngCoolTemp,Ralenti,Sin Carga,70,95,Engine,Radiator
-EngOilPres,Operacional,Cargado,40,80,Engine,Lubrication
-EngOilPres,Ralenti,Sin Carga,30,70,Engine,Lubrication
+**Alert Logic**:
+```
+Alert Generated = TRUE IF Feature_Value < Limit_Lower OR Feature_Value > Limit_Upper
+Alert Generated = FALSE OTHERWISE
 ```
 
+**Example Configuration**:
+
+| Unit | Feature | Estado | EstadoCarga | Limit_Lower | Limit_Upper |
+|------|---------|--------|-------------|-------------|-------------|
+| Frankie_V2 | EngCoolTemp | Operacional | Cargado | 75.0 | 105.0 |
+| Frankie_V2 | EngCoolTemp | Ralenti | Sin Carga | 70.0 | 95.0 |
+| Frankie_V2 | EngOilPres | Operacional | Cargado | 40.0 | 80.0 |
+| Frankie_V2 | EngOilPres | Ralenti | Sin Carga | 30.0 | 70.0 |
+
 **Quality Rules**:
-- ✅ Unique combination of (Trigger, Estado, EstadoCarga)
+- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
 - ✅ `Limit_Lower` < `Limit_Upper`
-- ✅ All Triggers have rules defined
-- ✅ System/SubSystem mapping is consistent
+- ✅ All categorical columns stored as category dtype
+- ✅ All features from values table have rules defined
+- ✅ Coverage for all state combinations per unit
 
 ---
 
@@ -234,16 +234,17 @@ EngOilPres,Ralenti,Sin Carga,30,70,Engine,Lubrication
 
 ### Silver Layer
 
-**GPS Data**:
+**Telemetry Values (Wide)**:
 - ✅ Timestamps are sequential per unit
-- ✅ Valid geographic coordinates
-- ✅ No missing critical fields
-
-**Telemetry Data**:
+- ✅ Valid geographic coordinates (GPS)
 - ✅ All sensor values within expected ranges
+- ✅ No missing critical fields
+- ✅ Categorical columns optimized for memory
+
+**States Table**:
 - ✅ States from predefined vocabulary
-- ✅ Limits properly defined for each state
-- ✅ Alert flags correctly computed
+- ✅ No duplicate (Fecha, Unit) combinations
+- ✅ All categorical fields properly typed
 
 ### Golden Layer
 
@@ -252,11 +253,11 @@ EngOilPres,Ralenti,Sin Carga,30,70,Engine,Lubrication
 - ✅ No orphaned alerts (must match telemetry records)
 - ✅ Timestamps align with source data
 
-**Data Rules**:
-- ✅ Complete coverage of all triggers
+**Limits Configuration**:
+- ✅ Complete coverage of all features
 - ✅ Rules defined for all operational states
 - ✅ No conflicting threshold definitions
-- ✅ System hierarchy is complete
+- ✅ All limits properly validated (Lower < Upper)
 
 ---
 
@@ -264,12 +265,12 @@ EngOilPres,Ralenti,Sin Carga,30,70,Engine,Lubrication
 
 ### Per Client Daily Volume
 
-| Dataset | Records/Day | File Size |
-|---------|-------------|-----------|
-| GPS | ~100K | ~5 MB |
-| Telemetry | ~500K | ~25 MB |
+| Dataset | Records/Day | File Size (Compressed) |
+|---------|-------------|------------------------|
+| Telemetry Values (Wide) | ~100K | ~8-12 MB |
+| States | ~100K | ~1-2 MB |
 | Alerts | ~100-500 | ~50 KB |
-| Rules | ~200 | ~20 KB |
+| Limits Config | ~200 (static) | ~20 KB |
 
 **Note**: Volumes vary significantly based on:
 - Fleet size
@@ -282,15 +283,17 @@ EngOilPres,Ralenti,Sin Carga,30,70,Engine,Lubrication
 ## 🔄 Data Flow
 
 ```
-Raw Sensor Streams
+Raw Sensor Streams (GPS + Telemetry)
        ↓
   Silver Layer
-  (GPS + Telemetry with evaluation)
+  ├── Telemetry Values (Wide Format)
+  └── States (Long Format)
        ↓
-  Alert Detection
+  Alert Detection (using Limits Config)
        ↓
   Golden Layer
-  (Alerts + Rules)
+  ├── Alerts Data
+  └── Limits Configuration
        ↓
   Dashboard / Analytics
 ```
@@ -298,6 +301,14 @@ Raw Sensor Streams
 ---
 
 ## 📝 Change Log
+
+### Version 1.1 (February 2026)
+- **BREAKING CHANGE**: Optimized data structure for memory efficiency
+- Introduced wide-format telemetry values table (combines GPS + sensor data)
+- Separated states into lightweight table
+- Moved limits configuration to Golden layer as reference data
+- All categorical columns now use category dtype
+- Reduced memory footprint by ~60-70%
 
 ### Version 1.0 (February 2026)
 - Initial telemetry data contracts

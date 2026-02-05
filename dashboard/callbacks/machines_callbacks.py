@@ -12,9 +12,12 @@ import plotly.express as px
 from pathlib import Path
 from config.settings import get_settings
 from src.utils.file_utils import safe_read_parquet
+from src.utils.logger import get_logger
 from dashboard.components.charts import create_status_pie_chart, STATUS_COLORS
 from dashboard.components.tables import create_priority_table, create_machine_detail_table
 import dash_bootstrap_components as dbc
+
+logger = get_logger(__name__)
 
 
 def register_machines_callbacks(app):
@@ -36,18 +39,23 @@ def register_machines_callbacks(app):
     )
     def update_machines_overview(client, status_filter):
         """Update machines overview based on client and status filter."""
+        logger.info(f"Machines overview callback triggered: client={client}, status_filter={status_filter}")
+        
         if not client:
             from plotly.graph_objects import Figure
+            logger.warning("No client selected")
             return Figure(), "Please select a client", [], []
         
         settings = get_settings()
         
         # Load machine status data from golden layer
         machine_file = settings.get_machine_status_path(client)
+        logger.info(f"Looking for machine file at: {machine_file}")
         
         if not machine_file.exists():
             from plotly.graph_objects import Figure
-            return Figure(), "No machine data available", [], []
+            logger.error(f"Machine file not found: {machine_file}")
+            return Figure(), f"No machine data available at {machine_file}", [], []
         
         try:
             df = safe_read_parquet(machine_file)
@@ -64,7 +72,7 @@ def register_machines_callbacks(app):
             
             # Machine options for detail selector - add "All Machines" option
             machines = sorted(df['unit_id'].unique().tolist())
-            machine_options = [{'label': 'All Machines', 'value': 'ALL'}] + [{'label': m.title(), 'value': m} for m in machines]
+            machine_options = [{'label': 'All Machines', 'value': 'ALL'}] + [{'label': m.upper(), 'value': m} for m in machines]
             
             return pie_chart, priority_table, machine_options, machine_options[1:]  # Nav options without "All"
             
@@ -133,9 +141,9 @@ def register_machines_callbacks(app):
                 machine_info = machine_df.iloc[0]
                 machine_type_display = str(machine_info.get('machineName', 'N/A')).title()
                 header = html.Div([
-                    html.H5(header_text, className="mb-2"),
+                    html.H5(f"Machine: {unit_id.upper()}", className="mb-2"),
                     html.P([
-                        f"Client: {machine_info.get('client', 'N/A')} | ",
+                        f"Client: {machine_info.get('client', 'N/A').upper()} | ",
                         f"Machine Type: {machine_type_display} | ",
                         f"Total Components: {len(latest_samples)}"
                     ], className="text-muted")
@@ -303,8 +311,8 @@ def register_machines_callbacks(app):
                 status_color = 'danger' if row['report_status'] == 'Anormal' else 'warning'
                 status_icon = '🔴' if row['report_status'] == 'Anormal' else '🟡'
                 
-                # Apply title() to display names
-                unit_display = str(row['unitId']).title()
+                # Apply formatting to display names
+                unit_display = str(row['unitId']).upper()
                 component_display = str(row['componentName']).title()
                 
                 # Create component card
@@ -355,7 +363,7 @@ def register_machines_callbacks(app):
     # NAVIGATION: Handle "Navigate to Report" button
     @app.callback(
         [Output('navigation-state', 'data'),
-         Output('main-tabs', 'active_tab')],
+         Output('active-section-store', 'data', allow_duplicate=True)],
         [Input('nav-to-report-button', 'n_clicks')],
         [State('nav-equipment-selector', 'value'),
          State('nav-component-selector', 'value'),
@@ -363,7 +371,7 @@ def register_machines_callbacks(app):
         prevent_initial_call=True
     )
     def navigate_to_report(n_clicks, equipo, component, client):
-        """Navigate to Reports Detail tab with pre-filled filters."""
+        """Navigate to Oil monitoring section with pre-filled filters."""
         if not n_clicks or not all([equipo, component, client]):
             raise PreventUpdate
         
@@ -391,8 +399,8 @@ def register_machines_callbacks(app):
                 'client': client
             }
             
-            # Switch to reports tab
-            return nav_state, 'tab-reports'
+            # Switch to monitoring-oil section
+            return nav_state, 'monitoring-oil'
             
         except Exception as e:
             raise PreventUpdate

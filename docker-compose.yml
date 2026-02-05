@@ -7,9 +7,9 @@ services:
     environment:
       - DASHBOARD_HOST=0.0.0.0
       - DASHBOARD_PORT=8050
-      - DATA_ROOT=/app/data/oil
+      - DATA_ROOT=/data/oil
     volumes:
-      - ./data:/app/data:ro
+      - ./data:/data:ro
       - ./logs:/app/logs
       - ./dashboard:/app/dashboard
       - ./config:/app/config

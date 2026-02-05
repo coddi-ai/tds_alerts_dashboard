@@ -34,46 +34,56 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
         'limits-telemetry': lambda: create_placeholder_content('Telemetry Limits')
     }
     
+    # Callback 1: Handle button clicks and update store
     @app.callback(
-        [Output('section-content', 'children'),
-         Output('active-section-store', 'data'),
-         Output({'type': 'nav-button', 'index': ALL}, 'className')],
+        Output('active-section-store', 'data'),
         [Input({'type': 'nav-button', 'index': ALL}, 'n_clicks')],
         [State('active-section-store', 'data'),
-         State({'type': 'nav-button', 'index': ALL}, 'id')]
+         State({'type': 'nav-button', 'index': ALL}, 'id')],
+        prevent_initial_call=True
     )
-    def update_section_content(n_clicks_list, current_section, button_ids):
+    def update_active_section(n_clicks_list, current_section, button_ids):
         """
-        Update content when navigation button is clicked.
+        Update active section when navigation button is clicked.
+        """
+        ctx = callback_context
+        
+        if not ctx.triggered:
+            return current_section or 'overview-general'
+        
+        triggered_prop = ctx.triggered[0]['prop_id']
+        
+        try:
+            import json
+            id_dict = json.loads(triggered_prop.split('.')[0])
+            return id_dict['index']
+        except:
+            return current_section or 'overview-general'
+    
+    # Callback 2: Update content and button styles based on active section
+    @app.callback(
+        [Output('section-content', 'children'),
+         Output({'type': 'nav-button', 'index': ALL}, 'className')],
+        [Input('active-section-store', 'data')],
+        [State({'type': 'nav-button', 'index': ALL}, 'id')]
+    )
+    def update_section_content(active_section, button_ids):
+        """
+        Update content when active section changes.
         
         Args:
-            n_clicks_list: List of click counts for all nav buttons
-            current_section: Currently active section ID
+            active_section: Currently active section ID
             button_ids: List of all button IDs
         
         Returns:
-            Tuple of (content, active_section_id, button_classes)
+            Tuple of (content, button_classes)
         """
-        # Get triggered button
-        ctx = callback_context
-        
-        # Determine which button was clicked
-        if not ctx.triggered or not any(n_clicks_list):
-            # Initial load - show Overview > General
-            active_section = current_section or 'overview-general'
-        else:
-            # Extract the button ID from triggered prop_id
-            triggered_prop = ctx.triggered[0]['prop_id']
-            
-            # Parse the button index from prop_id
-            # Format: {"index":"overview-general","type":"nav-button"}.n_clicks
-            try:
-                import json
-                id_dict = json.loads(triggered_prop.split('.')[0])
-                active_section = id_dict['index']
-            except:
-                # Fallback to current section if parsing fails
-                active_section = current_section or 'overview-general'
+        # Default to overview if no section specified
+        if not active_section:
+            active_section = 'overview-general'
+        # Default to overview if no section specified
+        if not active_section:
+            active_section = 'overview-general'
         
         # Get content for active section
         content_generator = SECTION_CONTENT_MAP.get(
@@ -97,4 +107,4 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
                     "text-start text-white-50 w-100 mb-1 ps-4"
                 )
         
-        return content, active_section, button_classes
+        return content, button_classes
