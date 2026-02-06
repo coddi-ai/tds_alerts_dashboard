@@ -40,18 +40,19 @@ data/
     ├── silver/                              # Harmonized sensor data
     │   └── {client}/
     │       ├── telemetry_values_wide.parquet  # Sensor values (wide format)
-    │       └── telemetry_states.parquet       # Equipment states (long format)
+    │       ├── telemetry_states.parquet       # Equipment states (long format)
+    │       └── limits_config.parquet          # Alert trigger rules & thresholds
     └── golden/                              # Analysis-ready outputs
         └── {client}/
             ├── alerts_data.csv              # Generated alerts
-            └── limits_config.parquet        # Alert trigger rules & thresholds
+            └── component_mapping.parquet    # Component-to-feature mapping
 ```
 
 ---
 
 ## 🔄 Silver Layer
 
-**Purpose**: Harmonized sensor data with GPS tracking and alert evaluation  
+**Purpose**: Harmonized sensor data with GPS tracking, states, and alert thresholds  
 **Update Frequency**: Real-time / Continuous  
 **Retention**: Rolling window (configurable)  
 **Format**: Parquet (columnar, compressed)
@@ -141,12 +142,57 @@ Local: data/telemetry/silver/{client}/
 
 ---
 
+### 3. Limits Configuration Table (`limits_config.parquet`)
+
+**Purpose**: Static reference table defining alert thresholds per feature, unit, and state combination
+
+**Schema**:
+
+| Column       | Type     | Description                        | Example           |
+|--------------|----------|------------------------------------|-------------------|
+| `Unit`       | category | Machine or unit identifier         | `'CAT_001'`       |
+| `Feature`    | category | Variable name (sensor feature)     | `'EngCoolTemp'`   |
+| `Estado`     | category | Operational state                  | `'Operacional'`   |
+| `EstadoCarga` | category | Load state                        | `'Cargado'`       |
+| `Limit_Lower` | float32 | Lower threshold for the feature    | `80.0`            |
+| `Limit_Upper` | float32 | Upper threshold for the feature    | `110.0`           |
+
+**Alert Logic**:
+```
+Alert Generated = TRUE IF Feature_Value < Limit_Lower OR Feature_Value > Limit_Upper
+Alert Generated = FALSE OTHERWISE
+```
+
+**Example Configuration**:
+
+| Unit | Feature | Estado | EstadoCarga | Limit_Lower | Limit_Upper |
+|------|---------|--------|-------------|-------------|-------------|
+| Frankie_V2 | EngCoolTemp | Operacional | Cargado | 75.0 | 105.0 |
+| Frankie_V2 | EngCoolTemp | Ralenti | Sin Carga | 70.0 | 95.0 |
+| Frankie_V2 | EngOilPres | Operacional | Cargado | 40.0 | 80.0 |
+| Frankie_V2 | EngOilPres | Ralenti | Sin Carga | 30.0 | 70.0 |
+
+**Quality Rules**:
+- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
+- ✅ `Limit_Lower` < `Limit_Upper`
+- ✅ All categorical columns stored as category dtype
+- ✅ All features from values table have rules defined
+- ✅ Coverage for all state combinations per unit
+
+**Use Cases**:
+- Real-time alert evaluation alongside sensor values
+- State-aware threshold checking
+- Dynamic limit visualization in dashboards
+- Alert configuration management
+
+---
+
 ## 🏆 Golden Layer
 
-**Purpose**: Processed alerts and configuration rules  
-**Update Frequency**: Real-time for alerts, periodic for rules  
+**Purpose**: Processed alerts and reference mappings  
+**Update Frequency**: Real-time for alerts, static for mappings  
 **Retention**: Historical archive  
-**Format**: CSV
+**Format**: CSV / Parquet
 
 ### Location
 
@@ -191,42 +237,44 @@ Local: data/telemetry/golden/{client}/
 
 ---
 
-### 2. Limits Configuration Table (`limits_config.parquet`)
+### 2. Component Mapping Table (`component_mapping.parquet`)
 
-**Purpose**: Static reference table defining alert thresholds per feature, unit, and state combination
+**Purpose**: Reference table mapping components to their monitoring features and system hierarchy
 
 **Schema**:
 
 | Column       | Type     | Description                        | Example           |
 |--------------|----------|------------------------------------|-------------------|
-| `Unit`       | category | Machine or unit identifier         | `'Frankie_V2'`    |
-| `Feature`    | category | Variable name (sensor feature)     | `'EngCoolTemp'`   |
-| `Estado`     | category | Operational state                  | `'Operacional'`   |
-| `EstadoCarga` | category | Load state                        | `'Cargado'`       |
-| `Limit_Lower` | float32 | Lower threshold for the feature    | `80.0`            |
-| `Limit_Upper` | float32 | Upper threshold for the feature    | `110.0`           |
+| `Component`  | category | Component name                     | `'Refrigerante'`  |
+| `PrimaryFeature` | string | Main sensor/variable monitoring the component | `'EngCoolTemp'` |
+| `System`     | category | High-level equipment system        | `'Motor'`         |
+| `SubSystem`  | category | Specific subsystem                 | `'Refrigeracion'` |
+| `Meaning`    | string   | Human-readable description         | `'Temperatura del Refrigerante de Motor'` |
+| `RelatedFeatures` | list | List of related features for contextual analysis | `['EngOilPres', 'RAftrclrTemp']` |
 
-**Alert Logic**:
-```
-Alert Generated = TRUE IF Feature_Value < Limit_Lower OR Feature_Value > Limit_Upper
-Alert Generated = FALSE OTHERWISE
-```
+**Use Cases**:
+- Map alert triggers to component hierarchy
+- Retrieve contextual features for multi-variable analysis
+- Generate comprehensive system diagnostics
+- Support AI diagnosis with related sensor context
 
 **Example Configuration**:
 
-| Unit | Feature | Estado | EstadoCarga | Limit_Lower | Limit_Upper |
-|------|---------|--------|-------------|-------------|-------------|
-| Frankie_V2 | EngCoolTemp | Operacional | Cargado | 75.0 | 105.0 |
-| Frankie_V2 | EngCoolTemp | Ralenti | Sin Carga | 70.0 | 95.0 |
-| Frankie_V2 | EngOilPres | Operacional | Cargado | 40.0 | 80.0 |
-| Frankie_V2 | EngOilPres | Ralenti | Sin Carga | 30.0 | 70.0 |
+| Component | PrimaryFeature | System | SubSystem | RelatedFeatures |
+|-----------|----------------|--------|-----------|-----------------|
+| Refrigerante | EngCoolTemp | Motor | Refrigeracion | ['EngOilPres', 'RAftrclrTemp', 'DiffTemp'] |
+| PostRefrigerante | RAftrclrTemp | Motor | Refrigeracion | ['RtExhTemp', 'LtExhTemp', 'AirFltr'] |
+| Motor | EngOilPres | Motor | Motor | ['EngCoolTemp', 'EngSpd', 'EngOilFltr'] |
+| Filtro Aceite de Motor | EngOilFltr | Motor | Motor | ['EngCoolTemp', 'EngOilPres', 'CnkcasePres'] |
 
 **Quality Rules**:
-- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
-- ✅ `Limit_Lower` < `Limit_Upper`
+- ✅ Unique PrimaryFeature per row
 - ✅ All categorical columns stored as category dtype
-- ✅ All features from values table have rules defined
-- ✅ Coverage for all state combinations per unit
+- ✅ RelatedFeatures stored as list type
+- ✅ System/SubSystem hierarchy consistency
+- ✅ Complete coverage of all monitored features
+
+**Source**: `CDA_CM_ModularDeploy.xlsx` (VariablesMonitoreo sheet)
 
 ---
 
@@ -246,6 +294,13 @@ Alert Generated = FALSE OTHERWISE
 - ✅ No duplicate (Fecha, Unit) combinations
 - ✅ All categorical fields properly typed
 
+**Limits Configuration**:
+- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
+- ✅ `Limit_Lower` < `Limit_Upper`
+- ✅ All categorical columns stored as category dtype
+- ✅ All features from values table have rules defined
+- ✅ Coverage for all state combinations per unit
+
 ### Golden Layer
 
 **Alerts Data**:
@@ -253,11 +308,12 @@ Alert Generated = FALSE OTHERWISE
 - ✅ No orphaned alerts (must match telemetry records)
 - ✅ Timestamps align with source data
 
-**Limits Configuration**:
-- ✅ Complete coverage of all features
-- ✅ Rules defined for all operational states
-- ✅ No conflicting threshold definitions
-- ✅ All limits properly validated (Lower < Upper)
+**Component Mapping**:
+- ✅ Unique PrimaryFeature per row
+- ✅ All categorical columns stored as category dtype
+- ✅ RelatedFeatures stored as list type
+- ✅ System/SubSystem hierarchy consistency
+- ✅ Complete coverage of all monitored features
 
 ---
 
@@ -269,8 +325,9 @@ Alert Generated = FALSE OTHERWISE
 |---------|-------------|------------------------|
 | Telemetry Values (Wide) | ~100K | ~8-12 MB |
 | States | ~100K | ~1-2 MB |
-| Alerts | ~100-500 | ~50 KB |
 | Limits Config | ~200 (static) | ~20 KB |
+| Alerts | ~100-500 | ~50 KB |
+| Component Mapping | ~60 (static) | ~10 KB |
 
 **Note**: Volumes vary significantly based on:
 - Fleet size
@@ -287,13 +344,14 @@ Raw Sensor Streams (GPS + Telemetry)
        ↓
   Silver Layer
   ├── Telemetry Values (Wide Format)
-  └── States (Long Format)
+  ├── States (Long Format)
+  └── Limits Configuration (Thresholds)
        ↓
   Alert Detection (using Limits Config)
        ↓
   Golden Layer
   ├── Alerts Data
-  └── Limits Configuration
+  └── Component Mapping (Reference)
        ↓
   Dashboard / Analytics
 ```
@@ -301,6 +359,17 @@ Raw Sensor Streams (GPS + Telemetry)
 ---
 
 ## 📝 Change Log
+
+### Version 1.3 (February 2026)
+- **BREAKING CHANGE**: Moved limits_config from Golden to Silver layer
+- Limits now co-located with sensor data for real-time evaluation
+- Updated purpose descriptions for clarity
+
+### Version 1.2 (February 2026)
+- Added Component Mapping table to Golden layer
+- Maps components to monitoring features and system hierarchy
+- Includes related features for contextual analysis
+- Enables multi-variable diagnostics in dashboard
 
 ### Version 1.1 (February 2026)
 - **BREAKING CHANGE**: Optimized data structure for memory efficiency

@@ -90,71 +90,73 @@ Integrate the consolidated alerts data source to provide a **unified view of equ
 
 ---
 
-#### Step 1.1: Layout Proposal
+#### Step 1.1: Layout Proposal ✅ COMPLETED
 **Objective**: Design the visual structure for Alerts monitoring
 
-**Tasks**:
-1. **Navigation Design**
-   - Add "Monitoring" section to left navigation menu
-   - Add "Alerts" subsection under Monitoring
-   - Implement tabs: "General" and "Detail"
+**Status**: ✅ Complete (February 5, 2026)
 
-2. **General Tab Layout**
-   - KPI cards: Total alerts, Alerts by type, Critical alerts
-   - Bar chart: Alerts by equipment unit
-   - Pie chart: Alerts by system (Engine, Transmission, etc.)
-   - Timeline: Alert distribution over time
-   - Table: Recent alerts summary
+**Completed Tasks**:
+1. ✅ **Navigation Design**
+   - Monitoring section with Alerts subsection defined
+   - Two-tab structure: "General" and "Detail"
 
-3. **Detail Tab Layout**
-   - Filter panel: Unit, Date range, System, Trigger type
-   - Alert detail card: Full information display
-   - AI diagnosis section: Highlighted mensaje_ia
-   - Related data section: Links to telemetry/oil sources
-   - Maintenance context: Activities from Semana_Resumen_Mantencion
+2. ✅ **General Tab Layout**
+   - Distribution of Alerts per Unit (Horizontal Bar Chart)
+   - Distribution of Alerts per Month (Vertical Bar Chart)
+   - Distribution of Alert Trigger (Treemap)
+   - Alerts Table with key columns
+
+3. ✅ **Detail Tab Layout**
+   - Alert Specification section designed
+   - Telemetry Evidence: Sensor Trends, GPS Map, Context KPIs
+   - Oil Evidence: Radar Chart
+   - Maintenance Evidence: Text display
 
 **Deliverables**:
-- Wireframe document with layout mockups
-- Component specification (charts, tables, filters)
-- User interaction flow diagram
+- ✅ `documentation/alerts/dashboard_overview.md` - Complete layout documentation
+- ✅ Component specifications documented
+- ✅ Data sources and conditions clearly defined
 
 ---
 
-#### Step 1.2: Jupyter Notebook Prototyping
+#### Step 1.2: Jupyter Notebook Prototyping ✅ COMPLETED
 **Objective**: Develop and validate visualizations in Jupyter before Dash integration
 
-**Tasks**:
-1. **Create Notebook**: `notebooks/alerts_exploration.ipynb`
+**Status**: ✅ Complete (February 5, 2026)
 
-2. **Data Loading & Exploration**
-   - Load `consolidated_alerts.csv`
-   - Explore schema and data quality
-   - Validate referential integrity with telemetry/oil sources
-   - Calculate basic statistics
+**Completed Tasks**:
+1. ✅ **Create Notebook**: `notebooks/alerts_exploration.ipynb`
 
-3. **General Tab Visualizations**
-   - Create KPI calculations (total alerts, breakdowns)
-   - Build Plotly bar chart: Alerts by unit
-   - Build Plotly pie chart: Alerts by system
-   - Build Plotly timeline: Alerts over time
-   - Create summary table with Pandas styling
+2. ✅ **Data Loading & Exploration**
+   - Load consolidated alerts from golden layer
+   - Configuration for multi-client support
+   - Derived columns for has_telemetry, has_tribology, Month
 
-4. **Detail Tab Visualizations**
-   - Implement filtering logic
-   - Design alert detail card layout
-   - Format AI diagnosis display
-   - Create related data lookup functions
+3. ✅ **General Tab Visualizations**
+   - Distribution of Alerts per Unit (Plotly bar chart)
+   - Distribution of Alerts per Month (Plotly bar chart)
+   - Distribution of Alert Trigger (Plotly treemap)
+   - Alerts Table with sorting and formatting
 
-5. **Validation**
-   - Test with sample data
-   - Verify chart interactivity
-   - Validate filter combinations
-   - Document findings and edge cases
+4. ✅ **Detail Tab Visualizations**
+   - Alert Specification display (formatted text)
+   - Telemetry Evidence:
+     - Sensor Trends (Time series with subplots)
+     - GPS Location (Scattermapbox with route)
+     - Alert Context KPIs (Elevation, Payload, RPM)
+   - Oil Evidence (Radar chart with essay levels)
+   - Maintenance Evidence (Text display with summary)
+
+5. ✅ **Conditional Logic**
+   - Telemetry shown only if trigger_type in ['telemetry', 'mixto']
+   - Oil shown only if trigger_type in ['oil', 'mixto']
+   - Maintenance always shown (if available)
+   - Proper handling of missing data
 
 **Deliverables**:
-- `notebooks/alerts_exploration.ipynb` with working visualizations
-- Data quality report
-- Visualization specification document
+- ✅ `notebooks/alerts_exploration.ipynb` - Complete with all visualizations
+- ✅ Structured sections: Setup, General Tab, Detail Tab
+- ✅ Independent cells for each visualization component
 
 ---
 
@@ -572,11 +574,11 @@ Create a comprehensive **fleet health overview** that aggregates insights from a
 
 ### Phase Checklist
 
-- [ ] **Phase 1: Alerts**
-  - [ ] Layout proposal approved
-  - [ ] Jupyter notebook complete
-  - [ ] Dash migration done
-  - [ ] Integration tested
+- [x] **Phase 1: Alerts** (In Progress - 50% Complete)
+  - [x] ✅ Layout proposal approved (Step 1.1 - February 5, 2026)
+  - [x] ✅ Jupyter notebook complete (Step 1.2 - February 5, 2026)
+  - [ ] Dash migration pending (Step 1.3)
+  - [ ] Integration testing pending (Step 1.4)
   
 - [ ] **Phase 2: Telemetry**
   - [ ] Layout proposal approved
@@ -594,6 +596,24 @@ Create a comprehensive **fleet health overview** that aggregates insights from a
   - [ ] Aggregation logic complete
   - [ ] Overview page implemented
   - [ ] Final integration complete
+
+---
+
+### Recent Updates
+
+**February 5, 2026**:
+- ✅ Completed Phase 1, Step 1.1: Layout Proposal
+  - Created comprehensive `documentation/alerts/dashboard_overview.md`
+  - Documented General Tab (3 charts + table)
+  - Documented Detail Tab (Alert spec + 3 evidence sections)
+  
+- ✅ Completed Phase 1, Step 1.2: Jupyter Notebook Prototyping
+  - Created `notebooks/alerts_exploration.ipynb`
+  - Implemented all General Tab visualizations
+  - Implemented all Detail Tab visualizations
+  - Added conditional logic for telemetry/oil/maintenance evidence
+
+**Next Steps**: Phase 1, Step 1.3 - Dash Migration
 
 ---
 

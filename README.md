@@ -68,11 +68,41 @@ cd Multi-Technical-Alerts/alerts_dashboard_production
 
 ```bash
 # Copy environment template
-cp .env .env.local
+cp .env.example .env
 
-# Edit configuration (optional)
-# Set SECRET_KEY for production
+# Edit configuration
+nano .env  # or use your preferred editor
+
+# Required: Set SECRET_KEY for production
+# Optional: Set MAPBOX_TOKEN for GPS maps (see below)
 ```
+
+#### Mapbox Token Configuration (for GPS Maps)
+
+GPS route visualizations in the Alerts Detail tab require a Mapbox access token. You have **three options**:
+
+**Option 1: Environment Variable (Recommended for Docker/Production)**
+```bash
+# In your .env file:
+MAPBOX_TOKEN=pk.your.mapbox.token.here
+```
+
+**Option 2: Token File (Recommended for Local Development)**
+```bash
+# Create a .mapbox_token file in the project root
+cp .mapbox_token.example .mapbox_token
+
+# Edit and paste your token
+echo "pk.your.mapbox.token.here" > .mapbox_token
+```
+
+**Option 3: Skip GPS Maps**
+```bash
+# Leave MAPBOX_TOKEN empty in .env
+# GPS map section will display "No GPS data available"
+```
+
+**Get a free Mapbox token**: https://account.mapbox.com/access-tokens/
 
 ### 3. Run with Docker Compose
 
@@ -205,7 +235,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ### Environment Variables
 
-Create a `.env` file for production:
+Create a `.env` file for production (use `.env.example` as template):
 
 ```bash
 # Security
@@ -214,13 +244,25 @@ SECRET_KEY=your-production-secret-key-here-min-32-chars
 # Server Configuration
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8050
+DEBUG_MODE=False
 
-# Data
-DATA_ROOT=/app/data/oil
+# API Keys
+OPENAI_API_KEY=sk-your-openai-key-here  # Optional, for AI features
+MAPBOX_TOKEN=pk.your.mapbox.token.here  # Required for GPS maps
+
+# Clients
+CLIENTS=CDA,EMIN
 
 # Optional: Logging
 LOG_LEVEL=INFO
 ```
+
+**Important Notes:**
+- **SECRET_KEY**: Generate with `python -c "import secrets; print(secrets.token_hex(32))"`
+- **MAPBOX_TOKEN**: Get free token at https://account.mapbox.com/access-tokens/
+  - Can also be provided via `.mapbox_token` file
+  - Required for GPS route visualizations in Alerts Detail tab
+- **OPENAI_API_KEY**: Only needed if using AI recommendation features
 
 ### Update User Credentials
 

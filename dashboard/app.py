@@ -34,6 +34,9 @@ from dashboard.callbacks.limits_callbacks import register_limits_callbacks
 from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
 
+# Import alerts callbacks (uses @callback decorator, auto-registered on import)
+import dashboard.callbacks.alerts_callbacks
+
 
 # Initialize Dash app with Bootstrap theme
 app = dash.Dash(
