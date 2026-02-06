@@ -38,16 +38,44 @@ from dashboard.callbacks.reports_callbacks import register_reports_callbacks
 import dashboard.callbacks.alerts_callbacks
 
 
+def normalize_prefix(prefix: str | None) -> str:
+    """
+    Normalizes a URL prefix for Dash:
+    - None / empty → "/"
+    - ensures leading slash
+    - ensures trailing slash
+    """
+    if not prefix:
+        return "/"
+
+    prefix = prefix.strip()
+
+    if not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    if not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+
+    return prefix
+
+PATH_PREFIX = normalize_prefix(os.getenv("DASH_PATH_PREFIX"))
+
 # Initialize Dash app with Bootstrap theme
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True,
-    title="Multi-Technical Alerts"
+    title="Multi-Technical Alerts",
+    url_base_pathname=PATH_PREFIX,
+    serve_locally=True
 )
 
 # Set app layout
 app.layout = create_app_layout()
+
+# Add health check endpoint for ALB
+@app.server.route('/alerts-dashboard/health')
+def health_check():
+    return {'status': 'healthy'}, 200
 
 # Register all callbacks
 register_auth_callbacks(app)
