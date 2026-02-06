@@ -68,6 +68,11 @@ app = dash.Dash(
 # Set app layout
 app.layout = create_app_layout()
 
+# Add health check endpoint for ALB
+@app.server.route('/alerts-dashboard/health')
+def health_check():
+    return {'status': 'healthy'}, 200
+
 # Register all callbacks
 register_auth_callbacks(app)
 register_limits_callbacks(app)
