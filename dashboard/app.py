@@ -61,8 +61,8 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True,
     title="Multi-Technical Alerts",
-    routes_pathname_prefix=PATH_PREFIX,
-    requests_pathname_prefix=PATH_PREFIX
+    url_base_pathname=PATH_PREFIX,
+    serve_locally=True
 )
 
 # Set app layout
