@@ -74,7 +74,6 @@ logs/
 notebooks/
 data/
 
-
 # Docker
 *.pid
 *.seed

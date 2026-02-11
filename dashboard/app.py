@@ -91,6 +91,26 @@ if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8050'))
     debug = os.getenv('DEBUG', 'False').lower() == 'true'
     
+    # Check if data folder exists, sync from S3 if needed
+    data_folder = project_root / 'data'
+    logger.info(f"Checking data folder at: {data_folder}")
+    
+    if not data_folder.exists():
+        logger.warning("Data folder not found. Attempting to sync from S3...")
+        try:
+            from src.data.s3_downloader import main as s3_sync
+            logger.info("Starting S3 data synchronization...")
+            s3_sync()
+            logger.info("S3 synchronization completed successfully")
+        except ImportError as e:
+            logger.error(f"Failed to import s3_downloader: {e}")
+            logger.warning("Continuing without S3 sync. Some features may not work.")
+        except Exception as e:
+            logger.error(f"Error during S3 synchronization: {e}")
+            logger.warning("Continuing without S3 sync. Some features may not work.")
+    else:
+        logger.info("Data folder exists. Skipping S3 sync.")
+    
     # Run server
     logger.info("Starting Multi-Technical-Alerts Dashboard...")
     logger.info(f"Dashboard accessible at http://{host}:{port}")
