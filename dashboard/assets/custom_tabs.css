@@ -1,0 +1,30 @@
+/* Custom Tab Styling for Alerts Internal Tabs */
+
+.custom-tab {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-bottom: none;
+    padding: 12px 24px;
+    font-weight: 500;
+    color: #6c757d;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.custom-tab:hover {
+    background-color: #e9ecef;
+    color: #495057;
+}
+
+.custom-tab--selected {
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+    border-bottom: 2px solid #007bff;
+    color: #007bff;
+    font-weight: 600;
+}
+
+/* Tab container styling */
+.tabs__container {
+    border-bottom: 1px solid #dee2e6;
+}

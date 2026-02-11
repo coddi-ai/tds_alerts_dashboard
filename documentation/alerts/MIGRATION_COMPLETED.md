@@ -31,6 +31,8 @@ Successfully migrated the alerts visualization from Jupyter notebook to the Dash
 
 3. **Table Components** (`dashboard/components/alerts_tables.py`)
    - `create_alerts_datatable()` - Interactive DataTable with sorting/filtering
+     - Columns: ID, Fecha, Unidad, Sistema, Componente, Fuente, Diagnóstico IA, Telemetría, Tribología
+     - Row selection enabled for navigation to detail view
    - `create_alert_detail_card()` - Alert specification display
    - `create_context_kpis_cards()` - Context KPI cards (elevation, payload, RPM)
    - `create_maintenance_display()` - Maintenance summary with task filtering
@@ -57,23 +59,32 @@ Successfully migrated the alerts visualization from Jupyter notebook to the Dash
 ✅ Distribution of Alerts per Unit (horizontal bar chart)
 ✅ Distribution of Alerts per Month (vertical bar chart)
 ✅ Distribution of Alert Trigger (treemap)
+✅ System Distribution (donut pie chart)
 ✅ Summary statistics (total alerts, units, telemetry %, tribology %)
 ✅ Interactive alerts table with sorting, filtering, and selection
+✅ Alert info panel below table (shows details when row is selected)
+✅ Navigation button to detail tab from info panel
+✅ Interactive chart filtering with toggle behavior (click to filter, click again to clear)
 
 ### Detail Tab
 ✅ Alert specification card with full metadata
-✅ **Conditional Telemetry Evidence** (if Trigger_type in ['Telemetria', 'Mixto']):
-   - Sensor trends (multi-panel time series with state-based coloring)
+✅ Filter panel with 4 filters (Unit, System, Telemetry, Tribology)
+✅ Simplified alert selector (removed date picker for cleaner UX)
+✅ **Conditional Telemetry Evidence** (if Trigger_type contains 'telemetria' or 'mixto'):
+   - Sensor trends and GPS map displayed **side-by-side** (6 columns each)
+   - Context KPIs displayed **full-width below** (3 KPIs: elevation, payload, RPM)
+   - Multi-panel time series with state-based coloring
    - Continuous limit lines that adjust based on operational state
    - GPS route map with alert location marker
-   - Context KPIs (elevation status, payload, engine RPM)
-✅ **Conditional Oil Evidence** (if Trigger_type in ['Tribologia', 'Mixto']):
-   - Radar chart showing essay levels
+   - Loading indicators on all sections
+✅ **Conditional Oil Evidence** (if Trigger_type contains 'tribologia', 'oil', or 'mixto'):
+   - Radar chart showing essay levels (all numeric columns)
+   - Metadata exclusion approach for robust column detection
    - Report status with breached essays
    - AI recommendation display
 ✅ **Maintenance Evidence** (always displayed if available):
    - Weekly maintenance summary
-   - Tasks filtered by alert system
+   - Tasks filtered by alert system (case-insensitive matching)
 
 ### Backend Infrastructure
 ✅ Multi-datasource integration (alerts + telemetry + oil + maintenance)
@@ -250,8 +261,109 @@ User selects alert → Callbacks triggered → Data loaders check CDA client
 
 ✅ **Phase 1.1**: Layout Proposal (Completed)
 ✅ **Phase 1.2**: Jupyter Notebook Prototyping (Completed)
-✅ **Phase 1.3**: Dash Migration (Completed - Current)
-⏳ **Phase 1.4**: Dashboard Integration (Next)
+✅ **Phase 1.3**: Dash Migration (Completed)
+✅ **Phase 1.4**: Dashboard Integration (Completed)
+✅ **Phase 2.1**: UI/UX Improvements (Completed)
+🔄 **Phase 2.2**: Bug Fixes (In Progress)
+
+## Phase 2: Improvements & Refinements
+
+### Phase 2.1: UI/UX Enhancements (Completed)
+
+#### Color Scheme Update
+- ✅ Changed from custom colors to **Plotly Set1** color scale for better visual consistency
+- ✅ Applied to: Unit distribution, Month distribution, and System pie chart
+
+#### System Sorting
+- ✅ Implemented **reverse alphabetical sorting** (Z→A) for system groupings
+- ✅ Consistent across all charts
+
+#### Table Navigation Redesign
+- ✅ Removed direct navigation on table row click
+- ✅ Added **info panel below table** displaying selected alert details
+- ✅ Includes: ID, Unit, System, Component, Date, and Source
+- ✅ Added **"Ver Detalles Completos" button** for explicit navigation to detail tab
+- ✅ Similar UX pattern to overview view
+
+#### Filter Enhancements
+- ✅ Implemented **toggle behavior** for chart filters (click again to clear)
+- ✅ Enhanced month filter with robust Period-to-string conversion
+- ✅ Added debug logging for filter operations
+
+#### Detail Tab Layout Improvements
+- ✅ **Telemetry side-by-side**: TimeSeries and GPS charts now display side-by-side (md=6 each)
+- ✅ Context KPIs moved below charts at full width (md=12)
+- ✅ Added loading indicators to all sections
+- ✅ Removed date picker from alert selector (simplified UX)
+
+#### Oil Evidence Improvements
+- ✅ Fixed essay column detection using metadata exclusion approach
+- ✅ Consistent with monitoring>oil implementation
+- ✅ Updated radar chart labels to handle various column formats
+
+### Phase 2.2: Bug Fixes (In Progress)
+
+#### Fixed Issues ✅
+1. **Color Scale**: Changed from Dark24 to Set1 for better aesthetics
+2. **Month Filter**: Fixed Period-to-string comparison with enhanced logging
+3. **Navigation Button**: 
+   - Fixed table column names (added Sistema and Fuente)
+   - Info panel now displays correct data
+   - Button navigation working
+4. **Radar Chart Array Error**: 
+   - Fixed "truth value of array" ambiguity error
+   - Improved essay column filtering logic
+   - Better handling of TribologyID validation
+5. **Alert Dropdown Reset**: 
+   - Added check to prevent filter callback from firing unnecessarily
+   - Only updates options when filters are actually set
+   - Preserves selected alert when switching tabs
+
+#### Trigger Type Enhancement
+- ✅ Implemented case-insensitive trigger type matching
+- ✅ Supports variations: 'telemetria', 'Telemetria', 'tribologia', 'oil', 'mixto', etc.
+
+#### Debug Logging Added
+- ✅ Filter operations now log row counts after each filter
+- ✅ Dropdown filter callback logs current value and filter status
+- ✅ Trigger type and evidence section visibility logged for debugging
+
+### Testing Phase 2 Improvements
+
+1. **Color Scheme**
+   - Verify Set1 colors applied to all charts
+   - Check visual consistency across General tab
+
+2. **Table Navigation**
+   - Click table row → info panel should appear below table
+   - Info panel should show: ID, Unidad, Sistema, Componente, Fecha, Fuente
+   - Click "Ver Detalles Completos" button → should navigate to Detail tab with alert loaded
+
+3. **Month Filter**
+   - Click on month bar in distribution chart
+   - All components should filter to that month
+   - Click same month again → filter should clear
+   - Check logs for filter debugging messages
+
+4. **Radar Chart**
+   - Select alerts with Tribologia or Mixto trigger type
+   - Radar chart should load without array errors
+   - Test with various components (including Convertidor)
+
+5. **Alert Dropdown**
+   - Navigate from General to Detail tab
+   - Select an alert → detail should load and stay loaded
+   - Dropdown value should NOT reset to None
+   - Try with oil-based alerts specifically
+
+## Migration Status
+
+✅ **Phase 1.1**: Layout Proposal (Completed)
+✅ **Phase 1.2**: Jupyter Notebook Prototyping (Completed)
+✅ **Phase 1.3**: Dash Migration (Completed)
+✅ **Phase 1.4**: Dashboard Integration (Completed)
+✅ **Phase 2.1**: UI/UX Improvements (Completed - Feb 6, 2026)
+🔄 **Phase 2.2**: Bug Fixes (In Progress - Feb 6, 2026)
 
 ---
 

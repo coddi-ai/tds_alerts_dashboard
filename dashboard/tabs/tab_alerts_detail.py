@@ -31,68 +31,110 @@ def create_layout() -> html.Div:
     logger.info("Creating Alerts Detail Tab layout")
     
     layout = html.Div([
-        # Header
-        dbc.Row([
-            dbc.Col([
-                html.H2([
-                    html.I(className="fas fa-search me-3"),
-                    "Alertas - Vista Detallada"
-                ], className="text-primary mb-1"),
-                html.P(
-                    "Análisis profundo de alertas individuales con evidencia multi-fuente",
-                    className="text-muted"
-                )
-            ])
-        ], className="mb-4"),
-        
-        # Client restriction notice
-        html.Div(
-            id='alerts-detail-client-notice',
-            children=[
-                dbc.Alert([
-                    html.I(className="fas fa-info-circle me-2"),
-                    "Este módulo está disponible únicamente para el cliente CDA"
-                ], color="info", className="mb-4")
-            ]
-        ),
-        
-        # Alert Selector
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader([
-                        html.H5([
-                            html.I(className="fas fa-filter me-2"),
-                            "Seleccionar Alerta"
-                        ], className="mb-0")
-                    ]),
-                    dbc.CardBody([
-                        html.P("Seleccione una alerta de la lista para ver su análisis detallado:", className="mb-3"),
+        # Filters Section
+        dbc.Card([
+            dbc.CardHeader([
+                html.H5([
+                    html.I(className="fas fa-filter me-2"),
+                    "Filtros"
+                ], className="mb-0")
+            ]),
+            dbc.CardBody([
+                dbc.Row([
+                    # Unit Filter
+                    dbc.Col([
+                        html.Label("Unidad:", className="fw-bold mb-2"),
                         dcc.Dropdown(
-                            id='alert-selector-dropdown',
-                            placeholder="Seleccione una alerta...",
+                            id='detail-filter-unit',
+                            placeholder="Seleccionar unidad...",
                             clearable=True,
                             searchable=True,
-                            className="mb-2"
-                        ),
-                        html.Small(
-                            "También puede seleccionar una alerta desde la Vista General",
-                            className="text-muted"
+                            multi=True
                         )
-                    ])
-                ], className="shadow-sm mb-4")
-            ], md=12)
-        ]),
+                    ], md=3),
+                    
+                    # System Filter
+                    dbc.Col([
+                        html.Label("Sistema:", className="fw-bold mb-2"),
+                        dcc.Dropdown(
+                            id='detail-filter-sistema',
+                            placeholder="Seleccionar sistema...",
+                            clearable=True,
+                            multi=True
+                        )
+                    ], md=3),
+                    
+                    # Has Telemetry Filter
+                    dbc.Col([
+                        html.Label("Con Telemetría:", className="fw-bold mb-2"),
+                        dcc.Dropdown(
+                            id='detail-filter-telemetry',
+                            options=[
+                                {'label': 'Sí', 'value': 'yes'},
+                                {'label': 'No', 'value': 'no'}
+                            ],
+                            placeholder="Todos",
+                            clearable=True
+                        )
+                    ], md=3),
+                    
+                    # Has Tribology Filter
+                    dbc.Col([
+                        html.Label("Con Tribología:", className="fw-bold mb-2"),
+                        dcc.Dropdown(
+                            id='detail-filter-tribology',
+                            options=[
+                                {'label': 'Sí', 'value': 'yes'},
+                                {'label': 'No', 'value': 'no'}
+                            ],
+                            placeholder="Todos",
+                            clearable=True
+                        )
+                    ], md=3)
+                ], className="g-3")
+            ])
+        ], className="shadow-sm mb-4"),
         
-        # Alert Detail Content Container
-        html.Div(id='alert-detail-content', children=[
-            # Placeholder when no alert selected
-            dbc.Alert([
-                html.I(className="fas fa-arrow-up me-2"),
-                "Por favor, seleccione una alerta para ver los detalles"
-            ], color="info", className="text-center")
-        ])
-    ], className="container-fluid p-4")
+        # Alert Selector
+        dbc.Card([
+            dbc.CardHeader([
+                html.H5([
+                    html.I(className="fas fa-search me-2"),
+                    "Seleccionar Alerta"
+                ], className="mb-0")
+            ]),
+            dbc.CardBody([
+                html.Label("Alerta:", className="fw-bold mb-2"),
+                dcc.Dropdown(
+                    id='alert-selector-dropdown',
+                    placeholder="Seleccione una alerta...",
+                    clearable=True,
+                    searchable=True
+                ),
+                html.Small(
+                    "También puede seleccionar una alerta desde la Vista General",
+                    className="text-muted mt-2 d-block"
+                )
+            ])
+        ], className="shadow-sm mb-4"),
+        
+        # Loading indicator
+        dcc.Loading(
+            id="loading-alert-detail",
+            type="default",
+            fullscreen=False,
+            children=[
+                # Alert Detail Content Container
+                html.Div(id='alert-detail-content', children=[
+                    # Placeholder when no alert selected
+                    dbc.Alert([
+                        html.I(className="fas fa-arrow-up me-2"),
+                        "Por favor, seleccione una alerta para ver los detalles"
+                    ], color="info", className="text-center")
+                ])
+            ]
+        )
+    ], className="p-4")
     
     logger.info("Alerts Detail Tab layout created successfully")
     return layout
@@ -106,6 +148,13 @@ def create_alert_detail_content(
     """
     Create conditional detail content layout based on alert trigger type.
     
+    Layout Structure:
+    1. Context Table (full width)
+    2. TimeSeries | GPS Route (side by side)
+    3. KPIs (full width: 3 KPIs side by side)
+    4. Radar Charts (full width)
+    5. Maintenance Context (full width)
+    
     Args:
         show_telemetry: Whether to show telemetry evidence section
         show_oil: Whether to show oil evidence section
@@ -116,173 +165,162 @@ def create_alert_detail_content(
     """
     sections = []
     
-    # Always show alert specification
+    # 1. Alert Context Table (Always shown - full width)
     sections.append(
         dbc.Row([
             dbc.Col([
-                html.Div(id='alert-specification-card')
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.H5([
+                            html.I(className="fas fa-info-circle me-2"),
+                            "Información de la Alerta"
+                        ], className="mb-0")
+                    ]),
+                    dbc.CardBody([
+                        html.Div(id='alert-specification-card')
+                    ])
+                ], className="shadow-sm mb-4")
             ], md=12)
-        ], className="mb-4")
+        ])
     )
     
-    # Telemetry Evidence (conditional)
+    # 2. Telemetry Evidence: TimeSeries | GPS Route (conditional)
     if show_telemetry:
         sections.append(
-            html.Div([
-                dbc.Row([
-                    dbc.Col([
-                        html.H4([
-                            html.I(className="fas fa-satellite-dish me-2"),
-                            "Evidencia de Telemetría"
-                        ], className="text-info mb-3")
-                    ])
-                ]),
+            dbc.Row([
+                # Sensor Trends (left side - 6 columns)
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H5([
+                                html.I(className="fas fa-chart-line me-2"),
+                                "Tendencias de Sensores"
+                            ], className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-sensor-trends",
+                                type="circle",
+                                children=[
+                                    dcc.Graph(
+                                        id='sensor-trends-chart',
+                                        config={'displayModeBar': True}
+                                    )
+                                ]
+                            )
+                        ])
+                    ], className="shadow-sm mb-4")
+                ], md=6),
                 
-                # Sensor Trends
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H5([
-                                    html.I(className="fas fa-chart-line me-2"),
-                                    "Tendencias de Sensores"
-                                ], className="mb-0")
-                            ]),
-                            dbc.CardBody([
-                                dcc.Loading(
-                                    id="loading-sensor-trends",
-                                    type="circle",
-                                    children=[
-                                        dcc.Graph(
-                                            id='sensor-trends-chart',
-                                            config={'displayModeBar': True}
-                                        )
-                                    ]
-                                )
-                            ])
-                        ], className="shadow-sm mb-4")
-                    ], md=12)
-                ]),
-                
-                # GPS Map and Context KPIs
-                dbc.Row([
-                    # GPS Map
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H5([
-                                    html.I(className="fas fa-map-marked-alt me-2"),
-                                    "Ruta GPS"
-                                ], className="mb-0")
-                            ]),
-                            dbc.CardBody([
-                                dcc.Loading(
-                                    id="loading-gps-map",
-                                    type="circle",
-                                    children=[
-                                        dcc.Graph(
-                                            id='gps-route-map',
-                                            config={'displayModeBar': True}
-                                        )
-                                    ]
-                                )
-                            ])
-                        ], className="shadow-sm mb-4")
-                    ], md=8),
-                    
-                    # Context KPIs
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H5([
-                                    html.I(className="fas fa-info-circle me-2"),
-                                    "Contexto"
-                                ], className="mb-0")
-                            ]),
-                            dbc.CardBody([
-                                html.Div(id='context-kpis-container')
-                            ])
-                        ], className="shadow-sm mb-4")
-                    ], md=4)
-                ])
-            ], className="mb-5")
+                # GPS Map (right side - 6 columns)
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H5([
+                                html.I(className="fas fa-map-marked-alt me-2"),
+                                "Ruta GPS"
+                            ], className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-gps-map",
+                                type="circle",
+                                children=[
+                                    dcc.Graph(
+                                        id='gps-route-map',
+                                        config={'displayModeBar': True},
+                                        style={'height': '600px'}
+                                    )
+                                ]
+                            )
+                        ])
+                    ], className="shadow-sm mb-4")
+                ], md=6)
+            ])
+        )
+        
+        # 3. KPIs Row (full width: 3 KPIs side by side)
+        sections.append(
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H5([
+                                html.I(className="fas fa-tachometer-alt me-2"),
+                                "Indicadores de Contexto"
+                            ], className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-context-kpis",
+                                type="circle",
+                                children=[
+                                    dbc.Row(id='context-kpis-container', className="g-3")
+                                ]
+                            )
+                        ])
+                    ], className="shadow-sm mb-4")
+                ], md=12)
+            ])
         )
     
-    # Oil Evidence (conditional)
+    # 4. Oil Evidence: Radar Chart (conditional - full width)
     if show_oil:
         sections.append(
-            html.Div([
-                dbc.Row([
-                    dbc.Col([
-                        html.H4([
-                            html.I(className="fas fa-flask me-2"),
-                            "Evidencia de Tribología"
-                        ], className="text-warning mb-3")
-                    ])
-                ]),
-                
-                dbc.Row([
-                    # Radar Chart
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H5([
-                                    html.I(className="fas fa-vial me-2"),
-                                    "Análisis de Aceite"
-                                ], className="mb-0")
-                            ]),
-                            dbc.CardBody([
-                                dcc.Loading(
-                                    id="loading-oil-radar",
-                                    type="circle",
-                                    children=[
-                                        dcc.Graph(
-                                            id='oil-radar-chart',
-                                            config={'displayModeBar': False}
-                                        )
-                                    ]
-                                )
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H5([
+                                html.I(className="fas fa-flask me-2"),
+                                "Evidencia de Tribología - Análisis de Aceite"
+                            ], className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dbc.Row([
+                                # Radar Chart
+                                dbc.Col([
+                                    dcc.Loading(
+                                        id="loading-oil-radar",
+                                        type="circle",
+                                        children=[
+                                            dcc.Graph(
+                                                id='oil-radar-chart',
+                                                config={'displayModeBar': False}
+                                            )
+                                        ]
+                                    )
+                                ], md=8),
+                                
+                                # Oil Report Status
+                                dbc.Col([
+                                    html.Div(id='oil-report-status-container')
+                                ], md=4)
                             ])
-                        ], className="shadow-sm mb-4")
-                    ], md=8),
-                    
-                    # Oil Report Status
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H5([
-                                    html.I(className="fas fa-clipboard-check me-2"),
-                                    "Estado del Reporte"
-                                ], className="mb-0")
-                            ]),
-                            dbc.CardBody([
-                                html.Div(id='oil-report-status-container')
-                            ])
-                        ], className="shadow-sm mb-4")
-                    ], md=4)
-                ])
-            ], className="mb-5")
+                        ])
+                    ], className="shadow-sm mb-4")
+                ], md=12)
+            ])
         )
     
-    # Maintenance Evidence (always if available)
+    # 5. Maintenance Evidence (conditional - full width)
     if show_maintenance:
         sections.append(
-            html.Div([
-                dbc.Row([
-                    dbc.Col([
-                        html.H4([
-                            html.I(className="fas fa-tools me-2"),
-                            "Evidencia de Mantenimiento"
-                        ], className="text-secondary mb-3")
-                    ])
-                ]),
-                
-                dbc.Row([
-                    dbc.Col([
-                        html.Div(id='maintenance-display-container')
-                    ], md=12)
-                ])
-            ], className="mb-4")
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H5([
+                                html.I(className="fas fa-tools me-2"),
+                                "Evidencia de Mantenimiento"
+                            ], className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            html.Div(id='maintenance-display-container')
+                        ])
+                    ], className="shadow-sm mb-4")
+                ], md=12)
+            ])
         )
     
     return html.Div(sections)
@@ -326,9 +364,9 @@ def create_oil_status_display(
         html.Div([
             html.H6("Ensayos en Alerta:", className="text-muted mb-2"),
             html.Ul([
-                html.Li(essay, className="text-danger")
+                html.Li(str(essay), className="text-danger")
                 for essay in breached_essays
-            ]) if breached_essays else html.P("Ninguno", className="text-success")
+            ]) if (breached_essays and len(breached_essays) > 0) else html.P("Ninguno", className="text-success")
         ], className="mb-3"),
         
         # AI Recommendation

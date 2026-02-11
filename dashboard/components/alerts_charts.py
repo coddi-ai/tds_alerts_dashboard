@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+import plotly.colors
 
 from src.utils.logger import get_logger
 
@@ -45,6 +46,14 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
         # Count alerts per unit and system
         alerts_per_unit = alerts_df.groupby(['UnitId', 'sistema']).size().reset_index(name='Count')
         
+        # Sort systems in reverse alphabetical order for consistent ordering
+        alerts_per_unit['sistema'] = pd.Categorical(
+            alerts_per_unit['sistema'],
+            categories=sorted(alerts_per_unit['sistema'].unique(), reverse=True),
+            ordered=True
+        )
+        alerts_per_unit = alerts_per_unit.sort_values('sistema')
+        
         # Create horizontal bar chart
         fig = px.bar(
             alerts_per_unit,
@@ -55,7 +64,8 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
             title='Distribución de Alertas por Unidad',
             labels={'Count': 'Número de Alertas', 'UnitId': 'Unidad'},
             template='plotly_white',
-            height=500
+            height=500,
+            color_discrete_sequence=plotly.colors.qualitative.Set1
         )
         
         fig.update_layout(
@@ -100,6 +110,14 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
         alerts_per_month = alerts_df.groupby(['Month', 'sistema']).size().reset_index(name='Count')
         alerts_per_month['Month_str'] = alerts_per_month['Month'].astype(str)
         
+        # Sort systems in reverse alphabetical order for consistent ordering
+        alerts_per_month['sistema'] = pd.Categorical(
+            alerts_per_month['sistema'],
+            categories=sorted(alerts_per_month['sistema'].unique(), reverse=True),
+            ordered=True
+        )
+        alerts_per_month = alerts_per_month.sort_values('sistema')
+        
         # Create vertical bar chart
         fig = px.bar(
             alerts_per_month,
@@ -109,7 +127,8 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
             title='Distribución de Alertas por Mes',
             labels={'Month_str': 'Mes', 'Count': 'Número de Alertas'},
             template='plotly_white',
-            height=500
+            height=500,
+            color_discrete_sequence=plotly.colors.qualitative.Set1
         )
         
         fig.update_layout(
@@ -556,7 +575,8 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
     Returns:
         Plotly Figure with radar chart
     """
-    if oil_report.empty or not essay_cols:
+    # Check if data is available (Series doesn't have .empty attribute)
+    if oil_report is None or len(oil_report) == 0 or not essay_cols:
         logger.warning("Cannot create oil radar chart: empty data or no essay columns")
         return go.Figure().add_annotation(
             text="No oil data available",
@@ -567,20 +587,28 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
     try:
         fig = go.Figure()
         
+        # Get values for each essay column
+        r_values = [float(oil_report.get(col, 0)) if pd.notna(oil_report.get(col, 0)) else 0 for col in essay_cols]
+        theta_values = [col.replace('_ppm', '').replace('_', ' ').title() for col in essay_cols]
+        
+        # Calculate max value for scale (ensure at least 1 for visibility)
+        max_value = max(r_values) if max(r_values) > 0 else 1
+        
         # Add actual values
         fig.add_trace(go.Scatterpolar(
-            r=[oil_report.get(col, 0) for col in essay_cols],
-            theta=[col.replace('_ppm', '').title() for col in essay_cols],
+            r=r_values,
+            theta=theta_values,
             fill='toself',
             name='Valores Actuales',
-            line_color='#3498db'
+            line_color='#3498db',
+            hovertemplate='<b>%{theta}</b><br>Valor: %{r:.2f} ppm<extra></extra>'
         ))
         
         fig.update_layout(
             polar=dict(
                 radialaxis=dict(
                     visible=True,
-                    range=[0, max([oil_report.get(col, 0) for col in essay_cols]) * 1.2]
+                    range=[0, max_value * 1.2]
                 )
             ),
             title='Análisis de Aceite - Niveles de Elementos',
@@ -588,11 +616,77 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
             showlegend=True
         )
         
-        logger.info("Created oil radar chart successfully")
+        logger.info(f"Created oil radar chart successfully with {len(essay_cols)} essays")
         return fig
     
     except Exception as e:
         logger.error(f"Error creating oil radar chart: {e}")
+        return go.Figure().add_annotation(
+            text=f"Error: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+
+
+def create_system_distribution_pie_chart(alerts_df: pd.DataFrame) -> go.Figure:
+    """
+    Create pie chart showing distribution of alerts per system.
+    
+    Args:
+        alerts_df: DataFrame with column ['sistema']
+    
+    Returns:
+        Plotly Figure with pie chart
+    """
+    if alerts_df.empty:
+        logger.warning("Cannot create system distribution pie chart: empty dataframe")
+        return go.Figure().add_annotation(
+            text="No data available",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+    
+    try:
+        # Count alerts by system
+        system_counts = alerts_df['sistema'].value_counts().reset_index()
+        system_counts.columns = ['sistema', 'Count']
+        
+        # Sort systems in reverse alphabetical order
+        system_counts = system_counts.sort_values('sistema', ascending=False)
+        
+        # Create pie chart
+        fig = px.pie(
+            system_counts,
+            values='Count',
+            names='sistema',
+            title='Distribución por Sistema',
+            hole=0.3,  # Makes it a donut chart
+            color_discrete_sequence=plotly.colors.qualitative.Set1
+        )
+        
+        fig.update_traces(
+            textposition='inside',
+            textinfo='percent+label',
+            hovertemplate='<b>%{label}</b><br>Alertas: %{value}<br>Porcentaje: %{percent}<extra></extra>'
+        )
+        
+        fig.update_layout(
+            height=500,
+            showlegend=True,
+            legend=dict(
+                orientation="v",
+                yanchor="middle",
+                y=0.5,
+                xanchor="left",
+                x=1.05
+            )
+        )
+        
+        logger.info("Created system distribution pie chart successfully")
+        return fig
+    
+    except Exception as e:
+        logger.error(f"Error creating system distribution pie chart: {e}")
         return go.Figure().add_annotation(
             text=f"Error: {str(e)}",
             xref="paper", yref="paper",

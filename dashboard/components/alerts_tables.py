@@ -33,8 +33,8 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     try:
         # Prepare table data
         table_df = alerts_df[[
-            'FusionID', 'Timestamp', 'UnitId', 'componente', 'mensaje_ia', 
-            'has_telemetry', 'has_tribology'
+            'FusionID', 'Timestamp', 'UnitId', 'sistema', 'componente', 'Trigger_type',
+            'mensaje_ia', 'has_telemetry', 'has_tribology'
         ]].copy()
         
         # Sort by timestamp (newest first)
@@ -52,13 +52,13 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         
         # Select display columns
         display_df = table_df[[
-            'FusionID', 'Timestamp_display', 'UnitId', 'componente', 
-            'mensaje_ia_short', 'Telemetría', 'Tribología'
+            'FusionID', 'Timestamp_display', 'UnitId', 'sistema', 'componente', 
+            'Trigger_type', 'mensaje_ia_short', 'Telemetría', 'Tribología'
         ]].copy()
         
         display_df.columns = [
-            'ID', 'Fecha/Hora', 'Unidad', 'Componente', 
-            'Diagnóstico IA', 'Telemetría', 'Tribología'
+            'ID', 'Fecha', 'Unidad', 'Sistema', 'Componente',
+            'Fuente', 'Diagnóstico IA', 'Telemetría', 'Tribología'
         ]
         
         # Create DataTable
@@ -98,16 +98,16 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                     'backgroundColor': '#f8f9fa'
                 },
                 {
-                    'if': {'state': 'selected'},
+                    'if': {'state': 'active'},
                     'backgroundColor': '#3498db',
                     'color': 'white',
-                    'border': '1px solid #2980b9'
+                    'border': '2px solid #2980b9',
+                    'cursor': 'pointer'
                 }
             ],
             
-            # Interaction
-            row_selectable='single',
-            selected_rows=[],
+            # Enable cell clicks for navigation
+            cell_selectable=True,
             
             # Filtering and sorting
             filter_action='native',
@@ -378,11 +378,14 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                 
                 found_tasks = False
                 for date, systems in tasks_dict.items():
-                    if alert_system in systems:
+                    # Compare systems case-insensitively (maintenance CSV uses uppercase)
+                    if alert_system.upper() in [s.upper() for s in systems.keys()]:
+                        # Find the original key in systems dict (case-insensitive match)
+                        matching_key = next(k for k in systems.keys() if k.upper() == alert_system.upper())
                         found_tasks = True
                         tasks_elements.append(html.H6(f"📆 {date}:", className="mt-2"))
                         
-                        for task in systems[alert_system]:
+                        for task in systems[matching_key]:
                             tasks_elements.append(html.Li(task, className="mb-1"))
                 
                 if not found_tasks:

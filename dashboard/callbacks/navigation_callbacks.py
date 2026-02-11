@@ -12,8 +12,7 @@ from pathlib import Path
 from dashboard.tabs.tab_limits import create_limits_tab
 from dashboard.tabs.tab_machines import create_machines_tab
 from dashboard.tabs.tab_reports import create_reports_tab
-from dashboard.tabs.tab_alerts_general import create_layout as create_alerts_general_tab
-from dashboard.tabs.tab_alerts_detail import create_layout as create_alerts_detail_tab
+from dashboard.tabs.tab_alerts import create_layout as create_alerts_tab
 from dashboard.layout import create_placeholder_content
 from config.settings import get_settings
 from src.utils.logger import get_logger
@@ -60,35 +59,30 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
         app: Dash application instance
     """
     
-    def get_alerts_content(client: str, tab_type: str = 'general'):
+    def get_alerts_content(client: str):
         """
         Get alerts content or 'In Progress' placeholder based on data availability.
         
         Args:
             client: Client identifier (not used directly, alerts tabs get client from callbacks)
-            tab_type: 'general' or 'detail'
             
         Returns:
-            Dashboard content
+            Dashboard content (unified alerts tab with internal tabs)
         """
-        logger.info(f"Getting alerts content for client={client}, tab_type={tab_type}")
+        logger.info(f"Getting alerts content for client={client}")
         
         # Alerts subsystem is CDA-only
         if client.lower() != 'cda':
             logger.warning(f"Alerts subsystem is only available for CDA client, requested: {client}")
             return create_placeholder_content('Alertas (Solo disponible para CDA)')
         
-        logger.info(f"Creating {tab_type} tab for alerts")
-        if tab_type == 'general':
-            return create_alerts_general_tab()
-        else:
-            return create_alerts_detail_tab()
+        logger.info("Creating unified alerts tab with internal tabs")
+        return create_alerts_tab()
     
     # Map subsection IDs to their content generators
     SECTION_CONTENT_MAP = {
         'overview-general': create_machines_tab,
-        'monitoring-alerts-general': lambda client: get_alerts_content(client, 'general'),
-        'monitoring-alerts-detail': lambda client: get_alerts_content(client, 'detail'),
+        'monitoring-alerts': lambda client: get_alerts_content(client),
         'monitoring-telemetry': lambda client: create_placeholder_content('Telemetry'),
         'monitoring-mantentions': lambda client: create_placeholder_content('Mantentions'),
         'monitoring-oil': create_reports_tab,
@@ -166,7 +160,7 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
         # Call content generator with client parameter
         # Some generators need client, others don't
         try:
-            if active_section in ['monitoring-alerts-general', 'monitoring-alerts-detail', 
+            if active_section in ['monitoring-alerts', 
                                  'monitoring-telemetry', 'monitoring-mantentions', 'limits-telemetry']:
                 content = content_generator(client)
             else:

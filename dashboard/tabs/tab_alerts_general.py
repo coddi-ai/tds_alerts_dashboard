@@ -25,32 +25,10 @@ def create_layout() -> html.Div:
     logger.info("Creating Alerts General Tab layout")
     
     layout = html.Div([
-        # Header
-        dbc.Row([
-            dbc.Col([
-                html.H2([
-                    html.I(className="fas fa-chart-bar me-3"),
-                    "Alertas - Vista General"
-                ], className="text-primary mb-1"),
-                html.P(
-                    "Análisis estadístico de alertas por unidad, mes y fuente de origen",
-                    className="text-muted"
-                )
-            ])
-        ], className="mb-4"),
+        # Summary stats at the top
+        html.Div(id='alerts-summary-stats', className="mb-3"),
         
-        # Client restriction notice
-        html.Div(
-            id='alerts-client-notice',
-            children=[
-                dbc.Alert([
-                    html.I(className="fas fa-info-circle me-2"),
-                    "Este módulo está disponible únicamente para el cliente CDA"
-                ], color="info", className="mb-4")
-            ]
-        ),
-        
-        # Analytics Charts Row
+        # Top Row: 3 Analytics Charts (Unit | Month | Treemap)
         dbc.Row([
             # Distribution per Unit
             dbc.Col([
@@ -68,13 +46,14 @@ def create_layout() -> html.Div:
                             children=[
                                 dcc.Graph(
                                     id='alerts-unit-distribution-chart',
-                                    config={'displayModeBar': False}
+                                    config={'displayModeBar': False},
+                                    clear_on_unhover=True
                                 )
                             ]
                         )
                     ])
                 ], className="shadow-sm mb-4")
-            ], md=6),
+            ], md=4),
             
             # Distribution per Month
             dbc.Col([
@@ -92,23 +71,22 @@ def create_layout() -> html.Div:
                             children=[
                                 dcc.Graph(
                                     id='alerts-month-distribution-chart',
-                                    config={'displayModeBar': False}
+                                    config={'displayModeBar': False},
+                                    clear_on_unhover=True
                                 )
                             ]
                         )
                     ])
                 ], className="shadow-sm mb-4")
-            ], md=6)
-        ]),
-        
-        # Trigger Distribution Treemap
-        dbc.Row([
+            ], md=4),
+            
+            # Trigger Distribution Treemap
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-signal me-2"),
-                            "Distribución por Fuente de Origen"
+                            "Distribución por Fuente"
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -118,17 +96,19 @@ def create_layout() -> html.Div:
                             children=[
                                 dcc.Graph(
                                     id='alerts-trigger-distribution-chart',
-                                    config={'displayModeBar': False}
+                                    config={'displayModeBar': False},
+                                    clear_on_unhover=True
                                 )
                             ]
                         )
                     ])
                 ], className="shadow-sm mb-4")
-            ], md=12)
+            ], md=4)
         ]),
         
-        # Alerts Table Section
+        # Bottom Row: Table (8 cols) | System Distribution (4 cols)
         dbc.Row([
+            # Alerts Table Section
             dbc.Col([
                 dbc.Card([
                     dbc.CardHeader([
@@ -137,14 +117,11 @@ def create_layout() -> html.Div:
                             "Tabla de Alertas"
                         ], className="mb-0"),
                         html.Small(
-                            " (Haga clic en una fila para ver detalles)",
+                            " → Haga clic en cualquier fila para ver detalles completos",
                             className="text-muted ms-2"
                         )
                     ]),
                     dbc.CardBody([
-                        # Summary stats
-                        html.Div(id='alerts-summary-stats', className="mb-3"),
-                        
                         # Table
                         dcc.Loading(
                             id="loading-alerts-table",
@@ -155,9 +132,34 @@ def create_layout() -> html.Div:
                         )
                     ])
                 ], className="shadow-sm")
-            ], md=12)
+            ], md=8),
+            
+            # System Distribution Pie Chart
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.H5([
+                            html.I(className="fas fa-cogs me-2"),
+                            "Distribución por Sistema"
+                        ], className="mb-0")
+                    ]),
+                    dbc.CardBody([
+                        dcc.Loading(
+                            id="loading-system-chart",
+                            type="circle",
+                            children=[
+                                dcc.Graph(
+                                    id='alerts-system-distribution-chart',
+                                    config={'displayModeBar': False},
+                                    clear_on_unhover=True
+                                )
+                            ]
+                        )
+                    ])
+                ], className="shadow-sm")
+            ], md=4)
         ])
-    ], className="container-fluid p-4")
+    ], className="p-4")
     
     logger.info("Alerts General Tab layout created successfully")
     return layout

@@ -1,0 +1,80 @@
+"""
+Unified Alerts Tab with Internal Tabs (General and Detail).
+
+This tab combines the General and Detail views into a single navigation entry
+with internal tabs for switching between views.
+"""
+
+from dash import html, dcc
+import dash_bootstrap_components as dbc
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def create_layout() -> html.Div:
+    """
+    Create unified alerts tab layout with internal tabs.
+    
+    Returns:
+        Dash HTML Div with tabbed interface
+    """
+    logger.info("Creating unified Alerts Tab layout with internal tabs")
+    
+    layout = html.Div([
+        # Header
+        dbc.Row([
+            dbc.Col([
+                html.H2([
+                    html.I(className="fas fa-exclamation-triangle me-3"),
+                    "Monitor de Alertas"
+                ], className="text-primary mb-1"),
+                html.P(
+                    "Sistema integral de análisis y seguimiento de alertas",
+                    className="text-muted"
+                )
+            ])
+        ], className="mb-4"),
+        
+        # Client restriction notice
+        html.Div(
+            id='alerts-client-notice',
+            children=[
+                dbc.Alert([
+                    html.I(className="fas fa-info-circle me-2"),
+                    "Este módulo está disponible únicamente para el cliente CDA"
+                ], color="info", className="mb-4")
+            ]
+        ),
+        
+        # Internal Tabs
+        dcc.Tabs(
+            id='alerts-internal-tabs',
+            value='general',
+            children=[
+                dcc.Tab(
+                    label='Vista General',
+                    value='general',
+                    className='custom-tab',
+                    selected_className='custom-tab--selected'
+                ),
+                dcc.Tab(
+                    label='Vista Detallada',
+                    value='detail',
+                    className='custom-tab',
+                    selected_className='custom-tab--selected'
+                )
+            ],
+            className='mb-4'
+        ),
+        
+        # Tab content container
+        html.Div(id='alerts-tab-content'),
+        
+        # Store for filters (used in General tab)
+        dcc.Store(id='alerts-filter-store', storage_type='memory', data={})
+        
+    ], className="container-fluid p-4")
+    
+    logger.info("Unified Alerts Tab layout created successfully")
+    return layout
