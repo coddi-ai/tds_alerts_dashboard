@@ -4,12 +4,16 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: oil-analysis-dashboard
+    env_file:
+      - .env  # Load environment variables from .env file
     environment:
+      # Override specific variables if needed
       - DASHBOARD_HOST=0.0.0.0
       - DASHBOARD_PORT=8050
-      - DATA_ROOT=/app/data/oil
+      # MAPBOX_TOKEN will be read from .env file
+      # Or set explicitly: MAPBOX_TOKEN=${MAPBOX_TOKEN}
     volumes:
-      - ./data:/app/data:ro
+      - ./data:/data:ro
       - ./logs:/app/logs
       - ./dashboard:/app/dashboard
       - ./config:/app/config

@@ -43,6 +43,7 @@ coverage.xml
 # Environments
 .env
 .venv
+.mapbox_token
 env/
 venv/
 ENV/
@@ -71,6 +72,7 @@ logs/
 
 # Data files (keep structure, ignore content)
 notebooks/
+data/
 
 
 # Docker

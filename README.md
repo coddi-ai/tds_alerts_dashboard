@@ -1,25 +1,48 @@
-# Oil Analysis Dashboard - Production Deployment
+# Multi-Technical Alerts Dashboard - Production Deployment
 
-Interactive web dashboard for oil analysis and technical alerts monitoring. Built with Dash and Plotly, containerized with Docker for easy deployment.
+Interactive web dashboard for comprehensive fleet monitoring across multiple data sources. Built with Dash and Plotly, containerized with Docker for easy deployment.
 
 ## 📋 Overview
 
 This dashboard provides:
-- **Machine Status Monitoring**: Track oil analysis results across all equipment
-- **Limit Management**: Configure and monitor technical limits (Stewart, custom)
-- **Automated Reports**: View AI-generated recommendations and alerts
-- **Historical Analysis**: Analyze trends and patterns over time
+- **Fleet Overview**: Unified view of equipment health across all monitoring techniques
+- **Alert Monitoring**: Consolidated alerts from telemetry and tribology analysis
+- **Sensor Monitoring**: Real-time telemetry data and trend analysis
+- **Maintenance Tracking**: Historical maintenance activity monitoring
+- **Oil Analysis**: Tribology analysis with AI-generated recommendations
+- **Limit Management**: Configure and monitor technical limits (Stewart, sensor thresholds)
+- **Multi-Client Support**: Isolated data and configurations per client
 
 ## 🏗️ Architecture
 
 ```
 alerts_dashboard_production/
 ├── dashboard/          # Dash application logic
+│   ├── callbacks/      # Interactive callbacks per section
+│   ├── components/     # Reusable UI components
+│   └── tabs/           # Section content modules
 ├── config/            # Application configuration
-├── data/
-│   └── oil/
-│       └── processed/ # Pre-processed JSON data files
+├── src/               # Data processing modules
+│   ├── data/          # Data transformers, loaders, schemas
+│   └── utils/         # Utility functions
+├── data/              # Multi-technique data layers
+│   ├── oil/           # Tribology analysis data
+│   │   ├── silver/{client}/     # Harmonized oil data
+│   │   └── golden/{client}/     # Classified reports & limits
+│   ├── telemetry/     # Sensor monitoring data
+│   │   ├── silver/{client}/     # GPS & sensor readings
+│   │   └── golden/{client}/     # Telemetry alerts & rules
+│   ├── mantentions/   # Maintenance records
+│   │   └── golden/{client}/     # Weekly maintenance reports
+│   └── alerts/        # Consolidated alerts
+│       └── golden/{client}/     # Cross-technique alerts
 ├── documentation/     # Technical documentation
+│   ├── general/       # Dashboard overview and migration plan
+│   ├── oil/           # Oil data contracts
+│   ├── telemetry/     # Telemetry data contracts
+│   ├── mantentions/   # Mantentions data contracts
+│   └── alerts/        # Alerts data contracts
+├── notebooks/         # Jupyter analysis notebooks
 ├── Dockerfile         # Container definition
 ├── docker-compose.yml # Docker Compose orchestration
 ├── requirements.txt   # Python dependencies
@@ -45,11 +68,41 @@ cd Multi-Technical-Alerts/alerts_dashboard_production
 
 ```bash
 # Copy environment template
-cp .env .env.local
+cp .env.example .env
 
-# Edit configuration (optional)
-# Set SECRET_KEY for production
+# Edit configuration
+nano .env  # or use your preferred editor
+
+# Required: Set SECRET_KEY for production
+# Optional: Set MAPBOX_TOKEN for GPS maps (see below)
 ```
+
+#### Mapbox Token Configuration (for GPS Maps)
+
+GPS route visualizations in the Alerts Detail tab require a Mapbox access token. You have **three options**:
+
+**Option 1: Environment Variable (Recommended for Docker/Production)**
+```bash
+# In your .env file:
+MAPBOX_TOKEN=pk.your.mapbox.token.here
+```
+
+**Option 2: Token File (Recommended for Local Development)**
+```bash
+# Create a .mapbox_token file in the project root
+cp .mapbox_token.example .mapbox_token
+
+# Edit and paste your token
+echo "pk.your.mapbox.token.here" > .mapbox_token
+```
+
+**Option 3: Skip GPS Maps**
+```bash
+# Leave MAPBOX_TOKEN empty in .env
+# GPS map section will display "No GPS data available"
+```
+
+**Get a free Mapbox token**: https://account.mapbox.com/access-tokens/
 
 ### 3. Run with Docker Compose
 
@@ -182,7 +235,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ### Environment Variables
 
-Create a `.env` file for production:
+Create a `.env` file for production (use `.env.example` as template):
 
 ```bash
 # Security
@@ -191,13 +244,25 @@ SECRET_KEY=your-production-secret-key-here-min-32-chars
 # Server Configuration
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8050
+DEBUG_MODE=False
 
-# Data
-DATA_ROOT=/app/data/oil
+# API Keys
+OPENAI_API_KEY=sk-your-openai-key-here  # Optional, for AI features
+MAPBOX_TOKEN=pk.your.mapbox.token.here  # Required for GPS maps
+
+# Clients
+CLIENTS=CDA,EMIN
 
 # Optional: Logging
 LOG_LEVEL=INFO
 ```
+
+**Important Notes:**
+- **SECRET_KEY**: Generate with `python -c "import secrets; print(secrets.token_hex(32))"`
+- **MAPBOX_TOKEN**: Get free token at https://account.mapbox.com/access-tokens/
+  - Can also be provided via `.mapbox_token` file
+  - Required for GPS route visualizations in Alerts Detail tab
+- **OPENAI_API_KEY**: Only needed if using AI recommendation features
 
 ### Update User Credentials
 
@@ -215,14 +280,21 @@ USERS = {
 To update dashboard data:
 
 ```bash
-# Replace processed data files
-cp new_cda_classified.parquet data/oil/processed/
-cp new_emin_classified.parquet data/oil/processed/
-cp new_stewart_limits.parquet data/oil/processed/
+# Update CDA client data
+cp new_classified.parquet data/oil/golden/cda/classified.parquet
+cp new_machine_status.parquet data/oil/golden/cda/machine_status.parquet
+cp new_stewart_limits.parquet data/oil/golden/cda/stewart_limits.parquet
 
-# Restart dashboard
+# Update EMIN client data
+cp new_classified.parquet data/oil/golden/emin/classified.parquet
+cp new_machine_status.parquet data/oil/golden/emin/machine_status.parquet
+cp new_stewart_limits.parquet data/oil/golden/emin/stewart_limits.parquet
+
+# Restart dashboard to load new data
 docker-compose restart
 ```
+
+**Note**: Data files must include `componentNameNormalized` field (added Feb 2026) for proper component granularity support.
 
 ## 🐳 Docker Commands Reference
 
@@ -271,13 +343,43 @@ docker stats oil-dashboard
 
 ## 📊 Data Format
 
-The dashboard expects processed data in Parquet format:
+The dashboard uses a **multi-technique data architecture** with the following structure:
 
-- `data/oil/processed/cda_classified.parquet` - CDA lab results
-- `data/oil/processed/emin_classified.parquet` - EMIN lab results  
-- `data/oil/processed/stewart_limits.parquet` - Stewart limit definitions
+### Data Organization
+```
+data/{technique}/{layer}/{client}/{datafile}
+```
 
-See `documentation/data_contracts.md` for detailed schemas.
+Where:
+- **technique**: `oil`, `telemetry`, `mantentions`, `alerts`
+- **layer**: `silver` (harmonized) or `golden` (analysis-ready)
+- **client**: Client identifier (e.g., `cda`, `emin`)
+
+### Available Techniques
+
+#### 1. Oil (Tribology Analysis) - ✅ Implemented
+- **Silver**: Harmonized oil sample data
+- **Golden**: Classified reports, machine status, Stewart limits
+- **Status**: Fully operational with AI recommendations
+
+#### 2. Telemetry (Sensor Monitoring) - 🔄 In Progress
+- **Silver**: GPS location, sensor readings with alerts
+- **Golden**: Alert data, sensor rules
+- **Status**: Data contracts defined, implementation pending
+
+#### 3. Mantentions (Maintenance Records) - 🔄 In Progress
+- **Golden**: Weekly maintenance reports with activity details
+- **Status**: Data contracts defined, implementation pending
+
+#### 4. Alerts (Consolidated) - 🔄 In Progress
+- **Golden**: Cross-technique alerts with AI diagnosis
+- **Status**: Data contracts defined, implementation pending
+
+See individual data contracts for detailed schemas:
+- [Oil Data Contracts](documentation/oil/DATA_CONTRACTS.md)
+- [Telemetry Data Contracts](documentation/telemetry/data_contracts.md)
+- [Mantentions Data Contracts](documentation/mantentions/data_contracts.md)
+- [Alerts Data Contracts](documentation/alerts/data_contracts.md)
 
 ## 🔍 Troubleshooting
 
@@ -302,9 +404,11 @@ netstat -an | grep 8050
 
 ### No Data Displayed
 
-- Ensure JSON files are in `data/oil/processed/`
-- Verify JSON format is valid
-- Check container has read access to data volume
+- Ensure Parquet files exist in `data/oil/golden/{client}/`
+- Verify required files: `classified.parquet`, `machine_status.parquet`, `stewart_limits.parquet`
+- Check Parquet format is valid (use `pd.read_parquet()` to test)
+- Verify container has read access to data volume
+- Ensure data includes `componentNameNormalized` field for proper limits matching
 
 ### Performance Issues
 
@@ -344,9 +448,14 @@ tar -czf dashboard-logs-backup-$(date +%Y%m%d).tar.gz logs/
 
 ## 📚 Additional Documentation
 
-- `documentation/dashboard_documentation.md` - Dashboard features and usage
-- `documentation/data_contracts.md` - Data format specifications
-- `documentation/deployment_guide_for_dummies.md` - Detailed deployment guide
+- **General**:
+  - [Dashboard Overview](documentation/general/dashboard_overview.md) - High-level architecture and features
+  - [Migration Plan](documentation/general/migration_plan.md) - Multi-technique integration roadmap
+- **Data Contracts**:
+  - [Oil Data Contracts](documentation/oil/DATA_CONTRACTS.md) - Tribology data specifications
+  - [Telemetry Data Contracts](documentation/telemetry/data_contracts.md) - Sensor data specifications
+  - [Mantentions Data Contracts](documentation/mantentions/data_contracts.md) - Maintenance data specifications
+  - [Alerts Data Contracts](documentation/alerts/data_contracts.md) - Consolidated alerts specifications
 
 ## 🤝 Support
 
@@ -361,6 +470,12 @@ Internal use only - Proprietary software
 
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: January 2026  
+**Version**: 2.0.0  
+**Last Updated**: February 2026  
 **Maintained by**: Technical Alerts Team
+
+**Recent Updates:**
+- ✨ Component granularity preservation (left/right positions)
+- 🏗️ Migrated to Bronze/Silver/Golden data architecture
+- 🔧 Enhanced Stewart Limits calculation with component normalization
+- 📊 Improved data contracts and documentation

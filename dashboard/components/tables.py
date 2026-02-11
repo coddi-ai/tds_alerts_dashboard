@@ -97,9 +97,9 @@ def create_priority_table(df: pd.DataFrame) -> dash_table.DataTable:
                                'components_anormal', 'components_alerta', 
                                'latest_sample_date']].copy()
     
-    # Apply title() to unit_id
+    # Apply .upper() to unit_id
     if 'unit_id' in display_df.columns:
-        display_df['unit_id'] = display_df['unit_id'].str.title()
+        display_df['unit_id'] = display_df['unit_id'].str.upper()
     
     return dash_table.DataTable(
         id='priority-table',
@@ -161,10 +161,10 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
     if df.empty:
         return html.Div("Select a machine to view details", className="text-muted p-3")
     
-    # Apply title() to unitId and componentName
+    # Apply formatting to unitId and componentName
     df = df.copy()
     if 'unitId' in df.columns:
-        df['unitId'] = df['unitId'].str.title()
+        df['unitId'] = df['unitId'].str.upper()
     if 'componentName' in df.columns:
         df['componentName'] = df['componentName'].str.title()
     

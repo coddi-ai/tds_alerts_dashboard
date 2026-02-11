@@ -23,9 +23,18 @@ class Settings(BaseSettings):
     # API Keys
     openai_api_key: str = Field(default="", description="OpenAI API key for recommendations")
     
-    # Paths
-    data_root: Path = Field(default=Path("data/oil"), description="Root data directory")
+    # Paths - managed internally, not via .env
     logs_dir: Path = Field(default=Path("logs"), description="Logs directory")
+    
+    @property
+    def data_root(self) -> Path:
+        """Get data root directory (multi-technique architecture)."""
+        # Check if running in Docker (data mounted at /app/data)
+        docker_path = Path("/data")
+        if docker_path.exists():
+            return docker_path
+        # Local development
+        return Path("data")
     
     # Dashboard
     secret_key: str = Field(default="dev-secret-key-change-in-production", description="Secret key for sessions")
@@ -59,7 +68,7 @@ class Settings(BaseSettings):
     # Clients
     clients: List[str] = Field(default=["CDA", "EMIN"], description="List of client names")
     
-    @field_validator("data_root", "logs_dir", mode="before")
+    @field_validator("logs_dir", mode="before")
     @classmethod
     def ensure_path(cls, v):
         """Convert string to Path if needed."""
@@ -75,29 +84,96 @@ class Settings(BaseSettings):
             return [c.strip() for c in v.split(",")]
         return v
     
+    # Generic multi-technique path methods
+    def get_technique_path(self, technique: str, layer: str, client: str) -> Path:
+        """
+        Get path for any technique following data/{technique}/{layer}/{client} pattern.
+        
+        Args:
+            technique: 'oil', 'telemetry', 'mantentions', or 'alerts'
+            layer: 'bronze', 'silver', or 'golden'
+            client: Client identifier
+        
+        Returns:
+            Path to technique data
+        """
+        return self.data_root / technique / layer / client.lower()
+    
+    def get_technique_file(self, technique: str, layer: str, client: str, filename: str) -> Path:
+        """
+        Get specific file path for any technique.
+        
+        Args:
+            technique: 'oil', 'telemetry', 'mantentions', or 'alerts'
+            layer: 'bronze', 'silver', or 'golden'
+            client: Client identifier
+            filename: File name (e.g., 'classified.parquet')
+        
+        Returns:
+            Full file path
+        """
+        return self.get_technique_path(technique, layer, client) / filename
+    
+    # Oil-specific convenience methods
     def get_bronze_path(self, client: str) -> Path:
-        """Get bronze (raw) data path for a client."""
-        return self.data_root / "bronze" / client.lower()
+        """Get bronze (raw) data path for oil technique."""
+        return self.get_technique_path('oil', 'bronze', client)
     
     def get_silver_path(self, client: str) -> Path:
-        """Get silver (harmonized) data path for a client."""
-        return self.data_root / "silver" / f"{client.upper()}.parquet"
+        """Get silver (harmonized) data file path for oil technique."""
+        return self.get_technique_path('oil', 'silver', client) / f"{client.upper()}.parquet"
     
     def get_golden_path(self, client: str) -> Path:
-        """Get golden (analysis-ready) data path for a client."""
-        return self.data_root / "golden" / client.lower()
+        """Get golden (analysis-ready) data path for oil technique."""
+        return self.get_technique_path('oil', 'golden', client)
     
     def get_classified_reports_path(self, client: str) -> Path:
-        """Get classified reports path for a client."""
-        return self.get_golden_path(client) / "classified.parquet"
+        """Get classified reports path for oil technique."""
+        return self.get_technique_file('oil', 'golden', client, 'classified.parquet')
     
     def get_machine_status_path(self, client: str) -> Path:
-        """Get machine status path for a client."""
-        return self.get_golden_path(client) / "machine_status.parquet"
+        """Get machine status path for oil technique."""
+        return self.get_technique_file('oil', 'golden', client, 'machine_status.parquet')
     
     def get_stewart_limits_path(self, client: str) -> Path:
-        """Get Stewart limits path for a client."""
-        return self.get_golden_path(client) / "stewart_limits.parquet"
+        """Get Stewart limits path for oil technique."""
+        return self.get_technique_file('oil', 'golden', client, 'stewart_limits.parquet')
+    
+    # Telemetry-specific convenience methods
+    def get_telemetry_gps_path(self, client: str) -> Path:
+        """Get GPS data path for telemetry."""
+        return self.get_technique_file('telemetry', 'silver', client, 'gps.parquet')
+    
+    def get_telemetry_data_path(self, client: str) -> Path:
+        """Get telemetry sensor data path."""
+        return self.get_technique_file('telemetry', 'silver', client, 'telemetry.parquet')
+    
+    def get_telemetry_alerts_path(self, client: str) -> Path:
+        """Get telemetry alerts data path."""
+        return self.get_technique_file('telemetry', 'golden', client, 'alerts_data.csv')
+    
+    def get_telemetry_rules_path(self, client: str) -> Path:
+        """Get telemetry data rules path."""
+        return self.get_technique_file('telemetry', 'golden', client, 'data_rules.csv')
+    
+    # Mantentions-specific convenience methods
+    def get_mantentions_report_path(self, client: str, week: str) -> Path:
+        """
+        Get mantentions weekly report path.
+        
+        Args:
+            client: Client identifier
+            week: Week in format 'ww-yyyy' (e.g., '32-2025')
+        
+        Returns:
+            Path to weekly maintenance report
+        """
+        return self.get_technique_file('mantentions', 'golden', client, f'{week}.csv')
+    
+    # Alerts-specific convenience methods
+    def get_consolidated_alerts_path(self, client: str) -> Path:
+        """Get consolidated alerts path."""
+        return self.get_technique_file('alerts', 'golden', client, 'consolidated_alerts.csv')
     
     def create_directories(self) -> None:
         """Create necessary directories if they don't exist."""

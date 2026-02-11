@@ -29,9 +29,13 @@ import dash
 import dash_bootstrap_components as dbc
 from dashboard.layout import create_app_layout
 from dashboard.callbacks.auth_callbacks import register_auth_callbacks
+from dashboard.callbacks.navigation_callbacks import register_navigation_callbacks
 from dashboard.callbacks.limits_callbacks import register_limits_callbacks
 from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
+
+# Import alerts callbacks (uses @callback decorator, auto-registered on import)
+import dashboard.callbacks.alerts_callbacks
 
 
 def normalize_prefix(prefix: str | None) -> str:
@@ -75,6 +79,7 @@ def health_check():
 
 # Register all callbacks
 register_auth_callbacks(app)
+register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
 register_reports_callbacks(app)

@@ -309,3 +309,309 @@ def load_silver_data(file_path: str | Path) -> pd.DataFrame:
     
     logger.info(f"Loaded {len(df)} silver layer records")
     return df
+
+
+# ========================================
+# ALERTS DASHBOARD LOADERS (CDA ONLY)
+# ========================================
+
+def load_alerts_data(client: str) -> pd.DataFrame:
+    """
+    Load consolidated alerts data for a specific client.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with alerts data including derived columns (has_telemetry, has_tribology, Month)
+    
+    Note:
+        This feature is currently only available for CDA client.
+    """
+    # CDA-only check
+    if client.lower() != 'cda':
+        logger.warning(f"Alerts dashboard is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/alerts/golden/{client.upper()}/consolidated_alerts.csv")
+    logger.info(f"Loading alerts data from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Alerts file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(file_path)
+        
+        # Parse timestamp
+        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        
+        # Fill sistema, subsistema and componente missing values
+        df['sistema'] = df['sistema'].fillna('Desconocido')
+        df['subsistema'] = df['subsistema'].fillna('Desconocido')
+        df['componente'] = df['componente'].fillna('Desconocido')
+        
+        # Derive additional columns
+        df['has_telemetry'] = df['Trigger_type'].isin(['Telemetria', 'Mixto'])
+        df['has_tribology'] = df['Trigger_type'].isin(['Tribologia', 'Mixto'])
+        df['Month'] = df['Timestamp'].dt.to_period('M')
+        
+        logger.info(f"Loaded {len(df)} alerts for client {client}")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading alerts data: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_values(client: str) -> pd.DataFrame:
+    """
+    Load telemetry values in wide format (one column per sensor).
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with telemetry values (Fecha, Unit, sensor columns)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry data is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/silver/{client.upper()}/telemetry_values_wide.parquet")
+    logger.info(f"Loading telemetry values from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Telemetry values file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = safe_read_parquet(file_path)
+        df['Fecha'] = pd.to_datetime(df['Fecha'])
+        logger.info(f"Loaded {len(df)} telemetry value records")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading telemetry values: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_states(client: str) -> pd.DataFrame:
+    """
+    Load telemetry states (operational state, payload state).
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with telemetry states (Fecha, Unit, Estado, EstadoCarga)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry states is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/silver/{client.upper()}/telemetry_states.parquet")
+    logger.info(f"Loading telemetry states from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Telemetry states file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = safe_read_parquet(file_path)
+        df['Fecha'] = pd.to_datetime(df['Fecha'])
+        logger.info(f"Loaded {len(df)} telemetry state records")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading telemetry states: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_limits(client: str) -> pd.DataFrame:
+    """
+    Load telemetry limits configuration.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with limits (Unit, Feature, Estado, EstadoCarga, Limit_Lower, Limit_Upper)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry limits is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/silver/{client.upper()}/limits_config.parquet")
+    logger.info(f"Loading telemetry limits from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Telemetry limits file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} telemetry limit records")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading telemetry limits: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_alerts_metadata(client: str) -> pd.DataFrame:
+    """
+    Load telemetry alerts metadata (includes Trigger field).
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with alerts metadata (AlertID, Trigger, etc.)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry alerts metadata is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/golden/{client.upper()}/alerts_data.csv")
+    logger.info(f"Loading telemetry alerts metadata from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Telemetry alerts metadata file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(file_path)
+        df['AlertID'] = df['AlertID'].astype(str)
+        logger.info(f"Loaded {len(df)} telemetry alert metadata records")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading telemetry alerts metadata: {e}")
+        return pd.DataFrame()
+
+
+def load_component_mapping(client: str) -> pd.DataFrame:
+    """
+    Load component-to-feature mapping for telemetry sensors.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with Component, PrimaryFeature, System, SubSystem, Meaning, RelatedFeatures
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Component mapping is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/golden/{client.upper()}/component_mapping.parquet")
+    logger.info(f"Loading component mapping from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Component mapping file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} component mapping entries")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading component mapping: {e}")
+        return pd.DataFrame()
+
+
+def load_feature_names(client: str) -> Dict[str, str]:
+    """
+    Load feature names mapping (Variable code → Spanish name).
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        Dictionary mapping feature codes to Spanish names
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Feature names is only available for CDA client. Requested: {client}")
+        return {}
+    
+    file_path = Path(f"data/telemetry/golden/{client.upper()}/feature_names.csv")
+    logger.info(f"Loading feature names from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Feature names file not found: {file_path}")
+        return {}
+    
+    try:
+        df = pd.read_csv(file_path)
+        mapping = dict(zip(df['Feature'], df['Name']))
+        logger.info(f"Loaded {len(mapping)} feature names")
+        return mapping
+    
+    except Exception as e:
+        logger.error(f"Error loading feature names: {e}")
+        return {}
+
+
+def load_oil_classified(client: str) -> pd.DataFrame:
+    """
+    Load classified oil reports for alerts dashboard.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with classified oil samples (sampleNumber, essay columns, report_status, etc.)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Oil classified data is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/oil/golden/{client.upper()}/classified.parquet")
+    logger.info(f"Loading oil classified data from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Oil classified file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} classified oil reports")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading oil classified data: {e}")
+        return pd.DataFrame()
+
+
+def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
+    """
+    Load maintenance data for a specific week.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        week: Week identifier (e.g., '01-2025')
+    
+    Returns:
+        DataFrame with maintenance records for the week
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Maintenance data is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/mantentions/golden/{client.upper()}/{week}.csv")
+    logger.info(f"Loading maintenance data from {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Maintenance file not found for week {week}: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(file_path)
+        logger.info(f"Loaded {len(df)} maintenance records for week {week}")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading maintenance data: {e}")
+        return pd.DataFrame()

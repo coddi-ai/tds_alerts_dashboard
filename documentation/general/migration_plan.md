@@ -1,0 +1,766 @@
+# Multi-Technical Dashboard - Migration Plan
+
+**Version**: 1.0  
+**Created**: February 4, 2026  
+**Owner**: Technical Alerts Team  
+**Estimated Duration**: 6-8 weeks
+
+---
+
+## 📋 Overview
+
+This migration plan outlines the phased approach to transform the single-technique Oil Analysis Dashboard into a **Multi-Technical Alerts Dashboard** that integrates four data sources:
+
+1. ✅ **Oil** - Tribology analysis (COMPLETED)
+2. 🔄 **Alerts** - Consolidated cross-technique alerts (PHASE 1)
+3. 🔄 **Telemetry** - Sensor data monitoring (PHASE 2)
+4. 🔄 **Mantentions** - Maintenance activity tracking (PHASE 3)
+
+**Migration Strategy**: Incremental technique-by-technique integration to minimize disruption and enable continuous validation.
+
+---
+
+## 🎯 Migration Goals
+
+### Primary Objectives
+1. ✅ Maintain existing Oil functionality during migration
+2. 🎯 Integrate new techniques without breaking current features
+3. 🎯 Provide unified fleet monitoring experience
+4. 🎯 Enable cross-technique alert correlation
+5. 🎯 Scale to support multiple clients seamlessly
+
+### Success Criteria
+- ✅ All existing Oil features work unchanged
+- ✅ New sections accessible and functional
+- ✅ Performance remains acceptable (<3s page load)
+- ✅ Data accuracy validated per technique
+- ✅ User experience is intuitive and consistent
+
+---
+
+## 🏗️ Architecture Updates
+
+### Current State (Oil-Only)
+```
+Dashboard
+├── Machine Overview (Oil machine status)
+├── Reports Detail (Oil classified reports)
+└── Stewart Limits (Oil limits)
+```
+
+### Target State (Multi-Technical)
+```
+Dashboard
+├── Overview Section
+│   └── General (Fleet summary)
+├── Monitoring Section
+│   ├── Alerts
+│   │   ├── General (Alert overview)
+│   │   └── Detail (Individual alert inspection)
+│   ├── Telemetry (Sensor monitoring)
+│   ├── Mantentions (Maintenance tracking)
+│   └── Oil (Tribology analysis)
+└── Limits Section
+    ├── Oil (Stewart Limits)
+    └── Telemetry (Sensor thresholds)
+```
+
+---
+
+## 📅 Migration Phases
+
+### ✅ **PHASE 0: Foundation** (COMPLETED)
+**Duration**: 1 week  
+**Status**: ✅ Complete
+
+#### Deliverables
+- [x] Component granularity fix implemented
+- [x] Data contracts documented for Oil
+- [x] Dashboard documentation created
+- [x] Multi-client folder structure established
+
+---
+
+### 🔄 **PHASE 1: Alerts Integration**
+**Duration**: 2 weeks  
+**Goal**: Enable unified alert monitoring across techniques
+
+#### Overview
+Integrate the consolidated alerts data source to provide a **unified view of equipment health issues** from both telemetry and oil analysis. This phase establishes the foundation for cross-technique correlation.
+
+---
+
+#### Step 1.1: Layout Proposal ✅ COMPLETED
+**Objective**: Design the visual structure for Alerts monitoring
+
+**Status**: ✅ Complete (February 5, 2026)
+
+**Completed Tasks**:
+1. ✅ **Navigation Design**
+   - Monitoring section with Alerts subsection defined
+   - Two-tab structure: "General" and "Detail"
+
+2. ✅ **General Tab Layout**
+   - Distribution of Alerts per Unit (Horizontal Bar Chart)
+   - Distribution of Alerts per Month (Vertical Bar Chart)
+   - Distribution of Alert Trigger (Treemap)
+   - Alerts Table with key columns
+
+3. ✅ **Detail Tab Layout**
+   - Alert Specification section designed
+   - Telemetry Evidence: Sensor Trends, GPS Map, Context KPIs
+   - Oil Evidence: Radar Chart
+   - Maintenance Evidence: Text display
+
+**Deliverables**:
+- ✅ `documentation/alerts/dashboard_overview.md` - Complete layout documentation
+- ✅ Component specifications documented
+- ✅ Data sources and conditions clearly defined
+
+---
+
+#### Step 1.2: Jupyter Notebook Prototyping ✅ COMPLETED
+**Objective**: Develop and validate visualizations in Jupyter before Dash integration
+
+**Status**: ✅ Complete (February 5, 2026)
+
+**Completed Tasks**:
+1. ✅ **Create Notebook**: `notebooks/alerts_exploration.ipynb`
+
+2. ✅ **Data Loading & Exploration**
+   - Load consolidated alerts from golden layer
+   - Configuration for multi-client support
+   - Derived columns for has_telemetry, has_tribology, Month
+
+3. ✅ **General Tab Visualizations**
+   - Distribution of Alerts per Unit (Plotly bar chart)
+   - Distribution of Alerts per Month (Plotly bar chart)
+   - Distribution of Alert Trigger (Plotly treemap)
+   - Alerts Table with sorting and formatting
+
+4. ✅ **Detail Tab Visualizations**
+   - Alert Specification display (formatted text)
+   - Telemetry Evidence:
+     - Sensor Trends (Time series with subplots)
+     - GPS Location (Scattermapbox with route)
+     - Alert Context KPIs (Elevation, Payload, RPM)
+   - Oil Evidence (Radar chart with essay levels)
+   - Maintenance Evidence (Text display with summary)
+
+5. ✅ **Conditional Logic**
+   - Telemetry shown only if trigger_type in ['telemetry', 'mixto']
+   - Oil shown only if trigger_type in ['oil', 'mixto']
+   - Maintenance always shown (if available)
+   - Proper handling of missing data
+
+**Deliverables**:
+- ✅ `notebooks/alerts_exploration.ipynb` - Complete with all visualizations
+- ✅ Structured sections: Setup, General Tab, Detail Tab
+- ✅ Independent cells for each visualization component
+
+---
+
+#### Step 1.3: Dash Migration
+**Objective**: Convert Jupyter visualizations to Dash components
+
+**Tasks**:
+1. **Create Components** (`dashboard/components/`)
+   - `alerts_charts.py`: Reusable chart functions
+   - `alerts_filters.py`: Filter components
+   - `alerts_tables.py`: Alert summary and detail tables
+
+2. **Create Tab Modules** (`dashboard/tabs/`)
+   - `tab_alerts_general.py`: General overview layout
+   - `tab_alerts_detail.py`: Detailed alert inspection layout
+
+3. **Create Callbacks** (`dashboard/callbacks/`)
+   - `alerts_callbacks.py`: Handle all alert interactions
+     - Filter updates
+     - Chart interactions
+     - Detail view navigation
+     - Data refreshes
+
+4. **Data Loader** (`src/data/loaders.py`)
+   - Add `load_consolidated_alerts()` function
+   - Implement caching for performance
+   - Handle missing data gracefully
+
+5. **Testing**
+   - Unit tests for data loading
+   - Integration tests for callbacks
+   - Visual regression testing
+   - Performance profiling
+
+**Deliverables**:
+- Functional Alerts General tab
+- Functional Alerts Detail tab
+- Callback logic tested and validated
+- Performance metrics documented
+
+---
+
+#### Step 1.4: Dashboard Integration
+**Objective**: Integrate Alerts tabs into main dashboard navigation
+
+**Tasks**:
+1. **Update Layout** (`dashboard/layout.py`)
+   - Add Monitoring section to navigation
+   - Add Alerts subsection
+   - Register new tabs
+
+2. **Update App** (`dashboard/app.py`)
+   - Import new tab modules
+   - Register callbacks
+   - Update routing logic
+
+3. **Styling & UX**
+   - Ensure consistent design with Oil tabs
+   - Add loading indicators
+   - Implement error handling
+   - Add tooltips and help text
+
+4. **Documentation**
+   - Update user guide
+   - Document new features
+   - Create training materials
+
+**Deliverables**:
+- Fully integrated Alerts section in dashboard
+- User documentation
+- Deployment-ready code
+
+---
+
+### 🔄 **PHASE 2: Telemetry Integration**
+**Duration**: 2-3 weeks  
+**Goal**: Enable real-time sensor monitoring and trend analysis
+
+#### Overview
+Integrate telemetry data to provide **real-time equipment health monitoring** through sensor readings. This phase enables detection of operational anomalies and trending analysis.
+
+---
+
+#### Step 2.1: Layout Proposal
+**Objective**: Design sensor monitoring visualizations
+
+**Tasks**:
+1. **Navigation Design**
+   - Add "Telemetry" subsection under Monitoring
+   - Single-page layout (no tabs needed)
+
+2. **Telemetry Page Layout**
+   - Filter panel: Unit, Date range, Trigger, Estado, EstadoCarga
+   - KPI cards: Active alerts, Monitored triggers, Alert rate
+   - Line charts: Sensor trends over time (multi-trigger)
+   - Heatmap: Alert frequency by unit and trigger
+   - Scatter plot: GPS location with alert overlay
+   - Table: Recent telemetry alerts
+
+**Deliverables**:
+- Wireframe document with layout mockups
+- Chart specification (axes, colors, interactions)
+- GPS mapping requirements
+
+---
+
+#### Step 2.2: Jupyter Notebook Prototyping
+**Objective**: Develop telemetry visualizations in Jupyter
+
+**Tasks**:
+1. **Create Notebook**: `notebooks/telemetry_exploration.ipynb`
+
+2. **Data Loading & Exploration**
+   - Load `telemetry.parquet` and `gps.parquet`
+   - Explore sensor data patterns
+   - Analyze alert trigger distributions
+   - Validate GPS coordinates
+
+3. **Visualizations**
+   - Build time series charts for sensor trends
+   - Create alert frequency heatmap
+   - Build GPS scatter map with Plotly/Mapbox
+   - Design alert threshold visualization (upper/lower limits)
+   - Create state-based analysis (Operacional vs Ralenti)
+
+4. **Analysis**
+   - Identify common alert patterns
+   - Calculate alert rates per unit
+   - Analyze sensor correlations
+   - Document anomaly detection logic
+
+5. **Validation**
+   - Test with different date ranges
+   - Verify GPS coordinates plot correctly
+   - Validate alert threshold logic
+   - Performance test with large datasets
+
+**Deliverables**:
+- `notebooks/telemetry_exploration.ipynb` with working visualizations
+- Sensor pattern analysis report
+- Performance recommendations
+
+---
+
+#### Step 2.3: Dash Migration
+**Objective**: Convert telemetry visualizations to Dash
+
+**Tasks**:
+1. **Create Components** (`dashboard/components/`)
+   - `telemetry_charts.py`: Time series, heatmaps, GPS maps
+   - `telemetry_filters.py`: Sensor-specific filters
+   - `telemetry_tables.py`: Alert and sensor tables
+
+2. **Create Tab Module** (`dashboard/tabs/`)
+   - `tab_telemetry.py`: Unified telemetry monitoring layout
+
+3. **Create Callbacks** (`dashboard/callbacks/`)
+   - `telemetry_callbacks.py`: Handle sensor interactions
+     - Sensor selection and filtering
+     - Time range updates
+     - GPS map interactions
+     - Real-time updates (if applicable)
+
+4. **Data Loaders** (`src/data/loaders.py`)
+   - Add `load_telemetry_data()` function
+   - Add `load_gps_data()` function
+   - Implement efficient time-based queries
+   - Cache recent data for performance
+
+5. **Testing**
+   - Test with multi-unit selections
+   - Verify GPS rendering performance
+   - Validate time series aggregations
+   - Load testing with real data volumes
+
+**Deliverables**:
+- Functional Telemetry monitoring page
+- Optimized data loading
+- Interactive sensor charts
+
+---
+
+#### Step 2.4: Dashboard Integration
+**Objective**: Add Telemetry to Monitoring section
+
+**Tasks**:
+1. **Update Navigation** (`dashboard/layout.py`)
+   - Add Telemetry subsection under Monitoring
+   - Update routing
+
+2. **Limits Section Enhancement**
+   - Add "Telemetry Limits" tab under Limits section
+   - Display `data_rules.csv` in table format
+   - Add filters by Trigger, Estado, EstadoCarga
+   - Visualize threshold distributions
+
+3. **Cross-Tab Integration**
+   - Enable navigation from Alerts → Telemetry
+   - Link telemetry alerts to detail views
+   - Implement unified filtering
+
+**Deliverables**:
+- Integrated Telemetry monitoring
+- Telemetry Limits tab functional
+- Cross-navigation working
+
+---
+
+### 🔄 **PHASE 3: Mantentions Integration**
+**Duration**: 1-2 weeks  
+**Goal**: Track maintenance activities and correlate with alerts
+
+#### Overview
+Integrate maintenance records to provide **historical intervention tracking** and enable correlation between maintenance activities and equipment health alerts.
+
+---
+
+#### Step 3.1: Layout Proposal
+**Objective**: Design maintenance activity visualizations
+
+**Tasks**:
+1. **Navigation Design**
+   - Add "Mantentions" subsection under Monitoring
+   - Single-page layout
+
+2. **Mantentions Page Layout**
+   - Filter panel: Unit, Week range, System
+   - KPI cards: Total interventions, Most active system, Units serviced
+   - Bar chart: Interventions per week
+   - Horizontal bar: Activities by system
+   - Sankey diagram: Unit → System → Activity flow
+   - Calendar heatmap: Maintenance frequency
+   - Table: Recent maintenance summary with expandable details
+
+**Deliverables**:
+- Wireframe document
+- Chart specifications
+- Interaction patterns
+
+---
+
+#### Step 3.2: Jupyter Notebook Prototyping
+**Objective**: Develop maintenance visualizations
+
+**Tasks**:
+1. **Create Notebook**: `notebooks/mantentions_exploration.ipynb`
+
+2. **Data Loading & Exploration**
+   - Load multiple `ww-yyyy.csv` files
+   - Parse `Tasks_List` JSON structure
+   - Aggregate weekly reports
+   - Extract activity patterns
+
+3. **Visualizations**
+   - Build intervention frequency charts
+   - Create system breakdown analysis
+   - Design calendar heatmap
+   - Build activity flow diagram (Sankey)
+   - Create maintenance summary table with expandable rows
+
+4. **Analysis**
+   - Identify maintenance patterns
+   - Calculate intervention frequencies
+   - Analyze system priorities
+   - Correlate with alert occurrences
+
+5. **Validation**
+   - Test JSON parsing robustness
+   - Validate aggregations across weeks
+   - Verify summary text quality
+
+**Deliverables**:
+- `notebooks/mantentions_exploration.ipynb`
+- Maintenance pattern analysis
+- JSON parsing utilities
+
+---
+
+#### Step 3.3: Dash Migration
+**Objective**: Convert maintenance visualizations to Dash
+
+**Tasks**:
+1. **Create Components** (`dashboard/components/`)
+   - `mantentions_charts.py`: Frequency, system breakdown, calendar
+   - `mantentions_filters.py`: Week range, system filters
+   - `mantentions_tables.py`: Expandable maintenance tables
+
+2. **Create Tab Module** (`dashboard/tabs/`)
+   - `tab_mantentions.py`: Maintenance tracking layout
+
+3. **Create Callbacks** (`dashboard/callbacks/`)
+   - `mantentions_callbacks.py`: Handle maintenance interactions
+     - Week range selection
+     - System filtering
+     - Table expansion/collapse
+     - Detail view navigation
+
+4. **Data Loaders** (`src/data/loaders.py`)
+   - Add `load_maintenance_data()` function
+   - Implement multi-file loading (all weeks)
+   - Parse and validate JSON Tasks_List
+   - Cache and aggregate efficiently
+
+5. **Testing**
+   - Test multi-week aggregations
+   - Validate JSON parsing edge cases
+   - Performance test with full history
+
+**Deliverables**:
+- Functional Mantentions tracking page
+- JSON parsing utilities tested
+- Efficient multi-file loading
+
+---
+
+#### Step 3.4: Dashboard Integration
+**Objective**: Complete Monitoring section with Mantentions
+
+**Tasks**:
+1. **Update Navigation** (`dashboard/layout.py`)
+   - Add Mantentions subsection under Monitoring
+   - Finalize Monitoring section structure
+
+2. **Cross-Technique Integration**
+   - Link alerts to maintenance weeks (`Semana_Resumen_Mantencion`)
+   - Display maintenance context in alert details
+   - Enable filtering alerts by maintenance status
+
+3. **Final Integration Testing**
+   - Test all cross-references work
+   - Validate data consistency across techniques
+   - Performance test full dashboard
+   - User acceptance testing
+
+**Deliverables**:
+- Complete Monitoring section with all techniques
+- Cross-technique navigation functional
+- Integrated dashboard ready for production
+
+---
+
+### 🔄 **PHASE 4: Overview Section** (Final Integration)
+**Duration**: 1 week  
+**Goal**: Provide unified fleet summary
+
+#### Overview
+Create a comprehensive **fleet health overview** that aggregates insights from all techniques into a single executive dashboard.
+
+---
+
+#### Tasks
+
+1. **Data Aggregation Logic**
+   - Aggregate alert counts from all techniques
+   - Calculate overall fleet health score
+   - Compute availability metrics
+   - Identify top priority units
+
+2. **Overview Page Design**
+   - Fleet health scorecard (Oil + Telemetry + Maintenance)
+   - Alert distribution by technique
+   - Critical units list
+   - Time series: Fleet health trends
+   - System-level health breakdown
+
+3. **Implementation**
+   - Create `tab_overview_general.py`
+   - Implement cross-technique data loading
+   - Build unified KPIs
+   - Add drill-down capabilities to detail sections
+
+4. **Integration**
+   - Update navigation to highlight Overview
+   - Set as default landing page
+   - Add quick links to detail sections
+
+**Deliverables**:
+- Unified fleet overview dashboard
+- Executive-level KPIs
+- Complete dashboard navigation
+
+---
+
+## 🧪 Testing Strategy
+
+### Per-Phase Testing
+
+#### Unit Testing
+- Data loading functions
+- Calculation logic
+- Filter operations
+- JSON parsing
+
+#### Integration Testing
+- Callback chains
+- Cross-tab navigation
+- Data refresh flows
+- Multi-client support
+
+#### Visual Testing
+- Chart rendering
+- Responsive design
+- Loading states
+- Error states
+
+#### Performance Testing
+- Page load times (<3s)
+- Chart rendering
+- Large dataset handling
+- Concurrent user load
+
+---
+
+## 📊 Progress Tracking
+
+### Phase Checklist
+
+- [x] **Phase 1: Alerts** (In Progress - 50% Complete)
+  - [x] ✅ Layout proposal approved (Step 1.1 - February 5, 2026)
+  - [x] ✅ Jupyter notebook complete (Step 1.2 - February 5, 2026)
+  - [ ] Dash migration pending (Step 1.3)
+  - [ ] Integration testing pending (Step 1.4)
+  
+- [ ] **Phase 2: Telemetry**
+  - [ ] Layout proposal approved
+  - [ ] Jupyter notebook complete
+  - [ ] Dash migration done
+  - [ ] Integration tested
+  
+- [ ] **Phase 3: Mantentions**
+  - [ ] Layout proposal approved
+  - [ ] Jupyter notebook complete
+  - [ ] Dash migration done
+  - [ ] Integration tested
+  
+- [ ] **Phase 4: Overview**
+  - [ ] Aggregation logic complete
+  - [ ] Overview page implemented
+  - [ ] Final integration complete
+
+---
+
+### Recent Updates
+
+**February 5, 2026**:
+- ✅ Completed Phase 1, Step 1.1: Layout Proposal
+  - Created comprehensive `documentation/alerts/dashboard_overview.md`
+  - Documented General Tab (3 charts + table)
+  - Documented Detail Tab (Alert spec + 3 evidence sections)
+  
+- ✅ Completed Phase 1, Step 1.2: Jupyter Notebook Prototyping
+  - Created `notebooks/alerts_exploration.ipynb`
+  - Implemented all General Tab visualizations
+  - Implemented all Detail Tab visualizations
+  - Added conditional logic for telemetry/oil/maintenance evidence
+
+**Next Steps**: Phase 1, Step 1.3 - Dash Migration
+
+---
+
+## 🚀 Deployment Plan
+
+### Per-Phase Deployment
+
+Each phase follows this deployment cycle:
+
+1. **Development** (local)
+   - Implement features
+   - Local testing
+
+2. **Staging** (Docker)
+   - Build Docker image
+   - Deploy to staging
+   - Integration testing
+   - UAT (User Acceptance Testing)
+
+3. **Production** (Docker)
+   - Tag stable release
+   - Deploy to production
+   - Monitor performance
+   - Gather user feedback
+
+### Rollback Strategy
+
+- Maintain previous Docker image tags
+- Quick rollback capability: `docker-compose down && docker-compose up -d <previous-tag>`
+- Database/file backups before each phase
+
+---
+
+## 📋 Dependencies & Prerequisites
+
+### Technical Dependencies
+- ✅ Python 3.11+
+- ✅ Dash/Plotly latest
+- ✅ Pandas 2.0+
+- ✅ Docker & Docker Compose
+- 🔄 Mapbox token (for GPS visualization)
+
+### Data Dependencies
+- ✅ Oil data contracts finalized
+- ✅ Telemetry data contracts finalized
+- ✅ Mantentions data contracts finalized
+- ✅ Alerts data contracts finalized
+- 🔄 Sample datasets for all techniques
+- 🔄 Production data pipelines operational
+
+### Team Dependencies
+- Data engineering team: Data pipeline preparation
+- Backend team: API endpoints (if needed)
+- UX/UI team: Layout approval
+- QA team: Testing support
+- Product team: Requirements validation
+
+---
+
+## ⚠️ Risks & Mitigations
+
+### Risk 1: Data Quality Issues
+**Impact**: High  
+**Mitigation**: 
+- Implement robust data validation
+- Add data quality monitoring
+- Fallback to empty states gracefully
+
+### Risk 2: Performance Degradation
+**Impact**: Medium  
+**Mitigation**:
+- Implement aggressive caching
+- Use data sampling for large datasets
+- Optimize Parquet queries
+- Load data asynchronously
+
+### Risk 3: Complex Cross-Technique Logic
+**Impact**: Medium  
+**Mitigation**:
+- Start with simple correlations
+- Document integration patterns
+- Extensive testing of edge cases
+
+### Risk 4: User Confusion
+**Impact**: Low  
+**Mitigation**:
+- Clear navigation structure
+- Consistent UI patterns
+- Comprehensive documentation
+- User training sessions
+
+---
+
+## 📚 Documentation Updates
+
+### Per-Phase Documentation
+
+Each phase requires:
+1. ✅ Data contracts (completed)
+2. 🔄 Technical specifications
+3. 🔄 User guides
+4. 🔄 API documentation (if applicable)
+5. 🔄 Deployment guides
+
+### Final Documentation Deliverables
+- Complete user manual
+- Administrator guide
+- API reference (if applicable)
+- Troubleshooting guide
+- Training materials
+
+---
+
+## 🎯 Success Metrics
+
+### Technical Metrics
+- Page load time <3s
+- 99% uptime
+- Zero data loss
+- <100ms callback response
+
+### Business Metrics
+- User adoption rate >80%
+- Alert resolution time improvement
+- Maintenance efficiency increase
+- Reduced equipment downtime
+
+### User Satisfaction
+- User feedback score >4/5
+- Feature adoption tracking
+- Support ticket reduction
+
+---
+
+## 📞 Support & Communication
+
+### Status Updates
+- Weekly progress reports
+- Phase completion reviews
+- Risk assessment meetings
+
+### Stakeholder Communication
+- Product owner: Weekly updates
+- End users: Phase demos
+- Leadership: Milestone reports
+
+---
+
+**Migration Plan Status**: 📝 Ready for Execution  
+**Next Action**: Begin Phase 1 - Alerts Integration
