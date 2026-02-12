@@ -74,12 +74,15 @@ logs/
 /notebooks/
 /data/
 
+<<<<<<< HEAD
 # Data files (ignore structure and content)
 *.csv
 *.json
 *.xlsx
 *.parquet
 
+=======
+>>>>>>> f2cc749c1c194bde9a680359b8d7faa3332570db
 # Docker
 *.pid
 *.seed
