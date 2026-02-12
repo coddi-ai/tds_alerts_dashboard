@@ -71,9 +71,14 @@ logs/
 *.log
 
 # Data files (keep structure, ignore content)
-notebooks/
-data/
+/notebooks/
+/data/
 
+# Data files (ignore structure and content)
+*.csv
+*.json
+*.xlsx
+*.parquet
 
 # Docker
 *.pid
@@ -84,3 +89,7 @@ data/
 *.tmp
 *.bak
 *.swp
+
+# Documentation claude
+NAVIGATION_FIX_SUMMARY.md
+IMPLEMENTATION_SUMMARY.md
