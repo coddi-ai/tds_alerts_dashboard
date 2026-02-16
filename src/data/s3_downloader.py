@@ -194,6 +194,8 @@ def main():
     logger.info("=" * 60)
     logger.info("S3 Data Download Script")
     logger.info("=" * 60)
+    print("Download into:", local_data_dir)
+
     
     try:
         # Initialize downloader with credentials from .env file
@@ -212,6 +214,7 @@ def main():
             preserve_structure=True
         )
         
+        print("Files in /app/data after download:", list(local_data_dir.iterdir()))
         logger.info("=" * 60)
         logger.info(f"Total files: {stats['total']}")
         logger.info(f"Successfully downloaded: {stats['success']}")
