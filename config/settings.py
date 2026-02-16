@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     def data_root(self) -> Path:
         """Get data root directory (multi-technique architecture)."""
         # Check if running in Docker (data mounted at /app/data)
-        docker_path = Path("/data")
+        project_root = Path(__file__).parent.parent
+        docker_path = project_root / 'data'
         if docker_path.exists():
             return docker_path
         # Local development
