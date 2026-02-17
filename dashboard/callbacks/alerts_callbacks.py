@@ -46,13 +46,15 @@ from dashboard.tabs.tab_alerts_detail import (
     create_layout as create_detail_layout
 )
 from src.utils.logger import get_logger
+from config.settings import Settings
 
 logger = get_logger(__name__)
+settings = Settings()
 
 # Configuration
 M1 = 60  # Minutes before alert
 M2 = 10  # Minutes after alert
-MAPBOX_TOKEN = "pk.eyJ1IjoicGF0bzI2IiwiYSI6ImNscDdvc2FxNDF6b2sya3F2eHZ6bG1pdzgifQ.uW_fqM1_9beP_OTFvHm3Nw"
+MAPBOX_TOKEN = settings.mapbox_token
 
 
 # ========================================

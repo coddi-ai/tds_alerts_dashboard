@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     
     # API Keys
     openai_api_key: str = Field(default="", description="OpenAI API key for recommendations")
+    mapbox_token: str = Field(default="", description="Mapbox access token for maps")
     
     # Paths - managed internally, not via .env
     logs_dir: Path = Field(default=Path("logs"), description="Logs directory")
