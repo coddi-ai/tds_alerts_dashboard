@@ -256,6 +256,9 @@ def create_app_layout() -> html.Div:
         # Store for active tab
         dcc.Store(id='active-tab-store', storage_type='memory'),
         
+        # Store for alerts internal navigation
+        dcc.Store(id='alerts-navigation-state', storage_type='memory'),
+        
         # Page content (login or dashboard)
         html.Div(id='page-content')
     ])

@@ -331,10 +331,10 @@ def navigate_to_detail_on_row_click(active_cell, derived_data):
     Returns:
         Tuple of (tab_value, alert_id)
     """
-    logger.info(f"🔵 NAVIGATE CALLBACK TRIGGERED: active_cell={active_cell}, has_data={bool(derived_data)}")
+    logger.info(f"[ROW-NAV] NAVIGATE CALLBACK TRIGGERED: active_cell={active_cell}, has_data={bool(derived_data)}")
     
     if not active_cell or not derived_data:
-        logger.info("❌ No cell clicked or no data, preventing update")
+        logger.info("[ROW-NAV] No cell clicked or no data, preventing update")
         raise PreventUpdate
     
     try:
@@ -343,14 +343,157 @@ def navigate_to_detail_on_row_click(active_cell, derived_data):
         
         # Get the selected alert ID from derived data (handles pagination/filtering)
         selected_fusion_id = derived_data[row_index]['ID']
-        logger.info(f"✅ Row {row_index} clicked! Navigating to detail for alert: {selected_fusion_id}")
+        logger.info(f"[ROW-NAV] Row {row_index} clicked! Navigating to detail for alert: {selected_fusion_id}")
         
         # Switch to detail tab and set the dropdown value
         return 'detail', selected_fusion_id
     
     except Exception as e:
-        logger.error(f"❌ ERROR navigating to detail from row click: {e}", exc_info=True)
+        logger.error(f"ERROR navigating to detail from row click: {e}", exc_info=True)
         raise PreventUpdate
+
+
+# ========================================
+# GENERAL TAB NAVIGATION BUTTON CALLBACKS
+# ========================================
+
+@callback(
+    Output('general-alert-selector', 'options'),
+    [Input('client-selector', 'value')]
+)
+def populate_general_alert_selector(client: str):
+    """
+    Populate the general tab alert selector dropdown with all available alerts.
+    
+    Args:
+        client: Selected client identifier
+    
+    Returns:
+        List of dropdown options
+    """
+    if not client:
+        raise PreventUpdate
+    
+    logger.info(f"Populating general alert selector for client: {client}")
+    
+    alerts_df = load_alerts_data(client)
+    
+    if alerts_df.empty:
+        return []
+    
+    try:
+        # Create dropdown options
+        options = []
+        for _, row in alerts_df.sort_values('Timestamp', ascending=False).iterrows():
+            label = f"{row['FusionID']} | {row['Timestamp'].strftime('%Y-%m-%d %H:%M')} | {row['UnitId']} | {row['componente']}"
+            options.append({'label': label, 'value': row['FusionID']})
+        
+        logger.info(f"General alert selector populated with {len(options)} alerts")
+        return options
+    
+    except Exception as e:
+        logger.error(f"Error populating general alert selector: {e}")
+        return []
+
+
+@callback(
+    Output('alerts-navigation-state', 'data'),
+    [Input('general-nav-to-detail-button', 'n_clicks')],
+    [State('general-alert-selector', 'value')],
+    prevent_initial_call=True
+)
+def navigate_to_detail_from_general(n_clicks, selected_alert_id):
+    """
+    Store navigation request from General tab to Detail tab with selected alert.
+    Uses store-based pattern to avoid direct output to dynamically rendered component.
+    
+    Args:
+        n_clicks: Number of times button has been clicked
+        selected_alert_id: FusionID of selected alert from dropdown
+    
+    Returns:
+        Navigation data dictionary
+    """
+    logger.info(f"[NAV] BUTTON CALLBACK TRIGGERED! n_clicks={n_clicks}, alert={selected_alert_id}")
+    
+    if not n_clicks or not selected_alert_id:
+        raise PreventUpdate
+    
+    logger.info(f"[NAV] Storing navigation request to Detail tab with alert: {selected_alert_id}")
+    
+    # Store navigation data for listener callback to process
+    return {
+        'target_tab': 'detail',
+        'alert_id': selected_alert_id
+    }
+
+
+@callback(
+    Output('alerts-internal-tabs', 'value', allow_duplicate=True),
+    [Input('alerts-navigation-state', 'data')],
+    prevent_initial_call=True
+)
+def switch_to_detail_tab(nav_data):
+    """
+    Switch to detail tab when navigation is triggered from general tab button.
+    
+    Args:
+        nav_data: Navigation data from alerts-navigation-state store
+    
+    Returns:
+        Tab value to switch to
+    """
+    logger.info(f"[NAV] TAB SWITCH LISTENER TRIGGERED: nav_data={nav_data}")
+    
+    if not nav_data or not nav_data.get('target_tab'):
+        raise PreventUpdate
+    
+    target_tab = nav_data['target_tab']
+    logger.info(f"[NAV] Switching to tab: {target_tab}")
+    
+    return target_tab
+
+
+@callback(
+    Output('alert-selector-dropdown', 'value', allow_duplicate=True),
+    [
+        Input('alerts-internal-tabs', 'value'),
+        Input('alerts-navigation-state', 'data')
+    ],
+    prevent_initial_call='initial_duplicate'
+)
+def set_alert_from_navigation(active_tab, nav_data):
+    """
+    Set the alert dropdown value when navigating from general tab.
+    Triggers when tab switches to detail OR navigation state changes.
+    
+    Args:
+        active_tab: Currently active internal tab ('general' or 'detail')
+        nav_data: Navigation data from alerts-navigation-state store
+    
+    Returns:
+        Alert ID to select in dropdown
+    """
+    from dash import callback_context
+    
+    trigger_info = callback_context.triggered[0] if callback_context.triggered else None
+    logger.info(f"[NAV] set_alert_from_navigation called: tab={active_tab}, nav_data={nav_data}, triggered_by={trigger_info}")
+    
+    # Only apply if we're on detail tab AND have navigation data
+    if active_tab != 'detail':
+        raise PreventUpdate
+        
+    if not nav_data or not nav_data.get('alert_id'):
+        raise PreventUpdate
+    
+    # Only apply if navigation target is detail tab
+    if nav_data.get('target_tab') != 'detail':
+        raise PreventUpdate
+    
+    alert_id = nav_data['alert_id']
+    logger.info(f"[NAV] Setting dropdown value to: {alert_id}")
+    
+    return alert_id
 
 
 # ========================================
