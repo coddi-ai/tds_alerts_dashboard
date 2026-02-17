@@ -72,82 +72,138 @@ URI: data/alerts/golden/{client}/consolidated_alerts.csv
 
 ### Layout Structure
 
-The General tab is divided into **2 sections**:
+The General tab is divided into **4 sections**:
 
-#### Section 1: Data Analysis (3 Figures)
+#### Section 1: Summary Statistics (4 KPI Cards)
+
+**Purpose**: Display high-level alert metrics at a glance
+
+**KPI Cards** (displayed horizontally):
+1. **Total Alertas** - Total count of alerts (primary color)
+2. **Unidades Afectadas** - Number of unique units with alerts (info color)
+3. **% con Telemetría** - Percentage of alerts with telemetry evidence (success color)
+4. **% con Tribología** - Percentage of alerts with oil analysis evidence (warning color)
+
+---
+
+#### Section 2: Analytics Charts (3 Figures)
 
 All figures are equal width, displayed horizontally across the screen.
 
 ##### Figure 1: Distribution of Alerts per Unit
-- **Type**: Horizontal Bar Chart (Histogram)
+- **Type**: Horizontal Bar Chart
 - **Y-axis**: `UnitId`
 - **X-axis**: Count of `FusionID` per Unit
-- **Color**: `System` (colored by affected system)
+- **Color**: `sistema` (colored by affected system)
 - **Purpose**: Identify units with highest alert frequency
-- **Sort**: Descending by count
+- **Sort**: Ascending by count
+- **Interactive**: Click to filter by unit (toggle behavior)
 
 **Visual Specifications**:
 ```python
-plotly.express.histogram(
+plotly.express.bar(
     data,
     y='UnitId',
-    color='System',
+    x='Count',
+    color='sistema',
     orientation='h'
 )
 ```
 
 ##### Figure 2: Distribution of Alerts per Month
-- **Type**: Vertical Bar Chart (Histogram)
+- **Type**: Vertical Bar Chart
 - **Y-axis**: Count of `FusionID` per Month
 - **X-axis**: Month (chronological)
-- **Color**: `System` (colored by affected system)
+- **Color**: `sistema` (colored by affected system)
 - **Purpose**: Identify temporal patterns in alert generation
+- **Interactive**: Click to filter by month (toggle behavior)
 
 **Visual Specifications**:
 ```python
-plotly.express.histogram(
+plotly.express.bar(
     data,
-    x='Month',  # Extracted from Timestamp
-    color='System'
+    x='Month_str',
+    y='Count',
+    color='sistema'
 )
 ```
 
 ##### Figure 3: Distribution of Alert Trigger
 - **Type**: Treemap
-- **Names**: `Trigger_type` (telemetry/oil)
+- **Names**: `Trigger_type` (Telemetria/Tribologia/Mixto)
 - **Values**: Frequency count
 - **Purpose**: Show proportion of alert sources
+- **Interactive**: Click to filter by trigger type (toggle behavior)
 
 **Visual Specifications**:
 ```python
 plotly.express.treemap(
     data,
     path=['Trigger_type'],
-    values='frequency'
+    values='Frequency'
 )
 ```
 
 ---
 
-#### Section 2: Alerts Table
+#### Section 3: Table and System Distribution
+
+**Layout**: Two columns
+- Left column (8/12 width): Alerts Table
+- Right column (4/12 width): System Distribution Chart
+
+##### Alerts Table
 
 **Purpose**: Comprehensive alert listing with key details
 
 **Columns**:
-1. `Timestamp` - Alert generation time
-2. `UnitId` - Equipment identifier
-3. `Component` - Specific component
-4. `mensaje_ia` - AI diagnosis (truncated for display)
-5. `has_telemetry` - Boolean indicator (✓/✗)
-6. `has_tribology` - Boolean indicator (✓/✗)
+1. **ID** - `FusionID` (Unique alert identifier)
+2. **Fecha** - `Timestamp` (Alert generation time, formatted YYYY-MM-DD HH:MM:SS)
+3. **Unidad** - `UnitId` (Equipment identifier)
+4. **Sistema** - `sistema` (Affected system)
+5. **Componente** - `componente` (Specific component)
+6. **Fuente** - `Trigger_type` (Alert source)
+7. **Diagnóstico IA** - `mensaje_ia` (AI diagnosis, truncated to 80 characters + "...")
+8. **Telemetría** - `has_telemetry` (Boolean indicator ✓/✗)
+9. **Tribología** - `has_tribology` (Boolean indicator ✓/✗)
 
-**Sorting**: `Timestamp` (newest to oldest)
-
-**Interaction**: Each row is clickable and redirects to the Detail tab with the selected alert's `FusionID`
+**Features**:
+- **Sorting**: `Timestamp` (newest to oldest)
+- **Pagination**: 20 rows per page
+- **Filtering**: Native column filtering
+- **Multi-column sorting**: Enabled
+- **Interaction**: Each row is clickable and navigates to the Detail tab with the selected alert's `FusionID`
 
 **Derived Columns**:
-- `has_telemetry`: True if `TelemetryID` is not null
-- `has_tribology`: True if `TribologyID` is not null
+- `has_telemetry`: True if `Trigger_type` in ['Telemetria', 'Mixto']
+- `has_tribology`: True if `Trigger_type` in ['Tribologia', 'Mixto']
+
+##### System Distribution Chart
+
+- **Type**: Donut/Pie Chart (hole=0.3)
+- **Shows**: Distribution by `sistema`
+- **Purpose**: Visualize alert distribution across systems
+- **Interactive**: Click to filter by system (toggle behavior)
+
+---
+
+#### Section 4: Navigation Card
+
+**Purpose**: Provide explicit navigation from General to Detail view with alert pre-selection
+
+**Components**:
+1. **Alert Selector Dropdown** (`general-alert-selector`):
+   - Populated with all alerts
+   - Format: `{FusionID} | {Timestamp} | {UnitId} | {componente}`
+   - Sorted by timestamp (newest first)
+   - Searchable and clearable
+
+2. **Navigation Button** (`general-nav-to-detail-button`):
+   - Label: "Ver Detalle →"
+   - Color: Primary
+   - Action: Navigate to Detail tab with selected alert pre-loaded
+
+**Navigation Pattern**: Uses store-based intermediary (`alerts-navigation-state`) to ensure reliable cross-tab navigation
 
 ---
 
@@ -284,11 +340,55 @@ URI: data/mantentions/golden/{client}/{Semana_Resumen_Mantencion}.csv
 
 ### Layout Structure
 
-The Detail tab is divided into **2 main sections**:
+The Detail tab is divided into **4 main sections**:
 
 ---
 
-#### Section 1: Alert Specification
+#### Section 1: Filters Section
+
+**Purpose**: Filter available alerts before selection
+
+**Filter Components** (4 dropdowns, equal width):
+1. **Unit Filter** (`detail-filter-unit`):
+   - Type: Multi-select
+   - Options: All unique units from alerts
+
+2. **System Filter** (`detail-filter-sistema`):
+   - Type: Multi-select
+   - Options: All unique systems from alerts
+
+3. **Telemetry Filter** (`detail-filter-telemetry`):
+   - Type: Single-select
+   - Options: Sí / No / Todos
+   - Filters alerts with/without telemetry evidence
+
+4. **Tribology Filter** (`detail-filter-tribology`):
+   - Type: Single-select
+   - Options: Sí / No / Todos
+   - Filters alerts with/without oil analysis evidence
+
+**Behavior**: Filters dynamically update the Alert Selector dropdown options
+
+---
+
+#### Section 2: Alert Selector
+
+**Purpose**: Select specific alert to view details
+
+**Components**:
+- **Alert Dropdown** (`alert-selector-dropdown`):
+  - Searchable and clearable
+  - Options filtered by Section 1 filters
+  - Format: `{FusionID} | {Timestamp} | {UnitId} | {componente}`
+  - Sorted by timestamp (newest first)
+  - Can be pre-populated via navigation from General tab
+- **Hint Text**: "También puede seleccionar una alerta desde la Vista General"
+
+**Default State**: Info alert "Por favor, seleccione una alerta para ver los detalles"
+
+---
+
+#### Section 3: Alert Specification
 
 **Purpose**: Display core alert information at a glance
 
@@ -307,7 +407,7 @@ The Detail tab is divided into **2 main sections**:
 
 ---
 
-#### Section 2: Evidence of the Alert
+#### Section 4: Evidence of the Alert
 
 **Purpose**: Provide multi-source diagnostic evidence
 
@@ -325,13 +425,13 @@ The Detail tab is divided into **2 main sections**:
 
 ### Subsection: Telemetry Evidence
 
-**Display Condition**: `Trigger_type` in ['telemetry', 'mixto']
+**Display Condition**: `Trigger_type` in ['Telemetria', 'Mixto']
 
-**Layout**: 3 equal-width columns
+**Layout**: 2 rows
 
 ---
 
-#### Column 1: Sensor Trends
+#### Row 1: Sensor Trends
 
 **Chart Type**: Time Series (Multiple Subplots)
 
@@ -340,9 +440,9 @@ The Detail tab is divided into **2 main sections**:
 **Data Requirements**:
 - Filter telemetry data for `Unit` = alert's `UnitId`
 - Time window: M1 minutes before alert, M2 minutes after alert
-  - **M1** (Before): 90 minutes (configurable in settings)
-  - **M2** (After): 10 minutes (configurable in settings)
-- Variables: Sensors related to `Component` or `System` of alert
+  - **M1** (Before): 60 minutes
+  - **M2** (After): 10 minutes
+- Variables: Sensors related to `componente` or `sistema` of alert
 
 **Visual Specifications**:
 - **Multiple Subplots**: One per sensor variable (shared x-axis)
@@ -358,11 +458,15 @@ The Detail tab is divided into **2 main sections**:
 - **Alert Marker**: Vertical line at alert `Timestamp` (orange, dotted)
 - **Hover Info**: Timestamp, value, state
 
-**Implementation Note**: Use `create_timeseries_chart()` from `visualizations.py` as helper
-
 ---
 
-#### Column 2: GPS Location
+#### Row 2: GPS Location and Alert Context
+
+**Layout**: Two columns
+- Left column (8/12 width): GPS Map
+- Right column (4/12 width): Alert Context KPIs
+
+##### GPS Location
 
 **Chart Type**: Scattermapbox (Route Visualization)
 
@@ -375,18 +479,14 @@ The Detail tab is divided into **2 main sections**:
 
 **Visual Specifications**:
 - **Route Line**: Gray line connecting points
-- **Point Color**: Time-based gradient using `colorscale='Aggrnyl'`
-  - Start of window: Light color
-  - Alert timestamp: Red marker (large)
-  - End of window: Dark color
-- **Map Style**: Satellite view
+- **Point Color**: Time-based gradient using `colorscale='Reds'`
+  - Start of window: Light red
+  - Alert timestamp: Dark red marker (large)
+  - End of window: Darker red
+- **Map Style**: `satellite-streets`
 - **Hover Info**: Timestamp, elevation, coordinates, state
 
-**Implementation Note**: Use `create_gps_map()` from `visualizations.py` as helper
-
----
-
-#### Column 3: Alert Context
+##### Alert Context
 
 **Chart Type**: KPI Cards (Boxes with Numbers)
 
@@ -397,17 +497,17 @@ The Detail tab is divided into **2 main sections**:
 1. **Elevation Status**
    - **Metric**: Gradient/Slope at alert time
    - **Display**: 
-     - "⬆️ Subiendo" (gradient > 0.05)
-     - "⬇️ Bajando" (gradient < -0.05)
-     - "➡️ Plano" (|gradient| ≤ 0.05)
+     - "Subiendo" (gradient > 0.05)
+     - "Bajando" (gradient < -0.05)
+     - "Plano" (|gradient| ≤ 0.05)
    - **Source**: `GPSElevation` derivative
 
 2. **Payload Status**
    - **Metric**: `EstadoCarga` at alert time
    - **Display**: 
-     - "✅ Cargado" 
-     - "❌ Vacío"
-     - "❓ Desconocido"
+     - "Cargado" 
+     - "Vacío"
+     - "Desconocido"
    - **Source**: `EstadoCarga` column
 
 3. **Engine RPM**
@@ -415,15 +515,17 @@ The Detail tab is divided into **2 main sections**:
    - **Display**: Numeric value with unit (e.g., "1,850 RPM")
    - **Source**: Sensor feature `EngineSpeed` or equivalent
 
-**Implementation Note**: Use `create_kpi_card()` from `visualizations.py` as helper
-
 ---
 
 ### Subsection: Oil Evidence
 
-**Display Condition**: `Trigger_type` in ['oil', 'mixto']
+**Display Condition**: `Trigger_type` in ['Tribologia', 'Mixto']
 
-**Chart Type**: Radar Chart (Polar Chart)
+**Layout**: Two columns
+- Left column: Radar Chart
+- Right column: Oil Report Status Table
+
+##### Radar Chart (Polar Chart)
 
 **Goal**: Visualize oil essay levels against thresholds
 
@@ -439,7 +541,17 @@ The Detail tab is divided into **2 main sections**:
   3. Alert threshold (dashed line, different color)
 - **Highlight**: Breached essays in red
 
-**Implementation Note**: Reuse radar chart logic from oil dashboard
+##### Oil Report Status Table
+
+**Purpose**: Display oil report metadata and status
+
+**Columns**:
+1. **Sample Number** - Unique report identifier
+2. **Sample Date** - Date of oil sample collection
+3. **Report Status** - Classification status
+4. **Laboratory** - Lab that analyzed the sample
+5. **Component** - Component analyzed
+6. **Hours** - Equipment hours at sample time
 
 ---
 
@@ -484,6 +596,10 @@ Se realizaron 3 intervenciones en el sistema de motor...
 
 ### General Tab → Detail Tab Navigation
 
+The dashboard provides **two navigation methods** from General to Detail tab:
+
+#### Method 1: Direct Table Row Click
+
 1. User views General tab with alert analytics
 2. User clicks on a row in the Alerts Table
 3. System captures `FusionID` of selected alert
@@ -492,7 +608,47 @@ Se realizaron 3 intervenciones en el sistema de motor...
 6. Detail tab queries all relevant data sources
 7. Evidence subsections render based on data availability
 
-**State Management**: Selected `FusionID` is stored in callback state
+**Technical Implementation**: Uses `Input` from table's `active_cell` property
+
+#### Method 2: Navigation Card (Explicit Selection)
+
+1. User views General tab
+2. User selects an alert from the dropdown in Section 4: Navigation Card
+3. User clicks "Ver Detalle →" button
+4. System writes selected `FusionID` to `alerts-navigation-state` store
+5. Store triggers Detail tab's `alert-selector-dropdown` update
+6. System switches to Detail tab
+7. Detail tab loads evidence for selected alert
+
+**Technical Implementation**: Uses store-based intermediary pattern
+- **Store**: `alerts-navigation-state` (memory store with data property)
+- **Callback Chain**: 
+  1. `navigate_to_detail_from_general`: Button click → writes to store
+  2. `switch_to_detail_tab`: Store update → changes active tab
+  3. `set_alert_from_navigation`: Store update → sets alert selector value
+
+**Why Store-Based Pattern**: Direct targeting of dynamically rendered components (like the alert selector in Detail tab) is unreliable. The store acts as a reliable intermediary that ensures the navigation state is available when the Detail tab renders.
+
+**State Management**: Selected `FusionID` is stored in both callback state and memory store
+
+---
+
+### Interactive Chart Filtering
+
+Charts in the General tab support click-to-filter with **toggle behavior**:
+
+1. User clicks on a chart element (e.g., a bar for a specific unit)
+2. System filters all components (table and other charts) to show only data for that selection
+3. User clicks the same element again to toggle off the filter
+4. System resets to show all data
+
+**Supported Charts**:
+- Distribution of Alerts per Unit
+- Distribution of Alerts per Month
+- Distribution of Alert Trigger
+- System Distribution (donut chart)
+
+**Filter Indicator**: Active filters are stored in `alerts-filter-store` and can be cleared with a reset button
 
 ---
 
@@ -566,8 +722,8 @@ Se realizaron 3 intervenciones en el sistema de motor...
 ### Telemetry Time Windows
 
 ```python
-# Default values (configurable in settings)
-TELEMETRY_WINDOW_BEFORE = 90  # minutes before alert
+# Default values
+TELEMETRY_WINDOW_BEFORE = 60  # minutes before alert
 TELEMETRY_WINDOW_AFTER = 10   # minutes after alert
 ```
 
@@ -617,22 +773,22 @@ SYSTEM_COLORS = 'Plotly'  # Default categorical palette
 
 ## 🚀 Future Enhancements
 
-1. **Correlation Alerts**: Support for `Trigger_type = 'mixto'` with combined evidence
-2. **Custom Time Windows**: User-adjustable M1 and M2 parameters
-3. **Export Functionality**: Download alert evidence as PDF report
-4. **Alert Annotations**: Add user comments and follow-up actions
-5. **Real-time Updates**: Auto-refresh when new alerts arrive
+1. **Export Functionality**: Download alert evidence as PDF report
+2. **Alert Annotations**: Add user comments and follow-up actions
+3. **Real-time Updates**: Auto-refresh when new alerts arrive
+4. **Advanced Filtering**: Multi-level filter combinations in General tab
+5. **Alert Comparison**: Side-by-side comparison of multiple alerts
 
 ---
 
 ## 📝 Notes
 
 - Current implementation treats tabs as subsections in code structure
-- Helper functions from `visualizations.py` are reused where applicable
 - GPS visualization requires Mapbox token (already configured)
-- AI diagnosis text may be long; implement truncation with "Show More" option
+- AI diagnosis text in table is truncated to 80 characters with "..." suffix
+- Interactive chart filtering uses toggle behavior for intuitive user experience
 
 ---
 
-**Last Updated**: February 5, 2026  
+**Last Updated**: February 6, 2025  
 **Next Review**: After Phase 1 Step 1.2 completion
