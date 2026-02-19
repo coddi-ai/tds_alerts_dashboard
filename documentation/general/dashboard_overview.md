@@ -67,8 +67,8 @@ The dashboard integrates four primary data sources:
 ### 4. **Alerts (Consolidated)**
 - **Purpose**: Unified view of all alerts across techniques
 - **Frequency**: Real-time aggregation
-- **Key Outputs**: Consolidated alerts with AI diagnosis, cross-technique correlation
-- **Status**: 🔄 **In Progress**
+- **Key Outputs**: Consolidated alerts with AI diagnosis, cross-technique correlation, evidence sections
+- **Status**: ✅ **Fully Implemented** (February 18, 2026)
 
 ---
 
@@ -148,10 +148,29 @@ The dashboard is organized into three main sections, each serving a specific pur
 #### 2.1 **Alerts**
 - **Purpose**: Unified view of all alerts across techniques
 - **Tabs**:
-  - **General**: Alert overview, counts, severity distribution
-  - **Detail**: Individual alert inspection with AI diagnosis
-- **Data Source**: `alerts/golden/{client}/consolidated_alerts.csv`
-- **Status**: 🔄 Planned
+  - **General**: Alert overview with distribution charts
+    - Distribution by Unit (horizontal bar chart)
+    - Distribution by Month (vertical bar chart)
+    - Distribution by Trigger (treemap)
+    - Distribution by Sistema (pie chart)
+    - Interactive alerts table with filtering
+  - **Detail**: Individual alert inspection with comprehensive evidence
+    - Alert specifications with AI diagnosis
+    - Telemetry evidence (sensor trends, GPS route, KPIs)
+    - Oil evidence (radar chart with essay levels)
+    - Maintenance evidence (activity summaries)
+- **Data Sources**: 
+  - `alerts/golden/{client}/consolidated_alerts.csv`
+  - `telemetry/golden/{client}/alerts_detail_wide_with_gps.csv`
+  - `oil/golden/{client}/classified.parquet`
+  - `mantentions/golden/{client}/ww-yyyy.csv`
+- **Key Features**:
+  - Spanish feature name mapping for sensor data
+  - Standard sistema color mapping (Tren de Fuerza, Motor, Frenos, Direccion)
+  - Conditional evidence display based on alert trigger type
+  - Golden layer optimization for fast loading
+  - Responsive charts with optimized legends
+- **Status**: ✅ **Fully Implemented** (February 18, 2026)
 
 #### 2.2 **Telemetry**
 - **Purpose**: Sensor data monitoring and trend analysis
@@ -294,9 +313,12 @@ Alerts are generated through technique-specific logic:
 
 ### Version 2.0.0 (February 2026)
 - Multi-technique integration architecture
-- Consolidated alerts system
+- Consolidated alerts system with full implementation
+- Alerts General and Detail tabs operational
 - Enhanced navigation with sections/subsections
 - Scalable multi-client platform
+- Golden layer optimization for performance
+- Spanish translations and standard color schemes
 
 ### Version 1.0.0 (January 2026)
 - Initial oil analysis dashboard

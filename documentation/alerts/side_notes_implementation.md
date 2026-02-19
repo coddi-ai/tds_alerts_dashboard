@@ -6,8 +6,54 @@
 - Core Design: `dashboard_overview.md`
 - Implementation Details: `alerts_dashboard_implementation_notes.md`
 - Remaining Gaps: `implementation_vs_design_gaps.md`
+- Telemetry Golden Layer: `../telemetry/telemetry_golden_layer.md`
 
-**Last Updated**: February 17, 2026
+**Last Updated**: February 18, 2026
+
+---
+
+## 🎯 Major Refactoring - Telemetry Golden Layer (Feb 2026)
+
+### Overview
+
+The dashboard was refactored to use pre-processed telemetry data from the **golden layer** instead of loading and merging large silver layer files. This significantly improves performance and simplifies code.
+
+### Key Changes
+
+#### Before (Silver Layer Approach)
+- **Data Load**: ~500MB silver layer files
+- **Files Loaded**: `telemetry_values_wide.parquet`, `telemetry_states.parquet`, `limits_config.parquet`, `component_mapping.parquet`
+- **Processing**: Complex filtering, merging, and component mapping logic
+- **Code Complexity**: ~150 lines per chart
+- **Performance**: Slow initial load, heavy memory usage
+
+#### After (Golden Layer Approach)
+- **Data Load**: ~2MB golden layer file
+- **File Loaded**: `alerts_detail_wide_with_gps.csv`
+- **Processing**: Simple filter by AlertID, drop NaN columns
+- **Code Complexity**: ~50 lines per chart
+- **Performance**: Fast load, minimal memory usage
+
+### Reference Notebooks
+
+Two notebooks demonstrate the comparison:
+- `notebooks/old_telemetry_charts.ipynb`: OLD silver layer approach
+- `notebooks/new_telemetry_charts.ipynb`: NEW golden layer approach
+
+### Deprecated Functions
+
+The following functions are now deprecated (marked in code but kept for reference):
+- `create_sensor_trends_chart()` → Replaced by `create_sensor_trends_chart_golden()`
+- `create_gps_route_map()` → Replaced by `create_gps_route_map_golden()`
+- `create_context_kpis_cards()` → Replaced by `create_context_kpis_cards_golden()`
+
+### Benefits
+
+1. **Performance**: 10x faster data loading
+2. **Simplicity**: 70% less code to maintain
+3. **Scalability**: Can handle larger time windows without memory issues
+4. **Maintainability**: No complex merging logic to debug
+5. **Extensibility**: Adding new sensors requires no dashboard code changes
 
 ---
 

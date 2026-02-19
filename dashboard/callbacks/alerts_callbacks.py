@@ -21,6 +21,7 @@ from src.data.loaders import (
     load_telemetry_alerts_metadata,
     load_component_mapping,
     load_feature_names,
+    load_telemetry_alerts_detail_golden,
     load_oil_classified,
     load_maintenance_week
 )
@@ -29,14 +30,14 @@ from dashboard.components.alerts_charts import (
     create_alerts_per_month_chart,
     create_trigger_distribution_treemap,
     create_system_distribution_pie_chart,
-    create_sensor_trends_chart,
-    create_gps_route_map,
-    create_oil_radar_chart
+    create_oil_radar_chart,
+    create_sensor_trends_chart_golden,
+    create_gps_route_map_golden,
+    create_context_kpis_cards_golden
 )
 from dashboard.components.alerts_tables import (
     create_alerts_datatable,
     create_alert_detail_card,
-    create_context_kpis_cards,
     create_maintenance_display
 )
 from dashboard.tabs.tab_alerts_general import create_summary_stats_display, create_layout as create_general_layout
@@ -713,6 +714,7 @@ def update_detail_view(dropdown_value, client):
 def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     """
     Create telemetry evidence section with sensor trends, GPS, and KPIs.
+    Uses pre-processed golden layer data for simplicity and performance.
     
     Args:
         alert_row: Selected alert data
@@ -721,112 +723,94 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
     Returns:
         HTML Div with telemetry evidence
     """
-    logger.info("Creating telemetry evidence section")
+    logger.info("Creating telemetry evidence section using golden layer data")
     
     try:
-        # Load telemetry data
-        telemetry_values = load_telemetry_values(client)
-        telemetry_states = load_telemetry_states(client)
-        limits_config = load_telemetry_limits(client)
-        telemetry_alerts = load_telemetry_alerts_metadata(client)
-        component_mapping = load_component_mapping(client)
-        feature_names = load_feature_names(client)
+        # Load golden layer telemetry data
+        telemetry_golden = load_telemetry_alerts_detail_golden(client)
         
-        if telemetry_values.empty:
+        if telemetry_golden.empty:
             return html.Div([
                 dbc.Alert("No hay datos de telemetría disponibles", color="warning")
             ])
         
-        # Define time window
-        alert_time = alert_row['Timestamp']
-        window_start = alert_time - timedelta(minutes=M1)
-        window_end = alert_time + timedelta(minutes=M2)
-        
-        # Filter data for unit and time window
-        unit_data = telemetry_values[
-            (telemetry_values['Unit'] == alert_row['UnitId']) &
-            (telemetry_values['Fecha'] >= window_start) &
-            (telemetry_values['Fecha'] <= window_end)
-        ].copy()
-        
-        # Merge with states
-        if not telemetry_states.empty:
-            unit_data = unit_data.merge(
-                telemetry_states[['Fecha', 'Unit', 'Estado', 'EstadoCarga']],
-                on=['Fecha', 'Unit'],
-                how='left'
-            )
-        
-        if unit_data.empty:
+        # Filter for this specific alert
+        alert_id = alert_row.get('TelemetryID')
+        if pd.isna(alert_id):
             return html.Div([
-                dbc.Alert("No hay datos de telemetría en la ventana de tiempo", color="warning")
+                dbc.Alert("Esta alerta no tiene TelemetryID asociado", color="info")
             ])
         
-        # Get trigger feature and related features
-        alert_trigger = None
-        if pd.notna(alert_row.get('TelemetryID')) and not telemetry_alerts.empty:
-            trigger_info = telemetry_alerts[
-                telemetry_alerts['AlertID'] == str(alert_row['TelemetryID'])
-            ]
-            if not trigger_info.empty:
-                alert_trigger = trigger_info.iloc[0]['Trigger']
+        # Get unit ID
+        unit_id = alert_row.get('UnitId')
+        if pd.isna(unit_id):
+            return html.Div([
+                dbc.Alert("Esta alerta no tiene UnitId asociado", color="info")
+            ])
         
-        # Determine which sensors to display
-        sensor_columns = []
-        if alert_trigger and not component_mapping.empty:
-            feature_map = component_mapping[
-                component_mapping['PrimaryFeature'] == alert_trigger
-            ]
-            
-            if not feature_map.empty:
-                feature_map = feature_map.iloc[0]
-                primary_feature = feature_map['PrimaryFeature']
-                related_features = feature_map['RelatedFeatures']
-                
-                # Convert to list if needed
-                if isinstance(related_features, np.ndarray):
-                    related_features = related_features.tolist()
-                elif not isinstance(related_features, list):
-                    related_features = []
-                
-                # Combine features
-                features_to_display = [primary_feature] + related_features
-                sensor_columns = [f for f in features_to_display if f in unit_data.columns]
+        # Filter telemetry data by BOTH AlertID AND Unit (AlertID is unique per unit, not globally)
+        alert_data = telemetry_golden[
+            (telemetry_golden['AlertID'] == int(alert_id)) & 
+            (telemetry_golden['Unit'] == unit_id)
+        ].copy()
         
-        # Fallback: use first 3 sensor columns
-        if not sensor_columns:
-            sensor_columns = [col for col in unit_data.columns 
-                             if col not in ['Fecha', 'Unit', 'Estado', 'EstadoCarga', 
-                                           'GPSLat', 'GPSLon', 'GPSElevation']][:3]
+        if alert_data.empty:
+            return html.Div([
+                dbc.Alert(f"No se encontraron datos de telemetría para AlertID: {alert_id}", color="warning")
+            ])
         
-        # Create sensor trends chart
-        sensor_trends_fig = create_sensor_trends_chart(
-            telemetry_values=telemetry_values,
-            telemetry_states=telemetry_states,
-            limits_config=limits_config,
-            unit_id=alert_row['UnitId'],
-            sensor_columns=sensor_columns,
+        # Drop columns with all NaN values
+        alert_data_clean = alert_data.dropna(axis=1, how='all')
+        
+        # Extract metadata
+        unit_id = alert_data_clean['Unit'].iloc[0]
+        # IMPORTANT: Use alert_time from alerts_data, NOT from telemetry TimeStart
+        # TimeStart is just the beginning of the telemetry window, not the actual alert moment
+        alert_time = pd.to_datetime(alert_row.get('Timestamp'))
+        trigger = alert_data_clean['Trigger'].iloc[0]
+        
+        logger.info(f"Processing telemetry alert: Unit={unit_id}, Time={alert_time}, Trigger={trigger}")
+        
+        # Load feature names mapping for Spanish titles
+        feature_name_map = load_feature_names(client)
+        
+        # Identify features to plot (columns ending with _Value)
+        value_cols = [col for col in alert_data_clean.columns if col.endswith('_Value')]
+        feature_names = [col.replace('_Value', '') for col in value_cols]
+        
+        # Filter out Payload and EngSpd (always excluded from charts)
+        excluded_features = ['Payload', 'EngSpd']
+        feature_names = [f for f in feature_names if f not in excluded_features]
+        
+        if not feature_names:
+            return html.Div([
+                dbc.Alert("No se encontraron señales con valores para graficar", color="warning")
+            ])
+        
+        logger.info(f"Found {len(feature_names)} features to plot (excluded: {excluded_features}): {feature_names}")
+        
+        # Create sensor trends chart (using new simplified approach)
+        sensor_trends_fig = create_sensor_trends_chart_golden(
+            alert_data=alert_data_clean,
+            feature_names=feature_names,
+            unit_id=unit_id,
             alert_time=alert_time,
-            window_start=window_start,
-            window_end=window_end,
-            feature_names=feature_names
+            feature_name_map=feature_name_map
         )
         
         # Create GPS map (if GPS data available)
-        gps_map_fig = create_gps_route_map(
-            telemetry_values=telemetry_values,
-            unit_id=alert_row['UnitId'],
+        gps_map_fig = create_gps_route_map_golden(
+            alert_data=alert_data_clean,
+            unit_id=unit_id,
             alert_time=alert_time,
-            window_start=window_start,
-            window_end=window_end,
             mapbox_token=MAPBOX_TOKEN
         )
         
         # Create context KPIs
-        context_kpis = create_context_kpis_cards(
-            alert_row=alert_row,
-            telemetry_data=unit_data,
-            alert_time=alert_time
+        context_kpis = create_context_kpis_cards_golden(
+            alert_data=alert_data_clean,
+            alert_time=alert_time,
+            trigger=trigger
         )
         
         # Build section

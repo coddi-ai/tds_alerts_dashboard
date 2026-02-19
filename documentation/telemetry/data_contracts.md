@@ -1,8 +1,26 @@
 # Data Contracts - Telemetry Data Product
 
-**Version**: 1.0  
-**Last Updated**: February 4, 2026  
+**Version**: 1.1  
+**Last Updated**: February 18, 2026  
 **Owner**: Telemetry Data Product Team
+
+---
+
+## 📋 Important Updates - February 2026
+
+### NEW: Golden Layer Alert Detail File
+
+A new golden layer file has been added: **`alerts_detail_wide_with_gps.csv`**
+
+**Purpose**: Pre-processed telemetry data for alert visualization, eliminating the need to load large silver layer files in the dashboard.
+
+**Key Benefits**:
+- ✅ 10x faster data loading (2MB vs 500MB)
+- ✅ 70% less code complexity  
+- ✅ No complex merging operations needed
+- ✅ All signals, limits, and GPS pre-integrated
+
+**Full Documentation**: See `telemetry_golden_layer.md`
 
 ---
 
