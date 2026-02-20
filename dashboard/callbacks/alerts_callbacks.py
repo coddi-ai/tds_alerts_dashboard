@@ -458,19 +458,21 @@ def switch_to_detail_tab(nav_data):
 @callback(
     Output('alert-selector-dropdown', 'value', allow_duplicate=True),
     [
-        Input('alerts-internal-tabs', 'value'),
+        Input('alert-selector-dropdown', 'options'),
         Input('alerts-navigation-state', 'data')
     ],
-    prevent_initial_call='initial_duplicate'
+    [State('alerts-internal-tabs', 'value')],
+    prevent_initial_call=True
 )
-def set_alert_from_navigation(active_tab, nav_data):
+def set_alert_from_navigation(dropdown_options, nav_data, active_tab):
     """
     Set the alert dropdown value when navigating from general tab.
-    Triggers when tab switches to detail OR navigation state changes.
+    Triggers when dropdown options are populated AND navigation state has data.
     
     Args:
-        active_tab: Currently active internal tab ('general' or 'detail')
+        dropdown_options: Dropdown options (triggers when populated)
         nav_data: Navigation data from alerts-navigation-state store
+        active_tab: Currently active internal tab ('general' or 'detail')
     
     Returns:
         Alert ID to select in dropdown
@@ -480,15 +482,18 @@ def set_alert_from_navigation(active_tab, nav_data):
     trigger_info = callback_context.triggered[0] if callback_context.triggered else None
     logger.info(f"[NAV] set_alert_from_navigation called: tab={active_tab}, nav_data={nav_data}, triggered_by={trigger_info}")
     
-    # Only apply if we're on detail tab AND have navigation data
+    # Only apply if we're on detail tab
     if active_tab != 'detail':
+        logger.info(f"[NAV] Not on detail tab (current: {active_tab}), skipping")
         raise PreventUpdate
         
     if not nav_data or not nav_data.get('alert_id'):
+        logger.info("[NAV] No navigation data or alert_id, skipping")
         raise PreventUpdate
     
     # Only apply if navigation target is detail tab
     if nav_data.get('target_tab') != 'detail':
+        logger.info(f"[NAV] Navigation target is not detail (target: {nav_data.get('target_tab')}), skipping")
         raise PreventUpdate
     
     alert_id = nav_data['alert_id']
@@ -622,29 +627,36 @@ def filter_alert_dropdown_by_criteria(units, sistemas, has_telemetry, has_tribol
     Output('alert-detail-content', 'children'),
     [
         Input('alert-selector-dropdown', 'value'),
-        Input('client-selector', 'value')
+        Input('client-selector', 'value'),
+        Input('alerts-navigation-state', 'data')
     ],
     prevent_initial_call=False
 )
-def update_detail_view(dropdown_value, client):
+def update_detail_view(dropdown_value, client, nav_data):
     """
-    Update detail view when an alert is selected from dropdown.
+    Update detail view when an alert is selected from dropdown or via navigation.
     
     Args:
         dropdown_value: FusionID selected from dropdown
         client: Selected client identifier
+        nav_data: Navigation data from alerts-navigation-state store
     
     Returns:
         Updated detail content layout
     """
-    logger.info(f"update_detail_view called: dropdown_value={dropdown_value}, client={client}")
+    logger.info(f"update_detail_view called: dropdown_value={dropdown_value}, client={client}, nav_data={nav_data}")
     
     if not client:
         logger.warning("No client selected, preventing update")
         raise PreventUpdate
     
-    # Determine selected alert from dropdown
+    # Determine selected alert from dropdown OR navigation state
     selected_fusion_id = dropdown_value
+    
+    # If dropdown is empty but navigation state has an alert ID, use that
+    if not selected_fusion_id and nav_data and nav_data.get('alert_id'):
+        selected_fusion_id = nav_data.get('alert_id')
+        logger.info(f"Using alert ID from navigation state: {selected_fusion_id}")
     
     if not selected_fusion_id:
         logger.info("No alert selected, showing placeholder")

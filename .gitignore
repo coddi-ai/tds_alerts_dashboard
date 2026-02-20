@@ -96,3 +96,5 @@ logs/
 # Documentation claude
 NAVIGATION_FIX_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
+
+dataDev/*
