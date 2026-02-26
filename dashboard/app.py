@@ -33,6 +33,7 @@ from dashboard.callbacks.navigation_callbacks import register_navigation_callbac
 from dashboard.callbacks.limits_callbacks import register_limits_callbacks
 from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
+from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 
 # Import alerts callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.alerts_callbacks
@@ -83,6 +84,7 @@ register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
 register_reports_callbacks(app)
+register_mantenciones_general_callbacks(app)
 
 
 if __name__ == '__main__':
