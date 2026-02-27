@@ -173,16 +173,39 @@ The dashboard is organized into three main sections, each serving a specific pur
 - **Status**: ✅ **Fully Implemented** (February 18, 2026)
 
 #### 2.2 **Telemetry**
-- **Purpose**: Sensor data monitoring and trend analysis
-- **Features**: 
-  - Real-time sensor readings
-  - Trend snapshots
-  - Alert triggers visualization
-  - Operational state tracking
+- **Purpose**: Hierarchical sensor monitoring from fleet-wide health to signal-level diagnosis
+- **Tabs**:
+  - **Fleet Overview**: High-level fleet health snapshot
+    - KPI Cards: Total Units, Normal %, Alerta %, Anormal %
+    - Fleet Status Table: Sortable by priority_score, component counts
+    - Status Distribution Pie Chart: Visual fleet health breakdown
+  - **Machine Detail**: Component-level analysis for specific units
+    - Machine selector with status badges
+    - Component Status Table: Detailed component health
+    - Component Radar Chart: Multi-axis visualization of component scores
+    - Component Details Accordion: Expandable evidence panels
+  - **Component Detail**: Signal-level evaluations with historical baselines
+    - Signal Evaluation Table: Window scores, severity, weight, data quality
+    - Weekly Distribution Boxplots: Historical comparison across weeks
+    - Estado filter: Operacional, Ralenti, Apagada state-specific analysis
+    - Signal drill-down modal: Detailed baseline comparison with P2/P5/P95/P98 thresholds
+  - **Limits**: Baseline threshold management and visualization
+    - Baseline Thresholds Table: Display P2, P5, P95, P98 percentiles per signal
+    - Training window metadata
+    - Threshold Distribution Histogram: Visualize baseline calculation
 - **Data Sources**: 
-  - `telemetry/silver/{client}/telemetry.parquet`
-  - `telemetry/golden/{client}/alerts_data.csv`
-- **Status**: 🔄 Planned
+  - `telemetry/golden/{client}/machine_status.parquet` (fleet-level summaries)
+  - `telemetry/golden/{client}/classified.parquet` (component-level evaluations)
+  - `telemetry/golden/{client}/baselines/baseline_YYYYMMDD.parquet` (percentile thresholds)
+  - `telemetry/silver/{client}/Telemetry_Wide_With_States/ww-yyyy.parquet` (raw sensor data)
+- **Key Features**:
+  - Severity-Weighted Percentile Window Scoring methodology
+  - Hierarchical drill-down navigation (Fleet → Machine → Component → Signal)
+  - State-aware baseline comparisons (Operacional, Ralenti, Apagada)
+  - Component criticality weighting for machine-level status
+  - Weekly evaluation with multi-week historical comparison
+  - JSON-based nested data structures (component_details, signals_evaluation)
+- **Status**: ✅ **Fully Implemented** (February 26, 2026)
 
 #### 2.3 **Mantentions**
 - **Purpose**: Maintenance activity tracking
@@ -228,13 +251,21 @@ The dashboard is organized into three main sections, each serving a specific pur
 - **Status**: ✅ **Fully Implemented**
 
 #### 3.2 **Telemetry Limits**
-- **Purpose**: Sensor alert thresholds
+- **Purpose**: Baseline percentile thresholds for sensor anomaly detection
 - **Features**:
-  - Trigger rules per state
-  - Operational limits
-  - System-specific thresholds
-- **Data Source**: `telemetry/golden/{client}/data_rules.csv`
-- **Status**: 🔄 Planned
+  - Baseline Thresholds Table: Display P2, P5, P95, P98 percentiles per signal
+  - Training window metadata: Shows baseline version and training period
+  - Threshold Distribution Histogram: Visualize training data distribution with percentile lines
+  - Filter by Unit, Signal, EstadoMaquina
+  - State-specific thresholds (Operacional, Ralenti, Apagada)
+- **Data Sources**: 
+  - `telemetry/golden/{client}/baselines/baseline_YYYYMMDD.parquet`
+  - `telemetry/silver/{client}/Telemetry_Wide_With_States/ww-yyyy.parquet` (for visualizations)
+- **Key Concepts**:
+  - P2/P98: Extreme bounds (alarm thresholds)
+  - P5/P95: Alert bounds (early warning)
+  - Training window: Historical data period used to compute percentiles
+- **Status**: ✅ **Fully Implemented** (February 26, 2026)
 
 ---
 
