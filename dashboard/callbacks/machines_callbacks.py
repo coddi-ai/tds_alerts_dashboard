@@ -239,20 +239,22 @@ def register_machines_callbacks(app):
                 height=400
             )
             
-            # Component status histogram
+            # Component status histogram – reports per component, colored by status
             histogram_fig = px.histogram(
                 latest_components,
-                x='report_status',
+                x='componentName',
                 color='report_status',
                 color_discrete_map=STATUS_COLORS,
-                title="Component Status Counts"
+                title="Reports per Component by Status",
+                barmode='stack'
             )
             
             histogram_fig.update_layout(
-                xaxis_title="Status",
-                yaxis_title="Number of Components",
-                showlegend=False,
-                height=400
+                xaxis_title="Component",
+                yaxis_title="Number of Reports",
+                showlegend=True,
+                height=400,
+                xaxis_tickangle=-45
             )
             
             return pie_fig, histogram_fig
@@ -363,7 +365,7 @@ def register_machines_callbacks(app):
     # NAVIGATION: Handle "Navigate to Report" button
     @app.callback(
         [Output('navigation-state', 'data'),
-         Output('active-section-store', 'data', allow_duplicate=True)],
+         Output('oil-internal-tabs', 'value')],
         [Input('nav-to-report-button', 'n_clicks')],
         [State('nav-equipment-selector', 'value'),
          State('nav-component-selector', 'value'),
@@ -371,7 +373,7 @@ def register_machines_callbacks(app):
         prevent_initial_call=True
     )
     def navigate_to_report(n_clicks, equipo, component, client):
-        """Navigate to Oil monitoring section with pre-filled filters."""
+        """Navigate to Report Detail tab within Oil section with pre-filled filters."""
         if not n_clicks or not all([equipo, component, client]):
             raise PreventUpdate
         
@@ -399,8 +401,8 @@ def register_machines_callbacks(app):
                 'client': client
             }
             
-            # Switch to monitoring-oil section
-            return nav_state, 'monitoring-oil'
+            # Switch to Report Detail internal tab within Oil section
+            return nav_state, 'report-detail'
             
         except Exception as e:
             raise PreventUpdate

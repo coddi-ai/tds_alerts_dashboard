@@ -40,6 +40,9 @@ import dashboard.callbacks.alerts_callbacks
 # Import telemetry callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.telemetry_callbacks
 
+# Import oil callbacks (uses @callback decorator, auto-registered on import)
+import dashboard.callbacks.oil_callbacks
+
 
 def normalize_prefix(prefix: str | None) -> str:
     """
