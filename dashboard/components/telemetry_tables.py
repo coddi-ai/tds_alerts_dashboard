@@ -1,8 +1,8 @@
 """
-Telemetry table building functions for Multi-Technical Alerts Dashboard.
+Table components for Telemetry Dashboard.
 
-This module provides reusable table functions for telemetry data display.
-All functions return DataFrames formatted for Dash DataTable display.
+Functions to build DataTables and parse JSON data structures
+for telemetry fleet, machine, component, and limits views.
 """
 
 import pandas as pd
@@ -15,304 +15,315 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ========================================
+# JSON PARSING HELPERS
+# ========================================
+
 def parse_component_details(component_details_raw) -> List[Dict]:
     """
-    Parse component_details JSON field into list of dictionaries.
+    Parse component_details JSON field from machine_status.
     
     Args:
-        component_details_raw: Raw component_details value (string, list, or numpy array)
+        component_details_raw: JSON string, list, or numpy array
     
     Returns:
-        List of component detail dictionaries
+        List of component dictionaries
     """
-    # Check if value is None or NaN
-    if component_details_raw is None or (isinstance(component_details_raw, float) and pd.isna(component_details_raw)):
-        return []
-    
-    # Handle different types
-    if isinstance(component_details_raw, str):
-        # JSON string - parse it
-        try:
-            return json.loads(component_details_raw)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse component_details JSON string")
+    try:
+        if component_details_raw is None:
             return []
-    elif isinstance(component_details_raw, (list, np.ndarray)):
-        # Already a list or numpy array - convert to list
-        return list(component_details_raw)
-    else:
+        if isinstance(component_details_raw, float) and pd.isna(component_details_raw):
+            return []
+        if isinstance(component_details_raw, str):
+            return json.loads(component_details_raw)
+        if isinstance(component_details_raw, (list, np.ndarray)):
+            return list(component_details_raw)
         logger.warning(f"Unexpected component_details type: {type(component_details_raw)}")
+        return []
+    except Exception as e:
+        logger.error(f"Error parsing component_details: {e}")
         return []
 
 
 def parse_signals_evaluation(signals_eval_raw) -> Dict:
     """
-    Parse signals_evaluation JSON field into dictionary.
+    Parse signals_evaluation JSON field from classified.
     
     Args:
-        signals_eval_raw: Raw signals_evaluation value (string or dict)
+        signals_eval_raw: JSON string or dict
     
     Returns:
-        Dictionary of signal evaluations
+        Dictionary of signal evaluations {signal_name: eval_dict}
     """
-    if pd.isna(signals_eval_raw):
-        return {}
-    
-    if isinstance(signals_eval_raw, str):
-        try:
-            return json.loads(signals_eval_raw)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse signals_evaluation JSON string")
+    try:
+        if signals_eval_raw is None:
             return {}
-    elif isinstance(signals_eval_raw, dict):
-        return signals_eval_raw
-    else:
+        if isinstance(signals_eval_raw, float) and pd.isna(signals_eval_raw):
+            return {}
+        if isinstance(signals_eval_raw, str):
+            return json.loads(signals_eval_raw)
+        if isinstance(signals_eval_raw, dict):
+            return signals_eval_raw
         logger.warning(f"Unexpected signals_evaluation type: {type(signals_eval_raw)}")
         return {}
+    except Exception as e:
+        logger.error(f"Error parsing signals_evaluation: {e}")
+        return {}
 
+
+# ========================================
+# FLEET STATUS TABLE
+# ========================================
 
 def build_fleet_status_table(machine_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build fleet status table for display.
+    Build fleet status table data from machine_status DataFrame.
+    
+    Parses component_details JSON to count components by status (A/L/N format).
     
     Args:
-        machine_df: DataFrame with machine status data
+        machine_df: DataFrame with machine status (filtered to latest week)
     
     Returns:
-        DataFrame formatted for DataTable display with columns:
-        - unit_id, overall_status, priority_score, machine_score,
-        - components (formatted as "A/L/N"), evaluation_week, evaluation_year
+        DataFrame formatted for display in DataTable
     """
     if machine_df.empty:
-        logger.warning("Empty machine dataframe provided to build_fleet_status_table")
         return pd.DataFrame()
-    
-    # Parse component_details to count components by status
-    def count_component_status(component_details_json):
-        """Parse component_details JSON and count by status."""
-        details = parse_component_details(component_details_json)
-        
-        if not details:
-            return 0, 0, 0
-        
-        anormal = sum(1 for c in details if c.get('component_status') == 'Anormal')
-        alerta = sum(1 for c in details if c.get('component_status') == 'Alerta')
-        normal = sum(1 for c in details if c.get('component_status') == 'Normal')
-        
-        return anormal, alerta, normal
-    
-    # Apply to dataframe
-    df = machine_df.copy()
-    df[['anormal_components', 'alerta_components', 'normal_components']] = \
-        df['component_details'].apply(
+
+    try:
+        result = machine_df.copy()
+
+        # Parse component details and count by status
+        # Note: raw parquet stores 'status' key, not 'component_status'
+        def count_component_status(component_details_json):
+            details = parse_component_details(component_details_json)
+            anormal = sum(1 for c in details if c.get('component_status', c.get('status')) == 'Anormal')
+            alerta = sum(1 for c in details if c.get('component_status', c.get('status')) == 'Alerta')
+            normal = sum(1 for c in details if c.get('component_status', c.get('status')) == 'Normal')
+            return anormal, alerta, normal
+
+        result[['anormal_comp', 'alerta_comp', 'normal_comp']] = result['component_details'].apply(
             lambda x: pd.Series(count_component_status(x))
         )
-    
-    # Create display table
-    fleet_table = df[[
-        'unit_id', 'overall_status', 'priority_score', 'machine_score',
-        'anormal_components', 'alerta_components', 'normal_components',
-        'evaluation_week', 'evaluation_year'
-    ]].copy()
-    
-    # Sort by priority (descending)
-    fleet_table = fleet_table.sort_values('priority_score', ascending=False)
-    
-    # Format component counts as "A/L/N"
-    fleet_table['components'] = fleet_table.apply(
-        lambda row: f"{int(row['anormal_components'])}/{int(row['alerta_components'])}/{int(row['normal_components'])}",
-        axis=1
-    )
-    
-    # Round numeric columns
-    fleet_table['priority_score'] = fleet_table['priority_score'].round(2)
-    fleet_table['machine_score'] = fleet_table['machine_score'].round(3)
-    
-    # Select final columns
-    display_df = fleet_table[[
-        'unit_id', 'overall_status', 'priority_score', 'machine_score',
-        'components', 'evaluation_week', 'evaluation_year'
-    ]].copy()
-    
-    return display_df
 
+        # Format components as A/L/N
+        result['componentes'] = result.apply(
+            lambda row: f"{int(row['anormal_comp'])}/{int(row['alerta_comp'])}/{int(row['normal_comp'])}",
+            axis=1
+        )
+
+        # Select and rename columns for display
+        display_cols = {
+            'unit_id': 'Unidad',
+            'overall_status': 'Estado',
+            'priority_score': 'Prioridad',
+            'machine_score': 'Score',
+            'componentes': 'Componentes (A/L/N)',
+            'evaluation_week': 'Semana',
+            'evaluation_year': 'Año'
+        }
+
+        table_df = result[list(display_cols.keys())].rename(columns=display_cols)
+
+        # Sort by priority (descending)
+        table_df = table_df.sort_values('Prioridad', ascending=False)
+
+        # Round numeric columns
+        table_df['Prioridad'] = table_df['Prioridad'].round(2)
+        table_df['Score'] = table_df['Score'].round(3)
+
+        return table_df
+
+    except Exception as e:
+        logger.error(f"Error building fleet status table: {e}")
+        return pd.DataFrame()
+
+
+# ========================================
+# COMPONENT STATUS TABLE
+# ========================================
 
 def build_component_table(component_details: List[Dict]) -> pd.DataFrame:
     """
-    Build component status table for a machine.
+    Build component status table from parsed component_details.
     
     Args:
-        component_details: List of component detail dictionaries
+        component_details: List of component dictionaries
     
     Returns:
-        DataFrame formatted for DataTable display with columns:
-        - component, component_status, component_score, num_signals,
-        - num_anormal, num_alerta, coverage
+        DataFrame formatted for display in DataTable
     """
     if not component_details:
-        logger.warning("Empty component_details provided to build_component_table")
         return pd.DataFrame()
-    
-    # Convert to DataFrame
-    component_table = pd.DataFrame(component_details)
-    
-    # Check for required columns and create them if needed
-    if 'component' not in component_table.columns:
-        logger.warning("Missing 'component' column in component_details")
+
+    try:
+        df = pd.DataFrame(component_details)
+
+        # Normalize column names
+        column_mapping = {
+            'status': 'component_status',
+            'score': 'component_score',
+            'signal_coverage': 'coverage'
+        }
+        for old_col, new_col in column_mapping.items():
+            if old_col in df.columns and old_col != new_col:
+                df.rename(columns={old_col: new_col}, inplace=True)
+
+        # Derive num_signals if not present
+        if 'num_signals' not in df.columns:
+            if 'triggering_signals' in df.columns:
+                df['num_signals'] = df['triggering_signals'].apply(
+                    lambda x: len(x) if isinstance(x, (list, np.ndarray)) else 0
+                )
+            else:
+                df['num_signals'] = 0
+
+        # Select display columns
+        display_mapping = {
+            'component': 'Componente',
+            'component_status': 'Estado',
+            'component_score': 'Score',
+            'num_signals': 'Señales',
+            'coverage': 'Cobertura'
+        }
+
+        available_cols = {k: v for k, v in display_mapping.items() if k in df.columns}
+        result = df[list(available_cols.keys())].rename(columns=available_cols)
+
+        # Format numeric columns
+        if 'Score' in result.columns:
+            result['Score'] = result['Score'].round(3)
+        if 'Cobertura' in result.columns:
+            result['Cobertura'] = (result['Cobertura'] * 100).round(1).astype(str) + '%'
+
+        # Sort by score descending
+        if 'Score' in result.columns:
+            result = result.sort_values('Score', ascending=False)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error building component table: {e}")
         return pd.DataFrame()
-    
-    # Map potential different column names
-    column_mapping = {
-        'status': 'component_status',
-        'score': 'component_score',
-        'signal_coverage': 'coverage'
-    }
-    
-    for old_col, new_col in column_mapping.items():
-        if old_col in component_table.columns and old_col != new_col:
-            component_table.rename(columns={old_col: new_col}, inplace=True)
-    
-    # Add missing columns with default values if needed
-    if 'num_signals' not in component_table.columns:
-        if 'triggering_signals' in component_table.columns:
-            component_table['num_signals'] = component_table['triggering_signals'].apply(
-                lambda x: len(x) if isinstance(x, (list, np.ndarray)) else 0
-            )
-        else:
-            component_table['num_signals'] = 0
-    
-    if 'num_anormal' not in component_table.columns:
-        component_table['num_anormal'] = component_table.get('component_status', 'Normal').apply(
-            lambda x: 1 if x == 'Anormal' else 0
-        )
-    
-    if 'num_alerta' not in component_table.columns:
-        component_table['num_alerta'] = component_table.get('component_status', 'Normal').apply(
-            lambda x: 1 if x == 'Alerta' else 0
-        )
-    
-    # Select display columns
-    display_cols = []
-    for col in ['component', 'component_status', 'component_score', 'num_signals', 
-                'num_anormal', 'num_alerta', 'coverage']:
-        if col in component_table.columns:
-            display_cols.append(col)
-    
-    display_df = component_table[display_cols].copy()
-    
-    # Round numeric columns
-    if 'component_score' in display_df.columns:
-        display_df['component_score'] = display_df['component_score'].round(3)
-    if 'coverage' in display_df.columns:
-        display_df['coverage'] = display_df['coverage'].round(3)
-    
-    # Sort by score
-    if 'component_score' in display_df.columns:
-        display_df = display_df.sort_values('component_score', ascending=False)
-    
-    return display_df
 
 
-def build_signal_evaluation_table(signals_evaluation: Dict) -> pd.DataFrame:
+# ========================================
+# SIGNAL EVALUATION TABLE
+# ========================================
+
+def build_signal_evaluation_table(signals_eval: Dict) -> pd.DataFrame:
     """
-    Build signal evaluation table for a component.
+    Build signal evaluation table from parsed signals_evaluation dict.
     
     Args:
-        signals_evaluation: Dictionary of signal evaluations
+        signals_eval: Dictionary of signal evaluations {signal_name: eval_dict}
     
     Returns:
-        DataFrame formatted for DataTable display with columns:
-        - signal, signal_status, score, samples, anomaly_%
+        DataFrame formatted for display with signal metrics
     """
-    if not signals_evaluation:
-        logger.warning("Empty signals_evaluation provided to build_signal_evaluation_table")
+    if not signals_eval:
         return pd.DataFrame()
-    
-    # Restructure dictionary: keys are signal names, values are evaluation dicts
-    signals_list = []
-    for signal_name, eval_data in signals_evaluation.items():
-        if eval_data is not None:  # Skip signals with no evaluation
-            row = {'signal': signal_name}
-            row.update(eval_data)
-            signals_list.append(row)
-    
-    if not signals_list:
-        logger.warning("All signals have null evaluations")
+
+    try:
+        signals_list = []
+        for signal_name, eval_data in signals_eval.items():
+            if eval_data is not None:
+                row = {'signal': signal_name}
+                row.update(eval_data)
+                signals_list.append(row)
+
+        if not signals_list:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(signals_list)
+
+        # Normalize column names
+        col_mapping = {
+            'status': 'signal_status',
+            'window_score': 'score',
+            'sample_count': 'samples',
+            'anomaly_percentage': 'anomaly_%'
+        }
+
+        for actual_col, display_name in col_mapping.items():
+            if actual_col in df.columns and display_name not in df.columns:
+                df.rename(columns={actual_col: display_name}, inplace=True)
+
+        # Rename for display
+        display_mapping = {
+            'signal': 'Señal',
+            'signal_status': 'Estado',
+            'score': 'Score',
+            'samples': 'Muestras',
+            'anomaly_%': 'Anomalía %'
+        }
+
+        available_cols = {k: v for k, v in display_mapping.items() if k in df.columns}
+        result = df[list(available_cols.keys())].rename(columns=available_cols)
+
+        # Format
+        if 'Score' in result.columns:
+            result['Score'] = result['Score'].round(4)
+        if 'Anomalía %' in result.columns:
+            result['Anomalía %'] = result['Anomalía %'].round(2)
+
+        # Sort by score descending
+        if 'Score' in result.columns:
+            result = result.sort_values('Score', ascending=False)
+
+        # Also return the original df with original column names for chart building
+        # We keep the raw signal name for boxplot matching
+        return df
+
+    except Exception as e:
+        logger.error(f"Error building signal evaluation table: {e}")
         return pd.DataFrame()
-    
-    # Convert to DataFrame
-    signals_table = pd.DataFrame(signals_list)
-    
-    # Map actual columns to display (use what's available)
-    col_mapping = {
-        'status': 'signal_status',
-        'window_score': 'score',
-        'sample_count': 'samples',
-        'anomaly_percentage': 'anomaly_%'
-    }
-    
-    # Build display columns from available data
-    display_cols = []
-    for actual_col, display_name in col_mapping.items():
-        if actual_col in signals_table.columns:
-            if actual_col != display_name and display_name not in signals_table.columns:
-                signals_table.rename(columns={actual_col: display_name}, inplace=True)
-            display_cols.append(display_name)
-    
-    # Always include 'signal' column first
-    if 'signal' not in display_cols:
-        display_cols.insert(0, 'signal')
-    
-    display_df = signals_table[display_cols].copy()
-    
-    # Round numeric columns
-    if 'score' in display_df.columns:
-        display_df['score'] = display_df['score'].round(3)
-    if 'anomaly_%' in display_df.columns:
-        display_df['anomaly_%'] = display_df['anomaly_%'].round(2)
-    
-    # Sort by score if available
-    if 'score' in display_df.columns:
-        display_df = display_df.sort_values('score', ascending=False)
-    
-    return display_df
 
 
-def build_baseline_thresholds_table(baseline_df: pd.DataFrame, unit_id: Optional[str] = None) -> pd.DataFrame:
+# ========================================
+# BASELINE THRESHOLDS TABLE
+# ========================================
+
+def build_baseline_thresholds_table(baseline_df: pd.DataFrame) -> pd.DataFrame:
     """
     Build baseline thresholds table for display.
     
     Args:
-        baseline_df: DataFrame with baseline thresholds
-        unit_id: Optional unit ID to filter by
+        baseline_df: DataFrame with baseline data (Unit, Signal, EstadoMaquina, P2, P5, P95, P98)
     
     Returns:
-        DataFrame formatted for DataTable display with columns:
-        - Unit, Signal, EstadoMaquina, P2, P5, P95, P98
+        DataFrame formatted for DataTable display
     """
     if baseline_df.empty:
-        logger.warning("Empty baseline_df provided to build_baseline_thresholds_table")
         return pd.DataFrame()
-    
-    df = baseline_df.copy()
-    
-    # Filter for specific unit if provided
-    if unit_id is not None and 'Unit' in df.columns:
-        df = df[df['Unit'] == unit_id]
-    
-    # Select display columns
-    display_cols = ['Unit', 'Signal', 'EstadoMaquina', 'P2', 'P5', 'P95', 'P98']
-    existing_cols = [col for col in display_cols if col in df.columns]
-    
-    if not existing_cols:
-        logger.warning("Required columns not found in baseline_df")
+
+    try:
+        # Select and rename columns
+        display_mapping = {
+            'Unit': 'Unidad',
+            'Signal': 'Señal',
+            'EstadoMaquina': 'Estado',
+            'P2': 'P2',
+            'P5': 'P5',
+            'P95': 'P95',
+            'P98': 'P98'
+        }
+
+        available_cols = {k: v for k, v in display_mapping.items() if k in baseline_df.columns}
+        result = baseline_df[list(available_cols.keys())].rename(columns=available_cols).copy()
+
+        # Round percentile values
+        for col in ['P2', 'P5', 'P95', 'P98']:
+            if col in result.columns:
+                result[col] = result[col].round(4)
+
+        # Sort
+        sort_cols = [c for c in ['Unidad', 'Señal', 'Estado'] if c in result.columns]
+        if sort_cols:
+            result = result.sort_values(sort_cols)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error building baseline thresholds table: {e}")
         return pd.DataFrame()
-    
-    display_df = df[existing_cols].copy()
-    
-    # Round percentile columns
-    for col in ['P2', 'P5', 'P95', 'P98']:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].round(2)
-    
-    return display_df

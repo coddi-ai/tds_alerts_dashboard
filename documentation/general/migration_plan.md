@@ -348,10 +348,10 @@ This phase implements the **Severity-Weighted Percentile Window Scoring** method
 
 ---
 
-#### Step 2.3: Dash Migration ✅ COMPLETED
+#### Step 2.3: Dash Migration
 **Objective**: Convert Jupyter visualizations to Dash components
 
-**Status**: ✅ Complete (February 26, 2026)
+**Status**: 🔄 Planned
 
 **Tasks**:
 1. **Create Components** (`dashboard/components/`)
@@ -405,10 +405,10 @@ This phase implements the **Severity-Weighted Percentile Window Scoring** method
 
 ---
 
-#### Step 2.4: Dashboard Integration ✅ COMPLETED
+#### Step 2.4: Dashboard Integration
 **Objective**: Integrate Telemetry tabs into main dashboard navigation
 
-**Status**: ✅ Complete (February 26, 2026)
+**Status**: 🔄 Planned
 
 **Tasks**:
 1. **Update Layout** (`dashboard/layout.py`)

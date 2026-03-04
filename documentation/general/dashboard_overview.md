@@ -205,7 +205,7 @@ The dashboard is organized into three main sections, each serving a specific pur
   - Component criticality weighting for machine-level status
   - Weekly evaluation with multi-week historical comparison
   - JSON-based nested data structures (component_details, signals_evaluation)
-- **Status**: ✅ **Fully Implemented** (February 26, 2026)
+- **Status**: 🔄 **In Progress** (February 26, 2026 - Prototyping Phase)
 
 #### 2.3 **Mantentions**
 - **Purpose**: Maintenance activity tracking
@@ -265,7 +265,7 @@ The dashboard is organized into three main sections, each serving a specific pur
   - P2/P98: Extreme bounds (alarm thresholds)
   - P5/P95: Alert bounds (early warning)
   - Training window: Historical data period used to compute percentiles
-- **Status**: ✅ **Fully Implemented** (February 26, 2026)
+- **Status**: 🔄 **In Progress** (February 26, 2026 - Prototyping Phase)
 
 ---
 

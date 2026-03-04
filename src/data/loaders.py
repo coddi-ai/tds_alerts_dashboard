@@ -624,6 +624,154 @@ def load_oil_classified(client: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+
+# ========================================
+# TELEMETRY DASHBOARD LOADERS (GOLDEN/SILVER)
+# ========================================
+
+def load_telemetry_machine_status(client: str) -> pd.DataFrame:
+    """
+    Load telemetry machine status from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with fleet-level machine status aggregations
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry machine status is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/machine_status.parquet")
+    logger.info(f"Loading telemetry machine status from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Telemetry machine status file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} telemetry machine status records")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry machine status: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_classified(client: str, week: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
+    """
+    Load telemetry classified component evaluations from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        week: Optional evaluation week filter
+        year: Optional evaluation year filter
+    
+    Returns:
+        DataFrame with component-level evaluations (signals_evaluation JSON)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry classified is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/classified.parquet")
+    logger.info(f"Loading telemetry classified from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Telemetry classified file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+
+        # Apply week/year filters if specified
+        if week is not None and 'evaluation_week' in df.columns:
+            df = df[df['evaluation_week'] == week]
+        if year is not None and 'evaluation_year' in df.columns:
+            df = df[df['evaluation_year'] == year]
+
+        logger.info(f"Loaded {len(df)} telemetry classified records")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry classified: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_baselines(client: str, baseline_version: str = 'latest') -> pd.DataFrame:
+    """
+    Load telemetry baseline thresholds (P2, P5, P95, P98) from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        baseline_version: 'latest' to auto-detect or specific filename
+    
+    Returns:
+        DataFrame with baseline percentile thresholds per signal/unit/state
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry baselines only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    baselines_dir = Path(f"data/telemetry/golden/{client.lower()}/baselines")
+    logger.info(f"Loading telemetry baselines from {baselines_dir}")
+
+    if not baselines_dir.exists():
+        logger.warning(f"Baselines directory not found: {baselines_dir}")
+        return pd.DataFrame()
+
+    try:
+        if baseline_version == 'latest':
+            baseline_files = sorted(baselines_dir.glob('baseline_*.parquet'))
+            if not baseline_files:
+                logger.warning("No baseline files found")
+                return pd.DataFrame()
+            file_path = baseline_files[-1]
+        else:
+            file_path = baselines_dir / baseline_version
+
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} baseline records from {file_path.name}")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry baselines: {e}")
+        return pd.DataFrame()
+
+
+def load_silver_telemetry_week(client: str, week: int, year: int) -> pd.DataFrame:
+    """
+    Load silver layer telemetry data for a specific week.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        week: Week number (1-53)
+        year: Year (e.g., 2026)
+    
+    Returns:
+        DataFrame with raw sensor data (wide format with states)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Silver telemetry only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/silver/{client.lower()}/Telemetry_Wide_With_States/Week{week:02d}Year{year}.parquet")
+    logger.info(f"Loading silver telemetry week from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Silver telemetry week file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+        if 'Fecha' in df.columns:
+            df['Fecha'] = pd.to_datetime(df['Fecha'])
+        logger.info(f"Loaded {len(df)} silver telemetry records for Week {week:02d}/{year}")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading silver telemetry week: {e}")
+        return pd.DataFrame()
+
+
 def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
     """
     Load maintenance data for a specific week.
@@ -653,151 +801,4 @@ def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
     
     except Exception as e:
         logger.error(f"Error loading maintenance data: {e}")
-        return pd.DataFrame()
-
-
-# ===================================================================
-# TELEMETRY DATA LOADERS
-# ===================================================================
-
-def load_telemetry_machine_status(client: str) -> pd.DataFrame:
-    """
-    Load telemetry machine status from Golden layer.
-    
-    Args:
-        client: Client identifier (e.g., 'cda')
-    
-    Returns:
-        DataFrame with machine-level status including:
-        - unit_id, overall_status, priority_score, machine_score
-        - component_details (JSON), evaluation_week, evaluation_year
-    """
-    file_path = Path(f"data/telemetry/golden/{client.lower()}/machine_status.parquet")
-    logger.info(f"Loading telemetry machine status from {file_path}")
-    
-    if not file_path.exists():
-        logger.warning(f"Telemetry machine status file not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = safe_read_parquet(file_path)
-        logger.info(f"Loaded {len(df)} telemetry machine records")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading telemetry machine status: {e}")
-        return pd.DataFrame()
-
-
-def load_telemetry_classified(client: str, week: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
-    """
-    Load telemetry classified data from Golden layer.
-    
-    Args:
-        client: Client identifier (e.g., 'cda')
-        week: Optional filter for specific evaluation week
-        year: Optional filter for specific evaluation year
-    
-    Returns:
-        DataFrame with component-level evaluations including:
-        - unit_id, component, component_status, component_score
-        - signals_evaluation (JSON), evaluation_week, evaluation_year
-    """
-    file_path = Path(f"data/telemetry/golden/{client.lower()}/classified.parquet")
-    logger.info(f"Loading telemetry classified data from {file_path}")
-    
-    if not file_path.exists():
-        logger.warning(f"Telemetry classified file not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = safe_read_parquet(file_path)
-        
-        # Filter by week/year if specified
-        if week is not None:
-            df = df[df['evaluation_week'] == week]
-        if year is not None:
-            df = df[df['evaluation_year'] == year]
-        
-        logger.info(f"Loaded {len(df)} telemetry classified records")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading telemetry classified data: {e}")
-        return pd.DataFrame()
-
-
-def load_telemetry_baselines(client: str, baseline_version: str = 'latest') -> pd.DataFrame:
-    """
-    Load telemetry baseline thresholds from Golden layer.
-    
-    Args:
-        client: Client identifier (e.g., 'cda')
-        baseline_version: 'latest' or specific baseline date (YYYYMMDD)
-    
-    Returns:
-        DataFrame with baseline thresholds including:
-        - Unit, Signal, EstadoMaquina, P2, P5, P95, P98
-    """
-    baselines_dir = Path(f"data/telemetry/golden/{client.lower()}/baselines")
-    
-    if not baselines_dir.exists():
-        logger.warning(f"Baselines directory not found: {baselines_dir}")
-        return pd.DataFrame()
-    
-    try:
-        # Find baseline files
-        baseline_files = sorted(baselines_dir.glob('baseline_*.parquet'))
-        
-        if not baseline_files:
-            logger.warning(f"No baseline files found in {baselines_dir}")
-            return pd.DataFrame()
-        
-        # Select baseline file
-        if baseline_version == 'latest':
-            baseline_file = baseline_files[-1]
-            logger.info(f"Using latest baseline: {baseline_file.name}")
-        else:
-            # Find specific version
-            baseline_file = baselines_dir / f'baseline_{baseline_version}.parquet'
-            if not baseline_file.exists():
-                logger.warning(f"Baseline version {baseline_version} not found, using latest")
-                baseline_file = baseline_files[-1]
-        
-        df = safe_read_parquet(baseline_file)
-        logger.info(f"Loaded {len(df)} baseline thresholds from {baseline_file.name}")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading telemetry baselines: {e}")
-        return pd.DataFrame()
-
-
-def load_silver_telemetry_week(client: str, week: int, year: int) -> pd.DataFrame:
-    """
-    Load silver telemetry data for a specific week.
-    
-    Args:
-        client: Client identifier (e.g., 'cda')
-        week: Week number (1-53)
-        year: Year (e.g., 2026)
-    
-    Returns:
-        DataFrame with silver telemetry data including:
-        - Unit, Fecha, EstadoMaquina, signal columns
-    """
-    file_path = Path(f"data/telemetry/silver/{client.lower()}/Telemetry_Wide_With_States/Week{week:02d}Year{year}.parquet")
-    logger.info(f"Loading silver telemetry data from {file_path}")
-    
-    if not file_path.exists():
-        logger.warning(f"Silver telemetry file not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = safe_read_parquet(file_path)
-        logger.info(f"Loaded {len(df)} silver telemetry records for Week {week:02d}/{year}")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading silver telemetry data: {e}")
         return pd.DataFrame()

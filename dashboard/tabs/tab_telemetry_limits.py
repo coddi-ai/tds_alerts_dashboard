@@ -1,208 +1,178 @@
 """
 Telemetry Limits Tab Layout.
 
-This tab displays baseline thresholds and training data:
-- Baseline Info Card: Training period and metadata
-- Baseline Thresholds Table: P2, P5, P95, P98 percentiles per signal
-- Unit Filter: Dropdown to filter by unit
-- Export Options: Download baselines as CSV (future)
+Displays baseline thresholds for sensor anomaly detection:
+info card, filters, and baseline thresholds table.
 """
 
 from dash import html, dcc, dash_table
 import dash_bootstrap_components as dbc
-
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def create_telemetry_limits_layout():
+def create_baseline_info_card(
+    baseline_filename: str,
+    num_records: int,
+    num_units: int,
+    num_signals: int,
+    num_states: int
+) -> dbc.Card:
     """
-    Create layout for Telemetry Limits tab.
+    Create baseline metadata info card.
+    
+    Args:
+        baseline_filename: Name of the baseline file loaded
+        num_records: Total number of baseline records
+        num_units: Number of unique units
+        num_signals: Number of unique signals
+        num_states: Number of unique machine states
     
     Returns:
-        Dash component tree for limits display
+        Bootstrap card with baseline metadata
     """
-    layout = dbc.Container([
+    return dbc.Card([
+        dbc.CardBody([
+            dbc.Row([
+                dbc.Col([
+                    html.H5([
+                        html.I(className="fas fa-database me-2"),
+                        "Información de Baseline"
+                    ], className="mb-0"),
+                ], width='auto'),
+                dbc.Col([
+                    html.Span([
+                        html.Strong("Archivo: "),
+                        baseline_filename
+                    ], className="me-4"),
+                    html.Span([
+                        html.Strong("Registros: "),
+                        f"{num_records:,}"
+                    ], className="me-4"),
+                    html.Span([
+                        html.Strong("Unidades: "),
+                        f"{num_units}"
+                    ], className="me-4"),
+                    html.Span([
+                        html.Strong("Señales: "),
+                        f"{num_signals}"
+                    ], className="me-4"),
+                    html.Span([
+                        html.Strong("Estados: "),
+                        f"{num_states}"
+                    ])
+                ], className="text-muted")
+            ], align="center")
+        ])
+    ], className="shadow-sm mb-4", color="light")
+
+
+def create_telemetry_limits_layout() -> html.Div:
+    """
+    Create telemetry limits tab layout.
+    
+    Returns:
+        Dash HTML Div with limits components
+    """
+    logger.info("Creating Telemetry Limits layout")
+
+    return html.Div([
         # Header
         dbc.Row([
             dbc.Col([
-                html.H3("Telemetry Limits", className="mb-3"),
+                html.H3([
+                    html.I(className="fas fa-sliders-h me-2"),
+                    "Límites de Telemetría - Baselines"
+                ], className="text-primary mb-1"),
                 html.P(
-                    "Baseline percentile thresholds for sensor anomaly detection.",
+                    "Umbrales percentiles (P2, P5, P95, P98) para detección de anomalías",
                     className="text-muted"
                 )
             ])
         ], className="mb-4"),
-        
-        # Baseline Info Card
+
+        # Info Card (dynamic)
+        html.Div(id='telemetry-limits-info-card'),
+
+        # Filters Row
         dbc.Row([
             dbc.Col([
-                dcc.Loading(
-                    id="loading-telemetry-limits-info",
-                    type="circle",
-                    children=[
-                        html.Div(id="telemetry-limits-info-card")
-                    ]
-                )
-            ], width=12)
-        ], className="mb-4"),
-        
-        # Filters Section
+                dbc.Card([
+                    dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Filtrar por Unidad:", className="fw-bold mb-1"),
+                                dcc.Dropdown(
+                                    id='telemetry-limits-unit-filter',
+                                    options=[{'label': 'Todas las Unidades', 'value': 'all'}],
+                                    value='all',
+                                    clearable=False
+                                )
+                            ], md=4),
+                            dbc.Col([
+                                html.Label("Filtrar por Estado:", className="fw-bold mb-1"),
+                                dcc.Dropdown(
+                                    id='telemetry-limits-estado-filter',
+                                    options=[
+                                        {'label': 'Todos', 'value': 'all'},
+                                        {'label': 'Operacional', 'value': 'Operacional'},
+                                        {'label': 'Ralenti', 'value': 'Ralenti'},
+                                        {'label': 'Apagada', 'value': 'Apagada'}
+                                    ],
+                                    value='all',
+                                    clearable=False
+                                )
+                            ], md=4),
+                        ])
+                    ])
+                ], className="shadow-sm mb-4")
+            ])
+        ]),
+
+        # Baseline Thresholds Table
         dbc.Row([
             dbc.Col([
-                html.Label("Filter by Unit:", className="fw-bold"),
-                dcc.Dropdown(
-                    id="telemetry-limits-unit-filter",
-                    options=[{'label': 'All Units', 'value': 'all'}],
-                    value='all',
-                    clearable=False,
-                    className="mb-3"
-                )
-            ], width=12, lg=4),
-            dbc.Col([
-                html.Label("Filter by Estado:", className="fw-bold"),
-                dcc.Dropdown(
-                    id="telemetry-limits-estado-filter",
-                    options=[
-                        {'label': 'All States', 'value': 'all'},
-                        {'label': 'Operacional', 'value': 'Operacional'},
-                        {'label': 'Ralenti', 'value': 'Ralenti'},
-                        {'label': 'Apagada', 'value': 'Apagada'}
-                    ],
-                    value='all',
-                    clearable=False,
-                    className="mb-3"
-                )
-            ], width=12, lg=4)
-        ], className="mb-4"),
-        
-        # Baseline Thresholds Table Section
-        dbc.Row([
-            dbc.Col([
-                html.H5("Baseline Thresholds", className="mb-3"),
-                html.P([
-                    html.Strong("P2/P98: "), "Extreme bounds (alarm thresholds) | ",
-                    html.Strong("P5/P95: "), "Warning bounds (alert thresholds)"
-                ], className="text-muted small mb-3"),
-                dcc.Loading(
-                    id="loading-telemetry-limits-table",
-                    type="circle",
-                    children=[
-                        dash_table.DataTable(
-                            id="telemetry-baseline-thresholds-table",
-                            columns=[
-                                {"name": "Unit", "id": "Unit"},
-                                {"name": "Signal", "id": "Signal"},
-                                {"name": "Estado", "id": "EstadoMaquina"},
-                                {"name": "P2", "id": "P2"},
-                                {"name": "P5", "id": "P5"},
-                                {"name": "P95", "id": "P95"},
-                                {"name": "P98", "id": "P98"}
-                            ],
-                            data=[],
-                            sort_action="native",
-                            filter_action="native",
-                            page_size=25,
-                            style_table={'overflowX': 'auto'},
-                            style_cell={
-                                'textAlign': 'left',
-                                'padding': '10px',
-                                'fontFamily': 'Arial, sans-serif',
-                                'fontSize': '14px'
-                            },
-                            style_header={
-                                'backgroundColor': '#f8f9fa',
-                                'fontWeight': 'bold',
-                                'borderBottom': '2px solid #dee2e6'
-                            },
-                            style_data_conditional=[
-                                {
-                                    'if': {'row_index': 'odd'},
-                                    'backgroundColor': '#f8f9fa'
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.H5([
+                            html.I(className="fas fa-table me-2"),
+                            "Umbrales de Baseline"
+                        ], className="mb-0")
+                    ]),
+                    dbc.CardBody([
+                        dcc.Loading(
+                            dash_table.DataTable(
+                                id='telemetry-baseline-thresholds-table',
+                                columns=[
+                                    {'name': 'Unidad', 'id': 'Unidad'},
+                                    {'name': 'Señal', 'id': 'Señal'},
+                                    {'name': 'Estado', 'id': 'Estado'},
+                                    {'name': 'P2', 'id': 'P2', 'type': 'numeric', 'format': {'specifier': '.4f'}},
+                                    {'name': 'P5', 'id': 'P5', 'type': 'numeric', 'format': {'specifier': '.4f'}},
+                                    {'name': 'P95', 'id': 'P95', 'type': 'numeric', 'format': {'specifier': '.4f'}},
+                                    {'name': 'P98', 'id': 'P98', 'type': 'numeric', 'format': {'specifier': '.4f'}},
+                                ],
+                                data=[],
+                                sort_action='native',
+                                filter_action='native',
+                                page_size=20,
+                                style_table={'overflowX': 'auto'},
+                                style_header={
+                                    'backgroundColor': '#f8f9fa',
+                                    'fontWeight': 'bold',
+                                    'textAlign': 'center'
+                                },
+                                style_cell={
+                                    'textAlign': 'center',
+                                    'padding': '8px',
+                                    'fontSize': '13px'
                                 }
-                            ]
+                            ),
+                            type='circle'
                         )
-                    ]
-                )
-            ], width=12)
-        ], className="mb-4"),
-        
-        # Hidden div to store baseline data
-        html.Div(id="telemetry-baseline-data-store", style={'display': 'none'}),
-        
-    ], fluid=True, className="p-4")
-    
-    return layout
-
-
-def create_baseline_info_card(baseline_filename: str, num_records: int, num_units: int, 
-                               num_signals: int, num_states: int):
-    """
-    Create baseline info card with metadata.
-    
-    Args:
-        baseline_filename: Name of baseline file
-        num_records: Total records in baseline
-        num_units: Number of unique units
-        num_signals: Number of unique signals
-        num_states: Number of unique estados
-    
-    Returns:
-        Dash component for baseline info card
-    """
-    # Extract date from filename (baseline_YYYYMMDD.parquet)
-    try:
-        date_str = baseline_filename.replace('baseline_', '').replace('.parquet', '')
-        from datetime import datetime
-        baseline_date = datetime.strptime(date_str, '%Y%m%d').strftime('%B %d, %Y')
-    except:
-        baseline_date = "Unknown"
-    
-    card = dbc.Card([
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.H5("Baseline Information", className="mb-3"),
-                    html.Div([
-                        html.Strong("Baseline Date: "),
-                        html.Span(baseline_date, className="text-primary")
-                    ], className="mb-2"),
-                    html.Div([
-                        html.Strong("File: "),
-                        html.Span(baseline_filename, className="text-muted small")
                     ])
-                ], width=12, lg=6),
-                dbc.Col([
-                    dbc.Row([
-                        dbc.Col([
-                            html.Div([
-                                html.Span(str(num_records), className="fs-4 text-primary d-block"),
-                                html.Small("Total Records", className="text-muted")
-                            ], className="text-center mb-2")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div([
-                                html.Span(str(num_units), className="fs-4 text-success d-block"),
-                                html.Small("Units", className="text-muted")
-                            ], className="text-center mb-2")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div([
-                                html.Span(str(num_signals), className="fs-4 text-info d-block"),
-                                html.Small("Signals", className="text-muted")
-                            ], className="text-center mb-2")
-                        ], width=3),
-                        dbc.Col([
-                            html.Div([
-                                html.Span(str(num_states), className="fs-4 text-secondary d-block"),
-                                html.Small("Estados", className="text-muted")
-                            ], className="text-center mb-2")
-                        ], width=3)
-                    ])
-                ], width=12, lg=6)
+                ], className="shadow-sm")
             ])
         ])
-    ], className="mb-3", color="light")
-    
-    return card
+    ])
