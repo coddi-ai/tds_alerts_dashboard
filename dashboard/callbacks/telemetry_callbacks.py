@@ -319,7 +319,7 @@ def update_component_selector(selected_unit, client):
 
         options = [
             {
-                'label': f"{row['component']} - {row.get('component_status', 'N/A')}",
+                'label': f"{row['component']} - {row.get('component_status', row.get('status', 'N/A'))}",
                 'value': row['component']
             }
             for _, row in component_df.iterrows()
@@ -343,19 +343,17 @@ def update_component_selector(selected_unit, client):
     ],
     [
         Input("telemetry-component-selector", "value"),
-        Input("telemetry-estado-filter", "value"),
         State("telemetry-component-unit-selector", "value"),
         State("client-selector", "value")
     ]
 )
-def update_component_detail(selected_component, estado_filter, selected_unit, client):
+def update_component_detail(selected_component, selected_unit, client):
     """
     Update component detail tab when component is selected.
     Also populates the daily signal selector options.
     
     Args:
         selected_component: Selected component name
-        estado_filter: Machine state filter
         selected_unit: Selected unit ID
         client: Selected client identifier
     
@@ -433,10 +431,6 @@ def update_component_detail(selected_component, estado_filter, selected_unit, cl
                     week_df['week_num'] = week
                     week_df['year'] = year
 
-                    # Apply estado filter if specified
-                    if estado_filter and estado_filter != 'all' and 'EstadoMaquina' in week_df.columns:
-                        week_df = week_df[week_df['EstadoMaquina'] == estado_filter]
-
                     if not week_df.empty:
                         all_weeks_data.append(week_df)
 
@@ -503,11 +497,10 @@ def update_component_detail(selected_component, estado_filter, selected_unit, cl
         Input("telemetry-daily-signal-selector", "value"),
         State("telemetry-component-unit-selector", "value"),
         State("telemetry-component-selector", "value"),
-        State("telemetry-estado-filter", "value"),
         State("client-selector", "value")
     ]
 )
-def update_daily_timeseries(selected_signal, selected_unit, selected_component, estado_filter, client):
+def update_daily_timeseries(selected_signal, selected_unit, selected_component, client):
     """
     Update daily time series chart when a signal is selected.
     
@@ -517,7 +510,6 @@ def update_daily_timeseries(selected_signal, selected_unit, selected_component, 
         selected_signal: Signal name to plot
         selected_unit: Selected unit ID
         selected_component: Selected component name
-        estado_filter: Machine state filter
         client: Selected client identifier
     
     Returns:
@@ -566,11 +558,7 @@ def update_daily_timeseries(selected_signal, selected_unit, selected_component, 
             if not week_df.empty:
                 week_df = week_df[week_df['Unit'] == selected_unit].copy()
                 if not week_df.empty:
-                    # Apply estado filter
-                    if estado_filter and estado_filter != 'all' and 'EstadoMaquina' in week_df.columns:
-                        week_df = week_df[week_df['EstadoMaquina'] == estado_filter]
-                    if not week_df.empty:
-                        all_weeks_daily.append(week_df)
+                    all_weeks_daily.append(week_df)
 
         if not all_weeks_daily:
             logger.warning("No daily data available for timeseries")

@@ -115,22 +115,6 @@ def create_telemetry_component_layout() -> html.Div:
                                     disabled=True
                                 )
                             ], md=4),
-
-                            # Estado Filter
-                            dbc.Col([
-                                html.Label("Estado Máquina:", className="fw-bold mb-1"),
-                                dcc.Dropdown(
-                                    id='telemetry-estado-filter',
-                                    options=[
-                                        {'label': 'Todos', 'value': 'all'},
-                                        {'label': 'Operacional', 'value': 'Operacional'},
-                                        {'label': 'Ralenti', 'value': 'Ralenti'},
-                                        {'label': 'Apagada', 'value': 'Apagada'}
-                                    ],
-                                    value='all',
-                                    clearable=False
-                                )
-                            ], md=3),
                         ])
                     ])
                 ], className="shadow-sm mb-4")
