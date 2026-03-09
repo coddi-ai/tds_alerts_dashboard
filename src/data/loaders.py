@@ -333,7 +333,7 @@ def load_alerts_data(client: str) -> pd.DataFrame:
         logger.warning(f"Alerts dashboard is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/alerts/golden/{client.upper()}/consolidated_alerts.csv")
+    file_path = Path(f"data/alerts/golden/{client.lower()}/consolidated_alerts.csv")
     logger.info(f"Loading alerts data from {file_path}")
     
     if not file_path.exists():
@@ -378,7 +378,7 @@ def load_telemetry_values(client: str) -> pd.DataFrame:
         logger.warning(f"Telemetry data is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/telemetry/silver/{client.upper()}/telemetry_values_wide.parquet")
+    file_path = Path(f"data/telemetry/silver/{client.lower()}/telemetry_values_wide.parquet")
     logger.info(f"Loading telemetry values from {file_path}")
     
     if not file_path.exists():
@@ -410,7 +410,7 @@ def load_telemetry_states(client: str) -> pd.DataFrame:
         logger.warning(f"Telemetry states is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/telemetry/silver/{client.upper()}/telemetry_states.parquet")
+    file_path = Path(f"data/telemetry/silver/{client.lower()}/telemetry_states.parquet")
     logger.info(f"Loading telemetry states from {file_path}")
     
     if not file_path.exists():
@@ -473,7 +473,7 @@ def load_telemetry_alerts_metadata(client: str) -> pd.DataFrame:
         logger.warning(f"Telemetry alerts metadata is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/telemetry/golden/{client.upper()}/alerts_data.csv")
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/alerts_data.csv")
     logger.info(f"Loading telemetry alerts metadata from {file_path}")
     
     if not file_path.exists():
@@ -505,7 +505,7 @@ def load_component_mapping(client: str) -> pd.DataFrame:
         logger.warning(f"Component mapping is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/telemetry/golden/{client.upper()}/component_mapping.parquet")
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/component_mapping.parquet")
     logger.info(f"Loading component mapping from {file_path}")
     
     if not file_path.exists():
@@ -536,7 +536,7 @@ def load_feature_names(client: str) -> Dict[str, str]:
         logger.warning(f"Feature names is only available for CDA client. Requested: {client}")
         return {}
     
-    file_path = Path(f"data/telemetry/golden/{client.upper()}/feature_names.csv")
+    file_path = Path("data/telemetry/features_mapping_name.json")
     logger.info(f"Loading feature names from {file_path}")
     
     if not file_path.exists():
@@ -544,14 +544,53 @@ def load_feature_names(client: str) -> Dict[str, str]:
         return {}
     
     try:
-        df = pd.read_csv(file_path)
-        mapping = dict(zip(df['Feature'], df['Name']))
+        import json
+        with open(file_path, 'r', encoding='utf-8') as f:
+            mapping = json.load(f)
         logger.info(f"Loaded {len(mapping)} feature names")
         return mapping
     
     except Exception as e:
         logger.error(f"Error loading feature names: {e}")
         return {}
+
+
+def load_telemetry_alerts_detail_golden(client: str) -> pd.DataFrame:
+    """
+    Load pre-processed telemetry alert details from golden layer.
+    This file contains all signals, limits, and GPS data for alerts in wide format.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with columns:
+        - AlertID, Unit, TimeStart, Trigger: Alert metadata
+        - GPSLat, GPSLon, GPSElevation: GPS data
+        - State: Operational state
+        - {Feature}_Value: Sensor values
+        - {Feature}_{Kind}_Limit: Limit values (Upper/Lower)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry alerts detail is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+    
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/alerts_detail_wide_with_gps.csv")
+    logger.info(f"Loading telemetry alerts detail from golden layer: {file_path}")
+    
+    if not file_path.exists():
+        logger.warning(f"Telemetry alerts detail file not found: {file_path}")
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(file_path)
+        df['TimeStart'] = pd.to_datetime(df['TimeStart'])
+        logger.info(f"Loaded {len(df)} telemetry alert detail records from golden layer")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error loading telemetry alerts detail: {e}")
+        return pd.DataFrame()
 
 
 def load_oil_classified(client: str) -> pd.DataFrame:
@@ -568,7 +607,7 @@ def load_oil_classified(client: str) -> pd.DataFrame:
         logger.warning(f"Oil classified data is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/oil/golden/{client.upper()}/classified.parquet")
+    file_path = Path(f"data/oil/golden/{client.lower()}/classified.parquet")
     logger.info(f"Loading oil classified data from {file_path}")
     
     if not file_path.exists():
@@ -582,6 +621,154 @@ def load_oil_classified(client: str) -> pd.DataFrame:
     
     except Exception as e:
         logger.error(f"Error loading oil classified data: {e}")
+        return pd.DataFrame()
+
+
+
+# ========================================
+# TELEMETRY DASHBOARD LOADERS (GOLDEN/SILVER)
+# ========================================
+
+def load_telemetry_machine_status(client: str) -> pd.DataFrame:
+    """
+    Load telemetry machine status from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+    
+    Returns:
+        DataFrame with fleet-level machine status aggregations
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry machine status is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/machine_status.parquet")
+    logger.info(f"Loading telemetry machine status from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Telemetry machine status file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} telemetry machine status records")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry machine status: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_classified(client: str, week: Optional[int] = None, year: Optional[int] = None) -> pd.DataFrame:
+    """
+    Load telemetry classified component evaluations from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        week: Optional evaluation week filter
+        year: Optional evaluation year filter
+    
+    Returns:
+        DataFrame with component-level evaluations (signals_evaluation JSON)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry classified is only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/golden/{client.lower()}/classified.parquet")
+    logger.info(f"Loading telemetry classified from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Telemetry classified file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+
+        # Apply week/year filters if specified
+        if week is not None and 'evaluation_week' in df.columns:
+            df = df[df['evaluation_week'] == week]
+        if year is not None and 'evaluation_year' in df.columns:
+            df = df[df['evaluation_year'] == year]
+
+        logger.info(f"Loaded {len(df)} telemetry classified records")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry classified: {e}")
+        return pd.DataFrame()
+
+
+def load_telemetry_baselines(client: str, baseline_version: str = 'latest') -> pd.DataFrame:
+    """
+    Load telemetry baseline thresholds (P2, P5, P95, P98) from golden layer.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        baseline_version: 'latest' to auto-detect or specific filename
+    
+    Returns:
+        DataFrame with baseline percentile thresholds per signal/unit/state
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Telemetry baselines only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    baselines_dir = Path(f"data/telemetry/golden/{client.lower()}/baselines")
+    logger.info(f"Loading telemetry baselines from {baselines_dir}")
+
+    if not baselines_dir.exists():
+        logger.warning(f"Baselines directory not found: {baselines_dir}")
+        return pd.DataFrame()
+
+    try:
+        if baseline_version == 'latest':
+            baseline_files = sorted(baselines_dir.glob('baseline_*.parquet'))
+            if not baseline_files:
+                logger.warning("No baseline files found")
+                return pd.DataFrame()
+            file_path = baseline_files[-1]
+        else:
+            file_path = baselines_dir / baseline_version
+
+        df = safe_read_parquet(file_path)
+        logger.info(f"Loaded {len(df)} baseline records from {file_path.name}")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading telemetry baselines: {e}")
+        return pd.DataFrame()
+
+
+def load_silver_telemetry_week(client: str, week: int, year: int) -> pd.DataFrame:
+    """
+    Load silver layer telemetry data for a specific week.
+    
+    Args:
+        client: Client identifier (e.g., 'cda')
+        week: Week number (1-53)
+        year: Year (e.g., 2026)
+    
+    Returns:
+        DataFrame with raw sensor data (wide format with states)
+    """
+    if client.lower() != 'cda':
+        logger.warning(f"Silver telemetry only available for CDA client. Requested: {client}")
+        return pd.DataFrame()
+
+    file_path = Path(f"data/telemetry/silver/{client.lower()}/Telemetry_Wide_With_States/Week{week:02d}Year{year}.parquet")
+    logger.info(f"Loading silver telemetry week from {file_path}")
+
+    if not file_path.exists():
+        logger.warning(f"Silver telemetry week file not found: {file_path}")
+        return pd.DataFrame()
+
+    try:
+        df = safe_read_parquet(file_path)
+        if 'Fecha' in df.columns:
+            df['Fecha'] = pd.to_datetime(df['Fecha'])
+        logger.info(f"Loaded {len(df)} silver telemetry records for Week {week:02d}/{year}")
+        return df
+    except Exception as e:
+        logger.error(f"Error loading silver telemetry week: {e}")
         return pd.DataFrame()
 
 
@@ -600,7 +787,7 @@ def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
         logger.warning(f"Maintenance data is only available for CDA client. Requested: {client}")
         return pd.DataFrame()
     
-    file_path = Path(f"data/mantentions/golden/{client.upper()}/{week}.csv")
+    file_path = Path(f"data/mantentions/golden/{client.lower()}/{week}.csv")
     logger.info(f"Loading maintenance data from {file_path}")
     
     if not file_path.exists():

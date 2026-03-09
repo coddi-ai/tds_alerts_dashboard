@@ -21,6 +21,7 @@ from src.data.loaders import (
     load_telemetry_alerts_metadata,
     load_component_mapping,
     load_feature_names,
+    load_telemetry_alerts_detail_golden,
     load_oil_classified,
     load_maintenance_week
 )
@@ -29,14 +30,14 @@ from dashboard.components.alerts_charts import (
     create_alerts_per_month_chart,
     create_trigger_distribution_treemap,
     create_system_distribution_pie_chart,
-    create_sensor_trends_chart,
-    create_gps_route_map,
-    create_oil_radar_chart
+    create_oil_radar_chart,
+    create_sensor_trends_chart_golden,
+    create_gps_route_map_golden,
+    create_context_kpis_cards_golden
 )
 from dashboard.components.alerts_tables import (
     create_alerts_datatable,
     create_alert_detail_card,
-    create_context_kpis_cards,
     create_maintenance_display
 )
 from dashboard.tabs.tab_alerts_general import create_summary_stats_display, create_layout as create_general_layout
@@ -46,13 +47,15 @@ from dashboard.tabs.tab_alerts_detail import (
     create_layout as create_detail_layout
 )
 from src.utils.logger import get_logger
+from config.settings import Settings
 
 logger = get_logger(__name__)
+settings = Settings()
 
 # Configuration
 M1 = 60  # Minutes before alert
 M2 = 10  # Minutes after alert
-MAPBOX_TOKEN = "pk.eyJ1IjoicGF0bzI2IiwiYSI6ImNscDdvc2FxNDF6b2sya3F2eHZ6bG1pdzgifQ.uW_fqM1_9beP_OTFvHm3Nw"
+MAPBOX_TOKEN = settings.mapbox_token
 
 
 # ========================================
@@ -329,10 +332,10 @@ def navigate_to_detail_on_row_click(active_cell, derived_data):
     Returns:
         Tuple of (tab_value, alert_id)
     """
-    logger.info(f"🔵 NAVIGATE CALLBACK TRIGGERED: active_cell={active_cell}, has_data={bool(derived_data)}")
+    logger.info(f"[ROW-NAV] NAVIGATE CALLBACK TRIGGERED: active_cell={active_cell}, has_data={bool(derived_data)}")
     
     if not active_cell or not derived_data:
-        logger.info("❌ No cell clicked or no data, preventing update")
+        logger.info("[ROW-NAV] No cell clicked or no data, preventing update")
         raise PreventUpdate
     
     try:
@@ -341,14 +344,162 @@ def navigate_to_detail_on_row_click(active_cell, derived_data):
         
         # Get the selected alert ID from derived data (handles pagination/filtering)
         selected_fusion_id = derived_data[row_index]['ID']
-        logger.info(f"✅ Row {row_index} clicked! Navigating to detail for alert: {selected_fusion_id}")
+        logger.info(f"[ROW-NAV] Row {row_index} clicked! Navigating to detail for alert: {selected_fusion_id}")
         
         # Switch to detail tab and set the dropdown value
         return 'detail', selected_fusion_id
     
     except Exception as e:
-        logger.error(f"❌ ERROR navigating to detail from row click: {e}", exc_info=True)
+        logger.error(f"ERROR navigating to detail from row click: {e}", exc_info=True)
         raise PreventUpdate
+
+
+# ========================================
+# GENERAL TAB NAVIGATION BUTTON CALLBACKS
+# ========================================
+
+@callback(
+    Output('general-alert-selector', 'options'),
+    [Input('client-selector', 'value')]
+)
+def populate_general_alert_selector(client: str):
+    """
+    Populate the general tab alert selector dropdown with all available alerts.
+    
+    Args:
+        client: Selected client identifier
+    
+    Returns:
+        List of dropdown options
+    """
+    if not client:
+        raise PreventUpdate
+    
+    logger.info(f"Populating general alert selector for client: {client}")
+    
+    alerts_df = load_alerts_data(client)
+    
+    if alerts_df.empty:
+        return []
+    
+    try:
+        # Create dropdown options
+        options = []
+        for _, row in alerts_df.sort_values('Timestamp', ascending=False).iterrows():
+            label = f"{row['FusionID']} | {row['Timestamp'].strftime('%Y-%m-%d %H:%M')} | {row['UnitId']} | {row['componente']}"
+            options.append({'label': label, 'value': row['FusionID']})
+        
+        logger.info(f"General alert selector populated with {len(options)} alerts")
+        return options
+    
+    except Exception as e:
+        logger.error(f"Error populating general alert selector: {e}")
+        return []
+
+
+@callback(
+    Output('alerts-navigation-state', 'data'),
+    [Input('general-nav-to-detail-button', 'n_clicks')],
+    [State('general-alert-selector', 'value')],
+    prevent_initial_call=True
+)
+def navigate_to_detail_from_general(n_clicks, selected_alert_id):
+    """
+    Store navigation request from General tab to Detail tab with selected alert.
+    Uses store-based pattern to avoid direct output to dynamically rendered component.
+    
+    Args:
+        n_clicks: Number of times button has been clicked
+        selected_alert_id: FusionID of selected alert from dropdown
+    
+    Returns:
+        Navigation data dictionary
+    """
+    logger.info(f"[NAV] BUTTON CALLBACK TRIGGERED! n_clicks={n_clicks}, alert={selected_alert_id}")
+    
+    if not n_clicks or not selected_alert_id:
+        raise PreventUpdate
+    
+    logger.info(f"[NAV] Storing navigation request to Detail tab with alert: {selected_alert_id}")
+    
+    # Store navigation data for listener callback to process
+    return {
+        'target_tab': 'detail',
+        'alert_id': selected_alert_id
+    }
+
+
+@callback(
+    Output('alerts-internal-tabs', 'value', allow_duplicate=True),
+    [Input('alerts-navigation-state', 'data')],
+    prevent_initial_call=True
+)
+def switch_to_detail_tab(nav_data):
+    """
+    Switch to detail tab when navigation is triggered from general tab button.
+    
+    Args:
+        nav_data: Navigation data from alerts-navigation-state store
+    
+    Returns:
+        Tab value to switch to
+    """
+    logger.info(f"[NAV] TAB SWITCH LISTENER TRIGGERED: nav_data={nav_data}")
+    
+    if not nav_data or not nav_data.get('target_tab'):
+        raise PreventUpdate
+    
+    target_tab = nav_data['target_tab']
+    logger.info(f"[NAV] Switching to tab: {target_tab}")
+    
+    return target_tab
+
+
+@callback(
+    Output('alert-selector-dropdown', 'value', allow_duplicate=True),
+    [
+        Input('alert-selector-dropdown', 'options'),
+        Input('alerts-navigation-state', 'data')
+    ],
+    [State('alerts-internal-tabs', 'value')],
+    prevent_initial_call=True
+)
+def set_alert_from_navigation(dropdown_options, nav_data, active_tab):
+    """
+    Set the alert dropdown value when navigating from general tab.
+    Triggers when dropdown options are populated AND navigation state has data.
+    
+    Args:
+        dropdown_options: Dropdown options (triggers when populated)
+        nav_data: Navigation data from alerts-navigation-state store
+        active_tab: Currently active internal tab ('general' or 'detail')
+    
+    Returns:
+        Alert ID to select in dropdown
+    """
+    from dash import callback_context
+    
+    trigger_info = callback_context.triggered[0] if callback_context.triggered else None
+    logger.info(f"[NAV] set_alert_from_navigation called: tab={active_tab}, nav_data={nav_data}, triggered_by={trigger_info}")
+    
+    # Only apply if we're on detail tab
+    if active_tab != 'detail':
+        logger.info(f"[NAV] Not on detail tab (current: {active_tab}), skipping")
+        raise PreventUpdate
+        
+    if not nav_data or not nav_data.get('alert_id'):
+        logger.info("[NAV] No navigation data or alert_id, skipping")
+        raise PreventUpdate
+    
+    # Only apply if navigation target is detail tab
+    if nav_data.get('target_tab') != 'detail':
+        logger.info(f"[NAV] Navigation target is not detail (target: {nav_data.get('target_tab')}), skipping")
+        raise PreventUpdate
+    
+    alert_id = nav_data['alert_id']
+    logger.info(f"[NAV] Setting dropdown value to: {alert_id}")
+    
+    return alert_id
 
 
 # ========================================
@@ -476,29 +627,36 @@ def filter_alert_dropdown_by_criteria(units, sistemas, has_telemetry, has_tribol
     Output('alert-detail-content', 'children'),
     [
         Input('alert-selector-dropdown', 'value'),
-        Input('client-selector', 'value')
+        Input('client-selector', 'value'),
+        Input('alerts-navigation-state', 'data')
     ],
     prevent_initial_call=False
 )
-def update_detail_view(dropdown_value, client):
+def update_detail_view(dropdown_value, client, nav_data):
     """
-    Update detail view when an alert is selected from dropdown.
+    Update detail view when an alert is selected from dropdown or via navigation.
     
     Args:
         dropdown_value: FusionID selected from dropdown
         client: Selected client identifier
+        nav_data: Navigation data from alerts-navigation-state store
     
     Returns:
         Updated detail content layout
     """
-    logger.info(f"update_detail_view called: dropdown_value={dropdown_value}, client={client}")
+    logger.info(f"update_detail_view called: dropdown_value={dropdown_value}, client={client}, nav_data={nav_data}")
     
     if not client:
         logger.warning("No client selected, preventing update")
         raise PreventUpdate
     
-    # Determine selected alert from dropdown
+    # Determine selected alert from dropdown OR navigation state
     selected_fusion_id = dropdown_value
+    
+    # If dropdown is empty but navigation state has an alert ID, use that
+    if not selected_fusion_id and nav_data and nav_data.get('alert_id'):
+        selected_fusion_id = nav_data.get('alert_id')
+        logger.info(f"Using alert ID from navigation state: {selected_fusion_id}")
     
     if not selected_fusion_id:
         logger.info("No alert selected, showing placeholder")
@@ -568,6 +726,7 @@ def update_detail_view(dropdown_value, client):
 def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     """
     Create telemetry evidence section with sensor trends, GPS, and KPIs.
+    Uses pre-processed golden layer data for simplicity and performance.
     
     Args:
         alert_row: Selected alert data
@@ -576,112 +735,94 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
     Returns:
         HTML Div with telemetry evidence
     """
-    logger.info("Creating telemetry evidence section")
+    logger.info("Creating telemetry evidence section using golden layer data")
     
     try:
-        # Load telemetry data
-        telemetry_values = load_telemetry_values(client)
-        telemetry_states = load_telemetry_states(client)
-        limits_config = load_telemetry_limits(client)
-        telemetry_alerts = load_telemetry_alerts_metadata(client)
-        component_mapping = load_component_mapping(client)
-        feature_names = load_feature_names(client)
+        # Load golden layer telemetry data
+        telemetry_golden = load_telemetry_alerts_detail_golden(client)
         
-        if telemetry_values.empty:
+        if telemetry_golden.empty:
             return html.Div([
                 dbc.Alert("No hay datos de telemetría disponibles", color="warning")
             ])
         
-        # Define time window
-        alert_time = alert_row['Timestamp']
-        window_start = alert_time - timedelta(minutes=M1)
-        window_end = alert_time + timedelta(minutes=M2)
-        
-        # Filter data for unit and time window
-        unit_data = telemetry_values[
-            (telemetry_values['Unit'] == alert_row['UnitId']) &
-            (telemetry_values['Fecha'] >= window_start) &
-            (telemetry_values['Fecha'] <= window_end)
-        ].copy()
-        
-        # Merge with states
-        if not telemetry_states.empty:
-            unit_data = unit_data.merge(
-                telemetry_states[['Fecha', 'Unit', 'Estado', 'EstadoCarga']],
-                on=['Fecha', 'Unit'],
-                how='left'
-            )
-        
-        if unit_data.empty:
+        # Filter for this specific alert
+        alert_id = alert_row.get('TelemetryID')
+        if pd.isna(alert_id):
             return html.Div([
-                dbc.Alert("No hay datos de telemetría en la ventana de tiempo", color="warning")
+                dbc.Alert("Esta alerta no tiene TelemetryID asociado", color="info")
             ])
         
-        # Get trigger feature and related features
-        alert_trigger = None
-        if pd.notna(alert_row.get('TelemetryID')) and not telemetry_alerts.empty:
-            trigger_info = telemetry_alerts[
-                telemetry_alerts['AlertID'] == str(alert_row['TelemetryID'])
-            ]
-            if not trigger_info.empty:
-                alert_trigger = trigger_info.iloc[0]['Trigger']
+        # Get unit ID
+        unit_id = alert_row.get('UnitId')
+        if pd.isna(unit_id):
+            return html.Div([
+                dbc.Alert("Esta alerta no tiene UnitId asociado", color="info")
+            ])
         
-        # Determine which sensors to display
-        sensor_columns = []
-        if alert_trigger and not component_mapping.empty:
-            feature_map = component_mapping[
-                component_mapping['PrimaryFeature'] == alert_trigger
-            ]
-            
-            if not feature_map.empty:
-                feature_map = feature_map.iloc[0]
-                primary_feature = feature_map['PrimaryFeature']
-                related_features = feature_map['RelatedFeatures']
-                
-                # Convert to list if needed
-                if isinstance(related_features, np.ndarray):
-                    related_features = related_features.tolist()
-                elif not isinstance(related_features, list):
-                    related_features = []
-                
-                # Combine features
-                features_to_display = [primary_feature] + related_features
-                sensor_columns = [f for f in features_to_display if f in unit_data.columns]
+        # Filter telemetry data by BOTH AlertID AND Unit (AlertID is unique per unit, not globally)
+        alert_data = telemetry_golden[
+            (telemetry_golden['AlertID'] == int(alert_id)) & 
+            (telemetry_golden['Unit'] == unit_id)
+        ].copy()
         
-        # Fallback: use first 3 sensor columns
-        if not sensor_columns:
-            sensor_columns = [col for col in unit_data.columns 
-                             if col not in ['Fecha', 'Unit', 'Estado', 'EstadoCarga', 
-                                           'GPSLat', 'GPSLon', 'GPSElevation']][:3]
+        if alert_data.empty:
+            return html.Div([
+                dbc.Alert(f"No se encontraron datos de telemetría para AlertID: {alert_id}", color="warning")
+            ])
         
-        # Create sensor trends chart
-        sensor_trends_fig = create_sensor_trends_chart(
-            telemetry_values=telemetry_values,
-            telemetry_states=telemetry_states,
-            limits_config=limits_config,
-            unit_id=alert_row['UnitId'],
-            sensor_columns=sensor_columns,
+        # Drop columns with all NaN values
+        alert_data_clean = alert_data.dropna(axis=1, how='all')
+        
+        # Extract metadata
+        unit_id = alert_data_clean['Unit'].iloc[0]
+        # IMPORTANT: Use alert_time from alerts_data, NOT from telemetry TimeStart
+        # TimeStart is just the beginning of the telemetry window, not the actual alert moment
+        alert_time = pd.to_datetime(alert_row.get('Timestamp'))
+        trigger = alert_data_clean['Trigger'].iloc[0]
+        
+        logger.info(f"Processing telemetry alert: Unit={unit_id}, Time={alert_time}, Trigger={trigger}")
+        
+        # Load feature names mapping for Spanish titles
+        feature_name_map = load_feature_names(client)
+        
+        # Identify features to plot (columns ending with _Value)
+        value_cols = [col for col in alert_data_clean.columns if col.endswith('_Value')]
+        feature_names = [col.replace('_Value', '') for col in value_cols]
+        
+        # Filter out Payload and EngSpd (always excluded from charts)
+        excluded_features = ['Payload', 'EngSpd']
+        feature_names = [f for f in feature_names if f not in excluded_features]
+        
+        if not feature_names:
+            return html.Div([
+                dbc.Alert("No se encontraron señales con valores para graficar", color="warning")
+            ])
+        
+        logger.info(f"Found {len(feature_names)} features to plot (excluded: {excluded_features}): {feature_names}")
+        
+        # Create sensor trends chart (using new simplified approach)
+        sensor_trends_fig = create_sensor_trends_chart_golden(
+            alert_data=alert_data_clean,
+            feature_names=feature_names,
+            unit_id=unit_id,
             alert_time=alert_time,
-            window_start=window_start,
-            window_end=window_end,
-            feature_names=feature_names
+            feature_name_map=feature_name_map
         )
         
         # Create GPS map (if GPS data available)
-        gps_map_fig = create_gps_route_map(
-            telemetry_values=telemetry_values,
-            unit_id=alert_row['UnitId'],
+        gps_map_fig = create_gps_route_map_golden(
+            alert_data=alert_data_clean,
+            unit_id=unit_id,
             alert_time=alert_time,
-            window_start=window_start,
-            window_end=window_end,
             mapbox_token=MAPBOX_TOKEN
         )
         
         # Create context KPIs
-        context_kpis = create_context_kpis_cards(
-            alert_row=alert_row,
-            telemetry_data=unit_data,
-            alert_time=alert_time
+        context_kpis = create_context_kpis_cards_golden(
+            alert_data=alert_data_clean,
+            alert_time=alert_time,
+            trigger=trigger
         )
         
         # Build section

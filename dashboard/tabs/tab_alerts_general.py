@@ -158,7 +158,42 @@ def create_layout() -> html.Div:
                     ])
                 ], className="shadow-sm")
             ], md=4)
-        ])
+        ]),
+        
+        # Navigation to Detail Tab
+        dbc.Card([
+            dbc.CardHeader([
+                html.H5([
+                    html.I(className="fas fa-arrow-right me-2"),
+                    "Ver Detalle de Alerta"
+                ], className="mb-0")
+            ]),
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Seleccione una alerta para ver su detalle:", className="fw-bold mb-2"),
+                        dcc.Dropdown(
+                            id='general-alert-selector',
+                            placeholder="Seleccione una alerta...",
+                            clearable=True,
+                            searchable=True
+                        )
+                    ], md=10),
+                    dbc.Col([
+                        html.Label(html.Br()),  # Spacer to align with dropdown
+                        dbc.Button(
+                            [
+                                html.I(className="fas fa-arrow-right me-2"),
+                                "Ver Detalle"
+                            ],
+                            id='general-nav-to-detail-button',
+                            color='primary',
+                            className='w-100'
+                        )
+                    ], md=2)
+                ], className="g-2")
+            ])
+        ], className="shadow-sm mt-4")
     ], className="p-4")
     
     logger.info("Alerts General Tab layout created successfully")

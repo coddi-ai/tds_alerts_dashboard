@@ -94,14 +94,33 @@ class S3Downloader:
             True if successful, False otherwise
         """
         try:
+            # Convert to absolute path and handle Windows long paths
+            local_path = local_path.resolve()
+            
             # Create parent directories if they don't exist
-            local_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.error(f"Failed to create directory {local_path.parent}: {e}")
+                return False
+            
+            # Verify the directory exists
+            if not local_path.parent.exists():
+                logger.error(f"Directory does not exist after creation: {local_path.parent}")
+                return False
+            
+            # Convert to string, use extended path for Windows if path is long
+            local_path_str = str(local_path)
+            if os.name == 'nt' and len(local_path_str) > 200:
+                # Use Windows extended-length path syntax for long paths
+                if not local_path_str.startswith('\\\\?\\'):
+                    local_path_str = '\\\\?\\' + local_path_str
             
             # Download the file
             self.s3_client.download_file(
                 self.bucket_name, 
                 s3_key, 
-                str(local_path)
+                local_path_str
             )
             
             logger.debug(f"Downloaded: {s3_key} -> {local_path}")
@@ -109,6 +128,12 @@ class S3Downloader:
             
         except ClientError as e:
             logger.error(f"Error downloading {s3_key}: {e}")
+            return False
+        except OSError as e:
+            logger.error(f"OS error downloading {s3_key} to {local_path}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error downloading {s3_key}: {e}")
             return False
     
     def download_folder(
@@ -181,11 +206,12 @@ def main():
     BUCKET_NAME = os.getenv("BUCKET_NAME")
     ACCESS_KEY = os.getenv("ACCESS_KEY")
     SECRET_KEY = os.getenv("SECRET_KEY")
+    STAGE_NAME = os.getenv("STAGE_NAME") # Only defined when deployed to the cloud
     S3_PREFIX = "MultiTechnique Alerts/"
     
     if not BUCKET_NAME:
         raise ValueError("BUCKET_NAME not found in .env file")
-    if not ACCESS_KEY or not SECRET_KEY:
+    if not STAGE_NAME and (not ACCESS_KEY or not SECRET_KEY):
         raise ValueError("ACCESS_KEY and SECRET_KEY not found in .env file")
     
     local_data_dir = project_root / "data"
@@ -193,6 +219,8 @@ def main():
     logger.info("=" * 60)
     logger.info("S3 Data Download Script")
     logger.info("=" * 60)
+    print("Download into:", local_data_dir)
+
     
     try:
         # Initialize downloader with credentials from .env file
@@ -211,6 +239,7 @@ def main():
             preserve_structure=True
         )
         
+        print("Files in /app/data after download:", list(local_data_dir.iterdir()))
         logger.info("=" * 60)
         logger.info(f"Total files: {stats['total']}")
         logger.info(f"Successfully downloaded: {stats['success']}")

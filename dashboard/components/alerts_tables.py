@@ -61,7 +61,7 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             'Fuente', 'Diagnóstico IA', 'Telemetría', 'Tribología'
         ]
         
-        # Create DataTable
+        # Create DataTable (no subtitle)
         table = dash_table.DataTable(
             id='alerts-datatable',
             columns=[
@@ -69,8 +69,6 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 for col in display_df.columns
             ],
             data=display_df.to_dict('records'),
-            
-            # Styling
             style_table={
                 'overflowX': 'auto',
                 'overflowY': 'auto',
@@ -105,21 +103,14 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                     'cursor': 'pointer'
                 }
             ],
-            
-            # Enable cell clicks for navigation
             cell_selectable=True,
-            
-            # Filtering and sorting
             filter_action='native',
             sort_action='native',
             sort_mode='multi',
-            
-            # Pagination
             page_action='native',
             page_current=0,
             page_size=20
         )
-        
         logger.info(f"Created alerts DataTable with {len(display_df)} rows")
         return table
     
@@ -220,7 +211,10 @@ def create_context_kpis_cards(
     alert_time: pd.Timestamp
 ) -> dbc.Row:
     """
-    Create KPI cards showing alert context information.
+    **DEPRECATED**: Use create_context_kpis_cards_golden() instead.
+    
+    Old implementation: Create KPI cards showing alert context information.
+    This function loads from silver layer and performs filtering operations.
     
     Args:
         alert_row: Series with alert data

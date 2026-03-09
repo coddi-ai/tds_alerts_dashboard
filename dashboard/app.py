@@ -38,6 +38,9 @@ from dashboard.callbacks.mantenciones_general_callbacks import register_mantenci
 # Import alerts callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.alerts_callbacks
 
+# Import telemetry callbacks (uses @callback decorator, auto-registered on import)
+import dashboard.callbacks.telemetry_callbacks
+
 
 def normalize_prefix(prefix: str | None) -> str:
     """
