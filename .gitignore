@@ -79,7 +79,7 @@ logs/
 *.json
 *.xlsx
 *.parquet
-
+*.db
 # Docker
 *.pid
 *.seed
