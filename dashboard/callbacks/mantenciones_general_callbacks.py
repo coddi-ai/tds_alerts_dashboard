@@ -49,8 +49,8 @@ def register_mantenciones_general_callbacks(app):
         try:
             logger.info(f"Loading mantenciones general data... (n_clicks={n_clicks}, loaded={loaded})")
             
-            # Get repository (using dummy mode for now)
-            repo = get_repository(mode="dummy")
+            # Get repository (using parquet mode for real data)
+            repo = get_repository(mode="parquet")
             
             # Load all datasets
             df_status = repo.get_status_counts()
