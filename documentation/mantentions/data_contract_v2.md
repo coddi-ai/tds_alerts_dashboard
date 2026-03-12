@@ -304,11 +304,32 @@ total_downtime = df_kpis['downtime_hours_70d'].sum()
 
 ## 📁 Ubicación de Archivos
 
+### Estructura de Producción
+
+```
+data/
+└── mantentions/
+    └── golden/
+        └── {client}/                          # ej: "cda"
+            └── Maintance_Labeler_Views/
+                ├── query_3_actions_all_equipment.parquet  # 659 acciones
+                └── query_4_business_kpis.parquet          # 11 máquinas con KPIs
+```
+
+### Estructura de Desarrollo (Fallback)
+
+Para desarrollo local, los archivos pueden estar en el root del proyecto:
+
 ```
 proyecto_root/
-├── query_3_actions_all_equipment.parquet  # 659 acciones
-└── query_4_business_kpis.parquet          # 11 máquinas con KPIs
+├── query_3_actions_all_equipment.parquet
+└── query_4_business_kpis.parquet
 ```
+
+**Configuración:**
+- Por defecto usa `client = "cda"`
+- Se puede configurar con variable de entorno: `CLIENT_NAME=cda`
+- El código automáticamente detecta si usa la estructura de producción o el fallback
 
 ---
 
@@ -316,18 +337,26 @@ proyecto_root/
 
 ### Carga de Datos
 ```python
-from src.data.maintenance_loaders import (
+from src.data.loaders import (
     load_maintenance_actions_all_equipment,
     load_business_kpis
 )
 
 # Cargar acciones de mantenimiento
+# Por defecto usa client="cda" y busca en data/mantentions/golden/cda/Maintance_Labeler_Views/
 df_actions = load_maintenance_actions_all_equipment()
 print(f"Acciones cargadas: {len(df_actions)}")
+
+# Cargar para otro cliente
+df_actions = load_maintenance_actions_all_equipment(client="otro_cliente")
 
 # Cargar KPIs de negocio
 df_kpis = load_business_kpis()
 print(f"Máquinas con KPIs: {len(df_kpis)}")
+
+# Usar variable de entorno (opcional)
+# export CLIENT_NAME=cda
+# El loader automáticamente usará el valor de CLIENT_NAME
 ```
 
 ### Uso en Repository
@@ -368,6 +397,14 @@ df_daily = repo.get_downtime_by_day_mtd()
 ---
 
 ## 📝 Changelog
+
+### v2.1 - 12 de Marzo 2026 (Actualización de Arquitectura)
+- ✅ Consolidado loaders de mantenciones en `src/data/loaders.py`
+- ✅ Eliminado archivo redundante `maintenance_loaders.py`
+- ✅ Ruta de producción: `data/mantentions/golden/{client}/Maintance_Labeler_Views/`
+- ✅ Soporte para variable de entorno `CLIENT_NAME`
+- ✅ Fallback automático a root para desarrollo local
+- ✅ Funciones con parámetro `client` configurable
 
 ### v2.0 - 12 de Marzo 2026
 - ✅ Migración de `query_1`, `query_2`, `query_3` a `query_3_actions_all_equipment` y `query_4_business_kpis`

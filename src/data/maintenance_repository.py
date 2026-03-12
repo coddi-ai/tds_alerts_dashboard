@@ -9,7 +9,7 @@ from typing import Optional
 import logging
 
 from src.data.dummy_generator import generate_dummy_tables
-from src.data.maintenance_loaders import (
+from src.data.loaders import (
     load_maintenance_actions_all_equipment,
     load_business_kpis
 )
