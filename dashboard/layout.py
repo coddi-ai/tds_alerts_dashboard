@@ -12,6 +12,7 @@ from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_alerts import create_layout as create_alerts_tab
 from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from dashboard.tabs.tab_telemetry import create_layout as create_telemetry_tab
+from dashboard.tabs.tab_oil import create_layout as create_oil_tab
 from dashboard.components.filters import create_client_selector
 
 
@@ -155,7 +156,7 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             'label': 'Overview',
             'icon': 'fas fa-tachometer-alt',
             'subsections': [
-                {'id': 'overview-general', 'label': 'General', 'tab': create_machines_tab}
+                {'id': 'overview-general', 'label': 'General', 'tab': lambda: create_placeholder_content('Overview General')}
             ]
         },
         {
