@@ -74,15 +74,12 @@ logs/
 /notebooks/
 /data/
 
-<<<<<<< HEAD
 # Data files (ignore structure and content)
 *.csv
 *.json
 *.xlsx
 *.parquet
-
-=======
->>>>>>> f2cc749c1c194bde9a680359b8d7faa3332570db
+*.db
 # Docker
 *.pid
 *.seed
@@ -96,3 +93,5 @@ logs/
 # Documentation claude
 NAVIGATION_FIX_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
+
+dataDev/*

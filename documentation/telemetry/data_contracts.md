@@ -1,386 +1,858 @@
-# Data Contracts - Telemetry Data Product
+# Telemetry Data Contracts
 
-**Version**: 1.0  
-**Last Updated**: February 4, 2026  
-**Owner**: Telemetry Data Product Team
+**Version**: 1.0.0  
+**Last Updated**: February 24, 2026  
+**Component**: Telemetry Analysis System
 
 ---
 
 ## 📋 Table of Contents
 
 1. [Overview](#overview)
-2. [Data Layer Architecture](#data-layer-architecture)
-3. [Silver Layer](#silver-layer)
-4. [Golden Layer](#golden-layer)
+2. [Layer Architecture](#layer-architecture)
+3. [Silver Layer Schemas](#silver-layer-schemas)
+4. [Golden Layer Schemas](#golden-layer-schemas)
 5. [Data Quality Rules](#data-quality-rules)
+6. [Validation Requirements](#validation-requirements)
+7. [Change Management](#change-management)
 
 ---
 
 ## 🎯 Overview
 
-This document defines the data contracts for the Telemetry Data Product, which processes real-time sensor data from mining equipment to detect operational anomalies and generate alerts.
+This document defines the **data contracts** for the Telemetry Analysis Pipeline, specifying the schema, data types, constraints, and quality requirements for data flowing through the Silver → Golden layer transformation.
 
-**Data Product Purpose**: Monitor equipment sensor data in real-time, apply state-aware thresholds, and generate contextualized alerts for maintenance teams.
+### Contract Scope
 
-**Primary Consumers**:
-- Multi-Technical Alerts Dashboard
-- Real-time monitoring systems
-- Predictive maintenance models
-- Fleet management applications
+- **Silver Layer**: Raw telemetry data ingested from operational systems (input to pipeline)
+- **Golden Layer**: Enriched, evaluated, and classified telemetry outputs (consumable by dashboards)
 
----
+### Design Principles
 
-## 🏗️ Data Layer Architecture
-
-### Local Storage Structure
-
-```
-data/
-└── telemetry/
-    ├── silver/                              # Harmonized sensor data
-    │   └── {client}/
-    │       ├── telemetry_values_wide.parquet  # Sensor values (wide format)
-    │       ├── telemetry_states.parquet       # Equipment states (long format)
-    │       └── limits_config.parquet          # Alert trigger rules & thresholds
-    └── golden/                              # Analysis-ready outputs
-        └── {client}/
-            ├── alerts_data.csv              # Generated alerts
-            └── component_mapping.parquet    # Component-to-feature mapping
-```
+1. **Backward Compatibility**: Schema changes must not break existing consumers
+2. **Explicit Typing**: All columns have defined data types and nullability rules
+3. **Validation Gates**: Data quality checks enforce contracts at layer boundaries
+4. **Traceability**: Each golden layer row traces back to silver layer sources
 
 ---
 
-## 🔄 Silver Layer
-
-**Purpose**: Harmonized sensor data with GPS tracking, states, and alert thresholds  
-**Update Frequency**: Real-time / Continuous  
-**Retention**: Rolling window (configurable)  
-**Format**: Parquet (columnar, compressed)
-
-### Location
+## 🏗️ Layer Architecture
 
 ```
-Local: data/telemetry/silver/{client}/
-```
-
----
-
-### 1. Main Telemetry Values Table (`telemetry_values_wide.parquet`)
-
-**Purpose**: Wide-format sensor readings with GPS data for efficient querying
-
-**Schema**:
-
-| Column   | Type           | Description                      | Example           |
-|----------|----------------|----------------------------------|-------------------|
-| `Fecha`  | datetime64[ns] | Timestamp of the record          | `2024-02-05 12:00:00` |
-| `Unit`   | category       | Machine or unit identifier       | `'Frankie_V2'`    |
-| `Feature1` | float32      | Sensor value for Feature1        | `12.5`            |
-| `Feature2` | float32      | Sensor value for Feature2        | `7.8`             |
-| `...`    | float32        | Additional sensor values         | `...`             |
-| `FeatureN` | float32      | Sensor value for FeatureN        | `3.2`             |
-| `GPSLat` | float32        | Latitude coordinate              | `-30.2`           |
-| `GPSLon` | float32        | Longitude coordinate             | `-71.1`           |
-| `GPSElevation` | float32  | Elevation in meters              | `900.1`           |
-
-**Common Features** (sensor columns):
-- `EngCoolTemp`: Engine coolant temperature
-- `EngOilPres`: Engine oil pressure
-
-**Quality Rules**:
-- ✅ Valid datetime format
-- ✅ Unit is categorical (memory optimized)
-- ✅ All sensor values are float32 (memory optimized)
-- ✅ GPS coordinates within valid ranges (Lat: -31 to -30, Lon: -72 to -70)
-- ✅ No duplicate (Fecha, Unit) combinations
-
-**Use Cases**:
-- Time-series analysis of sensor data
-- Multi-variable correlation analysis
-- Equipment location tracking
-- Efficient filtering and aggregations
-
----
-
-### 2. States Table (`telemetry_states.parquet`)
-
-**Purpose**: Lightweight table tracking equipment operational and load states
-
-**Schema**:
-
-| Column      | Type           | Description                          | Example           |
-|-------------|----------------|--------------------------------------|-------------------|
-| `Fecha`     | datetime64[ns] | Timestamp of the record              | `2024-02-05 12:00:00` |
-| `Unit`      | category       | Machine or unit identifier           | `'Frankie_V2'`    |
-| `Estado`    | category       | Operational state                    | `'Operacional'`   |
-| `EstadoCarga` | category     | Load state                           | `'Cargado'`       |
-
-**Operational States** (`Estado`):
-- `Ralenti`: Idle state (engine running, no load)
-- `Operacional`: Active operation (engine running with load)
-- `Apagado`: Shut down
-- `Mantencion`: Under maintenance
-
-**Payload States** (`EstadoCarga`):
-- `Sin Carga`: Empty / No payload
-- `Cargado`: Loaded with payload
-- `Cargando`: Loading in progress
-- `Descargando`: Unloading in progress
-
-**Quality Rules**:
-- ✅ Valid datetime format
-- ✅ All string columns stored as categorical (memory optimized)
-- ✅ Estado and EstadoCarga from predefined lists
-- ✅ No duplicate (Fecha, Unit) combinations
-- ✅ Non-null values for all columns
-
-**Use Cases**:
-- Join with values table to get state context
-- Filter data by operational mode
-- State transition analysis
-- Equipment availability reporting
-
----
-
-### 3. Limits Configuration Table (`limits_config.parquet`)
-
-**Purpose**: Static reference table defining alert thresholds per feature, unit, and state combination
-
-**Schema**:
-
-| Column       | Type     | Description                        | Example           |
-|--------------|----------|------------------------------------|-------------------|
-| `Unit`       | category | Machine or unit identifier         | `'CAT_001'`       |
-| `Feature`    | category | Variable name (sensor feature)     | `'EngCoolTemp'`   |
-| `Estado`     | category | Operational state                  | `'Operacional'`   |
-| `EstadoCarga` | category | Load state                        | `'Cargado'`       |
-| `Limit_Lower` | float32 | Lower threshold for the feature    | `80.0`            |
-| `Limit_Upper` | float32 | Upper threshold for the feature    | `110.0`           |
-
-**Alert Logic**:
-```
-Alert Generated = TRUE IF Feature_Value < Limit_Lower OR Feature_Value > Limit_Upper
-Alert Generated = FALSE OTHERWISE
-```
-
-**Example Configuration**:
-
-| Unit | Feature | Estado | EstadoCarga | Limit_Lower | Limit_Upper |
-|------|---------|--------|-------------|-------------|-------------|
-| Frankie_V2 | EngCoolTemp | Operacional | Cargado | 75.0 | 105.0 |
-| Frankie_V2 | EngCoolTemp | Ralenti | Sin Carga | 70.0 | 95.0 |
-| Frankie_V2 | EngOilPres | Operacional | Cargado | 40.0 | 80.0 |
-| Frankie_V2 | EngOilPres | Ralenti | Sin Carga | 30.0 | 70.0 |
-
-**Quality Rules**:
-- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
-- ✅ `Limit_Lower` < `Limit_Upper`
-- ✅ All categorical columns stored as category dtype
-- ✅ All features from values table have rules defined
-- ✅ Coverage for all state combinations per unit
-
-**Use Cases**:
-- Real-time alert evaluation alongside sensor values
-- State-aware threshold checking
-- Dynamic limit visualization in dashboards
-- Alert configuration management
-
----
-
-## 🏆 Golden Layer
-
-**Purpose**: Processed alerts and reference mappings  
-**Update Frequency**: Real-time for alerts, static for mappings  
-**Retention**: Historical archive  
-**Format**: CSV / Parquet
-
-### Location
-
-```
-Local: data/telemetry/golden/{client}/
+┌──────────────────────────────────────────────────────────────┐
+│                     BRONZE LAYER (S3)                        │
+│              Raw sensor streams from equipment               │
+└────────────────────────┬─────────────────────────────────────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     SILVER LAYER                             │
+│  Cleaned, normalized telemetry with operational states       │
+│  Location: data/telemetry/silver/{client}/                   │
+│  Format: Parquet (partitioned by week)                       │
+│  Schema: [DEFINED BELOW]                                     │
+└────────────────────────┬─────────────────────────────────────┘
+                         │
+                         ▼
+                ┌────────────────┐
+                │  PIPELINE      │
+                │  • Scoring     │
+                │  • Aggregation │
+                │  • Evaluation  │
+                └────────┬───────┘
+                         │
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     GOLDEN LAYER                             │
+│  Evaluated telemetry with health assessments                 │
+│  Location: data/telemetry/golden/{client}/                   │
+│  Files:                                                       │
+│    • machine_status.parquet (machine-level summary)          │
+│    • classified.parquet (component-level detail)             │
+│    • alerts_data.csv (alert records with system mapping)     │
+│    • alerts_detail_wide_with_gps.csv (wide format alerts)    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 1. Alerts Data (`alerts_data.csv`)
+## 📥 Silver Layer Schemas
 
-**Purpose**: Generated telemetry alerts with system context
+### File Organization
 
-**Schema**:
+```
+data/telemetry/silver/{client}/
+├── week_01_2026.parquet
+├── week_02_2026.parquet
+├── week_03_2026.parquet
+└── ...
+```
 
-| Column | Type | Description | Example |
-|--------|------|-------------|---------|
-| `AlertID` | int | Unique alert identifier | `1`, `2`, `3` |
-| `Fecha` | datetime64[ns] | Alert timestamp | `2025-01-01 00:00:00` |
-| `Unit` | string | Equipment unit identifier | `'CAT-001'` |
-| `Trigger` | string | Sensor that triggered alert | `'EngCoolTemp'`, `'EngOilPres'` |
-| `System` | string | Affected system | `'Engine'`, `'Transmission'` |
-| `SubSystem` | string | Affected subsystem | `'Radiator'`, `'Lubrication'` |
-
-**System Hierarchy Examples**:
-
-| Trigger | System | SubSystem |
-|---------|--------|-----------|
-| `EngCoolTemp` | `Engine` | `Radiator` |
-| `EngOilPres` | `Engine` | `Lubrication` |
-| `TransOilTemp` | `Transmission` | `Cooling` |
-| `HydOilTemp` | `Hydraulic` | `Cooling` |
-| `BatteryVolt` | `Electrical` | `Power Supply` |
-
-**Quality Rules**:
-- ✅ Unique AlertID (auto-increment)
-- ✅ Valid datetime format
-- ✅ System/SubSystem mapping consistent with Trigger
-- ✅ No duplicate alerts (same Unit, Fecha, Trigger)
-
-**Sample Count**: ~100-500 alerts per day per client (varies by fleet size)
+**Partition Strategy**: One file per week (Monday 00:00 to Sunday 23:59)
 
 ---
 
-### 2. Component Mapping Table (`component_mapping.parquet`)
+### Schema: `week_{WW}_{YYYY}.parquet`
 
-**Purpose**: Reference table mapping components to their monitoring features and system hierarchy
+**Purpose**: Cleaned, normalized telemetry readings with operational context
 
-**Schema**:
+**Update Frequency**: Daily append (within current week file)
 
-| Column       | Type     | Description                        | Example           |
-|--------------|----------|------------------------------------|-------------------|
-| `Component`  | category | Component name                     | `'Refrigerante'`  |
-| `PrimaryFeature` | string | Main sensor/variable monitoring the component | `'EngCoolTemp'` |
-| `System`     | category | High-level equipment system        | `'Motor'`         |
-| `SubSystem`  | category | Specific subsystem                 | `'Refrigeracion'` |
-| `Meaning`    | string   | Human-readable description         | `'Temperatura del Refrigerante de Motor'` |
-| `RelatedFeatures` | list | List of related features for contextual analysis | `['EngOilPres', 'RAftrclrTemp']` |
+**Retention**: 365 days (52 weeks)
 
-**Use Cases**:
-- Map alert triggers to component hierarchy
-- Retrieve contextual features for multi-variable analysis
-- Generate comprehensive system diagnostics
-- Support AI diagnosis with related sensor context
+#### Core Columns
 
-**Example Configuration**:
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `client` | string | No | Client identifier | Must match `{client}` in path |
+| `unit_id` | string | No | Equipment unit identifier | Format: `[A-Z0-9\-]+` |
+| `timestamp` | datetime64[ns] | No | Reading timestamp (UTC) | ISO 8601 format |
+| `EstadoMaquina` | string | Yes | Operational state | Values: `'Operacional'`, `'Ralenti'`, `'Apagada'`, `'ND'` |
 
-| Component | PrimaryFeature | System | SubSystem | RelatedFeatures |
-|-----------|----------------|--------|-----------|-----------------|
-| Refrigerante | EngCoolTemp | Motor | Refrigeracion | ['EngOilPres', 'RAftrclrTemp', 'DiffTemp'] |
-| PostRefrigerante | RAftrclrTemp | Motor | Refrigeracion | ['RtExhTemp', 'LtExhTemp', 'AirFltr'] |
-| Motor | EngOilPres | Motor | Motor | ['EngCoolTemp', 'EngSpd', 'EngOilFltr'] |
-| Filtro Aceite de Motor | EngOilFltr | Motor | Motor | ['EngCoolTemp', 'EngOilPres', 'CnkcasePres'] |
+#### GPS Columns
 
-**Quality Rules**:
-- ✅ Unique PrimaryFeature per row
-- ✅ All categorical columns stored as category dtype
-- ✅ RelatedFeatures stored as list type
-- ✅ System/SubSystem hierarchy consistency
-- ✅ Complete coverage of all monitored features
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `GPSLat` | float64 | Yes | GPS Latitude | Range: -90.0 to 90.0 |
+| `GPSLon` | float64 | Yes | GPS Longitude | Range: -180.0 to 180.0 |
+| `GPSElevation` | float64 | Yes | Elevation (meters) | Range: -500.0 to 7000.0 |
 
-**Source**: `CDA_CM_ModularDeploy.xlsx` (VariablesMonitoreo sheet)
+#### Signal Columns (Dynamic)
+
+For each monitored sensor signal:
+
+| Column Pattern | Type | Nullable | Description | Example |
+|----------------|------|----------|-------------|---------|
+| `{SignalName}` | float64 | Yes | Sensor reading value | `EngCoolTemp`, `EngOilPres` |
+
+**Standard Signals** (may vary by equipment model):
+
+- **Engine**:
+  - `EngCoolTemp`: Engine Coolant Temperature (°C)
+  - `EngOilPres`: Engine Oil Pressure (kPa)
+  - `EngSpd`: Engine Speed (RPM)
+  - `TCOutTemp`: Turbocharger Outlet Temperature (°C)
+  - `CnkCasePres`: Crankcase Pressure (kPa)
+
+- **Transmission**:
+  - `TrnLubeTemp`: Transmission Lube Temperature (°C)
+  - `TrnOilPres`: Transmission Oil Pressure (kPa)
+
+- **Brakes**:
+  - `LtFBrkTemp`: Left Front Brake Temperature (°C)
+  - `LtRBrkTemp`: Left Rear Brake Temperature (°C)
+  - `RtFBrkTemp`: Right Front Brake Temperature (°C)
+  - `RtRBrkTemp`: Right Rear Brake Temperature (°C)
+
+- **Hydraulics**:
+  - `StrgOilTemp`: Steering Oil Temperature (°C)
+  - `StrgOilPres`: Steering Oil Pressure (kPa)
+
+- **Differential**:
+  - `DiffTemp`: Differential Temperature (°C)
+  - `DiffLubePres`: Differential Lube Pressure (kPa)
+
+- **Cooling System**:
+  - `RAftrclrTemp`: Right Aftercooler Temperature (°C)
+  - `LAftrclrTemp`: Left Aftercooler Temperature (°C)
+
+#### Data Quality Metadata (Optional)
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| `data_quality_flag` | string | Yes | Quality indicator: `'valid'`, `'suspicious'`, `'imputed'` |
+| `source_system` | string | Yes | Originating data source |
+
+#### Example Row
+
+```python
+{
+    "client": "cda",
+    "unit_id": "CAT797-001",
+    "timestamp": "2026-02-15 14:30:00",
+    "EstadoMaquina": "Operacional",
+    "GPSLat": -23.4372,
+    "GPSLon": -69.6506,
+    "GPSElevation": 2450.5,
+    "EngCoolTemp": 88.5,
+    "EngOilPres": 425.0,
+    "EngSpd": 1850.0,
+    "TrnLubeTemp": 72.3,
+    "LtFBrkTemp": 145.2,
+    "RtFBrkTemp": 148.7,
+    "StrgOilTemp": 65.8,
+    "DiffTemp": 68.5,
+    "TCOutTemp": 320.5,
+    "data_quality_flag": "valid"
+}
+```
+
+#### Nullability Rules
+
+- **Nullable Signals**: Missing sensor readings are marked as `null` (not `0.0` or `-999.0`)
+- **State Handling**: If `EstadoMaquina` is `null`, default to `'ND'` (Not Determined)
+- **GPS Handling**: GPS fields may be `null` for units without GPS hardware or indoor operation
+
+---
+
+## 📤 Golden Layer Schemas
+
+### 1. Machine Status Summary
+
+#### File: `machine_status.parquet`
+
+**Purpose**: Machine-level health evaluation (one row per unit per evaluation period)
+
+**Location**: `data/telemetry/golden/{client}/machine_status.parquet`
+
+**Update Frequency**: Weekly (append mode with deduplication)
+
+**Retention**: Historical time-series (all evaluation periods preserved)
+
+**Use Case**: Fleet health monitoring, trend analysis, offline unit detection
+
+**Deduplication**: Records are deduplicated on `(unit_id, evaluation_week, evaluation_year)` - latest evaluation wins
+
+**Edge Case Handling**: Units with no data in evaluation week are included with `overall_status='InsufficientData'`
+
+#### Schema
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `unit_id` | string | No | Unit identifier | Matches silver layer `unit_id` |
+| `client` | string | No | Client identifier | Matches silver layer `client` |
+| `evaluation_week` | int32 | No | ISO week number | Range: 1-53 |
+| `evaluation_year` | int32 | No | Year | Format: YYYY |
+| `evaluation_start` | datetime64[ns] | No | Week start timestamp (Monday 00:00 UTC) | ISO 8601 |
+| `evaluation_end` | datetime64[ns] | No | Week end timestamp (Sunday 23:59 UTC) | ISO 8601 |
+| `latest_sample_date` | datetime64[ns] | Yes | Most recent reading in window (null if no data) | Must be ≥ evaluation_start |
+| `overall_status` | string | No | Machine health classification | Values: `'Normal'`, `'Alerta'`, `'Anormal'`, `'InsufficientData'` |
+| `machine_score` | float64 | No | Aggregate severity score | Range: ≥ 0.0 (no upper limit) |
+| `total_components` | int32 | No | Number of components evaluated | Range: ≥ 1 |
+| `components_normal` | int32 | No | Count with Normal status | Range: 0 to total_components |
+| `components_alerta` | int32 | No | Count with Alerta status | Range: 0 to total_components |
+| `components_anormal` | int32 | No | Count with Anormal status | Range: 0 to total_components |
+| `components_insufficient_data` | int32 | No | Count with InsufficientData status | Range: 0 to total_components |
+| `priority_score` | float64 | No | Fleet ranking score (higher = worse) | Range: ≥ 0.0 |
+| `component_details` | string (JSON) | No | Per-component evaluation details | Valid JSON array (empty if InsufficientData) |
+| `baseline_version` | string | No | Baseline file identifier | Format: `YYYYMMDD` |
+| `total_signals_evaluated` | int32 | Yes | Total signals across all components | Range: ≥ 0 |
+| `total_signals_triggered` | int32 | Yes | Signals with non-Normal status | Range: 0 to total_signals_evaluated |
+
+#### Component Details JSON Schema
+
+The `component_details` column contains a JSON array of component evaluation objects:
+
+```json
+[
+  {
+    "component": "Engine",
+    "status": "Anormal",
+    "score": 0.52,
+    "coverage": 0.85,
+    "criticality_weight": 3,
+    "signals_count": 6,
+    "triggering_signals": ["EngCoolTemp", "EngOilPres"],
+    "signal_details": {
+      "EngCoolTemp": {
+        "status": "Anormal",
+        "window_score_normalized": 1.2,
+        "severity": 1.0,
+        "weight": 1.0
+      }
+    }
+  }
+]
+```
+
+#### Example Rows
+
+**Unit with data:**
+```python
+{
+    "unit_id": "CAT797-001",
+    "client": "cda",
+    "evaluation_week": 8,
+    "evaluation_year": 2026,
+    "evaluation_start": "2026-02-17 00:00:00",
+    "evaluation_end": "2026-02-23 23:59:59",
+    "latest_sample_date": "2026-02-23 23:45:00",
+    "overall_status": "Alerta",
+    "machine_score": 1.86,
+    "total_components": 12,
+    "components_normal": 9,
+    "components_alerta": 2,
+    "components_anormal": 1,
+    "components_insufficient_data": 0,
+    "priority_score": 120.86,
+    "component_details": "[{...}]",  # JSON string
+    "baseline_version": "20260201",
+    "total_signals_evaluated": 48,
+    "total_signals_triggered": 3
+}
+```
+
+**Unit without data (offline/missing):**
+```python
+{
+    "unit_id": "CAT797-002",
+    "client": "cda",
+    "evaluation_week": 8,
+    "evaluation_year": 2026,
+    "evaluation_start": "2026-02-17 00:00:00",
+    "evaluation_end": "2026-02-23 23:59:59",
+    "latest_sample_date": null,
+    "overall_status": "InsufficientData",
+    "machine_score": 0.0,
+    "total_components": 12,
+    "components_normal": 0,
+    "components_alerta": 0,
+    "components_anormal": 0,
+    "components_insufficient_data": 12,
+    "priority_score": 0.0,
+    "component_details": "[]",  # Empty array
+    "baseline_version": "20260201",
+    "total_signals_evaluated": 0,
+    "total_signals_triggered": 0
+}
+```
+
+#### Time-Series Queries
+
+Since `machine_status.parquet` contains historical records, you can track fleet health evolution:
+
+```python
+import pandas as pd
+
+# Load historical data
+machine_df = pd.read_parquet('data/telemetry/golden/cda/machine_status.parquet')
+
+# Track overall status for specific unit over time
+unit_history = machine_df[
+    machine_df['unit_id'] == 'CAT797-001'
+].sort_values(['evaluation_year', 'evaluation_week'])
+
+# Identify units that went offline
+offline_units = machine_df[
+    (machine_df['overall_status'] == 'InsufficientData') &
+    (machine_df['evaluation_week'] == 8) &
+    (machine_df['evaluation_year'] == 2026)
+]['unit_id'].tolist()
+
+# Fleet health trend
+fleet_trend = machine_df.groupby(['evaluation_year', 'evaluation_week']).agg({
+    'overall_status': lambda x: (x == 'Anormal').sum(),
+    'unit_id': 'count'
+}).rename(columns={'overall_status': 'anormal_count', 'unit_id': 'total_units'})
+```
+
+---
+
+### 2. Component Classification
+
+#### File: `classified.parquet`
+
+**Purpose**: Component-level evaluation detail (one row per unit-component-week)
+
+**Location**: `data/telemetry/golden/{client}/classified.parquet`
+
+**Update Frequency**: Weekly (append mode with deduplication)
+
+**Retention**: Historical time-series (all evaluation periods preserved)
+
+**Use Case**: Trend analysis, forecasting, component health evolution tracking
+
+**Deduplication**: Records are deduplicated on `(unit_id, component, evaluation_week, evaluation_year)` - latest evaluation wins
+
+#### Schema
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `client` | string | No | Client identifier | Matches silver layer `client` |
+| `evaluation_week` | int32 | No | ISO week number | Range: 1-53 |
+| `evaluation_year` | int32 | No | Year | Format: YYYY |
+| `date` | datetime64[ns] | No | Evaluation timestamp | ISO 8601 |
+| `component` | string | No | Component name | Example: `'Engine'`, `'Transmission'` |
+| `component_status` | string | No | Component health classification | Values: `'Normal'`, `'Alerta'`, `'Anormal'`, `'InsufficientData'` |
+| `component_score` | float64 | No | Weighted severity score | Range: 0.0-1.0 |
+| `component_coverage` | float64 | No | Fraction of signals with sufficient data | Range: 0.0-1.0 |
+| `criticality_weight` | int32 | No | Component criticality factor | Range: 1-3 |
+| `signals_evaluation` | string (JSON) | No | Per-signal scores and statuses | Valid JSON object |
+| `triggering_signals` | string (JSON) | No | Signals with non-Normal status | Valid JSON array |
+| `signal_weights` | string (JSON) | No | Per-signal data quality weights | Valid JSON object |
+| `ai_recommendation` | string | Yes | LLM-generated maintenance advice (Phase 2) | Reserved for future use |
+| `baseline_version` | string | No | Baseline file identifier | Format: `YYYYMMDD` |
+
+#### Signals Evaluation JSON Schema
+
+```json
+{
+  "EngCoolTemp": {
+    "status": "Anormal",
+    "window_score_normalized": 1.2,
+    "severity": 1.0,
+    "weight": 1.0,
+    "baseline": {
+      "p2": 75.0,
+      "p5": 78.0,
+      "p95": 95.0,
+      "p98": 98.0
+    },
+    "observed_range": [92.0, 102.0],
+    "anomaly_percentage": 45.2,
+    "sample_count": 1008
+  }
+}
+```
+
+#### Example Row
+
+```python
+{
+    "unit": "CAT797-001",
+    "evaluation_week": 8,
+    "evaluation_year": 2026,
+    "date": "2026-02-23 23:59:00",
+    "component": "Engine",
+    "component_status": "Anormal",
+    "component_score": 0.52,
+    "component_coverage": 0.85,
+    "criticality_weight": 3,
+    "signals_evaluation": "{...}",  # JSON string
+    "triggering_signals": '["EngCoolTemp", "EngOilPres"]',  # JSON string
+    "signal_weights": '{"EngCoolTemp": 1.0, "EngOilPres": 1.0}',  # JSON string
+    "ai_recommendation": null,
+    "baseline_version": "20260201"
+}
+```
+
+#### Time-Series Queries
+
+Since `classified.parquet` contains historical records, you can track component health evolution:
+
+```python
+import pandas as pd
+
+# Load historical data
+classified_df = pd.read_parquet('data/telemetry/golden/cda/classified.parquet')
+
+# Track engine health for specific unit over time
+unit_engine_history = classified_df[
+    (classified_df['unit'] == 'CAT797-001') & 
+    (classified_df['component'] == 'Engine')
+].sort_values(['evaluation_year', 'evaluation_week'])
+
+# Identify degradation trends (comparing recent 4 weeks vs older 4 weeks)
+degrading_components = classified_df.groupby(['unit', 'component']).apply(
+    lambda x: x.sort_values(['evaluation_year', 'evaluation_week'])
+                .tail(4)['component_score'].mean() > 
+              x.sort_values(['evaluation_year', 'evaluation_week'])
+                .head(4)['component_score'].mean()
+)
+```
+
+---
+
+### 3. Alerts Data
+
+#### File: `alerts_data.csv`
+
+**Purpose**: Generated telemetry alerts with system/subsystem mapping
+
+**Location**: `data/telemetry/golden/{client}/alerts_data.csv`
+
+**Update Frequency**: Weekly (overwrite)
+
+**Retention**: Historical files archived with date suffix
+
+#### Schema
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `AlertID` | int64 | No | Unique alert identifier | Auto-incrementing, unique within file |
+| `Fecha` | datetime64[ns] | No | Alert generation timestamp | ISO 8601 format |
+| `Unit` | string | No | Equipment unit identifier | Matches silver layer `unit_id` |
+| `Trigger` | string | No | Sensor that triggered alert | Must be valid signal name |
+| `System` | string | Yes | Affected system | Example: `'Engine'`, `'Transmission'`, `'Hydraulics'` |
+| `SubSystem` | string | Yes | Affected subsystem | Example: `'Radiator'`, `'Lubrication'`, `'Cooling'` |
+
+#### System/SubSystem Mapping
+
+| Trigger Signal | System | SubSystem |
+|----------------|--------|-----------|
+| `EngCoolTemp` | Engine | Cooling |
+| `EngOilPres` | Engine | Lubrication |
+| `EngSpd` | Engine | Combustion |
+| `TCOutTemp` | Engine | Turbocharger |
+| `TrnLubeTemp` | Transmission | Lubrication |
+| `TrnOilPres` | Transmission | Hydraulics |
+| `LtFBrkTemp`, `LtRBrkTemp`, `RtFBrkTemp`, `RtRBrkTemp` | Brakes | Friction |
+| `StrgOilTemp`, `StrgOilPres` | Steering | Hydraulics |
+| `DiffTemp`, `DiffLubePres` | Differential | Lubrication |
+
+#### Example Rows
+
+```csv
+AlertID,Fecha,Unit,Trigger,System,SubSystem
+1,2026-02-15 14:30:00,CAT797-001,EngCoolTemp,Engine,Cooling
+2,2026-02-15 16:45:00,CAT797-001,EngOilPres,Engine,Lubrication
+3,2026-02-16 09:15:00,CAT797-002,TrnLubeTemp,Transmission,Lubrication
+```
+
+---
+
+### 4. Alerts Detail Wide Format
+
+#### File: `alerts_detail_wide_with_gps.csv`
+
+**Purpose**: Wide format alert records with GPS coordinates and sensor readings
+
+**Location**: `data/telemetry/golden/{client}/alerts_detail_wide_with_gps.csv`
+
+**Update Frequency**: Weekly (overwrite)
+
+**Retention**: Historical files archived with date suffix
+
+#### Schema
+
+##### Metadata Columns
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `AlertID` | int64 | No | Unique telemetry alert identifier | Links to `alerts_data.csv` |
+| `Unit` | string | No | Equipment unit identifier | Matches silver layer `unit_id` |
+| `TimeStart` | datetime64[ns] | No | Alert data point timestamp | ISO 8601 format |
+| `Trigger` | string | No | Sensor that triggered the alert | Must be valid signal name |
+
+##### GPS Columns
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `GPSLat` | float64 | Yes | GPS Latitude | Range: -90.0 to 90.0 |
+| `GPSLon` | float64 | Yes | GPS Longitude | Range: -180.0 to 180.0 |
+| `GPSElevation` | float64 | Yes | GPS Elevation (meters) | Range: -500.0 to 7000.0 |
+
+##### Operational State Column
+
+| Column | Type | Nullable | Description | Constraints |
+|--------|------|----------|-------------|-------------|
+| `State` | string | Yes | Operational state | Values: `'Operacional'`, `'Ralenti'`, `'Apagada'`, `'ND'` |
+
+##### Signal Columns (Dynamic)
+
+For each monitored signal, there are up to **3 columns**:
+
+| Column Pattern | Type | Nullable | Description | Example |
+|----------------|------|----------|-------------|---------|
+| `{Feature}_Value` | float64 | Yes | Actual sensor reading | `EngCoolTemp_Value` |
+| `{Feature}_Upper_Limit` | float64 | Yes | Upper threshold (P98) | `EngCoolTemp_Upper_Limit` |
+| `{Feature}_Lower_Limit` | float64 | Yes | Lower threshold (P2) | `EngOilPres_Lower_Limit` |
+
+**Common Feature Columns**:
+- `CnkCasePres_Value`, `CnkCasePres_Upper_Limit`, `CnkCasePres_Lower_Limit`
+- `DiffLubePres_Value`, `DiffLubePres_Upper_Limit`, `DiffLubePres_Lower_Limit`
+- `DiffTemp_Value`, `DiffTemp_Upper_Limit`, `DiffTemp_Lower_Limit`
+- `EngCoolTemp_Value`, `EngCoolTemp_Upper_Limit`, `EngCoolTemp_Lower_Limit`
+- `EngOilPres_Value`, `EngOilPres_Upper_Limit`, `EngOilPres_Lower_Limit`
+- `EngSpd_Value`, `EngSpd_Upper_Limit`, `EngSpd_Lower_Limit`
+- `LtFBrkTemp_Value`, `LtFBrkTemp_Upper_Limit`, `LtFBrkTemp_Lower_Limit`
+- `LtRBrkTemp_Value`, `LtRBrkTemp_Upper_Limit`, `LtRBrkTemp_Lower_Limit`
+- `RAftrclrTemp_Value`, `RAftrclrTemp_Upper_Limit`, `RAftrclrTemp_Lower_Limit`
+- `RtFBrkTemp_Value`, `RtFBrkTemp_Upper_Limit`, `RtFBrkTemp_Lower_Limit`
+- `RtRBrkTemp_Value`, `RtRBrkTemp_Upper_Limit`, `RtRBrkTemp_Lower_Limit`
+- `StrgOilTemp_Value`, `StrgOilTemp_Upper_Limit`, `StrgOilTemp_Lower_Limit`
+- `TCOutTemp_Value`, `TCOutTemp_Upper_Limit`, `TCOutTemp_Lower_Limit`
+- `TrnLubeTemp_Value`, `TrnLubeTemp_Upper_Limit`, `TrnLubeTemp_Lower_Limit`
+
+#### Limit Calculation
+
+- **Upper_Limit**: Corresponds to **P98** baseline percentile for the signal
+- **Lower_Limit**: Corresponds to **P2** baseline percentile for the signal
+- Limits are **state-specific** when possible (based on `State` column)
+
+#### Example Row
+
+```csv
+AlertID,Unit,TimeStart,Trigger,GPSLat,GPSLon,GPSElevation,State,EngCoolTemp_Value,EngCoolTemp_Upper_Limit,EngCoolTemp_Lower_Limit,EngOilPres_Value,EngOilPres_Upper_Limit,EngOilPres_Lower_Limit,...
+1,CAT797-001,2026-02-15 14:30:00,EngCoolTemp,-23.4372,-69.6506,2450.5,Operacional,102.5,98.0,75.0,425.0,550.0,320.0,...
+```
 
 ---
 
 ## ✅ Data Quality Rules
 
-### Silver Layer
+### Silver Layer Quality Gates
 
-**Telemetry Values (Wide)**:
-- ✅ Timestamps are sequential per unit
-- ✅ Valid geographic coordinates (GPS)
-- ✅ All sensor values within expected ranges
-- ✅ No missing critical fields
-- ✅ Categorical columns optimized for memory
+Before data enters the Silver layer, enforce these rules:
 
-**States Table**:
-- ✅ States from predefined vocabulary
-- ✅ No duplicate (Fecha, Unit) combinations
-- ✅ All categorical fields properly typed
+1. **Timestamp Validity**
+   - No future timestamps (must be ≤ current time)
+   - No duplicate `(unit_id, timestamp)` pairs within same file
+   - Timestamps must be in UTC timezone
 
-**Limits Configuration**:
-- ✅ Unique combination of (Unit, Feature, Estado, EstadoCarga)
-- ✅ `Limit_Lower` < `Limit_Upper`
-- ✅ All categorical columns stored as category dtype
-- ✅ All features from values table have rules defined
-- ✅ Coverage for all state combinations per unit
+2. **Unit Identifier Consistency**
+   - Must match known fleet registry
+   - Format validation: alphanumeric + hyphens only
 
-### Golden Layer
+3. **Signal Range Validation**
+   - All numeric signals must be within physically plausible ranges
+   - Example: `EngCoolTemp` ∈ [-50, 200]°C, `EngOilPres` ∈ [0, 1000] kPa
+   - Out-of-range values → `null` (not coerced to bounds)
 
-**Alerts Data**:
-- ✅ All alerts have complete system mapping
-- ✅ No orphaned alerts (must match telemetry records)
-- ✅ Timestamps align with source data
+4. **State Consistency**
+   - If `EstadoMaquina = 'Apagada'`, expect near-zero readings for most signals
+   - If `EngSpd = 0`, state should not be `'Operacional'`
 
-**Component Mapping**:
-- ✅ Unique PrimaryFeature per row
-- ✅ All categorical columns stored as category dtype
-- ✅ RelatedFeatures stored as list type
-- ✅ System/SubSystem hierarchy consistency
-- ✅ Complete coverage of all monitored features
+5. **GPS Consistency**
+   - If GPS fields provided, all three (`GPSLat`, `GPSLon`, `GPSElevation`) should be populated together
+   - GPS changes > 100km between consecutive readings → flag for manual review
 
----
+### Golden Layer Quality Gates
 
-## 📊 Data Volume Estimates
+Before writing Golden layer outputs:
 
-### Per Client Daily Volume
+1. **Completeness**
+   - Every `unit_id` in Silver must have corresponding rows in Golden layer
+   - `component_details` JSON must be parseable and valid
+   - No `null` values in non-nullable columns
 
-| Dataset | Records/Day | File Size (Compressed) |
-|---------|-------------|------------------------|
-| Telemetry Values (Wide) | ~100K | ~8-12 MB |
-| States | ~100K | ~1-2 MB |
-| Limits Config | ~200 (static) | ~20 KB |
-| Alerts | ~100-500 | ~50 KB |
-| Component Mapping | ~60 (static) | ~10 KB |
+2. **Referential Integrity**
+   - `alerts_data.csv` → `AlertID` must match `alerts_detail_wide_with_gps.csv`
+   - `classified.parquet` → `component` names must match `component_signals_mapping.json`
+   - `machine_status.parquet` → Sum of `components_{normal|alerta|anormal|insufficient_data}` = `total_components`
 
-**Note**: Volumes vary significantly based on:
-- Fleet size
-- Sampling frequency
-- Number of monitored sensors
-- Alert generation rate
+3. **Score Consistency**
+   - `component_score` ∈ [0.0, 1.0]
+   - `machine_score` ≥ 0.0 (no upper limit, scales with affected components)
+   - `priority_score` = `100 * components_anormal + 10 * components_alerta + machine_score`
+
+4. **Status Logic**
+   - If `overall_status = 'Anormal'` → `components_anormal` ≥ 1
+   - If `overall_status = 'Normal'` → `components_alerta = 0` AND `components_anormal = 0`
+
+5. **Baseline Traceability**
+   - `baseline_version` must reference existing baseline file in `data/telemetry/golden/{client}/baselines/`
 
 ---
 
-## 🔄 Data Flow
+## 🔍 Validation Requirements
 
+### Automated Validation Checks
+
+Implement the following validation tests in `src/data/validator.py`:
+
+#### Silver Layer Validation
+
+```python
+def validate_silver_layer(df: pd.DataFrame, client: str) -> ValidationReport:
+    """
+    Validates silver layer telemetry data.
+    
+    Checks:
+    - No missing values in required columns (unit_id, timestamp, client)
+    - Timestamps are in valid range (past dates only)
+    - No duplicate (unit_id, timestamp) pairs
+    - Signal values within plausible physical ranges
+    - GPS coordinates within valid geographic bounds
+    - Client identifier matches directory path
+    
+    Returns:
+        ValidationReport with passed/failed checks and violation details
+    """
 ```
-Raw Sensor Streams (GPS + Telemetry)
-       ↓
-  Silver Layer
-  ├── Telemetry Values (Wide Format)
-  ├── States (Long Format)
-  └── Limits Configuration (Thresholds)
-       ↓
-  Alert Detection (using Limits Config)
-       ↓
-  Golden Layer
-  ├── Alerts Data
-  └── Component Mapping (Reference)
-       ↓
-  Dashboard / Analytics
+
+#### Golden Layer Validation
+
+```python
+def validate_golden_layer_machine_status(df: pd.DataFrame) -> ValidationReport:
+    """
+    Validates machine_status.parquet schema and business rules.
+    
+    Checks:
+    - All required columns present with correct dtypes
+    - Status values in allowed enum: {'Normal', 'Alerta', 'Anormal'}
+    - Score ranges: component_score ∈ [0,1], machine_score ≥ 0
+    - Component count consistency
+    - priority_score formula correctness
+    - JSON fields are parseable
+    - baseline_version references existing file
+    
+    Returns:
+        ValidationReport with passed/failed checks
+    """
+
+def validate_golden_layer_classified(df: pd.DataFrame) -> ValidationReport:
+    """
+    Validates classified.parquet schema and business rules.
+    
+    Checks:
+    - Component names match component_signals_mapping.json
+    - component_score ∈ [0.0, 1.0]
+    - component_coverage ∈ [0.0, 1.0]
+    - JSON fields are valid and parseable
+    - Triggering signals exist in signals_evaluation
+    
+    Returns:
+        ValidationReport with passed/failed checks
+    """
+
+def validate_alerts_referential_integrity(
+    alerts_data_df: pd.DataFrame,
+    alerts_detail_df: pd.DataFrame
+) -> ValidationReport:
+    """
+    Validates referential integrity between alerts files.
+    
+    Checks:
+    - Every AlertID in alerts_data exists in alerts_detail
+    - Every AlertID in alerts_detail exists in alerts_data
+    - Matching Unit and Trigger values for same AlertID
+    
+    Returns:
+        ValidationReport with orphaned records
+    """
+```
+
+### Validation Report Format
+
+```python
+@dataclass
+class ValidationReport:
+    dataset_name: str
+    validation_timestamp: datetime
+    total_checks: int
+    passed_checks: int
+    failed_checks: int
+    violations: List[ValidationViolation]
+    
+    @property
+    def is_valid(self) -> bool:
+        return self.failed_checks == 0
+
+@dataclass
+class ValidationViolation:
+    check_name: str
+    severity: str  # 'ERROR' | 'WARNING'
+    message: str
+    affected_rows: Optional[List[int]]
+    sample_values: Optional[List[Any]]
+```
+
+### Validation Execution Points
+
+1. **Pre-Pipeline**: Validate Silver layer before processing
+2. **Post-Pipeline**: Validate Golden layer before writing files
+3. **On-Demand**: Manual validation via CLI command
+
+```bash
+# Validate silver layer for week 08-2026
+python -m src.data.validator --layer silver --client cda --week 08 --year 2026
+
+# Validate golden layer outputs
+python -m src.data.validator --layer golden --client cda --week 08 --year 2026
+
+# Validate all layers
+python -m src.data.validator --layer all --client cda --week 08 --year 2026
 ```
 
 ---
 
-## 📝 Change Log
+## 🔄 Change Management
 
-### Version 1.3 (February 2026)
-- **BREAKING CHANGE**: Moved limits_config from Golden to Silver layer
-- Limits now co-located with sensor data for real-time evaluation
-- Updated purpose descriptions for clarity
+### Schema Evolution Policy
 
-### Version 1.2 (February 2026)
-- Added Component Mapping table to Golden layer
-- Maps components to monitoring features and system hierarchy
-- Includes related features for contextual analysis
-- Enables multi-variable diagnostics in dashboard
+#### Adding New Columns
 
-### Version 1.1 (February 2026)
-- **BREAKING CHANGE**: Optimized data structure for memory efficiency
-- Introduced wide-format telemetry values table (combines GPS + sensor data)
-- Separated states into lightweight table
-- Moved limits configuration to Golden layer as reference data
-- All categorical columns now use category dtype
-- Reduced memory footprint by ~60-70%
+✅ **Allowed** (Backward Compatible):
+- Add nullable columns to end of schema
+- Add new signal columns to Silver layer (equipment upgrades)
+- Add new fields to JSON objects in Golden layer
 
-### Version 1.0 (February 2026)
-- Initial telemetry data contracts
-- GPS and sensor data schemas
-- State-aware alert logic
-- System/subsystem mapping
+**Requirements**:
+- Update this contract document
+- Add validation rules for new columns
+- Ensure existing consumers ignore unknown columns
+
+#### Modifying Existing Columns
+
+⚠️ **Requires Deprecation Period**:
+- Changing column data types
+- Changing column names
+- Making nullable columns non-nullable
+
+**Process**:
+1. Add new column with desired schema
+2. Populate both old and new columns for **4 weeks** (deprecation period)
+3. Update all consumers to use new column
+4. Remove old column after deprecation period
+5. Publish migration guide
+
+#### Removing Columns
+
+❌ **Forbidden** (unless deprecated):
+- Cannot remove columns without 4-week deprecation notice
+- Must verify no active consumers before removal
+
+### Versioning Strategy
+
+#### Contract Version Format
+
+`<major>.<minor>.<patch>`
+
+- **Major**: Breaking changes (column removal, type changes)
+- **Minor**: Additive changes (new columns)
+- **Patch**: Documentation updates, clarifications
+
+#### Current Version: 1.0.0
+
+**Change Log**:
+- `1.0.0` (2026-02-24): Initial telemetry data contracts specification
+
+### Communication Process
+
+When contract changes are proposed:
+
+1. **RFC Document**: Create Request for Comments with:
+   - Motivation for change
+   - Proposed schema modifications
+   - Impact analysis (affected consumers)
+   - Migration strategy
+
+2. **Review Period**: 1 week minimum for stakeholder feedback
+
+3. **Approval**: Requires sign-off from:
+   - Pipeline maintainer
+   - Dashboard team
+   - Data engineering lead
+
+4. **Implementation**:
+   - Update contract document (this file)
+   - Update validation rules
+   - Publish migration guide
+   - Execute deprecation process if needed
+
+5. **Monitoring**: Track adoption and rollback plan for 2 weeks post-deployment
+
+---
+
+## 📚 Related Documentation
+
+- [Project Overview](project_overview.md) - Architecture and methodology
+- [Integration Plan](integration_plan.md) - Implementation roadmap
+- [Programming Rules](programming_rules.md) - Code standards
+- [Dashboard Proposal](dashboard_proposal.md) - Visualization layer
+
+---
+
+## 📝 Version History
+
+### Version 1.0.0 (February 24, 2026)
+- Initial data contracts specification
+- Silver layer schema: weekly telemetry parquet files
+- Golden layer schemas:
+  - `machine_status.parquet` (machine-level summary)
+  - `classified.parquet` (component-level detail)
+  - `alerts_data.csv` (alert records with system mapping)
+  - `alerts_detail_wide_with_gps.csv` (wide format alerts with GPS)
+- Data quality rules and validation requirements
+- Schema evolution and change management policies

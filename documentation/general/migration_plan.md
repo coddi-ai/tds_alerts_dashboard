@@ -160,10 +160,12 @@ Integrate the consolidated alerts data source to provide a **unified view of equ
 
 ---
 
-#### Step 1.3: Dash Migration
+#### Step 1.3: Dash Migration ✅ COMPLETED
 **Objective**: Convert Jupyter visualizations to Dash components
 
-**Tasks**:
+**Status**: ✅ Complete (February 18, 2026)
+
+**Completed Tasks**:
 1. **Create Components** (`dashboard/components/`)
    - `alerts_charts.py`: Reusable chart functions
    - `alerts_filters.py`: Filter components
@@ -192,176 +194,259 @@ Integrate the consolidated alerts data source to provide a **unified view of equ
    - Performance profiling
 
 **Deliverables**:
-- Functional Alerts General tab
-- Functional Alerts Detail tab
-- Callback logic tested and validated
-- Performance metrics documented
+- ✅ Functional Alerts General tab with all visualizations
+- ✅ Functional Alerts Detail tab with evidence sections
+- ✅ Callback logic tested and validated
+- ✅ Performance optimized with golden layer
 
 ---
 
-#### Step 1.4: Dashboard Integration
+#### Step 1.4: Dashboard Integration ✅ COMPLETED
 **Objective**: Integrate Alerts tabs into main dashboard navigation
 
-**Tasks**:
-1. **Update Layout** (`dashboard/layout.py`)
-   - Add Monitoring section to navigation
-   - Add Alerts subsection
-   - Register new tabs
+**Status**: ✅ Complete (February 18, 2026)
 
-2. **Update App** (`dashboard/app.py`)
-   - Import new tab modules
-   - Register callbacks
-   - Update routing logic
+**Completed Tasks**:
+1. ✅ **Update Layout** (`dashboard/layout.py`)
+   - Monitoring section added to navigation
+   - Alerts subsection integrated
+   - All tabs registered and functional
 
-3. **Styling & UX**
-   - Ensure consistent design with Oil tabs
-   - Add loading indicators
-   - Implement error handling
-   - Add tooltips and help text
+2. ✅ **Update App** (`dashboard/app.py`)
+   - New tab modules imported
+   - Callbacks registered
+   - Routing logic updated
 
-4. **Documentation**
-   - Update user guide
-   - Document new features
-   - Create training materials
+3. ✅ **Styling & UX**
+   - Consistent design with dashboard theme
+   - Responsive charts with optimized legends
+   - Error handling implemented
+   - Spanish translations applied
+   - Standard color schemes for sistemas
+
+4. ✅ **Documentation**
+   - Migration plan updated
+   - Dashboard overview updated
+   - Data contracts documented
+   - Implementation notes captured
 
 **Deliverables**:
-- Fully integrated Alerts section in dashboard
-- User documentation
-- Deployment-ready code
+- ✅ Fully integrated Alerts section in dashboard
+- ✅ Updated documentation
+- ✅ Production-ready code
+- ✅ Golden layer optimization implemented
 
 ---
 
 ### 🔄 **PHASE 2: Telemetry Integration**
 **Duration**: 2-3 weeks  
-**Goal**: Enable real-time sensor monitoring and trend analysis
+**Goal**: Enable hierarchical sensor monitoring from fleet-wide health to signal-level diagnosis
 
 #### Overview
-Integrate telemetry data to provide **real-time equipment health monitoring** through sensor readings. This phase enables detection of operational anomalies and trending analysis.
+Integrate telemetry data to provide **comprehensive equipment health monitoring** through a 4-level hierarchical diagnostic approach:
+1. **Fleet Overview**: High-level fleet health snapshot
+2. **Machine Detail**: Component-level analysis for individual units
+3. **Component Detail**: Signal-level evaluations with historical baselines
+4. **Limits Management**: Baseline threshold configuration and visualization
+
+This phase implements the **Severity-Weighted Percentile Window Scoring** methodology to detect operational anomalies through statistical baseline comparison.
 
 ---
 
-#### Step 2.1: Layout Proposal
-**Objective**: Design sensor monitoring visualizations
+#### Step 2.1: Layout Proposal ✅ COMPLETED
+**Objective**: Design hierarchical sensor monitoring dashboard
 
-**Tasks**:
-1. **Navigation Design**
-   - Add "Telemetry" subsection under Monitoring
-   - Single-page layout (no tabs needed)
+**Status**: ✅ Complete (February 23, 2026)
 
-2. **Telemetry Page Layout**
-   - Filter panel: Unit, Date range, Trigger, Estado, EstadoCarga
-   - KPI cards: Active alerts, Monitored triggers, Alert rate
-   - Line charts: Sensor trends over time (multi-trigger)
-   - Heatmap: Alert frequency by unit and trigger
-   - Scatter plot: GPS location with alert overlay
-   - Table: Recent telemetry alerts
+**Completed Tasks**:
+1. ✅ **Navigation Design**
+   - 4-tab structure: Fleet Overview, Machine Detail, Component Detail, Limits
+   - Hierarchical drill-down navigation with breadcrumbs
+
+2. ✅ **Fleet Overview Tab Layout**
+   - KPI Cards: Total Units, Normal %, Alerta %, Anormal %
+   - Fleet Status Table: Sortable by priority, status, component counts
+   - Status Distribution Pie Chart: Visual fleet health breakdown
+   - Interactive filtering and search
+
+3. ✅ **Machine Detail Tab Layout**
+   - Machine selector dropdown with status badges
+   - Component Status Table: Detailed component health
+   - Component Radar Chart: Multi-axis visualization of component scores
+   - Component Details Accordion: Expandable evidence panels
+   - Optional: Weekly Status Timeline for trend tracking
+
+4. ✅ **Component Detail Tab Layout**
+   - Signal Evaluation Table: Window scores, severity, weight
+   - Weekly Distribution Boxplots: Historical comparison across weeks
+   - Estado filter: Operacional, Ralenti, Apagada state-specific analysis
+   - Signal drill-down modal: Detailed baseline comparison
+
+5. ✅ **Limits Tab Layout**
+   - Baseline Thresholds Table: P2, P5, P95, P98 percentiles
+   - Training window metadata display
+   - Threshold Distribution Histogram: Visualize baseline calculation
 
 **Deliverables**:
-- Wireframe document with layout mockups
-- Chart specification (axes, colors, interactions)
-- GPS mapping requirements
+- ✅ `documentation/telemetry/dashboard_proposal.md` - Complete dashboard design
+- ✅ `documentation/telemetry/implementation_notes.md` - Technical implementation guide
+- ✅ `documentation/telemetry/telemetry_process_overview.md` - Pipeline and scoring methodology
+- ✅ Component specifications with pseudo-code examples
+- ✅ Data source mappings (machine_status.parquet, classified.parquet, baselines)
 
 ---
 
 #### Step 2.2: Jupyter Notebook Prototyping
-**Objective**: Develop telemetry visualizations in Jupyter
+**Objective**: Develop and validate visualizations in Jupyter before Dash integration
+
+**Status**: 🔄 In Progress
 
 **Tasks**:
-1. **Create Notebook**: `notebooks/telemetry_exploration.ipynb`
+1. **Create Notebook**: `notebooks/telemetry_dashboard_prototype.ipynb`
 
 2. **Data Loading & Exploration**
-   - Load `telemetry.parquet` and `gps.parquet`
-   - Explore sensor data patterns
-   - Analyze alert trigger distributions
-   - Validate GPS coordinates
+   - Load `telemetry/golden/{client}/machine_status.parquet`
+   - Load `telemetry/golden/{client}/classified.parquet`
+   - Load `telemetry/golden/{client}/baselines/baseline_YYYYMMDD.parquet`
+   - Load Silver layer data: `telemetry/silver/{client}/Telemetry_Wide_With_States/ww-yyyy.parquet`
+   - Parse JSON fields: `component_details`, `signals_evaluation`
+   - Validate data completeness and quality
 
-3. **Visualizations**
-   - Build time series charts for sensor trends
-   - Create alert frequency heatmap
-   - Build GPS scatter map with Plotly/Mapbox
-   - Design alert threshold visualization (upper/lower limits)
-   - Create state-based analysis (Operacional vs Ralenti)
+3. **Fleet Overview Visualizations**
+   - KPI Cards: Count units by overall_status (Normal/Alerta/Anormal)
+   - Fleet Status Table: Display unit_id, status, priority_score, component counts
+   - Status Distribution Pie Chart: Visual breakdown with Plotly
+   - Test sorting and filtering logic
 
-4. **Analysis**
-   - Identify common alert patterns
-   - Calculate alert rates per unit
-   - Analyze sensor correlations
-   - Document anomaly detection logic
+4. **Machine Detail Visualizations**
+   - Machine Info Header: Display selected machine metadata
+   - Component Status Table: Parse component_details JSON structure
+   - Component Radar Chart: Multi-axis plot with component scores
+   - Component Details Accordion: Format evidence for each component
 
-5. **Validation**
-   - Test with different date ranges
-   - Verify GPS coordinates plot correctly
-   - Validate alert threshold logic
-   - Performance test with large datasets
+5. **Component Detail Visualizations**
+   - Signal Evaluation Table: Parse signals_evaluation JSON, display window_score_normalized
+   - Weekly Distribution Boxplots: Load multiple week partitions, overlay with status markers
+   - Estado Filter: Test filtering by EstadoMaquina (Operacional/Ralenti/Apagada)
+   - Baseline Comparison: Show P2, P5, P95, P98 thresholds on plots
+
+6. **Limits Tab Visualizations**
+   - Baseline Thresholds Table: Display all signals with percentile values
+
+7. **Validation**
+   - Test with multiple units across different clients
+   - Verify JSON parsing handles missing fields gracefully
+   - Test with InsufficientData status handling
+   - Performance test with full client datasets (100+ units)
+   - Validate weekly boxplots with 6+ weeks of data
 
 **Deliverables**:
-- `notebooks/telemetry_exploration.ipynb` with working visualizations
-- Sensor pattern analysis report
-- Performance recommendations
+- `notebooks/telemetry_dashboard_prototype.ipynb` with all visualizations
+- Structured sections: Setup, Fleet Overview, Machine Detail, Component Detail, Limits
+- Independent cells for each visualization component
+- Performance benchmarks and optimization notes
 
 ---
 
 #### Step 2.3: Dash Migration
-**Objective**: Convert telemetry visualizations to Dash
+**Objective**: Convert Jupyter visualizations to Dash components
+
+**Status**: 🔄 Planned
 
 **Tasks**:
 1. **Create Components** (`dashboard/components/`)
-   - `telemetry_charts.py`: Time series, heatmaps, GPS maps
-   - `telemetry_filters.py`: Sensor-specific filters
-   - `telemetry_tables.py`: Alert and sensor tables
+   - `telemetry_charts.py`: Reusable chart functions
+     - `build_fleet_pie_chart(machine_df)`
+     - `build_component_radar_chart(machine_row)`
+     - `build_weekly_boxplots(unit_id, component, week, year)`
+     - `build_threshold_histogram(unit_id, signal, estado_filter)`
+   - `telemetry_tables.py`: Table builders
+     - `build_fleet_status_table(machine_df)`
+     - `build_component_table(machine_row)`
+     - `build_signal_evaluation_table(unit_id, component, week, year)`
+     - `build_baseline_thresholds_table(baseline_df)`
 
-2. **Create Tab Module** (`dashboard/tabs/`)
-   - `tab_telemetry.py`: Unified telemetry monitoring layout
+2. **Create Tab Modules** (`dashboard/tabs/`)
+   - `tab_telemetry_fleet.py`: Fleet Overview layout
+   - `tab_telemetry_machine.py`: Machine Detail layout
+   - `tab_telemetry_component.py`: Component Detail layout
+   - `tab_telemetry_limits.py`: Limits tab layout
 
 3. **Create Callbacks** (`dashboard/callbacks/`)
-   - `telemetry_callbacks.py`: Handle sensor interactions
-     - Sensor selection and filtering
-     - Time range updates
-     - GPS map interactions
-     - Real-time updates (if applicable)
+   - `telemetry_callbacks.py`: Handle all telemetry interactions
+     - Fleet table row selection → navigate to Machine Detail
+     - Machine selector → update component table and radar chart
+     - Component table row selection → navigate to Component Detail
+     - Signal table drill-down → open signal detail modal
+     - Estado filter → update boxplots
+     - Weekly navigation controls
 
 4. **Data Loaders** (`src/data/loaders.py`)
-   - Add `load_telemetry_data()` function
-   - Add `load_gps_data()` function
-   - Implement efficient time-based queries
-   - Cache recent data for performance
+   - Add `load_machine_status(client)` function
+   - Add `load_classified_telemetry(client, week=None, year=None)` function
+   - Add `load_telemetry_baselines(client, baseline_version='latest')` function
+   - Add `load_silver_telemetry_week(client, week, year)` function
+   - Implement caching with `@lru_cache` for performance
+   - Handle missing data gracefully with default values
 
 5. **Testing**
-   - Test with multi-unit selections
-   - Verify GPS rendering performance
-   - Validate time series aggregations
-   - Load testing with real data volumes
+   - Unit tests for JSON parsing functions
+   - Integration tests for callbacks
+   - Test with multi-client data
+   - Performance profiling with golden layer queries
+   - Load testing with concurrent user sessions
 
 **Deliverables**:
-- Functional Telemetry monitoring page
-- Optimized data loading
-- Interactive sensor charts
+- Functional Telemetry section with all 4 tabs
+- Interactive drill-down navigation working
+- Callback logic tested and validated
+- Performance optimized with golden layer
+- Error handling for missing data
 
 ---
 
 #### Step 2.4: Dashboard Integration
-**Objective**: Add Telemetry to Monitoring section
+**Objective**: Integrate Telemetry tabs into main dashboard navigation
+
+**Status**: 🔄 Planned
 
 **Tasks**:
-1. **Update Navigation** (`dashboard/layout.py`)
-   - Add Telemetry subsection under Monitoring
-   - Update routing
+1. **Update Layout** (`dashboard/layout.py`)
+   - Add Telemetry subsection under Monitoring section
+   - Register 4 tabs: Fleet Overview, Machine Detail, Component Detail, Limits
+   - Update navigation routing: `/telemetry/fleet`, `/telemetry/machine`, `/telemetry/component`, `/telemetry/limits`
+   - Add breadcrumb navigation for drill-down paths
 
-2. **Limits Section Enhancement**
-   - Add "Telemetry Limits" tab under Limits section
-   - Display `data_rules.csv` in table format
-   - Add filters by Trigger, Estado, EstadoCarga
-   - Visualize threshold distributions
+2. **Update App** (`dashboard/app.py`)
+   - Import new telemetry tab modules
+   - Register telemetry callbacks
+   - Update URL routing logic to handle telemetry paths
+   - Add telemetry data to app initialization
 
-3. **Cross-Tab Integration**
+3. **Styling & UX**
+   - Consistent design with dashboard theme (match Alerts section)
+   - Color schemes for status: Green (Normal), Yellow (Alerta), Red (Anormal)
+   - Loading states for data-heavy visualizations
+   - Responsive layouts for mobile/tablet viewing
+   - Tooltips and help text for complex metrics
+
+4. **Cross-Tab Integration**
    - Enable navigation from Alerts → Telemetry
-   - Link telemetry alerts to detail views
-   - Implement unified filtering
+   - Link consolidated alerts (trigger_type='telemetry') to Telemetry Component Detail
+   - Pass unit_id, component, and week parameters via URL routing
+   - Implement unified filtering across sections
+
+5. **Documentation**
+   - Update migration plan with completion status
+   - Update dashboard_overview.md with telemetry features
+   - Create user guide for telemetry monitoring workflow
+   - Document data refresh schedules and baseline update procedures
 
 **Deliverables**:
-- Integrated Telemetry monitoring
-- Telemetry Limits tab functional
-- Cross-navigation working
+- Fully integrated Telemetry section in dashboard
+- Cross-navigation from Alerts working
+- Updated documentation
+- Production-ready code with golden layer optimization
 
 ---
 
@@ -574,11 +659,11 @@ Create a comprehensive **fleet health overview** that aggregates insights from a
 
 ### Phase Checklist
 
-- [x] **Phase 1: Alerts** (In Progress - 50% Complete)
+- [x] **Phase 1: Alerts** ✅ COMPLETED (February 18, 2026)
   - [x] ✅ Layout proposal approved (Step 1.1 - February 5, 2026)
   - [x] ✅ Jupyter notebook complete (Step 1.2 - February 5, 2026)
-  - [ ] Dash migration pending (Step 1.3)
-  - [ ] Integration testing pending (Step 1.4)
+  - [x] ✅ Dash migration complete (Step 1.3 - February 18, 2026)
+  - [x] ✅ Integration complete (Step 1.4 - February 18, 2026)
   
 - [ ] **Phase 2: Telemetry**
   - [ ] Layout proposal approved
@@ -613,7 +698,25 @@ Create a comprehensive **fleet health overview** that aggregates insights from a
   - Implemented all Detail Tab visualizations
   - Added conditional logic for telemetry/oil/maintenance evidence
 
-**Next Steps**: Phase 1, Step 1.3 - Dash Migration
+**February 18, 2026**:
+- ✅ Completed Phase 1, Step 1.3: Dash Migration
+  - Created `alerts_charts.py` with golden layer functions
+  - Created `alerts_tables.py` with DataTable and KPI cards
+  - Implemented Spanish feature name mapping
+  - Applied standard sistema color mapping
+  - Optimized chart legends and layouts
+  - Removed titles from charts (container provides context)
+  
+- ✅ Completed Phase 1, Step 1.4: Dashboard Integration
+  - Integrated Alerts section into main navigation
+  - Registered all callbacks successfully
+  - Applied consistent styling and UX patterns
+  - Validated golden layer performance
+  - Updated all documentation
+
+**✅ Phase 1: Alerts Integration - COMPLETE**
+
+**Next Steps**: Phase 2, Step 2.1 - Telemetry Layout Proposal
 
 ---
 
@@ -762,5 +865,5 @@ Each phase requires:
 
 ---
 
-**Migration Plan Status**: 📝 Ready for Execution  
-**Next Action**: Begin Phase 1 - Alerts Integration
+**Migration Plan Status**: ✅ Phase 1 Complete | 🔄 Phase 2 Ready  
+**Next Action**: Begin Phase 2 - Telemetry Integration (Step 2.1 - Layout Proposal)

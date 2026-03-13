@@ -1,8 +1,9 @@
 # Data Contracts - Consolidated Alerts Data Product
 
-**Version**: 1.0  
-**Last Updated**: February 4, 2026  
-**Owner**: Alerts Fusion Data Product Team
+**Version**: 1.1  
+**Last Updated**: February 17, 2026  
+**Owner**: Alerts Fusion Data Product Team  
+**Status**: ✅ Aligned with implementation (Implementation is ground truth)
 
 ---
 
@@ -71,25 +72,27 @@ Local: data/alerts/golden/{client}/consolidated_alerts.csv
 |--------|------|-------------|---------|
 | `FusionID` | string | Unique consolidated alert identifier | `'FUS-001'`, `'FUS-002'` |
 | `TelemetryID` | string (nullable) | Reference to telemetry alert ID | `'1'`, `'2'`, `null` |
-| `TribologyID` | string (nullable) | Reference to oil sample number | `'CDA-2024-001'`, `null` |
+| `OilReportNumber` | string (nullable) | Reference to oil sample number | `'CDA-2024-001'`, `null` |
 | `Semana_Resumen_Mantencion` | string | Maintenance week reference | `'32-2025'` |
-| `Timestamp` | datetime64[ns] | Alert generation timestamp | `2025-01-01 00:00:00` |
+| `Fecha` | datetime64[ns] | Alert generation timestamp | `2025-01-01 00:00:00` |
 | `UnitId` | string | Equipment unit identifier | `'CAT-001'` |
-| `Trigger_type` | string | Alert source technique | `'telemetry'`, `'oil'` |
+| `Trigger_type` | string | Alert source technique | `'Telemetria'`, `'Tribologia'`, `'Mixto'` |
 | `mensaje_ia` | string | AI-generated diagnosis | `'Se observa que...'` |
-| `System` | string | Affected equipment system | `'Engine'`, `'Transmission'` |
-| `SubSystem` | string | Affected subsystem | `'Radiator'`, `'Lubrication'` |
-| `Component` | string | Specific component | `'Coolant Pump'`, `'Oil Filter'` |
+| `sistema` | string | Affected equipment system | `'Engine'`, `'Transmission'` |
+| `subsistema` | string (nullable) | Affected subsystem | `'Radiator'`, `'Lubrication'` |
+| `componente` | string (nullable) | Specific component | `'Coolant Pump'`, `'Oil Filter'` |
 
 ---
 
 ### Field Definitions
 
 #### `FusionID`
-- **Format**: `FUS-{sequential_number}`
+- **Type**: String
 - **Purpose**: Unique identifier for each consolidated alert
-- **Generation**: Auto-increment starting from 001
-- **Example**: `FUS-001`, `FUS-045`, `FUS-1023`
+- **Format**: String identifier (implementation-specific format)
+- **Note**: While a format like `FUS-{sequential_number}` was originally designed, the actual implementation may use a different format
+- **Example**: `'FUS-001'`, `'FUS-045'`, `'alert_123'`
+- **Requirement**: Must be unique across all alerts
 
 #### `TelemetryID` (Nullable)
 - **Type**: String (can be null)
@@ -98,7 +101,7 @@ Local: data/alerts/golden/{client}/consolidated_alerts.csv
 - **Null when**: Alert is oil-only
 - **Example**: `'15'`, `'234'`, `null`
 
-#### `TribologyID` (Nullable)
+#### `OilReportNumber` (Nullable)
 - **Type**: String (can be null)
 - **Purpose**: Links to oil sample if applicable
 - **Source**: `oil/golden/{client}/classified.parquet -> sampleNumber`
@@ -112,13 +115,28 @@ Local: data/alerts/golden/{client}/consolidated_alerts.csv
 - **Usage**: Correlate alerts with maintenance activities
 - **Example**: `'32-2025'` → file `32-2025.csv`
 
+#### `Fecha`
+- **Type**: datetime64[ns]
+- **Purpose**: Alert generation timestamp
+- **Format**: ISO datetime format
+- **Example**: `2025-01-01 00:00:00`
+- **Note**: Spanish for "Date", used for consistency with Spanish column naming convention
+
+#### `UnitId`
+- **Type**: String
+- **Purpose**: Equipment unit identifier
+- **Source**: Fleet registry
+- **Example**: `'CAT-001'`, `'EMIN-H45'`
+- **Note**: Must match valid unit in fleet database
+
 #### `Trigger_type`
-- **Values**: `'telemetry'` | `'oil'`
+- **Values**: `'Telemetria'` | `'Tribologia'` | `'Mixto'`
 - **Purpose**: Identify the monitoring technique that generated the alert
 - **Logic**:
-  - `'telemetry'`: When `TelemetryID` is not null
-  - `'oil'`: When `TribologyID` is not null
-  - Can potentially be both in future (correlation alerts)
+  - `'Telemetria'`: When alert originates from telemetry sensor data
+  - `'Tribologia'`: When alert originates from oil analysis reports
+  - `'Mixto'`: When alert combines both telemetry and oil analysis evidence (correlation alert)
+- **Note**: Values are capitalized Spanish terms for consistency with dashboard UI
 
 #### `mensaje_ia`
 - **Purpose**: AI-generated contextual diagnosis
@@ -145,19 +163,26 @@ Requiere análisis detallado y posible overhaul."
 
 The alert includes three levels of component hierarchy:
 
-1. **System**: High-level equipment system
+1. **sistema**: High-level equipment system (lowercase Spanish)
    - Examples: `Engine`, `Transmission`, `Hydraulic`, `Electrical`
+   - Special value: `'Desconocido'` when system cannot be determined
 
-2. **SubSystem**: Specific subsystem within the system
+2. **subsistema**: Specific subsystem within the system (lowercase Spanish, nullable)
    - Examples: `Radiator`, `Lubrication`, `Cooling`, `Power Supply`
+   - Can be null for high-level alerts
 
-3. **Component**: Specific component (when identifiable)
+3. **componente**: Specific component when identifiable (lowercase Spanish, nullable)
    - Examples: `Coolant Pump`, `Oil Filter`, `Thermostat`, `Battery`
+   - Can be null for system-level or subsystem-level alerts
+
+**Missing Value Handling**:
+- If `sistema` is null or empty, it is filled with `'Desconocido'`
+- `subsistema` and `componente` can remain null for high-level alerts
 
 **Mapping Examples**:
 
-| Trigger Source | System | SubSystem | Component |
-|----------------|--------|-----------|-----------|
+| Trigger Source | sistema | subsistema | componente |
+|----------------|---------|------------|------------|
 | EngCoolTemp (Telemetry) | Engine | Radiator | Coolant Pump |
 | EngOilPres (Telemetry) | Engine | Lubrication | Oil Pump |
 | Hierro (Oil) | Engine | Internal | Piston Rings |
@@ -176,7 +201,7 @@ The alert includes three levels of component hierarchy:
 │  Alert System   │         │   Alert System   │
 └────────┬────────┘         └────────┬─────────┘
          │                           │
-         │  TelemetryID              │  TribologyID
+         │  TelemetryID              │  OilReportNumber
          │                           │
          └───────────┬───────────────┘
                      ↓
@@ -202,9 +227,9 @@ Condition: Telemetry alert generated
 Action:
   - Create FusionID
   - Set TelemetryID = alert.AlertID
-  - Set TribologyID = null
-  - Set Trigger_type = 'telemetry'
-  - Extract System/SubSystem from telemetry
+  - Set OilReportNumber = null
+  - Set Trigger_type = 'Telemetria'
+  - Extract sistema/subsistema from telemetry
   - Generate AI diagnosis using sensor context
 ```
 
@@ -214,20 +239,21 @@ Condition: Oil report status = 'Alerta' or 'Anormal'
 Action:
   - Create FusionID
   - Set TelemetryID = null
-  - Set TribologyID = sample.sampleNumber
-  - Set Trigger_type = 'oil'
-  - Extract System/SubSystem from component
+  - Set OilReportNumber = sample.sampleNumber
+  - Set Trigger_type = 'Tribologia'
+  - Extract sistema/subsistema from component
   - Generate AI diagnosis using oil analysis context
 ```
 
-#### 3. Correlation Alerts (Future)
+#### 3. Mixed/Correlation Alerts
 ```
 Condition: Both telemetry and oil alerts for same unit/system within time window
 Action:
   - Create FusionID
-  - Set both TelemetryID and TribologyID
-  - Set Trigger_type = 'correlation'
+  - Set both TelemetryID and OilReportNumber
+  - Set Trigger_type = 'Mixto'
   - Enhanced AI diagnosis combining both contexts
+  - Provides comprehensive view of equipment health issue
 ```
 
 ### Maintenance Context Enrichment
@@ -242,23 +268,32 @@ For each alert:
 ## ✅ Data Quality Rules
 
 ### Required Fields
-- ✅ `FusionID`: Unique, non-null, sequential
-- ✅ `Timestamp`: Valid datetime
+- ✅ `FusionID`: Unique, non-null
+- ✅ `Fecha`: Valid datetime
 - ✅ `UnitId`: Valid, matches fleet registry
-- ✅ `Trigger_type`: In {'telemetry', 'oil'}
+- ✅ `Trigger_type`: In {'Telemetria', 'Tribologia', 'Mixto'}
 - ✅ `mensaje_ia`: Non-empty, coherent text
-- ✅ `System`: Non-null, from predefined vocabulary
+- ✅ `sistema`: Non-null (filled with 'Desconocido' if missing)
 - ✅ `Semana_Resumen_Mantencion`: Valid week format
 
 ### Conditional Rules
-- ✅ If `Trigger_type` = 'telemetry', then `TelemetryID` is not null
-- ✅ If `Trigger_type` = 'oil', then `TribologyID` is not null
-- ✅ At least one of `TelemetryID` or `TribologyID` must be non-null
-- ✅ `SubSystem` and `Component` can be null for high-level alerts
+- ✅ If `Trigger_type` = 'Telemetria', then `TelemetryID` is not null and `OilReportNumber` is null
+- ✅ If `Trigger_type` = 'Tribologia', then `OilReportNumber` is not null and `TelemetryID` is null
+- ✅ If `Trigger_type` = 'Mixto', then both `TelemetryID` and `OilReportNumber` are not null
+- ✅ At least one of `TelemetryID` or `OilReportNumber` must be non-null
+- ✅ `subsistema` and `componente` can be null for high-level alerts
+
+### Derived Display Columns
+
+The dashboard creates these derived boolean columns for display purposes:
+- `has_telemetry`: True if `Trigger_type` in ['Telemetria', 'Mixto']
+- `has_tribology`: True if `Trigger_type` in ['Tribologia', 'Mixto']
+
+These are NOT part of the data file schema, but are computed at display time.
 
 ### Referential Integrity
 - ✅ `TelemetryID` references valid record in `telemetry/golden/{client}/alerts_data.csv`
-- ✅ `TribologyID` references valid sample in `oil/golden/{client}/classified.parquet`
+- ✅ `OilReportNumber` references valid sample in `oil/golden/{client}/classified.parquet`
 - ✅ `Semana_Resumen_Mantencion` corresponds to existing file in `mantentions/golden/{client}/`
 
 ---
@@ -303,7 +338,7 @@ alerts_with_telemetry = alerts.merge(
 # Join oil context
 alerts_with_oil = alerts_with_telemetry.merge(
     oil_classified,
-    left_on='TribologyID',
+    left_on='OilReportNumber',
     right_on='sampleNumber',
     how='left'
 )
@@ -331,8 +366,8 @@ oil_weights = {'Normal': 0, 'Alerta': 5, 'Anormal': 10}
 system_weights = {'Engine': 10, 'Transmission': 8, 'Hydraulic': 6}
 
 alerts['priority_score'] = (
-    alerts['TribologyID'].map(lambda x: oil_weights.get(oil_status, 0)) +
-    alerts['System'].map(system_weights)
+    alerts['OilReportNumber'].map(lambda x: oil_weights.get(oil_status, 0)) +
+    alerts['sistema'].map(system_weights)
 )
 ```
 
@@ -340,12 +375,12 @@ alerts['priority_score'] = (
 Identify recurring issues:
 ```python
 # Group by unit and system to find patterns
-recurring_issues = alerts.groupby(['UnitId', 'System']).agg({
+recurring_issues = alerts.groupby(['UnitId', 'sistema']).agg({
     'FusionID': 'count',
-    'Timestamp': ['min', 'max']
+    'Fecha': ['min', 'max']
 }).reset_index()
 
-recurring_issues.columns = ['UnitId', 'System', 'alert_count', 'first_alert', 'last_alert']
+recurring_issues.columns = ['UnitId', 'sistema', 'alert_count', 'first_alert', 'last_alert']
 recurring_issues[recurring_issues['alert_count'] >= 3]  # Units with 3+ alerts
 ```
 
@@ -353,8 +388,8 @@ recurring_issues[recurring_issues['alert_count'] >= 3]  # Units with 3+ alerts
 Evaluate if maintenance resolved alerts:
 ```python
 # Check alerts before and after maintenance
-pre_maintenance = alerts[alerts['Timestamp'] < maintenance_date]
-post_maintenance = alerts[alerts['Timestamp'] >= maintenance_date]
+pre_maintenance = alerts[alerts['Fecha'] < maintenance_date]
+post_maintenance = alerts[alerts['Fecha'] >= maintenance_date]
 
 effectiveness = len(post_maintenance) / len(pre_maintenance)
 ```
@@ -363,7 +398,23 @@ effectiveness = len(post_maintenance) / len(pre_maintenance)
 
 ## 📝 Change Log
 
-### Version 1.0 (February 2026)
+### Version 1.1 (February 17, 2026) - Final
+- **TEAM DECISION**: Implementation declared as ground truth
+- **BREAKING CHANGES**: Updated to match actual implementation
+  - Changed `Timestamp` → `Fecha` (Spanish naming)
+  - Changed `TribologyID` → `OilReportNumber` (clearer naming)
+  - Changed `System`, `SubSystem`, `Component` → `sistema`, `subsistema`, `componente` (lowercase Spanish)
+  - Changed `Trigger_type` values: `'telemetry'`, `'oil'` → `'Telemetria'`, `'Tribologia'`, `'Mixto'`
+  - Updated `FusionID` documentation to reflect implementation-specific format (not enforced)
+  - Moved correlation alerts from "future" to standard as `'Mixto'` type
+  - Added missing value handling: `'Desconocido'` for missing sistema values
+  - Documented derived display columns (has_telemetry, has_tribology)
+  - Added field definitions for `Fecha` and `UnitId`
+- Updated all code examples to use implementation column names
+- Updated data quality rules to match implementation logic
+- **STATUS**: All documentation now aligned with actual implementation ✅
+
+### Version 1.0 (February 4, 2026)
 - Initial consolidated alerts data contract
 - Multi-technique fusion logic
 - AI diagnosis integration
