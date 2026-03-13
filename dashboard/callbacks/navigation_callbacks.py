@@ -13,6 +13,7 @@ from dashboard.tabs.tab_limits import create_limits_tab
 from dashboard.tabs.tab_machines import create_machines_tab
 from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_alerts import create_layout as create_alerts_tab
+from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from dashboard.tabs.tab_telemetry import create_layout as create_telemetry_tab
 from dashboard.tabs.tab_oil import create_layout as create_oil_tab
 from dashboard.layout import create_placeholder_content
@@ -106,8 +107,8 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
         'overview-general': lambda client: create_placeholder_content('Overview General'),
         'monitoring-alerts': lambda client: get_alerts_content(client),
         'monitoring-telemetry': lambda client: get_telemetry_content(client),
-        'monitoring-mantentions': lambda client: create_placeholder_content('Mantentions'),
-        'monitoring-oil': create_oil_tab,
+        'monitoring-mantentions': lambda client: layout_mantenciones_general(),
+        'monitoring-oil': create_reports_tab,
         'limits-oil': create_limits_tab,
 
     }

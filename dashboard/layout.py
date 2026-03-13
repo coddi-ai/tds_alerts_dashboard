@@ -10,6 +10,7 @@ from dashboard.tabs.tab_limits import create_limits_tab
 from dashboard.tabs.tab_machines import create_machines_tab
 from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_alerts import create_layout as create_alerts_tab
+from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from dashboard.tabs.tab_telemetry import create_layout as create_telemetry_tab
 from dashboard.tabs.tab_oil import create_layout as create_oil_tab
 from dashboard.components.filters import create_client_selector
@@ -165,8 +166,8 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             'subsections': [
                 {'id': 'monitoring-alerts', 'label': 'Alerts', 'tab': create_alerts_tab},
                 {'id': 'monitoring-telemetry', 'label': 'Telemetry', 'tab': create_telemetry_tab},
-                {'id': 'monitoring-mantentions', 'label': 'Mantentions', 'tab': lambda: create_placeholder_content('Mantentions')},
-                {'id': 'monitoring-oil', 'label': 'Oil', 'tab': create_oil_tab}
+                {'id': 'monitoring-mantentions', 'label': 'Mantentions', 'tab': layout_mantenciones_general},
+                {'id': 'monitoring-oil', 'label': 'Oil', 'tab': create_reports_tab}
             ]
         },
         {
