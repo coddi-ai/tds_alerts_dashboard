@@ -12,7 +12,7 @@ from pathlib import Path
 import logging
 
 from src.utils.file_utils import safe_read_parquet
-from src.data.loaders import load_telemetry_machine_status
+from src.data.loaders import load_telemetry_machine_status, load_alerts_data
 from src.data.maintenance_repository import get_repository
 
 logger = logging.getLogger(__name__)
@@ -25,27 +25,40 @@ def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -
     Formula: More alerts for same equipment/component = higher criticality
     
     Args:
-        df_alerts: DataFrame with alert data
+        df_alerts: DataFrame with alert data (using real columns: Timestamp, Unidad, Componente)
         days: Number of days to consider recent alerts
         
     Returns:
         DataFrame with equipment, alert_count, component_count, score, and status
     """
+    if df_alerts.empty:
+        return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
+    
+    # Use correct column names from load_alerts_data
+    if 'Timestamp' not in df_alerts.columns:
+        logger.warning(f"Column 'Timestamp' not found. Available: {df_alerts.columns.tolist()}")
+        return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
+    
     cutoff_date = datetime.now() - timedelta(days=days)
     
-    # Filter recent alerts
-    recent = df_alerts[df_alerts['fecha_alerta'] >= cutoff_date].copy() if 'fecha_alerta' in df_alerts.columns else df_alerts
+    # Filter recent alerts (Timestamp is already datetime from load_alerts_data)
+    recent = df_alerts[df_alerts['Timestamp'] >= cutoff_date].copy()
     
     if recent.empty:
         return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
     
+    # Use correct column names: Unidad (equipment) and Componente (component)
+    if 'Unidad' not in recent.columns or 'Componente' not in recent.columns:
+        logger.warning(f"Required columns not found. Available: {recent.columns.tolist()}")
+        return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
+    
     # Group by equipment and component
-    grouped = recent.groupby(['equipo', 'componente']).size().reset_index(name='alerts_per_component')
+    grouped = recent.groupby(['Unidad', 'Componente']).size().reset_index(name='alerts_per_component')
     
     # Calculate metrics per equipment
-    equipment_stats = grouped.groupby('equipo').agg({
+    equipment_stats = grouped.groupby('Unidad').agg({
         'alerts_per_component': 'sum',  # Total alerts
-        'componente': 'nunique'  # Number of affected components
+        'Componente': 'nunique'  # Number of affected components
     }).reset_index()
     
     equipment_stats.columns = ['equipo', 'alert_count', 'component_count']
@@ -77,7 +90,7 @@ def create_telemetry_bar_chart(df_telemetry: pd.DataFrame) -> go.Figure:
     Create compact bar chart showing fleet status distribution from telemetry.
     
     Args:
-        df_telemetry: DataFrame with telemetry machine status
+        df_telemetry: DataFrame with telemetry machine status (using real columns: overall_status)
         
     Returns:
         Plotly figure
@@ -85,12 +98,16 @@ def create_telemetry_bar_chart(df_telemetry: pd.DataFrame) -> go.Figure:
     if df_telemetry.empty:
         return create_empty_figure("No hay datos")
     
+    # Use correct column name from load_telemetry_machine_status
+    if 'overall_status' not in df_telemetry.columns:
+        logger.warning(f"Column 'overall_status' not found. Available: {df_telemetry.columns.tolist()}")
+        return create_empty_figure("Datos incompletos")
+    
     # Count by status
-    status_col = 'Estado' if 'Estado' in df_telemetry.columns else 'status'
-    status_counts = df_telemetry[status_col].value_counts().reset_index()
+    status_counts = df_telemetry['overall_status'].value_counts().reset_index()
     status_counts.columns = ['Estado', 'Cantidad']
     
-    # Color mapping
+    # Color mapping (matching telemetry status values)
     color_map = {
         'Normal': '#28a745',
         'Alerta': '#ffc107',
@@ -392,10 +409,10 @@ def create_summary_table(df_telemetry: pd.DataFrame, df_maintenance: pd.DataFram
     Create comprehensive summary table combining all technical areas.
     
     Args:
-        df_telemetry: Telemetry data
+        df_telemetry: Telemetry data (with correct columns: unit_id, overall_status)
         df_maintenance: Maintenance data
         df_oil: Oil analysis data
-        df_alerts: Alerts data
+        df_alerts: Alerts data (with correct columns: Unidad, Componente, Timestamp)
         
     Returns:
         Dash DataTable component
@@ -404,22 +421,22 @@ def create_summary_table(df_telemetry: pd.DataFrame, df_maintenance: pd.DataFram
         # Build summary by equipment
         summary_data = []
         
-        # Get unique equipment from all sources
+        # Get unique equipment from all sources (using correct column names)
         equipos = set()
-        if not df_telemetry.empty and 'Unidad' in df_telemetry.columns:
-            equipos.update(df_telemetry['Unidad'].unique())
-        if not df_alerts.empty and 'equipo' in df_alerts.columns:
-            equipos.update(df_alerts['equipo'].unique())
+        if not df_telemetry.empty and 'unit_id' in df_telemetry.columns:
+            equipos.update(df_telemetry['unit_id'].unique())
+        if not df_alerts.empty and 'Unidad' in df_alerts.columns:
+            equipos.update(df_alerts['Unidad'].unique())
         
         alert_scores = calculate_alert_criticality_score(df_alerts, 30) if not df_alerts.empty else pd.DataFrame()
         
         for equipo in sorted(equipos):
-            # Telemetry status
+            # Telemetry status (use correct column: unit_id and overall_status)
             telem_status = 'N/A'
-            if not df_telemetry.empty and 'Unidad' in df_telemetry.columns:
-                equipo_telem = df_telemetry[df_telemetry['Unidad'] == equipo]
-                if not equipo_telem.empty:
-                    telem_status = equipo_telem['Estado'].iloc[0]
+            if not df_telemetry.empty and 'unit_id' in df_telemetry.columns:
+                equipo_telem = df_telemetry[df_telemetry['unit_id'] == equipo]
+                if not equipo_telem.empty and 'overall_status' in equipo_telem.columns:
+                    telem_status = equipo_telem['overall_status'].iloc[0]
             
             # Oil status
             oil_status = 'N/A'
@@ -596,17 +613,17 @@ def register_overview_general_callbacks(app):
             oil_latest = "N/A"
             alerts_period = "N/A"
             
-            # Load Telemetry data (most recent week/year available)
+            # Load Telemetry data using proper loader (most recent week/year available)
             df_telemetry = load_telemetry_machine_status(client)
             if not df_telemetry.empty:
-                # Get most recent week/year combination
-                if 'Semana' in df_telemetry.columns and 'Año' in df_telemetry.columns:
-                    most_recent = df_telemetry.sort_values(['Año', 'Semana'], ascending=False).iloc[0]
-                    latest_year = most_recent['Año']
-                    latest_week = most_recent['Semana']
+                # Get most recent week/year combination using correct column names
+                if 'evaluation_week' in df_telemetry.columns and 'evaluation_year' in df_telemetry.columns:
+                    most_recent = df_telemetry.sort_values(['evaluation_year', 'evaluation_week'], ascending=False).iloc[0]
+                    latest_year = most_recent['evaluation_year']
+                    latest_week = most_recent['evaluation_week']
                     df_telemetry = df_telemetry[
-                        (df_telemetry['Año'] == latest_year) & 
-                        (df_telemetry['Semana'] == latest_week)
+                        (df_telemetry['evaluation_year'] == latest_year) & 
+                        (df_telemetry['evaluation_week'] == latest_week)
                     ]
                     telemetry_latest = f"Semana {latest_week}, Año {latest_year}"
                     logger.info(f"Telemetry: Using most recent data - {telemetry_latest}")
@@ -647,31 +664,14 @@ def register_overview_general_callbacks(app):
                 if 'unitId' in df_oil.columns and 'equipo' not in df_oil.columns:
                     df_oil['equipo'] = df_oil['unitId']
             
-            # Load Alerts data (recent alerts only - last 60 days by default)
-            alerts_file = f'data/alerts/golden/{client.lower()}/consolidated_alerts.csv'
-            try:
-                df_alerts = pd.read_csv(alerts_file)
-                if 'Timestamp' in df_alerts.columns:
-                    df_alerts['Timestamp'] = pd.to_datetime(df_alerts['Timestamp'])
-                    # Filter last 60 days
-                    cutoff_date = datetime.now() - timedelta(days=60)
-                    df_alerts = df_alerts[df_alerts['Timestamp'] >= cutoff_date]
-                    alerts_period = "Últimos 60 días"
-                    logger.info(f"Alerts: Using recent data - {alerts_period}, {len(df_alerts)} alerts")
-                
-                # Rename columns for consistency
-                if 'Unidad' in df_alerts.columns and 'equipo' not in df_alerts.columns:
-                    df_alerts['equipo'] = df_alerts['Unidad']
-                if 'Componente' in df_alerts.columns and 'componente' not in df_alerts.columns:
-                    df_alerts['componente'] = df_alerts['Componente']
-                if 'Timestamp' in df_alerts.columns and 'fecha_alerta' not in df_alerts.columns:
-                    df_alerts['fecha_alerta'] = df_alerts['Timestamp']
-            except FileNotFoundError:
-                logger.warning(f"Alerts file not found: {alerts_file}")
-                df_alerts = pd.DataFrame()
-            except Exception as e:
-                logger.error(f"Error loading alerts: {e}")
-                df_alerts = pd.DataFrame()
+            # Load Alerts data using proper loader (recent alerts only - last 60 days by default)
+            df_alerts = load_alerts_data(client)
+            if not df_alerts.empty:
+                # Filter last 60 days (Timestamp is already datetime from load_alerts_data)
+                cutoff_date = datetime.now() - timedelta(days=60)
+                df_alerts = df_alerts[df_alerts['Timestamp'] >= cutoff_date]
+                alerts_period = "Últimos 60 días"
+                logger.info(f"Alerts: Using recent data - {alerts_period}, {len(df_alerts)} alerts")
             
             # Serialize to JSON with metadata about data freshness
             data = {
@@ -707,7 +707,7 @@ def register_overview_general_callbacks(app):
         [Input("store-overview-data", "data")]
     )
     def update_global_kpis(data):
-        """Update global KPI cards."""
+        """Update global KPI cards using correct column names."""
         if not data:
             return "0", "0", "0", "0"
         
@@ -720,22 +720,22 @@ def register_overview_general_callbacks(app):
             # Total equipment (from telemetry or maintenance)
             total = len(df_telemetry) if not df_telemetry.empty else df_status['n_machines'].sum() if not df_status.empty else 0
             
-            # Operational equipment
+            # Operational equipment (use correct column: overall_status)
             operational = 0
-            if not df_telemetry.empty and 'Estado' in df_telemetry.columns:
-                operational = (df_telemetry['Estado'] == 'Normal').sum()
+            if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
+                operational = (df_telemetry['overall_status'] == 'Normal').sum()
             elif not df_status.empty:
                 operational = df_status[df_status['machine_status'] == 'SANO']['n_machines'].sum()
             
             # Warning equipment (Alerta status in telemetry)
             warning = 0
-            if not df_telemetry.empty and 'Estado' in df_telemetry.columns:
-                warning = (df_telemetry['Estado'] == 'Alerta').sum()
+            if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
+                warning = (df_telemetry['overall_status'] == 'Alerta').sum()
             
             # Critical equipment (Anormal in telemetry or high alert score)
             critical = 0
-            if not df_telemetry.empty and 'Estado' in df_telemetry.columns:
-                critical = (df_telemetry['Estado'] == 'Anormal').sum()
+            if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
+                critical = (df_telemetry['overall_status'] == 'Anormal').sum()
             
             # Add critical from alerts
             if not df_alerts.empty:
