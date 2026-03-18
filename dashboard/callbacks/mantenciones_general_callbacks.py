@@ -55,7 +55,7 @@ def register_mantenciones_general_callbacks(app):
             # Load all datasets
             df_status = repo.get_status_counts()
             df_downtime_mtd = repo.get_downtime_mtd()
-            df_last_detentions = repo.get_last_detentions(n_per_machine=3)
+            df_last_detentions = repo.get_last_detentions(n_per_machine=1)  # Solo el último periodo por equipo
             df_jobs_last_week = repo.get_jobs_last_week()
             df_downtime_by_day = repo.get_downtime_by_day_mtd()
             
