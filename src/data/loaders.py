@@ -863,9 +863,9 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         logger.info(f"Loading maintenance actions from {file_path}")
         df = pd.read_parquet(file_path)
         
-        # Convert date strings to datetime
-        df['event_ts'] = pd.to_datetime(df['event_ts'])
-        df['change_date'] = pd.to_datetime(df['change_date'])
+        # Convert date strings to datetime (UTC to handle mixed timezones)
+        df['event_ts'] = pd.to_datetime(df['event_ts'], utc=True)
+        df['change_date'] = pd.to_datetime(df['change_date'], utc=True)
         
         logger.info(f"Loaded {len(df)} maintenance actions for {df['machine_code'].nunique()} machines")
         return df

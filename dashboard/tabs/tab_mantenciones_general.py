@@ -298,20 +298,23 @@ def create_detentions_table(df_detentions: pd.DataFrame) -> dash_table.DataTable
     
     # Format data
     df = df_detentions.copy()
+    # Mostrar fecha y hora completa
     df["start_date"] = pd.to_datetime(df["start_date"]).dt.strftime("%Y-%m-%d %H:%M")
-    df["end_date"] = df.apply(
-        lambda row: "En curso" if row["ongoing"] else pd.to_datetime(row["end_date"]).strftime("%Y-%m-%d %H:%M"),
-        axis=1
-    )
-    df["duration_hours"] = df["duration_hours"].round(2)
+    
+    # Solo mostrar duración estimada (basada en número de acciones)
+    df["duration_hours"] = df["duration_hours"].round(1)
+    
+    # Asegurarse de que n_actions existe
+    if "n_actions" not in df.columns:
+        df["n_actions"] = 1  # Default para compatibilidad
     
     return dash_table.DataTable(
         data=df.to_dict("records"),
         columns=[
             {"name": "Equipo", "id": "machine_code"},
-            {"name": "Inicio", "id": "start_date"},
-            {"name": "Fin", "id": "end_date"},
-            {"name": "Duración (hrs)", "id": "duration_hours"},
+            {"name": "Fecha y Hora", "id": "start_date"},
+            {"name": "N° Acciones", "id": "n_actions"},
+            {"name": "Duración Est. (hrs)", "id": "duration_hours"},
             {"name": "Tipos de Trabajo", "id": "job_types"},
         ],
         style_table={"overflowX": "auto"},
@@ -330,9 +333,13 @@ def create_detentions_table(df_detentions: pd.DataFrame) -> dash_table.DataTable
                 "backgroundColor": "#f8f9fa"
             }
         ],
-        page_size=10,
+        # Sin paginación - mostrar todos los equipos
         sort_action="native",
-        filter_action="native"
+        filter_action="native",
+        tooltip_header={
+            "duration_hours": "Duración estimada: 1.5 hrs por acción",
+            "n_actions": "Número de acciones registradas en este periodo"
+        }
     )
 
 
