@@ -90,12 +90,15 @@ def layout_mantenciones_general():
                         "fa-exclamation-triangle", 
                         "danger"
                     ), width=3),
-                    dbc.Col(create_kpi_card(
-                        "Horas Detenidas MTD", 
-                        "0", 
-                        "fa-clock", 
-                        "warning"
-                    ), width=3),
+                    dbc.Col(dbc.Card([
+                        dbc.CardBody([
+                            html.Div([
+                                html.I(className="fas fa-clock fa-2x mb-2 text-warning"),
+                                html.H3("0", className="mb-0", id="kpi-horas-detenidas-mtd"),
+                                html.P(id="kpi-horas-detenidas-label", children="Horas Detenidas", className="text-muted mb-0"),
+                            ], className="text-center")
+                        ])
+                    ], className="shadow-sm h-100"), width=3),
                 ], className="mb-4", id="row-kpis"),
                 
                 # Row 2: Visualizations
@@ -242,12 +245,13 @@ def create_status_donut_chart(df_status: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_downtime_trend_chart(df_trend: pd.DataFrame) -> go.Figure:
+def create_downtime_trend_chart(df_trend: pd.DataFrame, period_label: str = "Período") -> go.Figure:
     """
     Create a line chart for downtime trend by day.
     
     Args:
         df_trend: DataFrame with columns date, downtime_hours
+        period_label: Label for the period (e.g., "Febrero 2024")
         
     Returns:
         plotly.graph_objects.Figure
@@ -269,10 +273,16 @@ def create_downtime_trend_chart(df_trend: pd.DataFrame) -> go.Figure:
     ))
     
     fig.update_layout(
+        title=dict(
+            text=f"Horas Detenidas por Día - {period_label}",
+            font=dict(size=14),
+            x=0.5,
+            xanchor='center'
+        ),
         xaxis_title="Fecha",
         yaxis_title="Horas Detenidas",
         hovermode="x unified",
-        margin=dict(l=40, r=20, t=20, b=40),
+        margin=dict(l=40, r=20, t=40, b=40),
         height=300,
         plot_bgcolor="white"
     )
@@ -298,20 +308,23 @@ def create_detentions_table(df_detentions: pd.DataFrame) -> dash_table.DataTable
     
     # Format data
     df = df_detentions.copy()
+    # Mostrar fecha y hora completa
     df["start_date"] = pd.to_datetime(df["start_date"]).dt.strftime("%Y-%m-%d %H:%M")
-    df["end_date"] = df.apply(
-        lambda row: "En curso" if row["ongoing"] else pd.to_datetime(row["end_date"]).strftime("%Y-%m-%d %H:%M"),
-        axis=1
-    )
-    df["duration_hours"] = df["duration_hours"].round(2)
+    
+    # Solo mostrar duración estimada (basada en número de acciones)
+    df["duration_hours"] = df["duration_hours"].round(1)
+    
+    # Asegurarse de que n_actions existe
+    if "n_actions" not in df.columns:
+        df["n_actions"] = 1  # Default para compatibilidad
     
     return dash_table.DataTable(
         data=df.to_dict("records"),
         columns=[
             {"name": "Equipo", "id": "machine_code"},
-            {"name": "Inicio", "id": "start_date"},
-            {"name": "Fin", "id": "end_date"},
-            {"name": "Duración (hrs)", "id": "duration_hours"},
+            {"name": "Fecha y Hora", "id": "start_date"},
+            {"name": "N° Acciones", "id": "n_actions"},
+            {"name": "Duración Est. (hrs)", "id": "duration_hours"},
             {"name": "Tipos de Trabajo", "id": "job_types"},
         ],
         style_table={"overflowX": "auto"},
@@ -330,9 +343,13 @@ def create_detentions_table(df_detentions: pd.DataFrame) -> dash_table.DataTable
                 "backgroundColor": "#f8f9fa"
             }
         ],
-        page_size=10,
+        # Sin paginación - mostrar todos los equipos
         sort_action="native",
-        filter_action="native"
+        filter_action="native",
+        tooltip_header={
+            "duration_hours": "Duración estimada: 1.5 hrs por acción",
+            "n_actions": "Número de acciones registradas en este periodo"
+        }
     )
 
 

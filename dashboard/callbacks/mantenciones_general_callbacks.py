@@ -52,10 +52,13 @@ def register_mantenciones_general_callbacks(app):
             # Get repository (using parquet mode for real data)
             repo = get_repository(mode="parquet")
             
+            # Get period info
+            period_info = repo.get_data_period_info()
+            
             # Load all datasets
             df_status = repo.get_status_counts()
             df_downtime_mtd = repo.get_downtime_mtd()
-            df_last_detentions = repo.get_last_detentions(n_per_machine=3)
+            df_last_detentions = repo.get_last_detentions(n_per_machine=1)  # Solo el último periodo por equipo
             df_jobs_last_week = repo.get_jobs_last_week()
             df_downtime_by_day = repo.get_downtime_by_day_mtd()
             
@@ -66,6 +69,7 @@ def register_mantenciones_general_callbacks(app):
                 "last_detentions": df_last_detentions.to_dict("records"),
                 "jobs_last_week": df_jobs_last_week.to_dict("records"),
                 "downtime_by_day": df_downtime_by_day.to_dict("records"),
+                "period_info": period_info,  # Información del período
             }
             
             timestamp = datetime.now().isoformat()
@@ -83,13 +87,14 @@ def register_mantenciones_general_callbacks(app):
             Output("kpi-equipos-sanos", "children"),
             Output("kpi-equipos-detenidos", "children"),
             Output("kpi-horas-detenidas-mtd", "children"),
+            Output("kpi-horas-detenidas-label", "children"),
         ],
         [Input("store-general-data", "data")]
     )
     def update_kpis(data):
-        """Update KPI cards with loaded data."""
+        """Update KPI cards with loaded data and period info."""
         if not data or not data.get("status"):
-            return "0", "0", "0", "0"
+            return "0", "0", "0", "0", "Horas Detenidas"
         
         try:
             # Parse status counts
@@ -102,11 +107,16 @@ def register_mantenciones_general_callbacks(app):
             downtime_mtd = data.get("downtime_mtd", [{}])[0].get("total_downtime_hours_mtd", 0)
             downtime_str = f"{downtime_mtd:.1f}"
             
-            return str(total), str(sanos), str(detenidos), downtime_str
+            # Get period label
+            period_info = data.get("period_info", {})
+            period_label = period_info.get("period_label", "Período")
+            kpi_label = f"Horas Detenidas - {period_label}"
+            
+            return str(total), str(sanos), str(detenidos), downtime_str, kpi_label
             
         except Exception as e:
             logger.error(f"Error updating KPIs: {e}")
-            return "Error", "Error", "Error", "Error"
+            return "Error", "Error", "Error", "Error", "Horas Detenidas"
     
     @callback(
         Output("chart-status-distribution", "figure"),
@@ -130,14 +140,18 @@ def register_mantenciones_general_callbacks(app):
         [Input("store-general-data", "data")]
     )
     def update_downtime_trend(data):
-        """Update downtime trend line chart."""
+        """Update downtime trend line chart with period info."""
         if not data or not data.get("downtime_by_day"):
             return create_empty_figure("No hay datos de tendencia disponibles")
         
         try:
             import pandas as pd
             df_trend = pd.DataFrame(data["downtime_by_day"])
-            return create_downtime_trend_chart(df_trend)
+            
+            # Get period label if available
+            period_label = data.get("period_info", {}).get("period_label", "Período")
+            
+            return create_downtime_trend_chart(df_trend, period_label)
         except Exception as e:
             logger.error(f"Error updating downtime trend: {e}")
             return create_empty_figure("Error al cargar gráfico")

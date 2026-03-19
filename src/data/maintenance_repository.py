@@ -48,6 +48,56 @@ class MaintenanceRepository:
             }
         return self._parquet_cache
     
+    def get_data_period_info(self) -> dict:
+        """
+        Get information about the period covered by the data.
+        
+        Returns:
+            Dictionary with keys: period_start, period_end, period_label
+        """
+        if self.mode == "parquet":
+            data = self._get_parquet_data()
+            df_actions = data["actions"]
+            
+            if df_actions.empty:
+                return {
+                    "period_start": None,
+                    "period_end": None,
+                    "period_label": "Sin datos"
+                }
+            
+            latest_date = df_actions['change_date'].max()
+            if pd.isna(latest_date):
+                return {
+                    "period_start": None,
+                    "period_end": None,
+                    "period_label": "Sin datos"
+                }
+            
+            # Usar el año y mes de la última fecha disponible
+            latest_year = latest_date.year
+            latest_month = latest_date.month
+            
+            month_start = datetime(latest_year, latest_month, 1)
+            
+            # Nombre del mes en español
+            meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+                    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+            month_name = meses[latest_month - 1]
+            
+            return {
+                "period_start": month_start,
+                "period_end": latest_date,
+                "period_label": f"{month_name} {latest_year}"
+            }
+        else:
+            now = datetime.now()
+            return {
+                "period_start": datetime(now.year, now.month, 1),
+                "period_end": now,
+                "period_label": "Mes Actual"
+            }
+    
     def get_status_counts(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> pd.DataFrame:
         """
         Get count of machines by status (SANO vs DETENIDO).
@@ -150,16 +200,16 @@ class MaintenanceRepository:
             return pd.DataFrame([{"total_downtime_hours_mtd": total_hours}])
         
         elif self.mode == "parquet":
-            data = self._get_parquet_data()
-            df_kpis = data["kpis"]
+            # Calculate MTD from the daily downtime data to ensure consistency
+            df_daily = self.get_downtime_by_day_mtd()
             
-            if df_kpis.empty:
+            if df_daily.empty:
                 return pd.DataFrame([{"total_downtime_hours_mtd": 0.0}])
             
-            # Usar downtime_hours_70d pre-calculado de query_4
-            total_hours = df_kpis['downtime_hours_70d'].sum() if 'downtime_hours_70d' in df_kpis.columns else 0.0
+            # Sum all daily hours for MTD total
+            total_hours = df_daily['downtime_hours'].sum()
             
-            logger.info(f"Total downtime (70d): {total_hours:.2f} hours")
+            logger.info(f"Total downtime MTD: {total_hours:.2f} hours (from {len(df_daily)} days)")
             return pd.DataFrame([{"total_downtime_hours_mtd": float(total_hours)}])
         
         else:
@@ -249,24 +299,38 @@ class MaintenanceRepository:
             
             records = []
             for (machine_id, record_id, machine_code), group in grouped:
-                # Calcular tiempo de detención: max(event_ts) - min(event_ts)
-                start_date = group['event_ts'].min()
-                end_date = group['event_ts'].max()
-                duration_hours = (end_date - start_date).total_seconds() / 3600
+                # Usar event_ts como fecha y hora del evento (momento de la detención)
+                event_datetime = pd.to_datetime(group['event_ts'].iloc[0], utc=True)
+                n_actions = len(group)
                 
-                # Obtener array de action_type_name únicos
-                action_types = group['action_type_name'].dropna().unique()
-                job_types = ", ".join(action_types) if len(action_types) > 0 else "Sin información"
+                # Crear job_types como "accion-sistema" sin duplicados
+                # Combinar action_type_name con action_system_name
+                action_system_pairs = []
+                for _, row in group.iterrows():
+                    action_type = row.get('action_type_name', '')
+                    action_system = row.get('action_system_name', '')
+                    if pd.notna(action_type) and pd.notna(action_system):
+                        pair = f"{action_type}-{action_system}"
+                        if pair not in action_system_pairs:
+                            action_system_pairs.append(pair)
+                
+                job_types = ", ".join(action_system_pairs) if len(action_system_pairs) > 0 else "Sin información"
+                
+                # Para duración, usamos el conteo de acciones como proxy
+                # Cada acción representa aproximadamente 1-2 horas de trabajo
+                # Esto es una estimación basada en la actividad registrada
+                estimated_duration = n_actions * 1.5  # 1.5 horas por acción en promedio
                 
                 records.append({
                     'machine_code': machine_code,
                     'machine_id': machine_id,
                     'record_id': record_id,
-                    'start_date': start_date,
-                    'end_date': end_date,
+                    'start_date': event_datetime,
+                    'end_date': event_datetime,  # Misma fecha para registros históricos
                     'ongoing': False,  # Datos históricos
-                    'duration_hours': duration_hours,
-                    'job_types': job_types
+                    'duration_hours': estimated_duration,
+                    'job_types': job_types,
+                    'n_actions': n_actions
                 })
             
             df = pd.DataFrame(records)
@@ -357,9 +421,9 @@ class MaintenanceRepository:
             
             # Filtrar últimas 10 semanas (70 días) para capturar datos históricos
             now = datetime.now()
-            period_start = pd.Timestamp(now - timedelta(days=70))
+            period_start = pd.Timestamp(now - timedelta(days=70), tz='UTC')
             
-            # Filtrar por change_date (sin timezone)
+            # Filtrar por change_date
             df = df_actions[df_actions["change_date"] >= period_start].copy()
             
             # Si no hay datos en el período, usar todos los datos disponibles
@@ -396,7 +460,8 @@ class MaintenanceRepository:
     
     def get_downtime_by_day_mtd(self) -> pd.DataFrame:
         """
-        Get downtime hours by day for current month.
+        Get downtime hours by day for the most recent month with data available (MTD - Month To Date).
+        If no data exists for current month, uses the last month with available data.
         
         Returns:
             DataFrame with columns: date, downtime_hours
@@ -451,33 +516,50 @@ class MaintenanceRepository:
             if df_actions.empty:
                 return pd.DataFrame(columns=["date", "downtime_hours"])
             
-            now = datetime.now()
-            # Usar últimas 10 semanas (70 días)
-            period_start = pd.Timestamp(now - timedelta(days=70))
+            # Encontrar el último mes con datos disponibles
+            df_actions['date'] = df_actions['change_date'].dt.date
+            latest_date = df_actions['change_date'].max()
             
-            # Agrupar acciones por día
-            df_period = df_actions[df_actions["change_date"] >= period_start].copy()
+            if pd.isna(latest_date):
+                logger.warning("No valid dates found in maintenance actions")
+                return pd.DataFrame(columns=["date", "downtime_hours"])
             
-            if df_period.empty:
-                # Si no hay datos en el período, usar todos los datos disponibles
-                df_period = df_actions.copy()
+            # Usar el año y mes de la última fecha disponible
+            latest_year = latest_date.year
+            latest_month = latest_date.month
+            
+            # Calcular inicio y fin del último mes con datos
+            month_start = pd.Timestamp(datetime(latest_year, latest_month, 1), tz='UTC')
+            
+            # Fin del mes: primer día del siguiente mes - 1 día
+            if latest_month == 12:
+                month_end = pd.Timestamp(datetime(latest_year + 1, 1, 1), tz='UTC')
+            else:
+                month_end = pd.Timestamp(datetime(latest_year, latest_month + 1, 1), tz='UTC')
+            
+            # Filtrar acciones del último mes con datos
+            df_month = df_actions[
+                (df_actions["change_date"] >= month_start) &
+                (df_actions["change_date"] < month_end)
+            ].copy()
+            
+            if df_month.empty:
+                logger.warning(f"No maintenance actions found for last available month ({latest_year}-{latest_month:02d})")
+                return pd.DataFrame(columns=["date", "downtime_hours"])
             
             # Contar acciones por día como proxy de actividad de mantenimiento
-            daily_counts = df_period.groupby("change_date").size().reset_index(name="action_count")
+            daily_counts = df_month.groupby('date').size().reset_index(name='action_count')
             
             # Estimar horas de downtime: 
             # - Cada acción representa ~1.5 horas de trabajo en promedio
             # - Esto es un estimado basado en la actividad registrada
-            daily_counts["downtime_hours"] = daily_counts["action_count"] * 1.5
+            daily_counts['downtime_hours'] = daily_counts['action_count'] * 1.5
             
-            # Renombrar columna y asegurar que sea date
-            daily_counts = daily_counts.rename(columns={"change_date": "date"})
+            logger.info(f"MTD downtime: Using last available month {latest_year}-{latest_month:02d}")
+            logger.info(f"Data range: {len(daily_counts)} days from {daily_counts['date'].min()} to {daily_counts['date'].max()}")
+            logger.info(f"Total actions: {daily_counts['action_count'].sum()}, Total hours: {daily_counts['downtime_hours'].sum():.2f}")
             
-            # Convertir timestamp a date si es necesario
-            if pd.api.types.is_datetime64_any_dtype(daily_counts["date"]):
-                daily_counts["date"] = pd.to_datetime(daily_counts["date"]).dt.date
-            
-            return daily_counts[["date", "downtime_hours"]].sort_values("date")
+            return daily_counts[['date', 'downtime_hours']].sort_values('date')
         
         else:
             # TODO: Implement SQL query for production
