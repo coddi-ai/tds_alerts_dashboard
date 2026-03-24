@@ -20,14 +20,16 @@ logger = logging.getLogger(__name__)
 class MaintenanceRepository:
     """Repository for maintenance data access."""
     
-    def __init__(self, mode="dummy"):
+    def __init__(self, mode="dummy", client="cda"):
         """
         Initialize repository.
         
         Args:
             mode: "dummy" for in-memory data, "parquet" for parquet files, "prod" for database queries
+            client: Client name (e.g., "cda", "emin") for data filtering
         """
         self.mode = mode
+        self.client = client.lower()  # Normalize to lowercase
         self._dummy_cache = None
         self._parquet_cache = None
         
@@ -41,10 +43,10 @@ class MaintenanceRepository:
     def _get_parquet_data(self):
         """Get or load parquet data."""
         if self._parquet_cache is None:
-            logger.info("Loading maintenance data from parquet files...")
+            logger.info(f"Loading maintenance data from parquet files for client: {self.client}")
             self._parquet_cache = {
-                "actions": load_maintenance_actions_all_equipment(),
-                "kpis": load_business_kpis()
+                "actions": load_maintenance_actions_all_equipment(client=self.client),
+                "kpis": load_business_kpis(client=self.client)
             }
         return self._parquet_cache
     
@@ -566,13 +568,23 @@ class MaintenanceRepository:
             raise NotImplementedError("Production mode not yet implemented")
 
 
-# Global instance
-_repository = None
+# Global instance - now keyed by (mode, client)
+_repositories = {}
 
 
-def get_repository(mode="dummy") -> MaintenanceRepository:
-    """Get or create repository instance."""
-    global _repository
-    if _repository is None or _repository.mode != mode:
-        _repository = MaintenanceRepository(mode)
-    return _repository
+def get_repository(mode="dummy", client="cda") -> MaintenanceRepository:
+    """
+    Get or create repository instance.
+    
+    Args:
+        mode: "dummy" for in-memory data, "parquet" for parquet files
+        client: Client name (e.g., "cda", "emin")
+        
+    Returns:
+        MaintenanceRepository instance
+    """
+    global _repositories
+    key = (mode, client.lower())
+    if key not in _repositories:
+        _repositories[key] = MaintenanceRepository(mode, client)
+    return _repositories[key]

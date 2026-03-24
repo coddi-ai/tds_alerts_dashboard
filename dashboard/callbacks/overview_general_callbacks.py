@@ -628,11 +628,11 @@ def register_overview_general_callbacks(app):
                     telemetry_latest = f"Semana {latest_week}, Año {latest_year}"
                     logger.info(f"Telemetry: Using most recent data - {telemetry_latest}")
             
-            # Load Maintenance data (already filtered by MTD)
-            repo = get_repository(mode="parquet")
+            # Load Maintenance data (already filtered by MTD) - MUST pass client parameter
+            repo = get_repository(mode="parquet", client=client)
             df_status = repo.get_status_counts()
             df_downtime = repo.get_downtime_mtd()
-            logger.info(f"Maintenance: Loaded {len(df_status)} status records")
+            logger.info(f"Maintenance: Loaded {len(df_status)} status records for client: {client}")
             
             # Load Oil analysis data (most recent sample per equipment)
             reports_file = f'data/oil/golden/{client.lower()}/classified.parquet'
