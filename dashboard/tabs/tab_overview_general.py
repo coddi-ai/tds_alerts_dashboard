@@ -247,7 +247,7 @@ def create_overview_general_layout():
                             dbc.CardHeader([
                                 html.Div([
                                     html.I(className="fas fa-table me-2"),
-                                    html.Span("Top 10 Equipos Críticos - Aceites", className="fw-bold"),
+                                    html.Span("Resumen de Equipos con Problemas", className="fw-bold"),
                                 ], className="d-inline")
                             ], className="py-2"),
                             dbc.CardBody([
