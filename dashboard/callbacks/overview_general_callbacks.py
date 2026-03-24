@@ -120,9 +120,9 @@ def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -
     return equipment_stats.sort_values('criticality_score', ascending=False)
 
 
-def create_telemetry_bar_chart(df_telemetry: pd.DataFrame) -> go.Figure:
+def create_telemetry_pie_chart(df_telemetry: pd.DataFrame) -> go.Figure:
     """
-    Create compact bar chart showing fleet status distribution from telemetry.
+    Create compact pie chart showing fleet status distribution from telemetry.
     
     Args:
         df_telemetry: DataFrame with telemetry machine status (using real columns: overall_status)
@@ -139,8 +139,7 @@ def create_telemetry_bar_chart(df_telemetry: pd.DataFrame) -> go.Figure:
         return create_empty_figure("Datos incompletos")
     
     # Count by status
-    status_counts = df_telemetry['overall_status'].value_counts().reset_index()
-    status_counts.columns = ['Estado', 'Cantidad']
+    status_counts = df_telemetry['overall_status'].value_counts()
     
     # Color mapping (matching telemetry status values)
     color_map = {
@@ -150,40 +149,41 @@ def create_telemetry_bar_chart(df_telemetry: pd.DataFrame) -> go.Figure:
         'Sin Datos': '#6c757d'
     }
     
-    colors = [color_map.get(status, '#3498db') for status in status_counts['Estado']]
+    colors = [color_map.get(status, '#3498db') for status in status_counts.index]
     
-    fig = go.Figure(data=[
-        go.Bar(
-            x=status_counts['Estado'],
-            y=status_counts['Cantidad'],
-            marker_color=colors,
-            text=status_counts['Cantidad'],
-            textposition='auto',
-            textfont=dict(size=14, color='white'),
-            hovertemplate='<b>%{x}</b><br>%{y} equipos<extra></extra>'
-        )
-    ])
+    fig = go.Figure(data=[go.Pie(
+        labels=status_counts.index,
+        values=status_counts.values,
+        marker_colors=colors,
+        hole=0.5,
+        textposition='inside',
+        textinfo='value',
+        textfont=dict(size=14, color='white'),
+        hovertemplate='<b>%{label}</b><br>%{value} equipos (%{percent})<extra></extra>'
+    )])
     
     fig.update_layout(
         title=None,
-        xaxis_title=None,
-        yaxis_title=None,
         height=220,
-        margin=dict(l=30, r=10, t=10, b=40),
-        plot_bgcolor='white',
-        showlegend=False,
+        margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.05,
+            font=dict(size=10)
+        ),
         font=dict(size=11)
     )
-    
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor='#f0f0f0', showticklabels=True)
     
     return fig
 
 
-def create_maintenance_bar_chart(df_status: pd.DataFrame, df_downtime: pd.DataFrame) -> go.Figure:
+def create_maintenance_pie_chart(df_status: pd.DataFrame, df_downtime: pd.DataFrame) -> go.Figure:
     """
-    Create compact grouped bar chart showing operational vs stopped equipment with MTD.
+    Create compact pie chart showing operational vs stopped equipment.
     
     Args:
         df_status: DataFrame with status counts
@@ -196,56 +196,42 @@ def create_maintenance_bar_chart(df_status: pd.DataFrame, df_downtime: pd.DataFr
         return create_empty_figure("No hay datos")
     
     # Get counts
-    sanos = df_status[df_status['machine_status'] == 'SANO']['n_machines'].sum() if not df_status.empty else 0
-    detenidos = df_status[df_status['machine_status'] == 'DETENIDO']['n_machines'].sum() if not df_status.empty else 0
+    sanos = int(df_status[df_status['machine_status'] == 'SANO']['n_machines'].sum()) if not df_status.empty else 0
+    detenidos = int(df_status[df_status['machine_status'] == 'DETENIDO']['n_machines'].sum()) if not df_status.empty else 0
     
     # Get MTD
     mtd_hours = df_downtime['total_downtime_hours_mtd'].iloc[0] if not df_downtime.empty else 0
     
-    fig = go.Figure()
+    labels = ['Operativos', f'Detenidos ({mtd_hours:.0f}h MTD)']
+    values = [sanos, detenidos]
+    colors = ['#28a745', '#dc3545']
     
-    fig.add_trace(go.Bar(
-        name='Sanos',
-        x=['Status'],
-        y=[sanos],
-        text=[f'{sanos}'],
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        marker_colors=colors,
+        hole=0.5,
         textposition='inside',
-        textfont=dict(size=16, color='white'),
-        marker_color='#28a745',
-        hovertemplate='<b>Operativos</b><br>%{y} equipos<extra></extra>'
-    ))
-    
-    fig.add_trace(go.Bar(
-        name=f'Detenidos ({mtd_hours:.0f}h)',
-        x=['Status'],
-        y=[detenidos],
-        text=[f'{detenidos}'],
-        textposition='inside',
-        textfont=dict(size=16, color='white'),
-        marker_color='#dc3545',
-        hovertemplate=f'<b>Detenidos</b><br>%{{y}} equipos<br>MTD: {mtd_hours:.1f}h<extra></extra>'
-    ))
+        textinfo='value',
+        textfont=dict(size=14, color='white'),
+        hovertemplate='<b>%{label}</b><br>%{value} equipos (%{percent})<extra></extra>'
+    )])
     
     fig.update_layout(
         title=None,
-        barmode='group',
         height=220,
-        margin=dict(l=10, r=10, t=10, b=30),
-        plot_bgcolor='white',
+        margin=dict(l=10, r=10, t=10, b=10),
         showlegend=True,
         legend=dict(
-            orientation="h", 
-            yanchor="bottom", 
-            y=1.02, 
-            xanchor="center", 
-            x=0.5,
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.05,
             font=dict(size=10)
         ),
         font=dict(size=11)
     )
-    
-    fig.update_xaxes(showgrid=False, showticklabels=False)
-    fig.update_yaxes(showgrid=True, gridcolor='#f0f0f0', showticklabels=True)
     
     return fig
 
@@ -306,78 +292,238 @@ def create_oil_pie_chart(df_oil: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_oil_ranking_table(df_oil: pd.DataFrame) -> html.Div:
+def create_critical_equipment_summary_table(df_telemetry: pd.DataFrame, df_oil: pd.DataFrame, 
+                                            df_alerts: pd.DataFrame, df_maintenance: pd.DataFrame) -> html.Div:
     """
-    Create compact ranking table of top 10 critical equipment based on oil analysis.
+    Create summary table showing only equipment with problems across all technical areas.
+    
+    Format: Unidad | Tribología | Telemetría | Alertas | Mantenciones | Estado General
     
     Args:
-        df_oil: DataFrame with oil analysis data
+        df_telemetry: Telemetry data
+        df_oil: Oil analysis data
+        df_alerts: Alerts data
+        df_maintenance: Maintenance data
         
     Returns:
-        Dash DataTable component
+        Dash DataTable component with only critical/warning equipment
     """
-    if df_oil.empty:
+    if df_telemetry.empty and df_oil.empty and df_alerts.empty and df_maintenance.empty:
         return html.Div(html.P("No hay datos disponibles", className="text-muted text-center p-2 mb-0", style={'fontSize': '12px'}))
     
-    # Filter abnormal/alert status
-    critical = df_oil[df_oil['estado'].isin(['ANORMAL', 'ALERTA'])].copy()
-    
-    if critical.empty:
-        return html.Div(html.P("✓ No hay equipos críticos", className="text-success text-center p-2 mb-0", style={'fontSize': '12px'}))
-    
-    # Get unique equipment and their worst status
-    if 'equipo' in critical.columns:
-        # Group by equipment and get the worst status
-        status_priority = {'ANORMAL': 2, 'ALERTA': 1, 'NORMAL': 0}
-        critical['priority'] = critical['estado'].map(status_priority)
-        top_critical = critical.groupby('equipo').agg({
-            'estado': 'first',
-            'priority': 'max'
-        }).reset_index()
-        top_critical = top_critical.sort_values('priority', ascending=False).head(10)
-        top_critical = top_critical[['equipo', 'estado']]
-        top_critical.columns = ['Equipo', 'Estado']
-    else:
-        return html.Div(html.P("Formato de datos incorrecto", className="text-muted text-center p-2 mb-0", style={'fontSize': '12px'}))
-    
-    return dash_table.DataTable(
-        data=top_critical.to_dict('records'),
-        columns=[{'name': col, 'id': col} for col in top_critical.columns],
-        style_table={'overflowX': 'auto', 'height': '180px', 'overflowY': 'auto'},
-        style_header={
-            'backgroundColor': '#f8f9fa',
-            'fontWeight': 'bold',
-            'textAlign': 'center',
-            'fontSize': '11px',
-            'padding': '6px'
-        },
-        style_cell={
-            'textAlign': 'center',
-            'padding': '6px',
-            'fontSize': '11px',
-            'whiteSpace': 'normal',
-            'height': 'auto'
-        },
-        style_data_conditional=[
-            {
-                'if': {'filter_query': '{Estado} = "ANORMAL"', 'column_id': 'Estado'},
-                'backgroundColor': '#dc3545',
-                'color': 'white',
-                'fontWeight': 'bold'
-            },
-            {
-                'if': {'filter_query': '{Estado} = "ALERTA"', 'column_id': 'Estado'},
-                'backgroundColor': '#ffc107',
-                'color': '#000',
-                'fontWeight': 'bold'
+    try:
+        summary_data = []
+        
+        # Get unique equipment from all sources
+        equipos = set()
+        if not df_telemetry.empty and 'unit_id' in df_telemetry.columns:
+            equipos.update(df_telemetry['unit_id'].unique())
+        if not df_oil.empty and 'equipo' in df_oil.columns:
+            equipos.update(df_oil['equipo'].unique())
+        if not df_alerts.empty and 'UnitId' in df_alerts.columns:
+            equipos.update(df_alerts['UnitId'].unique())
+        if not df_maintenance.empty and 'machine_code' in df_maintenance.columns:
+            equipos.update(df_maintenance['machine_code'].unique())
+        
+        # Calculate alert scores
+        alert_scores = calculate_alert_criticality_score(df_alerts, 30) if not df_alerts.empty else pd.DataFrame()
+        
+        for equipo in sorted(equipos):
+            # Telemetry status
+            telem_status = 'N/A'
+            if not df_telemetry.empty and 'unit_id' in df_telemetry.columns:
+                equipo_telem = df_telemetry[df_telemetry['unit_id'] == equipo]
+                if not equipo_telem.empty and 'overall_status' in equipo_telem.columns:
+                    telem_status = equipo_telem['overall_status'].iloc[0]
+            
+            # Oil/Tribology status
+            oil_status = 'N/A'
+            if not df_oil.empty and 'equipo' in df_oil.columns:
+                equipo_oil = df_oil[df_oil['equipo'] == equipo]
+                if not equipo_oil.empty and 'estado' in equipo_oil.columns:
+                    oil_status = equipo_oil['estado'].iloc[0]
+            
+            # Alert status
+            alert_status = 'Normal'
+            if not alert_scores.empty:
+                equipo_alerts = alert_scores[alert_scores['equipo'] == equipo]
+                if not equipo_alerts.empty:
+                    alert_status = equipo_alerts['status'].iloc[0]
+            
+            # Maintenance status (map SANO->Normal, DETENIDO->Anormal)
+            maint_status = 'N/A'
+            if not df_maintenance.empty and 'machine_code' in df_maintenance.columns:
+                equipo_maint = df_maintenance[df_maintenance['machine_code'] == equipo]
+                if not equipo_maint.empty and 'machine_status' in equipo_maint.columns:
+                    raw_status = equipo_maint['machine_status'].iloc[0]
+                    # Map to coherent naming: SANO=Normal, DETENIDO=Anormal
+                    if raw_status == 'SANO':
+                        maint_status = 'Normal'
+                    elif raw_status == 'DETENIDO':
+                        maint_status = 'Anormal'
+                    else:
+                        maint_status = raw_status
+            
+            # Determine general status (worst case)
+            status_priority = {
+                'Anormal': 3, 'ANORMAL': 3, 'Crítico': 3,
+                'Alerta': 2, 'ALERTA': 2, 'Atención': 2,
+                'Normal': 1, 'NORMAL': 1,
+                'N/A': 0
             }
-        ]
-    )
+            
+            statuses = [telem_status, oil_status, alert_status, maint_status]
+            priorities = [status_priority.get(s, 0) for s in statuses]
+            max_priority = max(priorities)
+            
+            # Only include equipment with problems (priority >= 2)
+            if max_priority >= 2:
+                # Determine general status label
+                if max_priority == 3:
+                    general_status = 'Crítico'
+                elif max_priority == 2:
+                    general_status = 'Alerta'
+                else:
+                    general_status = 'Normal'
+                
+                summary_data.append({
+                    'Unidad': equipo,
+                    'Tribología': oil_status,
+                    'Telemetría': telem_status,
+                    'Alertas': alert_status,
+                    'Mantenciones': maint_status,
+                    'Estado General': general_status
+                })
+        
+        if not summary_data:
+            return html.Div(html.P("✓ No hay equipos con problemas", className="text-success text-center p-2 mb-0", style={'fontSize': '12px'}))
+        
+        df_summary = pd.DataFrame(summary_data)
+        
+        # Sort by severity (Crítico first)
+        df_summary['_priority'] = df_summary['Estado General'].map({'Crítico': 3, 'Alerta': 2, 'Normal': 1})
+        df_summary = df_summary.sort_values('_priority', ascending=False).drop('_priority', axis=1)
+        
+        return dash_table.DataTable(
+            data=df_summary.to_dict('records'),
+            columns=[{'name': col, 'id': col} for col in df_summary.columns],
+            style_table={'overflowX': 'auto', 'height': '180px', 'overflowY': 'auto'},
+            style_header={
+                'backgroundColor': '#f8f9fa',
+                'fontWeight': 'bold',
+                'textAlign': 'center',
+                'fontSize': '11px',
+                'padding': '6px'
+            },
+            style_cell={
+                'textAlign': 'center',
+                'padding': '6px',
+                'fontSize': '11px',
+                'whiteSpace': 'normal',
+                'height': 'auto'
+            },
+            style_data_conditional=[
+                # Telemetry - Anormal (coherente con gráfico pie)
+                {
+                    'if': {'filter_query': '{Telemetría} = "Anormal"', 'column_id': 'Telemetría'},
+                    'backgroundColor': '#dc3545',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Telemetry - Alerta
+                {
+                    'if': {'filter_query': '{Telemetría} = "Alerta"', 'column_id': 'Telemetría'},
+                    'backgroundColor': '#ffc107',
+                    'color': '#000',
+                    'fontWeight': 'bold'
+                },
+                # Telemetry - Normal
+                {
+                    'if': {'filter_query': '{Telemetría} = "Normal"', 'column_id': 'Telemetría'},
+                    'backgroundColor': '#28a745',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Tribology - ANORMAL (coherente con gráfico pie)
+                {
+                    'if': {'filter_query': '{Tribología} = "ANORMAL"', 'column_id': 'Tribología'},
+                    'backgroundColor': '#dc3545',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Tribology - ALERTA
+                {
+                    'if': {'filter_query': '{Tribología} = "ALERTA"', 'column_id': 'Tribología'},
+                    'backgroundColor': '#ffc107',
+                    'color': '#000',
+                    'fontWeight': 'bold'
+                },
+                # Tribology - NORMAL
+                {
+                    'if': {'filter_query': '{Tribología} = "NORMAL"', 'column_id': 'Tribología'},
+                    'backgroundColor': '#28a745',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Alerts - Crítico
+                {
+                    'if': {'filter_query': '{Alertas} = "Crítico"', 'column_id': 'Alertas'},
+                    'backgroundColor': '#dc3545',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Alerts - Alerta or Atención
+                {
+                    'if': {'filter_query': '{Alertas} = "Alerta" || {Alertas} = "Atención"', 'column_id': 'Alertas'},
+                    'backgroundColor': '#ffc107',
+                    'color': '#000',
+                    'fontWeight': 'bold'
+                },
+                # Alerts - Normal
+                {
+                    'if': {'filter_query': '{Alertas} = "Normal"', 'column_id': 'Alertas'},
+                    'backgroundColor': '#28a745',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Maintenance - Anormal (DETENIDO mapeado a Anormal)
+                {
+                    'if': {'filter_query': '{Mantenciones} = "Anormal"', 'column_id': 'Mantenciones'},
+                    'backgroundColor': '#dc3545',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Maintenance - Normal (SANO mapeado a Normal)
+                {
+                    'if': {'filter_query': '{Mantenciones} = "Normal"', 'column_id': 'Mantenciones'},
+                    'backgroundColor': '#28a745',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Estado General - Crítico
+                {
+                    'if': {'filter_query': '{Estado General} = "Crítico"', 'column_id': 'Estado General'},
+                    'backgroundColor': '#dc3545',
+                    'color': 'white',
+                    'fontWeight': 'bold'
+                },
+                # Estado General - Alerta
+                {
+                    'if': {'filter_query': '{Estado General} = "Alerta"', 'column_id': 'Estado General'},
+                    'backgroundColor': '#ffc107',
+                    'color': '#000',
+                    'fontWeight': 'bold'
+                }
+            ]
+        )
+    except Exception as e:
+        logger.error(f"Error creating critical equipment summary table: {e}", exc_info=True)
+        return html.Div(html.P("Error al generar tabla", className="text-danger text-center p-2 mb-0", style={'fontSize': '12px'}))
 
 
-def create_alerts_bar_chart(df_alerts: pd.DataFrame, days: int = 30) -> go.Figure:
+def create_alerts_pie_chart(df_alerts: pd.DataFrame, days: int = 30) -> go.Figure:
     """
-    Create compact bar chart showing top 10 critical equipment by alert frequency.
+    Create compact pie chart showing components affected by alerts.
     
     Args:
         df_alerts: DataFrame with alerts data
@@ -389,51 +535,57 @@ def create_alerts_bar_chart(df_alerts: pd.DataFrame, days: int = 30) -> go.Figur
     if df_alerts.empty:
         return create_empty_figure("No hay datos")
     
-    # Calculate criticality scores
-    equipment_scores = calculate_alert_criticality_score(df_alerts, days)
+    # Filter by date range
+    if 'Timestamp' in df_alerts.columns:
+        cutoff_date = datetime.now() - timedelta(days=days)
+        df_alerts['Timestamp'] = pd.to_datetime(df_alerts['Timestamp'])
+        df_recent = df_alerts[df_alerts['Timestamp'] >= cutoff_date].copy()
+    else:
+        df_recent = df_alerts.copy()
     
-    if equipment_scores.empty:
-        return create_empty_figure(f"Sin alertas ({days}d)")
+    if df_recent.empty:
+        return create_empty_figure(f"Sin alertas")
     
-    # Get top 10 for compact view
-    top_10 = equipment_scores.head(10)
+    # Count alerts by component
+    if 'componente' not in df_recent.columns:
+        return create_empty_figure("Datos incompletos")
     
-    # Color by status
-    color_map = {
-        'Crítico': '#dc3545',
-        'Alerta': '#ffc107',
-        'Atención': '#17a2b8',
-        'Normal': '#28a745'
-    }
+    # Count alerts per component
+    component_counts = df_recent['componente'].value_counts().head(10)  # Top 10 components
     
-    colors = [color_map.get(status, '#6c757d') for status in top_10['status']]
+    if component_counts.empty:
+        return create_empty_figure("Sin componentes")
     
-    fig = go.Figure(data=[
-        go.Bar(
-            x=top_10['equipo'],
-            y=top_10['criticality_score'],
-            marker_color=colors,
-            text=top_10['alert_count'],
-            textposition='inside',
-            textfont=dict(size=11, color='white'),
-            hovertemplate='<b>%{x}</b><br>Score: %{y:.1f}<br>Alertas: %{customdata[0]}<br>Componentes: %{customdata[1]}<extra></extra>',
-            customdata=top_10[['alert_count', 'component_count']].values
-        )
-    ])
+    # Generate distinct colors for components
+    import plotly.colors as pc
+    colors_palette = pc.qualitative.Set3[:len(component_counts)]
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=component_counts.index,
+        values=component_counts.values,
+        marker_colors=colors_palette,
+        hole=0.5,
+        textposition='inside',
+        textinfo='value',
+        textfont=dict(size=12, color='white'),
+        hovertemplate='<b>%{label}</b><br>%{value} alertas (%{percent})<extra></extra>'
+    )])
     
     fig.update_layout(
         title=None,
-        xaxis_title=None,
-        yaxis_title=None,
-        height=180,
-        margin=dict(l=30, r=10, t=10, b=50),
-        plot_bgcolor='white',
-        showlegend=False,
-        font=dict(size=10)
+        height=220,
+        margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.05,
+            font=dict(size=9)
+        ),
+        font=dict(size=11)
     )
-    
-    fig.update_xaxes(showgrid=False, tickangle=-45, tickfont=dict(size=9))
-    fig.update_yaxes(showgrid=True, gridcolor='#f0f0f0', showticklabels=True)
     
     return fig
 
@@ -699,14 +851,11 @@ def register_overview_general_callbacks(app):
                 if 'unitId' in df_oil.columns and 'equipo' not in df_oil.columns:
                     df_oil['equipo'] = df_oil['unitId']
             
-            # Load Alerts data using proper loader (recent alerts only - last 90 days by default)
+            # Load Alerts data using proper loader (load all recent alerts, filtering happens in visualizations)
             df_alerts = load_alerts_data(client)
+            alerts_period = "Últimos 90 días (por defecto)"  # Default period shown
             if not df_alerts.empty:
-                # Filter last 90 days (Timestamp is already datetime from load_alerts_data)
-                cutoff_date = datetime.now() - timedelta(days=90)
-                df_alerts = df_alerts[df_alerts['Timestamp'] >= cutoff_date]
-                alerts_period = "Últimos 90 días"
-                logger.info(f"Alerts: Using recent data - {alerts_period}, {len(df_alerts)} alerts")
+                logger.info(f"Alerts: Loaded {len(df_alerts)} alerts (will be filtered by visualization)")
             
             # Serialize to JSON with metadata about data freshness
             # Clean numpy types before serialization
@@ -719,7 +868,7 @@ def register_overview_general_callbacks(app):
                 "metadata": {
                     "telemetry_latest": telemetry_latest,
                     "oil_latest": oil_latest,
-                    "alerts_period": alerts_period,
+                    "alerts_period": "Configurable (ver filtro)",  # Dynamic based on filter
                     "maintenance": "MTD (Month to Date)"
                 }
             }
@@ -837,7 +986,7 @@ def register_overview_general_callbacks(app):
         
         try:
             df_telemetry = pd.DataFrame(data["telemetry"])
-            return create_telemetry_bar_chart(df_telemetry)
+            return create_telemetry_pie_chart(df_telemetry)
         except Exception as e:
             logger.error(f"Error updating telemetry chart: {e}")
             return create_empty_figure("Error al cargar gráfico")
@@ -854,7 +1003,7 @@ def register_overview_general_callbacks(app):
         try:
             df_status = pd.DataFrame(data.get("maintenance_status", []))
             df_downtime = pd.DataFrame(data.get("maintenance_downtime", []))
-            return create_maintenance_bar_chart(df_status, df_downtime)
+            return create_maintenance_pie_chart(df_status, df_downtime)
         except Exception as e:
             logger.error(f"Error updating maintenance chart: {e}")
             return create_empty_figure("Error al cargar gráfico")
@@ -879,17 +1028,20 @@ def register_overview_general_callbacks(app):
         Output("overview-oil-ranking-table", "children"),
         [Input("store-overview-data", "data")]
     )
-    def update_oil_ranking(data):
-        """Update oil analysis ranking table."""
-        if not data or not data.get("oil"):
+    def update_critical_equipment_table(data):
+        """Update critical equipment summary table."""
+        if not data:
             return html.P("No hay datos disponibles", className="text-muted text-center p-3")
         
         try:
-            df_oil = pd.DataFrame(data["oil"])
-            return create_oil_ranking_table(df_oil)
+            df_telemetry = pd.DataFrame(data.get("telemetry", []))
+            df_oil = pd.DataFrame(data.get("oil", []))
+            df_alerts = pd.DataFrame(data.get("alerts", []))
+            df_maintenance = pd.DataFrame(data.get("maintenance_status", []))
+            return create_critical_equipment_summary_table(df_telemetry, df_oil, df_alerts, df_maintenance)
         except Exception as e:
-            logger.error(f"Error updating oil ranking: {e}")
-            return html.P("Error al cargar ranking", className="text-danger text-center p-3")
+            logger.error(f"Error updating critical equipment table: {e}")
+            return html.P("Error al cargar tabla", className="text-danger text-center p-3")
     
     @callback(
         Output("overview-alerts-chart", "figure"),
@@ -905,7 +1057,7 @@ def register_overview_general_callbacks(app):
         
         try:
             df_alerts = pd.DataFrame(data["alerts"])
-            return create_alerts_bar_chart(df_alerts, days)
+            return create_alerts_pie_chart(df_alerts, days)
         except Exception as e:
             logger.error(f"Error updating alerts chart: {e}")
             return create_empty_figure("Error al cargar gráfico")
