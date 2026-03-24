@@ -808,7 +808,7 @@ def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
 # MAINTENANCE / MANTENCIONES DATA LOADERS
 # =============================================================================
 
-def _get_mantentions_data_path(client: str = "cda") -> Path:
+def _get_mantentions_data_path(client: str = "cda") -> Optional[Path]:
     """
     Get the path to the mantentions data directory following production architecture.
     
@@ -816,7 +816,7 @@ def _get_mantentions_data_path(client: str = "cda") -> Path:
         client: Client name (default: "cda"). Can be overridden by CLIENT_NAME env var.
         
     Returns:
-        Path to data/mantentions/golden/{client}/Maintance_Labeler_Views/
+        Path to data/mantentions/golden/{client}/Maintance_Labeler_Views/ or None if not found
     """
     import os
     
@@ -826,16 +826,26 @@ def _get_mantentions_data_path(client: str = "cda") -> Path:
     # Get project root (3 levels up from this file)
     base_path = Path(__file__).parent.parent.parent
     
+    # Try both lowercase and uppercase variants for compatibility
     # Production structure: data/mantentions/golden/{client}/Maintance_Labeler_Views/
-    data_path = base_path / "data" / "mantentions" / "golden" / client / "Maintance_Labeler_Views"
+    client_lower = client.lower()
+    client_upper = client.upper()
     
-    # Fallback: check if files are in project root (for local development)
-    if not data_path.exists():
-        logger.warning(f"Production path not found: {data_path}. Falling back to project root.")
-        return base_path
+    # Try lowercase first (preferred convention)
+    data_path = base_path / "data" / "mantentions" / "golden" / client_lower / "Maintance_Labeler_Views"
+    if data_path.exists():
+        logger.info(f"Using mantentions data path: {data_path}")
+        return data_path
     
-    logger.info(f"Using mantentions data path: {data_path}")
-    return data_path
+    # Try uppercase if lowercase doesn't exist
+    data_path = base_path / "data" / "mantentions" / "golden" / client_upper / "Maintance_Labeler_Views"
+    if data_path.exists():
+        logger.info(f"Using mantentions data path: {data_path}")
+        return data_path
+    
+    # No fallback - if data doesn't exist for client, return None
+    logger.warning(f"No mantentions data found for client '{client}'. Checked paths: {client_lower}, {client_upper}")
+    return None
 
 
 def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
@@ -856,6 +866,9 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
     """
     if base_path is None:
         base_path = _get_mantentions_data_path(client)
+        if base_path is None:
+            logger.warning(f"No maintenance data available for client: {client}")
+            return pd.DataFrame()
     
     file_path = base_path / "query_3_actions_all_equipment.parquet"
     
@@ -896,6 +909,9 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
     """
     if base_path is None:
         base_path = _get_mantentions_data_path(client)
+        if base_path is None:
+            logger.warning(f"No business KPIs data available for client: {client}")
+            return pd.DataFrame()
     
     file_path = base_path / "query_4_business_kpis.parquet"
     
