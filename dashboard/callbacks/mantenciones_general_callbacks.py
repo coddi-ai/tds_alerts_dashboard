@@ -38,19 +38,23 @@ def register_mantenciones_general_callbacks(app):
         [
             Input("btn-refresh-general", "n_clicks"),
             Input("store-general-loaded", "data"),
+            Input("client-selector", "value"),
         ],
         prevent_initial_call=False
     )
-    def load_general_data(n_clicks, loaded):
+    def load_general_data(n_clicks, loaded, client):
         """
         Load all data for the general view.
         Triggered by refresh button or initial page load.
         """
-        try:
-            logger.info(f"Loading mantenciones general data... (n_clicks={n_clicks}, loaded={loaded})")
+        if not client:
+            raise PreventUpdate
             
-            # Get repository (using parquet mode for real data)
-            repo = get_repository(mode="parquet")
+        try:
+            logger.info(f"Loading mantenciones general data for client: {client}... (n_clicks={n_clicks}, loaded={loaded})")
+            
+            # Get repository (using parquet mode for real data) - MUST pass client parameter
+            repo = get_repository(mode="parquet", client=client)
             
             # Get period info
             period_info = repo.get_data_period_info()
