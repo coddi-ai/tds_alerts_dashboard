@@ -6,6 +6,7 @@ Handles data loading and visualization for consolidated executive summary.
 from dash import callback, Output, Input, State, html, dash_table
 from dash.exceptions import PreventUpdate
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,36 @@ from src.data.loaders import load_telemetry_machine_status, load_alerts_data
 from src.data.maintenance_repository import get_repository
 
 logger = logging.getLogger(__name__)
+
+
+def clean_numpy_types(data):
+    """
+    Recursively clean numpy types from nested data structures to make them JSON serializable.
+    Converts numpy arrays to lists and numpy types to Python native types.
+    Also handles pandas Timestamp and Period types.
+    
+    Args:
+        data: The data structure to clean (dict, list, numpy types, etc.)
+        
+    Returns:
+        Cleaned data structure with Python native types only
+    """
+    if isinstance(data, dict):
+        return {key: clean_numpy_types(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [clean_numpy_types(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return [clean_numpy_types(item) for item in data.tolist()]
+    elif isinstance(data, (np.integer, np.floating)):
+        return data.item()
+    elif isinstance(data, np.bool_):
+        return bool(data)
+    elif isinstance(data, (pd.Timestamp, pd.Period)):
+        return str(data)
+    elif pd.isna(data):
+        return None
+    else:
+        return data
 
 
 def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -> pd.DataFrame:
@@ -41,24 +72,28 @@ def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -
     
     cutoff_date = datetime.now() - timedelta(days=days)
     
-    # Filter recent alerts (Timestamp is already datetime from load_alerts_data)
+    # Ensure Timestamp is datetime (it might be string after clean_numpy_types)
+    if 'Timestamp' in df_alerts.columns:
+        df_alerts['Timestamp'] = pd.to_datetime(df_alerts['Timestamp'])
+    
+    # Filter recent alerts
     recent = df_alerts[df_alerts['Timestamp'] >= cutoff_date].copy()
     
     if recent.empty:
         return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
     
-    # Use correct column names: Unidad (equipment) and Componente (component)
-    if 'Unidad' not in recent.columns or 'Componente' not in recent.columns:
+    # Use correct column names: UnitId (equipment) and componente (component)
+    if 'UnitId' not in recent.columns or 'componente' not in recent.columns:
         logger.warning(f"Required columns not found. Available: {recent.columns.tolist()}")
         return pd.DataFrame(columns=['equipo', 'alert_count', 'component_count', 'criticality_score', 'status'])
     
     # Group by equipment and component
-    grouped = recent.groupby(['Unidad', 'Componente']).size().reset_index(name='alerts_per_component')
+    grouped = recent.groupby(['UnitId', 'componente']).size().reset_index(name='alerts_per_component')
     
     # Calculate metrics per equipment
-    equipment_stats = grouped.groupby('Unidad').agg({
+    equipment_stats = grouped.groupby('UnitId').agg({
         'alerts_per_component': 'sum',  # Total alerts
-        'Componente': 'nunique'  # Number of affected components
+        'componente': 'nunique'  # Number of affected components
     }).reset_index()
     
     equipment_stats.columns = ['equipo', 'alert_count', 'component_count']
@@ -664,22 +699,23 @@ def register_overview_general_callbacks(app):
                 if 'unitId' in df_oil.columns and 'equipo' not in df_oil.columns:
                     df_oil['equipo'] = df_oil['unitId']
             
-            # Load Alerts data using proper loader (recent alerts only - last 60 days by default)
+            # Load Alerts data using proper loader (recent alerts only - last 90 days by default)
             df_alerts = load_alerts_data(client)
             if not df_alerts.empty:
-                # Filter last 60 days (Timestamp is already datetime from load_alerts_data)
-                cutoff_date = datetime.now() - timedelta(days=60)
+                # Filter last 90 days (Timestamp is already datetime from load_alerts_data)
+                cutoff_date = datetime.now() - timedelta(days=90)
                 df_alerts = df_alerts[df_alerts['Timestamp'] >= cutoff_date]
-                alerts_period = "Últimos 60 días"
+                alerts_period = "Últimos 90 días"
                 logger.info(f"Alerts: Using recent data - {alerts_period}, {len(df_alerts)} alerts")
             
             # Serialize to JSON with metadata about data freshness
+            # Clean numpy types before serialization
             data = {
-                "telemetry": df_telemetry.to_dict("records") if not df_telemetry.empty else [],
-                "maintenance_status": df_status.to_dict("records") if not df_status.empty else [],
-                "maintenance_downtime": df_downtime.to_dict("records") if not df_downtime.empty else [],
-                "oil": df_oil.to_dict("records") if not df_oil.empty else [],
-                "alerts": df_alerts.to_dict("records") if not df_alerts.empty else [],
+                "telemetry": clean_numpy_types(df_telemetry.to_dict("records")) if not df_telemetry.empty else [],
+                "maintenance_status": clean_numpy_types(df_status.to_dict("records")) if not df_status.empty else [],
+                "maintenance_downtime": clean_numpy_types(df_downtime.to_dict("records")) if not df_downtime.empty else [],
+                "oil": clean_numpy_types(df_oil.to_dict("records")) if not df_oil.empty else [],
+                "alerts": clean_numpy_types(df_alerts.to_dict("records")) if not df_alerts.empty else [],
                 "metadata": {
                     "telemetry_latest": telemetry_latest,
                     "oil_latest": oil_latest,
@@ -715,27 +751,67 @@ def register_overview_general_callbacks(app):
             # Parse data
             df_telemetry = pd.DataFrame(data.get("telemetry", []))
             df_status = pd.DataFrame(data.get("maintenance_status", []))
+            df_oil = pd.DataFrame(data.get("oil", []))
             df_alerts = pd.DataFrame(data.get("alerts", []))
             
-            # Total equipment (from telemetry or maintenance)
-            total = len(df_telemetry) if not df_telemetry.empty else df_status['n_machines'].sum() if not df_status.empty else 0
+            logger.info(f"KPI Update - Telemetry rows: {len(df_telemetry)}, Maintenance rows: {len(df_status)}, Oil rows: {len(df_oil)}, Alerts rows: {len(df_alerts)}")
+            
+            # Total equipment (priority: telemetry > maintenance > oil)
+            if not df_telemetry.empty:
+                total = len(df_telemetry)
+                logger.info(f"Total from telemetry: {total}")
+            elif not df_status.empty:
+                total = int(df_status['n_machines'].sum())
+                # If maintenance shows 0 machines but we have oil data, use oil instead
+                if total == 0 and not df_oil.empty:
+                    if 'equipo' in df_oil.columns:
+                        total = df_oil['equipo'].nunique()
+                        logger.info(f"Total from oil (fallback from empty maintenance): {total}")
+                    else:
+                        total = len(df_oil)
+                        logger.info(f"Total from oil length (fallback): {total}")
+                else:
+                    logger.info(f"Total from maintenance: {total}")
+            elif not df_oil.empty:
+                # Count unique equipment from oil analysis
+                if 'equipo' in df_oil.columns:
+                    total = df_oil['equipo'].nunique()
+                    logger.info(f"Total from oil (equipo column): {total}, unique values: {df_oil['equipo'].unique()[:5]}")
+                else:
+                    total = len(df_oil)
+                    logger.info(f"Total from oil (length): {total}")
+            else:
+                total = 0
+                logger.info("Total: No data available")
             
             # Operational equipment (use correct column: overall_status)
             operational = 0
             if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
                 operational = (df_telemetry['overall_status'] == 'Normal').sum()
             elif not df_status.empty:
-                operational = df_status[df_status['machine_status'] == 'SANO']['n_machines'].sum()
+                operational = int(df_status[df_status['machine_status'] == 'SANO']['n_machines'].sum())
+                # If maintenance shows 0 operational but we have oil data, use oil instead
+                if operational == 0 and not df_oil.empty and 'estado' in df_oil.columns:
+                    operational = (df_oil['estado'] == 'NORMAL').sum()
+                    logger.info(f"Operational from oil (fallback from empty maintenance): {operational}")
+            elif not df_oil.empty and 'estado' in df_oil.columns:
+                # Count equipment with NORMAL status in oil analysis
+                operational = (df_oil['estado'] == 'NORMAL').sum()
+                logger.info(f"Operational from oil: {operational}, estados: {df_oil['estado'].value_counts().to_dict()}")
             
-            # Warning equipment (Alerta status in telemetry)
+            # Warning equipment (Alerta status in telemetry or oil)
             warning = 0
             if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
                 warning = (df_telemetry['overall_status'] == 'Alerta').sum()
+            elif not df_oil.empty and 'estado' in df_oil.columns:
+                warning = (df_oil['estado'] == 'ALERTA').sum()
             
-            # Critical equipment (Anormal in telemetry or high alert score)
+            # Critical equipment (Anormal in telemetry, oil, or high alert score)
             critical = 0
             if not df_telemetry.empty and 'overall_status' in df_telemetry.columns:
                 critical = (df_telemetry['overall_status'] == 'Anormal').sum()
+            elif not df_oil.empty and 'estado' in df_oil.columns:
+                critical = (df_oil['estado'] == 'ANORMAL').sum()
             
             # Add critical from alerts
             if not df_alerts.empty:
@@ -743,10 +819,11 @@ def register_overview_general_callbacks(app):
                 if not alert_scores.empty:
                     critical += (alert_scores['status'] == 'Crítico').sum()
             
+            logger.info(f"Final KPIs - Total: {total}, Operational: {operational}, Warning: {warning}, Critical: {critical}")
             return str(total), str(operational), str(warning), str(critical)
             
         except Exception as e:
-            logger.error(f"Error updating global KPIs: {e}")
+            logger.error(f"Error updating global KPIs: {e}", exc_info=True)
             return "Error", "Error", "Error", "Error"
     
     @callback(
