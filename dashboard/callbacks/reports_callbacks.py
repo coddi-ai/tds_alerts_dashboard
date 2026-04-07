@@ -81,7 +81,8 @@ def register_reports_callbacks(app):
         [Input('reports-familia-selector', 'value'),
          Input('client-selector', 'value'),
          Input('navigation-state', 'data')],
-        [State('reports-equipo-selector', 'value')]
+        [State('reports-equipo-selector', 'value')],
+        prevent_initial_call=True
     )
     def update_equipo_options(familia, client, nav_state, current_equipo):
         """Update equipo (unitId) options."""
@@ -185,7 +186,8 @@ def register_reports_callbacks(app):
          Input('reports-equipo-selector', 'value'),
          Input('reports-familia-selector', 'value'),
          Input('client-selector', 'value')],
-        [State('reports-date-selector', 'value')]
+        [State('reports-date-selector', 'value')],
+        prevent_initial_call=True
     )
     def update_date_options(component, equipo, familia, client, current_date):
         """Update sample date options (most recent first)."""
@@ -257,7 +259,8 @@ def register_reports_callbacks(app):
          Input('reports-component-selector', 'value'),
          Input('reports-equipo-selector', 'value'),
          Input('reports-familia-selector', 'value'),
-         Input('client-selector', 'value')]
+         Input('client-selector', 'value')],
+        prevent_initial_call=True
     )
     def update_report_display(sample_date, component, equipo, familia, client):
         """Update all report displays."""
@@ -337,7 +340,8 @@ def register_reports_callbacks(app):
         [Input('reports-essays-selector', 'value'),
          Input('reports-component-selector', 'value'),
          Input('reports-equipo-selector', 'value'),
-         Input('client-selector', 'value')]
+         Input('client-selector', 'value')],
+        prevent_initial_call=True
     )
     def update_time_series(essays, component, equipo, client):
         """Update time series chart with subplots."""
