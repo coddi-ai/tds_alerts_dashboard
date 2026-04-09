@@ -45,6 +45,9 @@ import dashboard.callbacks.telemetry_callbacks
 # Import oil callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.oil_callbacks
 
+# Import health index callbacks module
+from dashboard.callbacks.health_index_callbacks import register_health_index_callbacks
+
 
 def normalize_prefix(prefix: str | None) -> str:
     """
@@ -90,9 +93,10 @@ register_auth_callbacks(app)
 register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
-register_reports_callbacks(app)
+# register_reports_callbacks(app)  # Disabled - tab not in current layout
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
+register_health_index_callbacks(app)
 
 
 if __name__ == '__main__':
