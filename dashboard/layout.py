@@ -29,7 +29,7 @@ def create_login_page() -> dbc.Container:
         dbc.Row([
             dbc.Col([
                 html.Div([
-                    html.H2("Multi-Technical Alerts", className="text-center mb-4 mt-5"),
+                    html.H2("Plataforma de Monitoreo Multi-Técnica", className="text-center mb-4 mt-5"),
                     html.P("Oil Analysis Dashboard", className="text-center text-muted mb-4"),
                     
                     dbc.Card([
@@ -88,7 +88,7 @@ def create_navbar(user_data: dict) -> dbc.Navbar:
                     html.A(
                         dbc.Row([
                             dbc.Col(html.I(className="fas fa-oil-can me-2")),
-                            dbc.Col(dbc.NavbarBrand("Multi-Technical Alerts", className="ms-2"))
+                            dbc.Col(dbc.NavbarBrand("Plataforma de Monitoreo Multi-Técnica", className="ms-2"))
                         ], align="center", className="g-0"),
                         href="/",
                         style={"textDecoration": "none"}
