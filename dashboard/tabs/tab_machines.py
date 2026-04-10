@@ -7,7 +7,6 @@ Complete implementation with all 4 sections from documentation.
 
 from dash import dcc, html
 import dash_bootstrap_components as dbc
-from dashboard.components.filters import create_status_filter
 
 
 def create_machines_tab() -> dbc.Container:
@@ -26,11 +25,6 @@ def create_machines_tab() -> dbc.Container:
     return dbc.Container([
         html.H3("Machines Overview", className="mt-4 mb-3"),
         html.Hr(),
-        
-        # Filters
-        dbc.Row([
-            create_status_filter()
-        ], className="mb-4"),
         
         # SECTION 1: Machine-Level Summary
         html.H4("📊 Machine Status Distribution", className="mt-4 mb-3"),

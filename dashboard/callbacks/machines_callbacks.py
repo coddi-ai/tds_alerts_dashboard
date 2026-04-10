@@ -34,12 +34,11 @@ def register_machines_callbacks(app):
          Output('priority-table-container', 'children'),
          Output('machine-detail-selector', 'options'),
          Output('nav-equipment-selector', 'options')],
-        [Input('client-selector', 'value'),
-         Input('status-filter', 'value')]
+        [Input('client-selector', 'value')]
     )
-    def update_machines_overview(client, status_filter):
-        """Update machines overview based on client and status filter."""
-        logger.info(f"Machines overview callback triggered: client={client}, status_filter={status_filter}")
+    def update_machines_overview(client):
+        """Update machines overview based on client."""
+        logger.info(f"Machines overview callback triggered: client={client}")
         
         if not client:
             from plotly.graph_objects import Figure
@@ -59,10 +58,6 @@ def register_machines_callbacks(app):
         
         try:
             df = safe_read_parquet(machine_file)
-            
-            # Apply status filter
-            if status_filter:
-                df = df[df['overall_status'].isin(status_filter)]
             
             # Create pie chart
             pie_chart = create_status_pie_chart(df)
@@ -194,10 +189,9 @@ def register_machines_callbacks(app):
     @app.callback(
         [Output('component-status-pie-chart', 'figure'),
          Output('component-status-histogram', 'figure')],
-        [Input('client-selector', 'value'),
-         Input('status-filter', 'value')]
+        [Input('client-selector', 'value')]
     )
-    def update_component_distributions(client, status_filter):
+    def update_component_distributions(client):
         """Update component-level distribution charts."""
         if not client:
             from plotly.graph_objects import Figure
@@ -215,10 +209,6 @@ def register_machines_callbacks(app):
             
             # Get latest sample for each machine-component combination
             latest_components = df.loc[df.groupby(['unitId', 'componentName'])['sampleDate'].idxmax()]
-            
-            # Apply status filter
-            if status_filter:
-                latest_components = latest_components[latest_components['report_status'].isin(status_filter)]
             
             # Component status pie chart
             status_counts = latest_components['report_status'].value_counts()
@@ -267,10 +257,9 @@ def register_machines_callbacks(app):
     # SECTION 4: Critical Components Analysis
     @app.callback(
         Output('critical-components-container', 'children'),
-        [Input('client-selector', 'value'),
-         Input('status-filter', 'value')]
+        [Input('client-selector', 'value')]
     )
-    def update_critical_components(client, status_filter):
+    def update_critical_components(client):
         """Update critical components table with AI recommendations."""
         if not client:
             return html.Div("Please select a client", className="text-muted p-3")
@@ -289,10 +278,6 @@ def register_machines_callbacks(app):
             
             # Filter to critical components (Anormal or Alerta)
             critical = latest_components[latest_components['report_status'].isin(['Anormal', 'Alerta'])]
-            
-            # Apply status filter if specified
-            if status_filter:
-                critical = critical[critical['report_status'].isin(status_filter)]
             
             if critical.empty:
                 return dbc.Alert(

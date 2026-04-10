@@ -93,7 +93,7 @@ register_auth_callbacks(app)
 register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
-# register_reports_callbacks(app)  # Disabled - tab not in current layout
+register_reports_callbacks(app)
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
 register_health_index_callbacks(app)

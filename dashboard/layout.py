@@ -21,7 +21,7 @@ from dashboard.components.filters import create_client_selector
 def create_login_page() -> dbc.Container:
     """
     Create login page layout.
-    
+
     Returns:
         Bootstrap container with login form
     """
@@ -29,34 +29,48 @@ def create_login_page() -> dbc.Container:
         dbc.Row([
             dbc.Col([
                 html.Div([
-                    html.H2("Plataforma de Monitoreo Multi-Técnica", className="text-center mb-4 mt-5"),
-                    html.P("Oil Analysis Dashboard", className="text-center text-muted mb-4"),
-                    
+                    html.Div(
+                        html.Img(
+                            src="/assets/logo.svg",
+                            style={
+                                "height": "90px",
+                                "width": "auto",
+                                "marginBottom": "20px"
+                            }
+                        ),
+                        className="text-center mt-5"
+                    ),
+
+                    html.H2(
+                        "Plataforma de Monitoreo Multi-Técnica",
+                        className="text-center mb-4"
+                    ),
+
                     dbc.Card([
                         dbc.CardBody([
-                            html.H4("Login", className="mb-4"),
-                            
+                            html.H4("Login", className="mb-4 text-center"),
+
                             dbc.Alert(
                                 id='login-alert',
                                 is_open=False,
                                 color='danger',
                                 duration=4000
                             ),
-                            
+
                             dbc.Input(
                                 id='username-input',
                                 placeholder='Username',
                                 type='text',
                                 className='mb-3'
                             ),
-                            
+
                             dbc.Input(
                                 id='password-input',
                                 placeholder='Password',
                                 type='password',
                                 className='mb-3'
                             ),
-                            
+
                             dbc.Button(
                                 'Login',
                                 id='login-button',
@@ -70,31 +84,37 @@ def create_login_page() -> dbc.Container:
         ])
     ], fluid=True, className='min-vh-100 bg-light')
 
-
 def create_navbar(user_data: dict) -> dbc.Navbar:
-    """
-    Create navigation bar.
-    
-    Args:
-        user_data: User information dictionary
-    
-    Returns:
-        Bootstrap navbar
-    """
     return dbc.Navbar(
         dbc.Container([
             dbc.Row([
                 dbc.Col([
                     html.A(
                         dbc.Row([
-                            dbc.Col(html.I(className="fas fa-oil-can me-2")),
-                            dbc.Col(dbc.NavbarBrand("Plataforma de Monitoreo Multi-Técnica", className="ms-2"))
+                            dbc.Col(
+                                html.Img(
+                                    src="/assets/logo.svg",
+                                    style={
+                                        "height": "36px",
+                                        "width": "auto"
+                                    },
+                                    className="me-2"
+                                ),
+                                width="auto"
+                            ),
+                            dbc.Col(
+                                dbc.NavbarBrand(
+                                    "Plataforma de Monitoreo Multi-Técnica",
+                                    className="ms-2"
+                                ),
+                                width="auto"
+                            )
                         ], align="center", className="g-0"),
                         href="/",
                         style={"textDecoration": "none"}
                     )
                 ], width="auto"),
-                
+
                 dbc.Col([
                     html.Span(f"User: {user_data.get('username', 'Unknown')} ", className="text-white me-3"),
                     html.Span(f"Role: {user_data.get('role', 'N/A').title()} ", className="text-white-50 me-3"),
