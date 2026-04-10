@@ -20,13 +20,14 @@ def register_auth_callbacks(app):
         [Output('user-info-store', 'data'),
          Output('login-alert', 'children'),
          Output('login-alert', 'is_open')],
-        Input('login-button', 'n_clicks'),
+        [Input('login-button', 'n_clicks'),
+         Input('password-input', 'n_submit')],
         [State('username-input', 'value'),
          State('password-input', 'value')],
         prevent_initial_call=True
     )
-    def login(n_clicks, username, password):
-        """Handle user login."""
+    def login(n_clicks, n_submit, username, password):
+        """Handle user login from button click or Enter key press."""
         if not username or not password:
             return None, "Please enter username and password", True
         
