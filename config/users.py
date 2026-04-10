@@ -27,7 +27,7 @@ USERS: Dict[str, Dict[str, any]] = {
     "admin": {
         "password": hash_password("admin123"),  # Change in production!
         "name": "Administrator",
-        "clients": ["CDA", "EMIN"],  # Access to all clients
+        "clients": ["CDA", "EMIN", "ENEX"],  # Access to all clients
         "role": "admin"
     },
     "cda_user": {
@@ -40,6 +40,12 @@ USERS: Dict[str, Dict[str, any]] = {
         "password": hash_password("emin123"),  # Change in production!
         "name": "EMIN User",
         "clients": ["EMIN"],  # Only EMIN data
+        "role": "client"
+    },
+    "enex_user": {
+        "password": hash_password("enex123"),  # Change in production!
+        "name": "ENEX User",
+        "clients": ["ENEX"],  # Only ENEX data
         "role": "client"
     }
 }

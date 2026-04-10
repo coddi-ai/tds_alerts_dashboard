@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     report_threshold_anormal: int = Field(default=5, description="Report threshold for Anormal (>=)")
     
     # Clients
-    clients: List[str] = Field(default=["CDA", "EMIN"], description="List of client names")
+    clients: List[str] = Field(default=["CDA", "EMIN", "ENEX"], description="List of client names")
     
     @field_validator("logs_dir", mode="before")
     @classmethod

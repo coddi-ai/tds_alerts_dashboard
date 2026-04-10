@@ -14,7 +14,7 @@ USERS = {
     'admin': {
         'password': hashlib.sha256('admin123'.encode()).hexdigest(),
         'role': 'admin',
-        'clients': ['CDA', 'EMIN']
+        'clients': ['CDA', 'EMIN', 'ENEX']
     },
     'cda_user': {
         'password': hashlib.sha256('cda123'.encode()).hexdigest(),
@@ -25,6 +25,11 @@ USERS = {
         'password': hashlib.sha256('emin123'.encode()).hexdigest(),
         'role': 'viewer',
         'clients': ['EMIN']
+    },
+    'enex_user': {
+        'password': hashlib.sha256('enex123'.encode()).hexdigest(),
+        'role': 'viewer',
+        'clients': ['ENEX']
     }
 }
 
