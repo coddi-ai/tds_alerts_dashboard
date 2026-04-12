@@ -37,7 +37,7 @@ def create_login_page() -> dbc.Container:
                         html.Div([
                             html.Div(
                                 html.Img(
-                                    src="/assets/logo.svg",
+                                    src="https://raw.githubusercontent.com/coddi-ai/tds_alerts_dashboard/refs/heads/dev/dashboard/assets/logo.svg",
                                     style={
                                         "height": "64px",
                                         "width": "auto",
@@ -73,11 +73,11 @@ def create_login_page() -> dbc.Container:
                                 className="mb-1 text-center",
                                 style={"fontWeight": "600", "fontSize": "1.3rem"}
                             ),
-                            html.P(
-                                "Enter your credentials to access the platform",
-                                className="text-center text-muted mb-4",
-                                style={"fontSize": "0.85rem"}
-                            ),
+                            # html.P(
+                            #     "Enter your credentials to access the platform",
+                            #     className="text-center text-muted mb-4",
+                            #     style={"fontSize": "0.85rem"}
+                            # ),
 
                             dbc.Alert(
                                 id='login-alert',
@@ -193,7 +193,7 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                     dbc.Col([
                         html.Div([
                             html.Img(
-                                src="/assets/logo.svg",
+                                src='https://raw.githubusercontent.com/coddi-ai/tds_alerts_dashboard/refs/heads/dev/dashboard/assets/logo.svg',
                                 style={
                                     "height": "48px",
                                     "width": "auto",
