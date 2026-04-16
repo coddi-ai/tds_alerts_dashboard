@@ -1,7 +1,7 @@
 # Telemetry Data Contracts
 
-**Version**: 1.0.0  
-**Last Updated**: February 24, 2026  
+**Version**: 1.1.0  
+**Last Updated**: April 15, 2026  
 **Component**: Telemetry Analysis System
 
 ---
@@ -220,24 +220,18 @@ For each monitored sensor signal:
 | Column | Type | Nullable | Description | Constraints |
 |--------|------|----------|-------------|-------------|
 | `unit_id` | string | No | Unit identifier | Matches silver layer `unit_id` |
-| `client` | string | No | Client identifier | Matches silver layer `client` |
 | `evaluation_week` | int32 | No | ISO week number | Range: 1-53 |
 | `evaluation_year` | int32 | No | Year | Format: YYYY |
-| `evaluation_start` | datetime64[ns] | No | Week start timestamp (Monday 00:00 UTC) | ISO 8601 |
-| `evaluation_end` | datetime64[ns] | No | Week end timestamp (Sunday 23:59 UTC) | ISO 8601 |
-| `latest_sample_date` | datetime64[ns] | Yes | Most recent reading in window (null if no data) | Must be ≥ evaluation_start |
 | `overall_status` | string | No | Machine health classification | Values: `'Normal'`, `'Alerta'`, `'Anormal'`, `'InsufficientData'` |
 | `machine_score` | float64 | No | Aggregate severity score | Range: ≥ 0.0 (no upper limit) |
-| `total_components` | int32 | No | Number of components evaluated | Range: ≥ 1 |
+| `priority_score` | float64 | No | Fleet ranking score (higher = worse) | Range: ≥ 0.0 |
 | `components_normal` | int32 | No | Count with Normal status | Range: 0 to total_components |
 | `components_alerta` | int32 | No | Count with Alerta status | Range: 0 to total_components |
 | `components_anormal` | int32 | No | Count with Anormal status | Range: 0 to total_components |
-| `components_insufficient_data` | int32 | No | Count with InsufficientData status | Range: 0 to total_components |
-| `priority_score` | float64 | No | Fleet ranking score (higher = worse) | Range: ≥ 0.0 |
-| `component_details` | string (JSON) | No | Per-component evaluation details | Valid JSON array (empty if InsufficientData) |
+| `components_insufficient` | int32 | No | Count with InsufficientData status | Range: 0 to total_components |
+| `total_components` | int32 | No | Number of components evaluated | Range: ≥ 1 |
 | `baseline_version` | string | No | Baseline file identifier | Format: `YYYYMMDD` |
-| `total_signals_evaluated` | int32 | Yes | Total signals across all components | Range: ≥ 0 |
-| `total_signals_triggered` | int32 | Yes | Signals with non-Normal status | Range: 0 to total_signals_evaluated |
+| `component_details` | string (JSON) | No | Per-component evaluation details | Valid JSON array (empty if InsufficientData) |
 
 #### Component Details JSON Schema
 
@@ -271,24 +265,18 @@ The `component_details` column contains a JSON array of component evaluation obj
 ```python
 {
     "unit_id": "CAT797-001",
-    "client": "cda",
     "evaluation_week": 8,
     "evaluation_year": 2026,
-    "evaluation_start": "2026-02-17 00:00:00",
-    "evaluation_end": "2026-02-23 23:59:59",
-    "latest_sample_date": "2026-02-23 23:45:00",
     "overall_status": "Alerta",
     "machine_score": 1.86,
-    "total_components": 12,
+    "priority_score": 120.86,
     "components_normal": 9,
     "components_alerta": 2,
     "components_anormal": 1,
-    "components_insufficient_data": 0,
-    "priority_score": 120.86,
-    "component_details": "[{...}]",  # JSON string
+    "components_insufficient": 0,
+    "total_components": 12,
     "baseline_version": "20260201",
-    "total_signals_evaluated": 48,
-    "total_signals_triggered": 3
+    "component_details": "[{...}]"  # JSON string
 }
 ```
 
@@ -296,24 +284,18 @@ The `component_details` column contains a JSON array of component evaluation obj
 ```python
 {
     "unit_id": "CAT797-002",
-    "client": "cda",
     "evaluation_week": 8,
     "evaluation_year": 2026,
-    "evaluation_start": "2026-02-17 00:00:00",
-    "evaluation_end": "2026-02-23 23:59:59",
-    "latest_sample_date": null,
     "overall_status": "InsufficientData",
     "machine_score": 0.0,
-    "total_components": 12,
+    "priority_score": 0.0,
     "components_normal": 0,
     "components_alerta": 0,
     "components_anormal": 0,
-    "components_insufficient_data": 12,
-    "priority_score": 0.0,
-    "component_details": "[]",  # Empty array
+    "components_insufficient": 12,
+    "total_components": 12,
     "baseline_version": "20260201",
-    "total_signals_evaluated": 0,
-    "total_signals_triggered": 0
+    "component_details": "[]"  # Empty array
 }
 ```
 
@@ -368,19 +350,17 @@ fleet_trend = machine_df.groupby(['evaluation_year', 'evaluation_week']).agg({
 
 | Column | Type | Nullable | Description | Constraints |
 |--------|------|----------|-------------|-------------|
-| `client` | string | No | Client identifier | Matches silver layer `client` |
+| `unit_id` | string | No | Unit identifier | Matches silver layer `unit_id` |
+| `component` | string | No | Component name | Example: `'Engine'`, `'Transmission'` |
 | `evaluation_week` | int32 | No | ISO week number | Range: 1-53 |
 | `evaluation_year` | int32 | No | Year | Format: YYYY |
-| `date` | datetime64[ns] | No | Evaluation timestamp | ISO 8601 |
-| `component` | string | No | Component name | Example: `'Engine'`, `'Transmission'` |
 | `component_status` | string | No | Component health classification | Values: `'Normal'`, `'Alerta'`, `'Anormal'`, `'InsufficientData'` |
 | `component_score` | float64 | No | Weighted severity score | Range: 0.0-1.0 |
-| `component_coverage` | float64 | No | Fraction of signals with sufficient data | Range: 0.0-1.0 |
-| `criticality_weight` | int32 | No | Component criticality factor | Range: 1-3 |
-| `signals_evaluation` | string (JSON) | No | Per-signal scores and statuses | Valid JSON object |
 | `triggering_signals` | string (JSON) | No | Signals with non-Normal status | Valid JSON array |
-| `signal_weights` | string (JSON) | No | Per-signal data quality weights | Valid JSON object |
-| `ai_recommendation` | string | Yes | LLM-generated maintenance advice (Phase 2) | Reserved for future use |
+| `signals_evaluation` | string (JSON) | No | Per-signal scores and statuses | Valid JSON object |
+| `signal_coverage` | float64 | No | Fraction of signals with sufficient data | Range: 0.0-1.0 |
+| `sample_count_avg` | float64 | Yes | Average sample count across signals | Range: ≥ 0 |
+| `criticality` | int32 | No | Component criticality factor | Range: 1-3 |
 | `baseline_version` | string | No | Baseline file identifier | Format: `YYYYMMDD` |
 
 #### Signals Evaluation JSON Schema
@@ -409,19 +389,17 @@ fleet_trend = machine_df.groupby(['evaluation_year', 'evaluation_week']).agg({
 
 ```python
 {
-    "unit": "CAT797-001",
+    "unit_id": "CAT797-001",
+    "component": "Engine",
     "evaluation_week": 8,
     "evaluation_year": 2026,
-    "date": "2026-02-23 23:59:00",
-    "component": "Engine",
     "component_status": "Anormal",
     "component_score": 0.52,
-    "component_coverage": 0.85,
-    "criticality_weight": 3,
-    "signals_evaluation": "{...}",  # JSON string
     "triggering_signals": '["EngCoolTemp", "EngOilPres"]',  # JSON string
-    "signal_weights": '{"EngCoolTemp": 1.0, "EngOilPres": 1.0}',  # JSON string
-    "ai_recommendation": null,
+    "signals_evaluation": "{...}",  # JSON string
+    "signal_coverage": 0.85,
+    "sample_count_avg": 1008.0,
+    "criticality": 3,
     "baseline_version": "20260201"
 }
 ```
@@ -470,9 +448,12 @@ degrading_components = classified_df.groupby(['unit', 'component']).apply(
 | Column | Type | Nullable | Description | Constraints |
 |--------|------|----------|-------------|-------------|
 | `AlertID` | int64 | No | Unique alert identifier | Auto-incrementing, unique within file |
-| `Fecha` | datetime64[ns] | No | Alert generation timestamp | ISO 8601 format |
 | `Unit` | string | No | Equipment unit identifier | Matches silver layer `unit_id` |
 | `Trigger` | string | No | Sensor that triggered alert | Must be valid signal name |
+| `Context` | string | Yes | Additional context information | Free text |
+| `Engineer` | string | Yes | Assigned engineer | Name or ID |
+| `Technician` | string | Yes | Assigned technician | Name or ID |
+| `Fecha` | datetime64[ns] | No | Alert generation timestamp | ISO 8601 format |
 | `System` | string | Yes | Affected system | Example: `'Engine'`, `'Transmission'`, `'Hydraulics'` |
 | `SubSystem` | string | Yes | Affected subsystem | Example: `'Radiator'`, `'Lubrication'`, `'Cooling'` |
 
@@ -493,10 +474,10 @@ degrading_components = classified_df.groupby(['unit', 'component']).apply(
 #### Example Rows
 
 ```csv
-AlertID,Fecha,Unit,Trigger,System,SubSystem
-1,2026-02-15 14:30:00,CAT797-001,EngCoolTemp,Engine,Cooling
-2,2026-02-15 16:45:00,CAT797-001,EngOilPres,Engine,Lubrication
-3,2026-02-16 09:15:00,CAT797-002,TrnLubeTemp,Transmission,Lubrication
+AlertID,Unit,Trigger,Context,Engineer,Technician,Fecha,System,SubSystem
+1,CAT797-001,EngCoolTemp,High temp detected,John Doe,Jane Smith,2026-02-15 14:30:00,Engine,Cooling
+2,CAT797-001,EngOilPres,Low pressure,John Doe,Jane Smith,2026-02-15 16:45:00,Engine,Lubrication
+3,CAT797-002,TrnLubeTemp,Elevated temp,Mike Wilson,Sarah Connor,2026-02-16 09:15:00,Transmission,Lubrication
 ```
 
 ---
@@ -520,9 +501,12 @@ AlertID,Fecha,Unit,Trigger,System,SubSystem
 | Column | Type | Nullable | Description | Constraints |
 |--------|------|----------|-------------|-------------|
 | `AlertID` | int64 | No | Unique telemetry alert identifier | Links to `alerts_data.csv` |
-| `Unit` | string | No | Equipment unit identifier | Matches silver layer `unit_id` |
-| `TimeStart` | datetime64[ns] | No | Alert data point timestamp | ISO 8601 format |
+| `Alert_TimeStart` | datetime64[ns] | Yes | Alert start timestamp | ISO 8601 format |
+| `Alert_Index` | int64 | Yes | Alert sequence index | Sequential number |
 | `Trigger` | string | No | Sensor that triggered the alert | Must be valid signal name |
+| `TimeStart` | datetime64[ns] | No | Alert data point timestamp | ISO 8601 format |
+| `Unit` | string | No | Equipment unit identifier | Matches silver layer `unit_id` |
+| `Payload_Value` | float64 | Yes | Triggering signal value | Sensor reading |
 
 ##### GPS Columns
 
@@ -537,6 +521,8 @@ AlertID,Fecha,Unit,Trigger,System,SubSystem
 | Column | Type | Nullable | Description | Constraints |
 |--------|------|----------|-------------|-------------|
 | `State` | string | Yes | Operational state | Values: `'Operacional'`, `'Ralenti'`, `'Apagada'`, `'ND'` |
+| `SubState` | string | Yes | Sub-operational state | Additional state detail |
+| `PayloadState` | string | Yes | Payload-specific state | State when alert occurred |
 
 ##### Signal Columns (Dynamic)
 
@@ -573,8 +559,8 @@ For each monitored signal, there are up to **3 columns**:
 #### Example Row
 
 ```csv
-AlertID,Unit,TimeStart,Trigger,GPSLat,GPSLon,GPSElevation,State,EngCoolTemp_Value,EngCoolTemp_Upper_Limit,EngCoolTemp_Lower_Limit,EngOilPres_Value,EngOilPres_Upper_Limit,EngOilPres_Lower_Limit,...
-1,CAT797-001,2026-02-15 14:30:00,EngCoolTemp,-23.4372,-69.6506,2450.5,Operacional,102.5,98.0,75.0,425.0,550.0,320.0,...
+AlertID,Alert_TimeStart,Alert_Index,Trigger,TimeStart,Unit,Payload_Value,GPSLat,GPSLon,GPSElevation,State,SubState,PayloadState,EngCoolTemp_Value,EngCoolTemp_Upper_Limit,EngCoolTemp_Lower_Limit,EngOilPres_Value,EngOilPres_Upper_Limit,EngOilPres_Lower_Limit,...
+1,2026-02-15 14:25:00,0,EngCoolTemp,2026-02-15 14:30:00,CAT797-001,102.5,-23.4372,-69.6506,2450.5,Operacional,SubState1,PayloadState1,102.5,98.0,75.0,425.0,550.0,320.0,...
 ```
 
 ---
@@ -845,6 +831,14 @@ When contract changes are proposed:
 ---
 
 ## 📝 Version History
+
+### Version 1.1.0 (April 15, 2026)
+- **Updated schemas to match actual data implementation**:
+  - `machine_status.parquet`: Removed `client`, `evaluation_start`, `evaluation_end`, `latest_sample_date`, `total_signals_evaluated`, `total_signals_triggered`; renamed `components_insufficient_data` to `components_insufficient`
+  - `classified.parquet`: Added `unit_id` and `sample_count_avg`; removed `client`, `date`, `signal_weights`, `ai_recommendation`; renamed `component_coverage` to `signal_coverage`, `criticality_weight` to `criticality`
+  - `alerts_data.csv`: Added `Context`, `Engineer`, `Technician` columns
+  - `alerts_detail_wide_with_gps.csv`: Added `Alert_TimeStart`, `Alert_Index`, `Payload_Value`, `SubState`, `PayloadState` columns
+- **Documentation now reflects production data schemas as of April 2026**
 
 ### Version 1.0.0 (February 24, 2026)
 - Initial data contracts specification

@@ -1,7 +1,7 @@
 # Data Contracts - Oil Analysis Data Product
 
-**Version**: 2.0  
-**Last Updated**: February 3, 2026  
+**Version**: 2.1  
+**Last Updated**: April 15, 2026  
 **Owner**: Oil Analysis Data Product Team
 
 ---
@@ -228,23 +228,23 @@ S3: s3://{BUCKET}/MultiTechnique Alerts/oil/golden/{client}/
 | Column | Type | Description | Example |
 |--------|------|-------------|---------|
 | **Base Columns** | | (All Silver layer columns including componentName and componentNameNormalized) | |
-| `essay_status_{essay}` | string | Essay classification | 'Normal', 'Marginal', 'Condenatorio', 'Critico' |
-| `breached_essays` | list[string] | Essays exceeding thresholds | ['Hierro', 'Cobre'] |
-| `essay_score` | int | Total essay points | 8 |
+| `essays_broken` | int | Number of essays exceeding thresholds | 2 |
+| `severity_score` | float | Severity scoring metric | 3.5 |
+| `desgaste_score` | float | Wear-specific scoring metric | 2.1 |
 | `report_status` | string | Overall report status | 'Normal', 'Alerta', 'Anormal' |
+| `breached_essays` | string (JSON) | Essays exceeding thresholds | '["Hierro", "Cobre"]' |
 | `ai_recommendation` | string | AI-generated maintenance advice | 'Se recomienda...' |
-| `ai_analysis` | string | AI analysis of breached essays | 'Niveles elevados de...' |
+| `ai_generated_at` | datetime | Timestamp when AI recommendation was generated | '2026-02-03 14:30:00' |
 
-**Essay Status Values**:
-- `Normal`: Below 90th percentile
-- `Marginal`: Between 90th-95th percentile
-- `Condenatorio`: Between 95th-98th percentile
-- `Critico`: Above 98th percentile
+**Scoring Metrics**:
+- `essays_broken`: Count of essays that exceeded their Stewart Limits
+- `severity_score`: Aggregate severity based on how much essays exceeded thresholds
+- `desgaste_score`: Specific scoring for wear-related essays (Hierro, Cromo, Aluminio, Cobre, etc.)
 
 **Report Status Logic**:
-- `Normal`: essay_score < 3
-- `Alerta`: 3 <= essay_score < 5
-- `Anormal`: essay_score >= 5
+- `Normal`: Low severity, no critical issues
+- `Alerta`: Moderate severity, monitoring recommended
+- `Anormal`: High severity, action required
 
 **Sample Count**: ~6,000-7,000 reports per client
 
@@ -258,20 +258,18 @@ S3: s3://{BUCKET}/MultiTechnique Alerts/oil/golden/{client}/
 
 | Column | Type | Description | Example |
 |--------|------|-------------|---------|
+| `unit_id` | string | Equipment unit ID | 'CAT-001' |
 | `client` | string | Client identifier | 'CDA' |
-| `unitId` | string | Equipment unit ID | 'CAT-001' |
-| `machineName` | string | Machine type | 'camion' |
-| `machineModel` | string | Machine model | 'CAT 797F' |
-| `componentName` | string | Component (original granularity) | 'mando final izquierdo' |
-| `lastSampleNumber` | string | Most recent sample | 'CDA-2024-100' |
-| `lastSampleDate` | date | Most recent date | '2024-02-01' |
-| `lastReportStatus` | string | Latest status | 'Alerta' |
-| `totalSamples` | int | Total samples for unit | 45 |
-| `normalCount` | int | Normal reports | 38 |
-| `alertaCount` | int | Alert reports | 5 |
-| `anormalCount` | int | Abnormal reports | 2 |
-| `avgEssayScore` | float | Average essay score | 2.3 |
-| `lastAiRecommendation` | string | Latest AI recommendation | 'Programar...' |
+| `latest_sample_date` | datetime | Most recent sample date | '2024-02-01' |
+| `overall_status` | string | Overall machine status | 'Normal', 'Alerta', 'Anormal' |
+| `machine_score` | float | Aggregate machine severity score | 2.3 |
+| `total_components` | int | Total components monitored | 5 |
+| `components_normal` | int | Components with Normal status | 3 |
+| `components_alerta` | int | Components with Alerta status | 1 |
+| `components_anormal` | int | Components with Anormal status | 1 |
+| `priority_score` | float | Fleet ranking score (higher = worse) | 45.2 |
+| `component_details` | string (JSON) | Per-component status details | JSON array |
+| `machine_ai_recommendation` | string | Latest AI recommendation for machine | 'Programar...' |
 
 **Sample Count**: ~200-250 machines per client
 
@@ -365,6 +363,13 @@ AWS_S3_PREFIX=MultiTechnique Alerts/oil/
 ---
 
 ## 📝 Change Log
+
+### Version 2.1 (April 15, 2026)
+- **Updated schemas to match actual data implementation**:
+  - `classified.parquet`: Changed from individual `essay_status_{essay}` columns to aggregate metrics (`essays_broken`, `severity_score`, `desgaste_score`); added `ai_generated_at` timestamp
+  - `machine_status.parquet`: Updated schema to reflect component-based aggregation with `unit_id`, `overall_status`, `machine_score`, `components_normal/alerta/anormal`, `priority_score`, `component_details` (JSON), and `machine_ai_recommendation`
+  - Removed columns: `machineName`, `machineModel`, `componentName`, `lastSampleNumber`, `totalSamples`, `normalCount`, `alertaCount`, `anormalCount`, `avgEssayScore`
+- **Documentation now reflects production data schemas as of April 2026**
 
 ### Version 2.0 (February 3, 2026)
 - Simplified folder structure: bronze/silver/golden
