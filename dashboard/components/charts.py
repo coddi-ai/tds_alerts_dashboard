@@ -6,23 +6,119 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
-# Color scheme
+# Color scheme (GR-05: Single status design language)
 STATUS_COLORS = {
     'Normal': '#28a745',   # Green
     'Alerta': '#ffc107',   # Yellow/Amber
-    'Anormal': '#dc3545'   # Red
+    'Anormal': '#dc3545',  # Red
+    'InsufficientData': '#6c757d'  # Neutral gray
 }
 
 
 def create_status_pie_chart(df: pd.DataFrame) -> go.Figure:
     """
-    Create pie chart showing machine status distribution.
+    DEPRECATED: Use create_machine_status_donut instead.
+    
+    Kept for backward compatibility.
+    """
+    return create_machine_status_donut(df)
+
+
+def create_machine_status_donut(df: pd.DataFrame, title: str = "Machine Status Distribution") -> go.Figure:
+    """
+    Create donut chart showing machine status distribution (GR-02, OIL-M-01).
+    
+    - Donut format (not pie)
+    - Total count in center
+    - Clickable segments for filtering
+    - Legend shows count and percentage
     
     Args:
         df: DataFrame with machine statuses (Golden layer - Machine Status schema)
+        title: Chart title
+    
+    Returns:
+        Plotly figure with clickData support
+    """
+    if df.empty:
+        return go.Figure()
+    
+    # Use 'overall_status' column
+    status_counts = df['overall_status'].value_counts()
+    total_machines = status_counts.sum()
+    
+    # Calculate percentages
+    percentages = (status_counts / total_machines * 100).round(1)
+    
+    # Create labels with count and percentage for legend
+    labels_with_counts = [
+        f"{status}: {count} ({percentages[status]}%)" 
+        for status, count in status_counts.items()
+    ]
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=status_counts.index,
+        values=status_counts.values,
+        marker=dict(colors=[STATUS_COLORS.get(s, '#999999') for s in status_counts.index]),
+        hole=0.5,  # Donut hole
+        textinfo='label+percent',
+        textfont=dict(size=13),
+        hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>',
+        text=labels_with_counts,  # For legend
+        textposition='inside'
+    )])
+    
+    # Add total count annotation in center
+    fig.add_annotation(
+        text=f"<b>{total_machines}</b><br>Total",
+        x=0.5, y=0.5,
+        font=dict(size=20, color='#333'),
+        showarrow=False,
+        xref="paper",
+        yref="paper"
+    )
+    
+    fig.update_layout(
+        title=dict(
+            text=title,
+            font=dict(size=18)
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.05
+        ),
+        height=400,
+        margin=dict(l=20, r=150, t=60, b=20)
+    )
+    
+    return fig
+
+
+def create_component_stacked_bar_chart(
+    df: pd.DataFrame, 
+    use_normalized: bool = False,
+    title: str = "Component Status Distribution"
+) -> go.Figure:
+    """
+    Create stacked horizontal bar chart for component status distribution (OIL-M-06).
+    
+    Replaces donut chart with scalable categorical comparison.
+    - Each bar = component
+    - Stacks = Normal, Alerta, Anormal
+    - Sorted by highest abnormal burden first
+    - Toggle between original and normalized component names
+    
+    Args:
+        df: DataFrame with classified reports (component-level data)
+        use_normalized: Use componentNameNormalized (grouped) vs componentName (original)
+        title: Chart title
     
     Returns:
         Plotly figure
@@ -30,23 +126,67 @@ def create_status_pie_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return go.Figure()
     
-    # Use 'overall_status' column
-    status_counts = df['overall_status'].value_counts()
+    # Choose component column
+    component_col = 'componentNameNormalized' if use_normalized else 'componentName'
     
-    fig = go.Figure(data=[go.Pie(
-        labels=status_counts.index,
-        values=status_counts.values,
-        marker=dict(colors=[STATUS_COLORS.get(s, '#999999') for s in status_counts.index]),
-        hole=0.4,
-        textinfo='label+percent+value',
-        textfont=dict(size=14)
-    )])
+    # Get latest sample for each unit-component
+    latest_components = df.loc[df.groupby(['unitId', component_col])['sampleDate'].idxmax()]
+    
+    # Count status by component
+    status_by_component = latest_components.groupby([component_col, 'report_status']).size().unstack(fill_value=0)
+    
+    # Ensure all status columns exist
+    for status in ['Normal', 'Alerta', 'Anormal']:
+        if status not in status_by_component.columns:
+            status_by_component[status] = 0
+    
+    # Calculate abnormal burden for sorting (Anormal > Alerta > Normal)
+    status_by_component['burden'] = (
+        status_by_component.get('Anormal', 0) * 100 + 
+        status_by_component.get('Alerta', 0) * 10
+    )
+    
+    # Sort by burden descending
+    status_by_component = status_by_component.sort_values('burden', ascending=True)  # True for horizontal bars (bottom to top)
+    status_by_component = status_by_component.drop('burden', axis=1)
+    
+    # Title-case component names for display
+    status_by_component.index = [str(c).title() for c in status_by_component.index]
+    
+    # Create stacked horizontal bar chart
+    fig = go.Figure()
+    
+    for status in ['Normal', 'Alerta', 'Anormal']:
+        if status in status_by_component.columns:
+            fig.add_trace(go.Bar(
+                name=status,
+                y=status_by_component.index,
+                x=status_by_component[status],
+                orientation='h',
+                marker=dict(color=STATUS_COLORS[status]),
+                text=status_by_component[status],
+                textposition='inside',
+                hovertemplate=f'<b>{status}</b><br>Count: %{{x}}<extra></extra>'
+            ))
     
     fig.update_layout(
-        title="Machine Status Distribution",
-        title_font_size=18,
+        title=dict(
+            text=title,
+            font=dict(size=16)
+        ),
+        xaxis_title="Number of Components",
+        yaxis_title="Component",
+        barmode='stack',
         showlegend=True,
-        height=400
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        height=max(400, len(status_by_component) * 25),  # Scale height with number of components
+        margin=dict(l=150, r=20, t=80, b=60)
     )
     
     return fig

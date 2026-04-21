@@ -1,1011 +1,789 @@
-Here is the developer-ready specification, organized by phases and written so a senior developer can turn it into backlog items immediately.
+# Dash + Plotly UI Improvement Requirements
 
-This specification assumes the dashboard must present **asset condition, supporting evidence, and AI guidance** as the primary user story. That is consistent with the oil contracts, where report-level and machine-level outputs already expose `report_status`, `essay_score`, `breached_essays`, `ai_analysis`, `ai_recommendation`, `lastReportStatus`, `avgEssayScore`, and `lastAiRecommendation`, and with the telemetry contracts, where machine and component outputs expose `overall_status`, `priority_score`, `component_details`, `total_signals_triggered`, `component_status`, `component_coverage`, `triggering_signals`, and a reserved `ai_recommendation`.  
+## Scope
 
-# MultiTechnique Dashboard UX/UI Specification
+* **Monitoring → Oil → Machines**
+* **Monitoring → Oil → Reports**
+* **Monitoring → Telemetry → Fleet Overview**
+* **Monitoring → Telemetry → Component Detail**
 
-## Version
+## Global UX Rules
 
-Draft 1.0
+These rules apply to all requirements below.
 
-## Goal
+### GR-01 — Remove redundant KPI cards where the same information is already encoded in a status distribution chart
 
-Redesign the current dashboard so that each module answers, in this order:
+* KPI cards must not be used when they duplicate the exact same totals/percentages already visible in the status distribution chart.
+* This applies immediately to **Telemetry / Fleet Overview**.
+* The goal is to reduce noise and avoid repeating counts in multiple places.
 
-1. What is the condition of the asset?
-2. Why is it in that condition?
+### GR-02 — Standardize all circular distribution charts as donuts
+
+* Any status distribution currently rendered as a full pie must be converted to a **donut chart**.
+* The center of the donut must show the total population.
+* Segment hover state must show count and percentage.
+* The legend must repeat the same count and percentage for quick scanning.
+* No screen may mix pie and donut conventions.
+
+### GR-03 — Re-orient all tables around “condition, evidence, action”
+
+* Table columns must prioritize:
+
+  * asset identifier
+  * current condition/status
+  * severity/priority
+  * strongest evidence
+  * latest AI guidance if available
+  * freshness or evaluation period if relevant
+* Low-value technical columns or internal scores must be demoted or hidden behind an expanded detail state.
+* Column design must follow the current production data contracts, not deprecated fields. Oil machine-level schema now centers on `unit_id`, `overall_status`, `machine_score`, component status counts, `priority_score`, `component_details`, and `machine_ai_recommendation`, while Oil report-level outputs include `essays_broken`, `severity_score`, `desgaste_score`, `report_status`, `breached_essays`, and `ai_recommendation`. 
+* Telemetry machine-level data now centers on `unit_id`, `overall_status`, `machine_score`, `priority_score`, `components_normal`, `components_alerta`, `components_anormal`, `components_insufficient`, `total_components`, `baseline_version`, and `component_details`; telemetry component-level detail includes `component_status`, `component_score`, `triggering_signals`, `signals_evaluation`, `signal_coverage`, `sample_count_avg`, `criticality`, and `baseline_version`.  
+
+### GR-04 — Introduce a shared view-model layer between loaders and UI components
+
+* Do not bind DataTable and Plotly traces directly to raw parquet schemas.
+* Implement a transformation layer that maps current contracts into UI-friendly objects.
+* This is required because both Oil and Telemetry contracts have changed in production and several older fields are deprecated or renamed.  
+
+### GR-05 — Use a single status design language across Oil and Telemetry
+
+* Reuse the same badge/chip pattern for:
+
+  * `Normal`
+  * `Alerta`
+  * `Anormal`
+  * `InsufficientData` where applicable in Telemetry
+* `InsufficientData` must be visually neutral and must not look like `Anormal`.
+* Status color tokens must be reused in charts, tables, chips, and summary headers.
+
+---
+
+# 1) Monitoring → Oil → Machines
+
+## OIL-M-01 — Redesign the first fold as a condition-first fleet summary
+
+**Apply to:** **Monitoring → Oil → Machines**, top section
+
+### Requirement
+
+Refactor the first visible row so it answers:
+
+1. Which units require attention now?
+2. Why?
 3. What does AI recommend?
-4. What changed over time?
 
-## In Scope
+### Implementation detail
 
-* Oil Data
-
-  * Fleet Overview tab
-  * Report Detail tab
-* Telemetry Data
-
-  * Fleet Overview tab
-  * Component Detail tab
-* Shared visual system and shared reusable components
-* Future-proofing for Maintenance module
-
-## Out of Scope
-
-* Maintenance functional module implementation
-* Changes to telemetry analytical methodology
-* Hourly telemetry analytics implementation
-* Backend data contract changes, except minor adapter/mapping work needed by the UI
-
-## Priority Model
-
-* **P0**: Mandatory for the next usable release
-* **P1**: High-value improvement for the next iteration after foundations are stable
-* **P2**: Nice-to-have or future-proofing work
-
----
-
-# Phase 1 — Shared Foundations
-
-## Objective
-
-Create one coherent product shell and one shared interaction language before changing individual tabs.
-
-## PH1-01 — Shared dashboard shell
-
-**Priority:** P0
-**Applies to:** Oil / Fleet Overview, Oil / Report Detail, Telemetry / Fleet Overview, Telemetry / Component Detail
-
-### Requirement
-
-Implement one reusable page shell for all modules with:
-
-* module title
-* subtitle
-* breadcrumb/location line
-* sticky filter/action bar
-* standard content width
-* standard spacing scale
-* standard card styling
-* standard section headers
+* Keep the left/right split structure if desired, but make the two panels work together.
+* Left panel: donut chart for machine status distribution.
+* Right panel: priority table of units.
+* Clicking a donut segment must filter the table by status.
 
 ### Acceptance criteria
 
-* All four current tabs use the same shell layout component.
-* All top-level headers align to the same grid.
-* Filter areas remain visible while scrolling long pages.
-* Cards, sections, and charts use the same border radius, padding, and shadow tokens.
+* The status chart is a **donut**, not a pie.
+* Table rows update when a donut segment is selected.
+* The active chart filter is visible as removable UI state.
+* Default table sort is descending by urgency.
 
 ---
 
-## PH1-02 — Shared status system
+## OIL-M-02 — Replace current priority table columns with user-facing diagnostic columns
 
-**Priority:** P0
-**Applies to:** All sections / all tabs
-
-### Requirement
-
-Create a reusable status design system with:
-
-* `Normal`
-* `Alerta`
-* `Anormal`
-* `InsufficientData` for telemetry only
-
-Oil essay-level categories must remain separate from report-level status and only appear in evidence views: `Normal`, `Marginal`, `Condenatorio`, `Critico`. Oil already distinguishes report-level status from essay-level classifications, and telemetry already distinguishes `InsufficientData` from anomalous states.  
-
-### Acceptance criteria
-
-* Every status label in the UI uses a shared badge/chip component.
-* `InsufficientData` is rendered with neutral styling, never red or orange.
-* Oil report-level status never mixes visually with essay-level thresholds in the same badge style.
-* The same status color mapping is used in tables, legends, filters, and detail headers.
-
----
-
-## PH1-03 — Shared chart policy
-
-**Priority:** P0
-**Applies to:** All sections / all tabs
+**Apply to:** **Monitoring → Oil → Machines**, priority table
 
 ### Requirement
 
-Define and enforce chart standards:
+Redefine the table columns to explain machine condition using the current oil machine schema.
 
-* all pie-style charts must be donuts
-* donut center must show total population
-* category comparisons with many items must use bars, stacked bars, or heatmaps
-* empty chart states must show explanatory placeholders, not blank graphs
-
-### Acceptance criteria
-
-* No full pie charts remain in the application.
-* Telemetry Fleet Overview no longer contains a full pie; it is converted to a donut.
-* Oil and telemetry donut charts show count and percentage in legend and interactive tooltip.
-* No section renders an empty plot without explicit empty-state messaging.
-
----
-
-## PH1-04 — Shared table policy
-
-**Priority:** P0
-**Applies to:** All sections / all tabs
-
-### Requirement
-
-Create one shared table behavior standard:
-
-* sticky header
-* sortable columns
-* search/filter support
-* row selection state
-* status chip rendering
-* loading / empty / error states
-* action affordances for drill-down
-
-### Acceptance criteria
-
-* All major tables use the same interaction pattern.
-* Row selection is visually persistent.
-* Table headers remain visible while scrolling.
-* Empty-state copy explains what filter or data condition caused the empty table.
-
----
-
-## PH1-05 — Shared AI insight card
-
-**Priority:** P0
-**Applies to:** Oil / Report Detail, Telemetry / Fleet Overview, future Maintenance
-
-### Requirement
-
-Create one reusable AI insight component with:
-
-* title
-* diagnosis summary
-* recommended action
-* severity emphasis
-* unavailable state
-* expandable long text
-
-This aligns with oil’s `ai_analysis` and `ai_recommendation` outputs, and telemetry’s reserved `ai_recommendation` field for later activation.  
-
-### Acceptance criteria
-
-* Oil Report Detail uses this shared component instead of custom text blocks.
-* Telemetry Fleet Overview shows the same card with placeholder content when AI is unavailable.
-* Long AI text is truncated with expand/collapse behavior.
-* Unavailable AI does not render as raw placeholder text inside a generic card.
-
----
-
-## PH1-06 — Shared copy and labeling rules
-
-**Priority:** P1
-**Applies to:** All sections / all tabs
-
-### Requirement
-
-Replace vague technical labels with user-centered labels. Preferred vocabulary:
-
-* asset condition
-* evidence
-* recommended action
-* change over time
-* latest evaluation
-* affected components
-* triggering signals
-
-### Acceptance criteria
-
-* No primary section title is only “Analysis” or only “Score”.
-* Tables and cards use labels that can be understood without backend knowledge.
-* “Score” is always paired with meaning, such as “Severity score” or “Priority score”.
-
----
-
-# Phase 2 — Fleet Views Redesign
-
-## Objective
-
-Make both fleet tabs decision-oriented and consistent.
-
-## PH2-01 — Oil Fleet Overview first-row redesign
-
-**Priority:** P0
-**Applies to:** Oil / Fleet Overview
-
-### Requirement
-
-Redesign the first row into a linked pair:
-
-* left: donut for fleet status distribution
-* right: priority machine table
-
-The donut must filter the table. The table must explain which asset needs action now, using the oil machine-level fields already available in `machine_status.parquet`, especially `lastSampleDate`, `lastReportStatus`, `alertaCount`, `anormalCount`, `avgEssayScore`, and `lastAiRecommendation`. 
-
-### Acceptance criteria
-
-* Clicking a donut segment filters the priority table.
-* A visible filter chip shows the active segment filter.
-* The table default sort is worst assets first.
-* The table contains at least: unit, machine type/model, latest sample date, current status, affected history summary, latest AI recommendation snippet.
-
----
-
-## PH2-02 — Oil Fleet machine detail as master-detail
-
-**Priority:** P0
-**Applies to:** Oil / Fleet Overview, Machine Component Details section
-
-### Requirement
-
-Replace the current dropdown-first experience with a master-detail layout:
-
-* searchable machine selector or table selection
-* selected machine summary strip
-* component evidence table beneath
-
-Use original `componentName` in detail views, since the oil contracts explicitly preserve original granularity for visibility, while `componentNameNormalized` exists for grouped analysis and thresholding. 
-
-### Acceptance criteria
-
-* The selected machine is always visible in a summary strip.
-* The component table is sorted by worst status first.
-* The component table surfaces condition-first fields before raw technical fields.
-* A grouped/normalized view toggle is optional, not the default.
-
----
-
-## PH2-03 — Oil Fleet component distribution redesign
-
-**Priority:** P1
-**Applies to:** Oil / Fleet Overview, Component Status Distribution section
-
-### Requirement
-
-Replace the current component distribution layout with a sorted stacked horizontal bar chart by component:
-
-* Normal
-* Alerta
-* Anormal
-
-Add a toggle:
-
-* Original component granularity
-* Normalized grouped component
-
-This is justified by the oil contract distinction between `componentName` and `componentNameNormalized`. 
-
-### Acceptance criteria
-
-* No donut is used for this many-category component comparison.
-* Components are sorted by highest abnormal/alert burden.
-* The grouping toggle changes the aggregation basis without changing the visual grammar.
-
----
-
-## PH2-04 — Oil Fleet quick navigation repositioning
-
-**Priority:** P1
-**Applies to:** Oil / Fleet Overview
-
-### Requirement
-
-Move “Quick Navigation to Report Detail” nearer to the first decision area and redesign it as:
-
-* machine selector
-* component selector
-* sample selector
-
-### Acceptance criteria
-
-* The navigation control is discoverable without scrolling to the bottom.
-* It takes at most three interactions to open a report detail page.
-* It reflects current machine selection when applicable.
-
----
-
-## PH2-05 — Telemetry Fleet remove KPI cards
-
-**Priority:** P0
-**Applies to:** Telemetry / Fleet Overview
-
-### Requirement
-
-Remove the KPI cards from the top of the page. Replace them with a single donut chart that summarizes the fleet, because the telemetry fleet status already includes `overall_status`, including `InsufficientData`, and the cards duplicate the same story. 
-
-### Acceptance criteria
-
-* No KPI summary cards remain at the top of Telemetry Fleet Overview.
-* The fleet donut includes `InsufficientData` as a separate segment.
-* Clicking a segment filters the machine table.
-
----
-
-## PH2-06 — Telemetry Fleet priority table redesign
-
-**Priority:** P0
-**Applies to:** Telemetry / Fleet Overview
-
-### Requirement
-
-Redesign the priority table to explain telemetry condition using machine-level fields already available:
+### Required visible columns
 
 * `unit_id`
-* `overall_status`
-* `priority_score`
-* `latest_sample_date`
-* `components_anormal`
-* `components_alerta`
-* `components_insufficient_data`
-* `total_signals_triggered`
+* current overall status
+* machine severity / machine score
+* component burden summary:
 
-### Acceptance criteria
+  * components normal
+  * components alerta
+  * components anormal
+* priority score
+* AI recommendation summary from `machine_ai_recommendation`
 
-* The default sort is descending by `priority_score`.
-* The table shows freshness using `latest_sample_date`.
-* `InsufficientData` rows are visually distinguishable from truly anomalous rows.
-* The table does not prioritize low-context fields over condition and evidence.
-
----
-
-## PH2-07 — Telemetry Fleet selected-machine master-detail
-
-**Priority:** P0
-**Applies to:** Telemetry / Fleet Overview
-
-### Requirement
-
-When the user selects a machine, render a stable detail panel below the fleet area using the `component_details` JSON as the source of truth. That JSON already contains component `status`, `score`, `coverage`, `signals_count`, and `triggering_signals`. 
-
-### Acceptance criteria
-
-* The selected machine row remains highlighted.
-* The detail area updates without navigating away.
-* The component table shows component, status, severity score, coverage, signals count, and triggering signals preview.
-* A clear CTA navigates to component detail.
-
----
-
-## PH2-08 — Telemetry Fleet AI card placeholder
-
-**Priority:** P1
-**Applies to:** Telemetry / Fleet Overview
-
-### Requirement
-
-Implement the shared AI insight card now with a telemetry placeholder state that is compatible with the reserved future `ai_recommendation` field. 
-
-### Acceptance criteria
-
-* The right-side AI panel no longer contains informal placeholder text.
-* The component can later receive telemetry AI text without redesign.
-* The placeholder state explains that AI guidance is not yet available for telemetry.
-
----
-
-# Phase 3 — Detail Views Redesign
-
-## Objective
-
-Make both detail tabs explain diagnosis, evidence, and change over time.
-
-## PH3-01 — Oil Report Detail sticky report identity bar
-
-**Priority:** P0
-**Applies to:** Oil / Report Detail
-
-### Requirement
-
-Replace the current top filter block with a sticky identity bar showing:
+### Optional secondary columns
 
 * client
-* family / machine type
-* unit
+* evaluation freshness if derived from latest report data
+* count of monitored components
+
+### Explicit constraint
+
+Do not use deprecated fields such as old machine name/model counters from previous contract versions unless they are derived from another valid source. The current production Oil `machine_status.parquet` contract removed several older columns and now uses the component-based summary model. 
+
+### Acceptance criteria
+
+* The first screen tells the user which unit is worse and why.
+* AI guidance is visible without opening the row detail.
+* Internal-only columns that do not help decision making are removed from the default view.
+
+---
+
+## OIL-M-03 — Convert machine selection into a persistent master-detail flow
+
+**Apply to:** **Monitoring → Oil → Machines**, machine detail section
+
+### Requirement
+
+Replace the current large dropdown-first interaction with a master-detail pattern.
+
+### Implementation detail
+
+* The selected machine must be visible in a persistent summary bar.
+* The component evidence table must update based on the selected machine.
+* Selection can come from the priority table or from a searchable selector.
+
+### Acceptance criteria
+
+* The user always knows which machine is selected.
+* Selection state is visually persistent.
+* The user does not need to scroll back to the selector to confirm context.
+
+---
+
+## OIL-M-04 — Refocus component-level evidence around condition and evidence, not raw layout
+
+**Apply to:** **Monitoring → Oil → Machines**, component detail table
+
+### Requirement
+
+The component table must explain why the machine is in `Alerta` or `Anormal`.
+
+### Required visible columns
+
+* `componentName` or display label
+* latest report status for that component
+* severity score
+* essays broken
+* breached essays summary
+* AI recommendation summary
+
+### Data rule
+
+Use original `componentName` for detailed visibility and only use `componentNameNormalized` for grouped or aggregated comparisons. The oil contract explicitly preserves both because the original name is needed for detailed visibility and the normalized name is used for Stewart-limit grouping. 
+
+### Acceptance criteria
+
+* Components are sorted worst-first.
+* Breached evidence is visible directly in the table.
+* The user can identify the critical component without opening a separate report.
+
+---
+
+## OIL-M-05 — Move quick navigation to report detail earlier in the workflow
+
+**Apply to:** **Monitoring → Oil → Machines**, quick navigation block
+
+### Requirement
+
+Relocate the “go to report detail” action so it appears near the selected machine or near the priority table, not as a late-page utility.
+
+### Implementation detail
+
+* Navigation inputs must follow:
+
+  * machine
+  * component
+  * sample/report
+* It must inherit the currently selected machine when available.
+
+### Acceptance criteria
+
+* The user can open the relevant report detail from the first half of the page.
+* It takes no more than 3 explicit selections when context is not already set.
+
+---
+
+## OIL-M-06 — Replace the component-distribution visual with a more scalable categorical comparison
+
+**Apply to:** **Monitoring → Oil → Machines**, component distribution section
+
+### Requirement
+
+Do not use a donut for component-level distribution across many categories.
+Replace it with a sorted stacked horizontal bar chart.
+
+### Implementation detail
+
+* Each bar = component
+* Stacks = `Normal`, `Alerta`, `Anormal`
+* Sort by highest abnormal burden first
+* Add toggle:
+
+  * original component granularity
+  * normalized grouped component
+
+### Acceptance criteria
+
+* Users can identify which component families are most problematic across the fleet.
+* The chart scales cleanly with many component names.
+* Grouped/normalized mode uses `componentNameNormalized`. 
+
+---
+
+# 2) Monitoring → Oil → Reports
+
+## OIL-R-01 — Create a sticky report identity header
+
+**Apply to:** **Monitoring → Oil → Reports**, top filter area
+
+### Requirement
+
+The current filter block must be redesigned as a sticky report context header.
+
+### Required visible context
+
+* client
+* machine/unit
 * component
 * sample date
 * report status
+* severity score
+
+### Data rule
+
+The report view must be powered by the current oil classified schema, which includes base silver fields plus `essays_broken`, `severity_score`, `desgaste_score`, `report_status`, `breached_essays`, and `ai_recommendation`. 
 
 ### Acceptance criteria
 
-* The selected report identity remains visible while scrolling.
-* The current report status is always visible in the identity bar.
-* The user never loses context about which report is open.
+* While scrolling, the user always knows which report is open.
+* Status and severity remain visible at all times.
 
 ---
 
-## PH3-02 — Oil Report Detail summary card redesign
+## OIL-R-02 — Redesign sample summary into a decision summary
 
-**Priority:** P0
-**Applies to:** Oil / Report Detail, Sample Information section
+**Apply to:** **Monitoring → Oil → Reports**, sample information section
 
 ### Requirement
 
-Elevate condition-first report facts:
+Prioritize the fields that explain the report outcome.
 
-* `report_status`
-* `essay_score`
-* breached essays count
+### Required visible fields
+
+* report status
+* severity score
+* desgaste score
+* essays broken
+* breached essays summary
 * previous sample date
-* `daysSincePrevious`
-
-Those fields exist in the oil silver/golden layers and should be surfaced before secondary metadata. 
+* days since previous sample
 
 ### Acceptance criteria
 
-* The summary card shows the current condition in the first visual row.
-* Previous sample context is present when available.
-* Breached essays are visible as chips or summarized count.
+* The summary section answers “how bad is this report?” before showing generic metadata.
+* Previous-sample context is visible without further clicks.
 
 ---
 
-## PH3-03 — Oil evidence visualization redesign
+## OIL-R-03 — Remove radar charts as the primary evidence view
 
-**Priority:** P0
-**Applies to:** Oil / Report Detail, Report Analysis section
+**Apply to:** **Monitoring → Oil → Reports**, evidence analysis section
 
 ### Requirement
 
-Radar charts must not be the primary evidence view. Replace the first-level evidence UI with grouped threshold tables or bullet charts showing:
+Radar charts must not be the first or primary interpretation device.
+
+### Replacement
+
+Use grouped evidence tables or bullet/bar threshold views by essay group.
+
+### Required row-level fields
 
 * essay
 * current value
+* threshold band
 * essay status
-* threshold bands
+* whether it contributes to breached evidence
 
-This is more consistent with the oil data model, where each report has essay classifications and thresholds are stored separately in Stewart limits. 
+### Data rule
 
-### Acceptance criteria
-
-* The first evidence view is no longer a radar chart.
-* Each essay row exposes current value and threshold context.
-* Grouping by `group_element` is supported.
-* Radar can remain as optional secondary visualization only.
-
----
-
-## PH3-04 — Oil AI diagnosis and recommendation split
-
-**Priority:** P0
-**Applies to:** Oil / Report Detail
-
-### Requirement
-
-Present AI content in two explicit areas:
-
-* diagnosis = `ai_analysis`
-* recommended action = `ai_recommendation`
+The report already exposes breached essay information and score aggregates, so the UI should first explain the threshold breach clearly and only then offer compact secondary visuals if needed. 
 
 ### Acceptance criteria
 
-* Diagnosis and recommendation are visually distinct.
-* Recommendation block receives stronger emphasis.
-* Long text remains readable and collapsible.
+* The first evidence view is interpretable without training.
+* The user can identify exactly which essays caused the report status.
 
 ---
 
-## PH3-05 — Oil time-series defaults redesign
+## OIL-R-04 — Separate AI diagnosis from AI action
 
-**Priority:** P1
-**Applies to:** Oil / Report Detail, Time Series section
+**Apply to:** **Monitoring → Oil → Reports**, AI section
 
 ### Requirement
 
-Improve time-series defaults so the page opens with useful content:
+Split the current AI block into:
 
-* preselect breached essays
-* display thresholds
-* highlight current sample versus previous sample
-* prevent empty chart states on first render
+* diagnostic explanation
+* recommended action
+
+### Implementation detail
+
+* Diagnosis can summarize interpretation.
+* Action must be visually stronger and scannable.
+* Long AI text must collapse/expand.
 
 ### Acceptance criteria
 
-* Time-series renders meaningful data on initial load when data exists.
-* Breached essays are auto-selected.
-* Current and previous sample are visually differentiated.
+* AI output is not shown as a single undifferentiated paragraph.
+* Recommended action can be identified in one scan.
 
 ---
 
-## PH3-06 — Oil previous-report comparison redesign
+## OIL-R-05 — Improve time-series defaults and remove empty initial states
 
-**Priority:** P1
-**Applies to:** Oil / Report Detail, Comparison with Previous Reports section
+**Apply to:** **Monitoring → Oil → Reports**, time-series section
 
 ### Requirement
 
-Replace the current broad comparison layout with a prioritized delta summary:
+The time-series analysis must show useful content on first render.
+
+### Implementation detail
+
+* Preselect breached essays by default.
+* Show the current sample highlighted against historical trend.
+* Show previous sample explicitly.
+* Overlay normal/alert/critical thresholds.
+
+### Acceptance criteria
+
+* The time-series section never opens as a blank chart when data exists.
+* The user can immediately compare current vs prior behavior.
+
+---
+
+## OIL-R-06 — Redesign “comparison with previous reports” into a delta summary
+
+**Apply to:** **Monitoring → Oil → Reports**, comparison section
+
+### Requirement
+
+The comparison block must answer “what changed from the previous report?”
+
+### Required outputs
 
 * worsening essays
 * improving essays
-* status change
-* largest value deltas
+* unchanged critical essays
+* net status change
+* major severity deltas
 
 ### Acceptance criteria
 
-* The section answers “what changed?” in one screen without scanning multiple wide tables.
-* Largest worsening items appear first.
-* Status change is explicitly labeled.
+* The user can identify deterioration or improvement in one screen.
+* The section is not a simple side-by-side repetition of the same metadata.
 
 ---
 
-## PH3-07 — Telemetry Component Detail summary header
+# 3) Monitoring → Telemetry → Fleet Overview
 
-**Priority:** P0
-**Applies to:** Telemetry / Component Detail
+## TEL-F-01 — Remove KPI cards completely
+
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, top summary section
 
 ### Requirement
 
-Create a strong summary header using telemetry component fields:
+Delete the KPI cards from the top of the page.
 
-* unit
-* component
-* `component_status`
-* `component_score`
-* `component_coverage`
-* triggering signals count
-* last evaluation week/date
+### Reason
+
+The current telemetry implementation explicitly includes fleet KPI cards and a status distribution pie chart in the same screen, which duplicates the same high-level message. The implemented telemetry section currently includes Fleet Overview UI with KPI cards and a pie chart, and the module was simplified to two tabs: Fleet Overview and Component Detail. 
+
+### Replacement
+
+Use a single donut chart with total units in the center.
 
 ### Acceptance criteria
 
-* The selected component context is visible at all times.
-* Status, severity, and coverage appear before raw technical detail.
-* The header supports a future AI recommendation slot.
+* No KPI summary cards remain in Telemetry Fleet Overview.
+* The donut contains the full fleet distribution including `InsufficientData`.
 
 ---
 
-## PH3-08 — Telemetry weekly view redesign
+## TEL-F-02 — Convert telemetry fleet pie chart to a donut and make it interactive
 
-**Priority:** P0
-**Applies to:** Telemetry / Component Detail, Weekly Analysis section
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, fleet distribution chart
 
 ### Requirement
 
-Replace the current dense weekly visualization with:
+Replace the current full pie with a donut.
 
-* primary: signal-by-week heatmap
-* secondary: focused trend panel for the selected signal
+### Implementation detail
 
-Use telemetry `signals_evaluation` data and baseline percentile bands where available. The telemetry contracts already define `signals_evaluation`, `triggering_signals`, `observed_range`, `anomaly_percentage`, `sample_count`, and baseline percentiles `p2`, `p5`, `p95`, `p98`. 
+* Center label = total units
+* Segments = `Normal`, `Alerta`, `Anormal`, `InsufficientData`
+* Click on segment filters the fleet table
+* Legend shows counts and percentages
+
+### Data rule
+
+Telemetry machine-level status explicitly includes `overall_status` with `InsufficientData`, plus counts for `components_normal`, `components_alerta`, `components_anormal`, and `components_insufficient`. 
 
 ### Acceptance criteria
 
-* The weekly section no longer renders a dense multi-panel layout as the default view.
-* The user can identify worst signals in one scan.
-* Selecting a signal updates the focus chart below.
+* The chart is the primary fleet summary.
+* Table filtering from chart interaction works reliably.
+* `InsufficientData` has a neutral visual style.
 
 ---
 
-## PH3-09 — Telemetry signal evaluation table redesign
+## TEL-F-03 — Redesign the fleet table around operational condition and evidence
 
-**Priority:** P0
-**Applies to:** Telemetry / Component Detail
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, fleet status table
 
 ### Requirement
 
-Redesign the signal table so columns are:
+The table must explain machine condition using the current telemetry machine contract.
 
-* signal
-* status
-* anomaly percentage
-* observed range
-* sample count
-* severity
-* baseline thresholds
-
-### Acceptance criteria
-
-* The table is populated from `signals_evaluation`.
-* Baseline context is shown in a user-readable way.
-* The table selection drives the focus chart.
-
----
-
-## PH3-10 — Telemetry daily analysis tied to selected signal
-
-**Priority:** P1
-**Applies to:** Telemetry / Component Detail, Daily Analysis section
-
-### Requirement
-
-Daily analysis must be subordinate to the active signal selection and show:
-
-* daily distribution or time series
-* threshold bands
-* anomaly highlights
-* date / state context
-
-### Acceptance criteria
-
-* Changing the selected signal updates the daily chart.
-* Threshold bands are visible.
-* The chart does not appear disconnected from the selected signal table row.
-
----
-
-## PH3-11 — Telemetry granularity scaffold
-
-**Priority:** P2
-**Applies to:** Telemetry / Component Detail
-
-### Requirement
-
-Add a granularity switch with:
-
-* Weekly
-* Daily
-* Hourly
-
-Hourly may be disabled initially.
-
-### Acceptance criteria
-
-* The component detail layout can support future granularities without redesign.
-* Disabled granularities are clearly marked as upcoming.
-
----
-
-# Phase 4 — Cross-Module Polish and Future-Proofing
-
-## Objective
-
-Lock consistency, prepare for maintenance, and reduce long-term redesign cost.
-
-## PH4-01 — Cross-module section naming cleanup
-
-**Priority:** P1
-**Applies to:** All sections / all tabs
-
-### Requirement
-
-Rename section headers to describe purpose, for example:
-
-* Fleet requiring attention
-* Why this unit is in alert
-* Evidence behind current diagnosis
-* AI recommended action
-* Change since previous evaluation
-
-### Acceptance criteria
-
-* The UI reads as a guided diagnostic workflow, not a set of unrelated widgets.
-* Section titles are consistent across oil and telemetry where the intent is the same.
-
----
-
-## PH4-02 — Maintenance-ready information architecture
-
-**Priority:** P2
-**Applies to:** Shared architecture
-
-### Requirement
-
-The future Maintenance module must inherit:
-
-* same shell
-* same status chips
-* same AI card
-* same summary hierarchy
-* same table and chart standards
-
-### Acceptance criteria
-
-* Shared components require no module-specific rewrite to support Maintenance.
-* The architecture does not assume only oil and telemetry exist.
-
----
-
-## PH4-03 — Performance and rendering cleanup
-
-**Priority:** P1
-**Applies to:** All tabs with large tables/charts
-
-### Requirement
-
-Implement:
-
-* virtualization or pagination for large tables
-* lazy rendering for below-the-fold sections
-* memoization/caching for derived chart datasets
-* controlled rerender strategy for cross-filter interactions
-
-### Acceptance criteria
-
-* Selecting filters or rows does not visibly freeze the page.
-* Large tables remain responsive.
-* Detail sections do not fully rerender unrelated components.
-
----
-
-## PH4-04 — UX states completion pass
-
-**Priority:** P1
-**Applies to:** All sections / all tabs
-
-### Requirement
-
-Every component must support:
-
-* loading
-* empty
-* partial data
-* unavailable AI
-* insufficient data
-* hard error
-
-### Acceptance criteria
-
-* No blank container remains in any supported state.
-* Every non-happy path tells the user what happened and what to do next.
-
----
-
-# Proposed Component Map
-
-## Core layout components
-
-**1. `DashboardShell`**
-Used by all modules.
-Responsibilities:
-
-* page width
-* section spacing
-* sticky header zones
-* responsive layout rules
-
-**2. `ModuleHeader`**
-Used by all top-level tabs.
-Props:
-
-* title
-* subtitle
-* icon
-* breadcrumb items
-
-**3. `StickyContextBar`**
-Used by all detail tabs and fleet tabs with active selection.
-Props:
-
-* active asset context
-* current status
-* key dates
-* quick actions
-
-**4. `SectionCard`**
-Used for all blocks.
-Responsibilities:
-
-* title
-* subtitle
-* optional toolbar area
-* standardized body padding
-
----
-
-## Shared semantic components
-
-**5. `StatusBadge`**
-Single source for all statuses.
-
-**6. `SeverityPill`**
-For scores, threshold classes, or warning emphasis.
-
-**7. `KeyValueSummary`**
-For top-level report/machine/component identity summaries.
-
-**8. `AIInsightCard`**
-Inputs:
-
-* diagnosis text
-* recommendation text
-* severity
-* availability state
-
-**9. `EmptyStatePanel`**
-Reusable blank/empty/loading/error view.
-
----
-
-## Shared analytical components
-
-**10. `DonutDistributionCard`**
-Used by:
-
-* Oil Fleet Overview
-* Telemetry Fleet Overview
-
-Inputs:
-
-* segment labels
-* counts
-* percentages
-* total
-* click callbacks
-
-**11. `PriorityTable`**
-Used by:
-
-* Oil Fleet Overview
-* Telemetry Fleet Overview
-
-Responsibilities:
-
-* sorting
-* row click
-* status rendering
-* AI snippet column
-* freshness column
-
-**12. `MasterDetailPanel`**
-Used by:
-
-* Oil Fleet machine selection area
-* Telemetry Fleet machine selection area
-
-**13. `EvidenceTable`**
-Used by:
-
-* Oil report evidence
-* Telemetry signal evaluation
-
-**14. `StackedDistributionChart`**
-Used by:
-
-* Oil component distribution
-* possible future maintenance distributions
-
-**15. `TrendPanel`**
-Used by:
-
-* Oil time series
-* Telemetry selected signal trend
-
-**16. `ComparisonPanel`**
-Used by:
-
-* Oil previous report comparison
-* future telemetry week-over-week comparison
-
-**17. `SignalHeatmap`**
-Used by:
-
-* Telemetry Component Detail weekly analysis
-
-**18. `FocusSignalChart`**
-Used by:
-
-* Telemetry Component Detail weekly/daily focused chart
-
----
-
-# Data-to-UI Mapping
-
-## Oil Fleet Overview
-
-Primary source:
-
-* `machine_status.parquet`
-
-Use these fields directly in the first decision table:
-
-* `unitId`
-* `machineName`
-* `machineModel`
-* `lastSampleDate`
-* `lastReportStatus`
-* `alertaCount`
-* `anormalCount`
-* `avgEssayScore`
-* `lastAiRecommendation` 
-
-Secondary source:
-
-* `classified.parquet` for deeper machine/component drill-down
-* `stewart_limits.parquet` for threshold-aware component/essay explanations 
-
-## Oil Report Detail
-
-Primary source:
-
-* `classified.parquet`
-
-Use directly:
-
-* `sampleNumber`
-* `sampleDate`
-* `previousSampleDate`
-* `daysSincePrevious`
-* `componentName`
-* `componentNameNormalized`
-* `breached_essays`
-* `essay_score`
-* `report_status`
-* `ai_analysis`
-* `ai_recommendation` 
-
-Secondary source:
-
-* `stewart_limits.parquet` for threshold presentation by essay/component grouping 
-
-## Telemetry Fleet Overview
-
-Primary source:
-
-* `machine_status.parquet`
-
-Use directly:
+### Required visible columns
 
 * `unit_id`
-* `latest_sample_date`
-* `overall_status`
-* `priority_score`
-* `components_normal`
-* `components_alerta`
-* `components_anormal`
-* `components_insufficient_data`
-* `component_details`
-* `total_signals_triggered` 
+* current overall status
+* priority score
+* machine score
+* abnormal component count
+* alert component count
+* insufficient-data component count
+* total components
+* short evidence preview derived from `component_details`
 
-## Telemetry Component Detail
+### Optional derived column
 
-Primary source:
+* worst component name
+* count of triggering signals derived from `component_details.signal_details`
 
-* `classified.parquet`
+### Constraint
 
-Use directly:
+Do not depend on removed contract fields such as `latest_sample_date` or `total_signals_triggered`; they are not in the current production contract. 
 
-* `component`
-* `component_status`
-* `component_score`
-* `component_coverage`
-* `signals_evaluation`
-* `triggering_signals`
-* `ai_recommendation`
-* `baseline_version` 
+### Acceptance criteria
 
-Derived UI data from `signals_evaluation`:
+* The user can identify which unit is worse and why from the table alone.
+* Internal schema noise is hidden from default presentation.
+* Evidence preview is generated from current JSON fields, not fabricated.
 
+---
+
+## TEL-F-04 — Implement persistent machine selection and lower-page drill-down
+
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, machine selection flow
+
+### Requirement
+
+Row selection in the fleet table must open a persistent machine detail zone below.
+
+### Data source
+
+Use `component_details`, which contains component `status`, `score`, `coverage`, `criticality_weight`, `signals_count`, `triggering_signals`, and per-signal detail under `signal_details`. 
+
+### Acceptance criteria
+
+* The selected row remains highlighted.
+* The lower section updates deterministically.
+* Selection survives secondary interactions such as sorting or filtering when possible.
+
+---
+
+## TEL-F-05 — Redesign component table under the selected machine
+
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, selected-machine component table
+
+### Requirement
+
+The component table must answer “which component is driving the machine status?”
+
+### Required visible columns
+
+* component
+* component status
+* component score
+* signal coverage
+* triggering signals count
+* strongest triggering signals preview
+
+### Acceptance criteria
+
+* Components are sorted worst-first.
+* Coverage is visible because missing data quality affects interpretation.
+* Triggering evidence is readable without opening the component detail page.
+
+---
+
+## TEL-F-06 — Add an AI-ready placeholder panel without inventing unsupported data
+
+**Apply to:** **Monitoring → Telemetry → Fleet Overview**, right-side insight panel
+
+### Requirement
+
+Provide a stable “AI insight unavailable / coming next” card design, but do not invent telemetry AI fields that are not in the current contract.
+
+### Reason
+
+The current telemetry production contract does not expose `ai_recommendation` in the component classified schema anymore, so the UI must not imply that validated AI guidance exists there today. 
+
+### Acceptance criteria
+
+* The panel exists and fits the layout.
+* It clearly states the current unavailability of telemetry AI recommendations.
+* It can later accept real AI text without redesign.
+
+---
+
+# 4) Monitoring → Telemetry → Component Detail
+
+## TEL-C-01 — Replace the current weekly multi-boxplot view
+
+**Apply to:** **Monitoring → Telemetry → Component Detail**, weekly analysis section
+
+### Requirement
+
+Replace the current “many weekly boxplots” first view with a more readable diagnostic layout.
+
+### Current issue
+
+The implemented telemetry component detail currently uses weekly boxplots with baseline bands and signal evaluation tables. That is functional but visually dense and difficult to scan at scale. 
+
+### Replacement
+
+Use:
+
+* primary view: signal-by-week heatmap or ranked signal matrix
+* secondary view: focused trend chart for the selected signal
+
+### Acceptance criteria
+
+* The user can identify worst signals in one scan.
+* The page is readable without comparing many small boxplots at once.
+* The selected signal drives the lower detail chart.
+
+---
+
+## TEL-C-02 — Redesign the component summary header
+
+**Apply to:** **Monitoring → Telemetry → Component Detail**, top header
+
+### Requirement
+
+The component detail page must start with a summary header that explains the current component condition.
+
+### Required visible fields
+
+* unit ID
+* component
+* component status
+* component score
+* signal coverage
+* sample count average
+* baseline version
+* triggering signals count
+
+### Data rule
+
+These fields are available in the current telemetry `classified.parquet` schema. 
+
+### Acceptance criteria
+
+* The user does not need to read the signal table to understand the top-level component diagnosis.
+* Coverage and baseline version are visible because they influence trust in the assessment.
+
+---
+
+## TEL-C-03 — Redesign the signal evaluation table around meaning, not only score
+
+**Apply to:** **Monitoring → Telemetry → Component Detail**, signal evaluation table
+
+### Requirement
+
+The signal table must prioritize interpretability.
+
+### Required visible columns
+
+* signal name
 * signal status
 * anomaly percentage
 * observed range
+* baseline range summary
 * sample count
-* p2 / p5 / p95 / p98 thresholds 
+* severity
+* signal weight if meaningful for interpretation
+
+### Data rule
+
+`signals_evaluation` already provides signal status, `window_score_normalized`, `severity`, `weight`, baseline percentiles `p2`, `p5`, `p95`, `p98`, observed range, anomaly percentage, and sample count. 
+
+### Acceptance criteria
+
+* A user can understand why a signal is flagged from one table row.
+* Threshold context is visible without opening a modal.
 
 ---
 
-# Delivery Sequence Recommendation
+## TEL-C-04 — Make the focused chart selection-driven
 
-## Release A
+**Apply to:** **Monitoring → Telemetry → Component Detail**, detailed chart section
 
-Phase 1 + Phase 2 P0 items
-This gives you a coherent product shell and fixes the highest-impact fleet-level UX problems first.
+### Requirement
 
-## Release B
+The lower chart must always be driven by the selected signal from the signal table or heatmap.
 
-Phase 3 P0 items
-This fixes the detail tabs and makes diagnosis/evidence readable.
+### Implementation detail
 
-## Release C
+* One selected signal at a time
+* Overlay baseline bands
+* Highlight anomalous region
+* Show operational-state context where relevant
 
-Phase 2 P1 + Phase 3 P1 + Phase 4 P1
-This adds polish, better comparison flows, and stronger empty/error states.
+### Acceptance criteria
 
-## Release D
-
-Phase 3 P2 + Phase 4 P2
-This is future-proofing for hourly telemetry and maintenance module expansion.
+* The detail chart never feels disconnected from the table selection.
+* State-aware context remains visible because the telemetry flow already supports `EstadoMaquina` filtering. 
 
 ---
 
-# Definition of Done
+## TEL-C-05 — Improve Estado filter usability
 
-A phase is complete only when:
+**Apply to:** **Monitoring → Telemetry → Component Detail**, state filter
 
-* all in-scope screens use shared foundation components where specified
-* all acceptance criteria for that phase pass
-* oil and telemetry feel like the same product, not two different dashboards
-* the top of every screen communicates condition first
-* AI content, when available, is presented consistently
-* no chart or table remains without a clear reason for existing
+### Requirement
 
-If you want, I can convert this into a **Jira-ready backlog** with epic, story, and ticket breakdown.
+The `EstadoMaquina` filter must be made more explicit and easier to interpret.
+
+### Implementation detail
+
+* Rename the visible label to a more explanatory user-facing label such as “Operating state”.
+* Available values remain `Operacional`, `Ralenti`, `Apagada`, and `ND` if applicable.
+* Filter state must be reflected in chart subtitles and table helper text.
+
+### Acceptance criteria
+
+* The user always knows whether they are looking at operational, idle, or stopped-state data.
+* Changing the filter updates both chart and explanatory copy.
+
+---
+
+## TEL-C-06 — Add a compact evidence summary above the detailed charts
+
+**Apply to:** **Monitoring → Telemetry → Component Detail**, between summary header and detailed visual analysis
+
+### Requirement
+
+Introduce a compact section that summarizes:
+
+* number of non-normal signals
+* top 3 worst signals
+* average anomaly burden
+* whether the component is affected by poor coverage
+
+### Acceptance criteria
+
+* The user gets a quick explanation before reading the detailed plots.
+* Coverage issues are not hidden.
+
+---
+
+# 5) Cross-screen technical requirements
+
+## X-01 — Introduce reusable chart and card primitives for Oil and Telemetry
+
+**Apply to:** all four target tabs
+
+### Requirement
+
+Create shared UI primitives for:
+
+* donut distribution card
+* priority/status table wrapper
+* summary header card
+* AI / recommendation card
+* evidence table
+* empty/loading/error states
+
+### Acceptance criteria
+
+* Oil and Telemetry share the same spacing, status chip style, card headers, and empty-state behavior.
+* Screen redesign does not require duplicating styling logic in each tab module.
+
+---
+
+## X-02 — Add table presets for “condition-first” sorting
+
+**Apply to:** all tables in Oil and Telemetry
+
+### Requirement
+
+Each table must declare a default sort that reflects urgency:
+
+* status severity
+* priority score
+* severity score
+* broken evidence count
+* anomaly burden
+
+### Acceptance criteria
+
+* No important table opens in a neutral or alphabetical state by default.
+* Worst assets/components appear first.
+
+---
+
+## X-03 — Preserve current production architecture and callback safety
+
+**Apply to:** all four target tabs
+
+### Requirement
+
+The redesign must be implemented without breaking the existing production Dash module structure and callback chain.
+
+### Reason
+
+The dashboard is already a production-ready, modular Dash application with dedicated tab modules, callback modules, and shared component modules.  
+
+### Acceptance criteria
+
+* Existing routes remain valid.
+* Cross-navigation keeps working.
+* New view-model logic is introduced behind existing loaders/callback wiring rather than through disruptive schema rewrites.
+
+---
+
+## X-04 — Respect performance constraints
+
+**Apply to:** all four target tabs
+
+### Requirement
+
+UI improvements must preserve current production responsiveness and the existing optimized golden-layer loading approach.
+
+### Reason
+
+The implementation summary states production readiness, optimized chart rendering, and page-load expectations under 3 seconds. 
+
+### Acceptance criteria
+
+* No redesign introduces visibly slower first render on the target tabs.
+* Heavy below-the-fold sections should be lazy-rendered where practical.
+* Large tables should support paging or virtualization if needed.
+
+---
+
+# Final implementation intent
+
+The redesigned interface must make each target screen answer, in this order:
+
+1. **What is the condition of the asset?**
+2. **What evidence explains that condition?**
+3. **What action does AI recommend, when AI exists for that technique?**
+4. **What changed over time?**
+
+For **Oil**, AI is already part of the data product and must be surfaced directly in machine/report flows. For **Telemetry**, the current UI must focus on condition and evidence first, and only reserve space for future AI support where the production contract does not yet provide it.  
+
+If you want, I can turn this into a **ticket-ready backlog** grouped by epics and stories.

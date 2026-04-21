@@ -1,8 +1,13 @@
 """
 Machines Overview tab for Multi-Technical-Alerts dashboard.
 
-Displays machine-level status aggregations and priority tables.
-Complete implementation with all 4 sections from documentation.
+Redesigned following OIL-M-01 through OIL-M-06 requirements:
+- Condition-first fleet summary with interactive donut
+- User-facing diagnostic table columns
+- Persistent master-detail flow
+- Component evidence focused on condition
+- Quick navigation relocated to top
+- Stacked bar chart for component distribution
 """
 
 from dash import dcc, html
@@ -11,13 +16,13 @@ import dash_bootstrap_components as dbc
 
 def create_machines_tab() -> dbc.Container:
     """
-    Create Tab 2: Machines Overview.
+    Create Tab: Machines Overview (Oil).
     
-    Complete implementation with 4 sections:
-    1. Machine-level status distribution (pie chart + priority table)
-    2. Machine detail drill-down (component breakdown)
-    3. Component-level status distribution (pie chart + histogram)
-    4. Critical components analysis (AI recommendations)
+    Redesigned layout with:
+    1. Interactive fleet status donut + priority table (OIL-M-01, OIL-M-02)
+    2. Quick navigation to report detail (OIL-M-05)
+    3. Persistent machine selection with component detail (OIL-M-03, OIL-M-04)
+    4. Component status stacked bar chart (OIL-M-06)
     
     Returns:
         Bootstrap container with tab layout
@@ -26,53 +31,77 @@ def create_machines_tab() -> dbc.Container:
         html.H3("Machines Overview", className="mt-4 mb-3"),
         html.Hr(),
         
-        # SECTION 1: Machine-Level Summary
-        html.H4("📊 Machine Status Distribution", className="mt-4 mb-3"),
+        # ========================================
+        # SECTION 1: Fleet Status Summary (OIL-M-01)
+        # ========================================
+        html.H4("📊 Fleet Status Summary", className="mt-4 mb-3"),
+        html.P("Click a segment in the donut chart to filter the priority table by status.", className="text-muted"),
+        
         dbc.Row([
+            # Left: Status Donut (interactive)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Status Distribution (Machines)", className="fw-bold"),
-                    dbc.CardBody(
-                        dcc.Graph(id='status-pie-chart')
-                    )
+                    dbc.CardHeader("Machine Status Distribution", className="fw-bold"),
+                    dbc.CardBody([
+                        dcc.Graph(id='status-donut-chart'),
+                        html.Div(id='status-filter-indicator', className="mt-2 text-center")
+                    ])
                 ])
-            ], width=6),
+            ], width=5),
             
+            # Right: Priority Table (OIL-M-02)
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Priority Machines (Top 10)", className="fw-bold"),
+                    dbc.CardHeader("Priority Machines", className="fw-bold"),
                     dbc.CardBody(
                         html.Div(id='priority-table-container')
                     )
                 ])
-            ], width=6)
+            ], width=7)
         ], className="mb-4"),
         
-        # SECTION 2: Machine Detail Drill-Down
+        # ========================================
+        # SECTION 2: Machine Detail (OIL-M-03, OIL-M-04)
+        # ========================================
         html.Hr(),
         html.H4("🔍 Machine Component Details", className="mt-4 mb-3"),
+        html.P("Select a machine from the priority table or use the selector below.", className="text-muted"),
+        
+        # Persistent machine selection indicator
+        dbc.Alert(
+            id='machine-selection-indicator',
+            children="No machine selected",
+            color="light",
+            className="mb-3"
+        ),
+        
+        # Machine selector (alternative to table selection)
         dbc.Row([
             dbc.Col([
-                html.Label("Select Machine for Details:", className="fw-bold"),
+                html.Label("Or select machine manually:", className="fw-bold"),
                 dcc.Dropdown(
                     id='machine-detail-selector',
-                    placeholder='Select a machine or view all...',
+                    placeholder='Select a machine...',
                     className="mb-3"
                 )
             ], width=6)
         ]),
         
+        # Component detail table
         dbc.Card([
-            dbc.CardHeader("Component Breakdown", className="fw-bold"),
-            dbc.CardBody([
-                html.Div(id='machine-info-header', className="mb-3"),
+            dbc.CardHeader("Component Breakdown (Sorted Worst-First)", className="fw-bold"),
+            dbc.CardBody(
                 html.Div(id='machine-detail-table-container')
-            ])
+            )
         ], className="mb-4"),
         
-        # Quick Navigation
+        # ========================================
+        # SECTION 3: Quick Navigation (OIL-M-05)
+        # ========================================
+        html.Hr(),
+        html.H4("🧭 Quick Navigation to Report Detail", className="mt-4 mb-3"),
+        
         dbc.Card([
-            dbc.CardHeader("🧭 Quick Navigation to Report Detail", className="fw-bold"),
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
@@ -86,7 +115,8 @@ def create_machines_tab() -> dbc.Container:
                         html.Label("Component:", className="fw-bold"),
                         dcc.Dropdown(
                             id='nav-component-selector',
-                            placeholder='Select component...'
+                            placeholder='Select component...',
+                            disabled=True
                         )
                     ], width=4),
                     dbc.Col([
@@ -96,7 +126,8 @@ def create_machines_tab() -> dbc.Container:
                                 "Navigate to Report Detail →",
                                 id='nav-to-report-button',
                                 color="primary",
-                                className="w-100"
+                                className="w-100",
+                                disabled=True
                             )
                         ])
                     ], width=4)
@@ -104,37 +135,34 @@ def create_machines_tab() -> dbc.Container:
             ])
         ], className="mb-4"),
         
-        # SECTION 3: Component-Level Distribution
+        # ========================================
+        # SECTION 4: Component Distribution (OIL-M-06)
+        # ========================================
         html.Hr(),
         html.H4("📈 Component Status Distribution", className="mt-4 mb-3"),
+        
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader("Status Distribution (Components)", className="fw-bold"),
-                    dbc.CardBody(
-                        dcc.Graph(id='component-status-pie-chart')
-                    )
+                    dbc.CardHeader([
+                        html.Span("Component Status by Type", className="fw-bold"),
+                        dbc.Button(
+                            "Toggle Grouping",
+                            id='toggle-component-grouping',
+                            color="secondary",
+                            size="sm",
+                            className="float-end"
+                        )
+                    ]),
+                    dbc.CardBody([
+                        html.Div(id='component-grouping-indicator', className="mb-2 text-muted small"),
+                        dcc.Graph(id='component-stacked-bar-chart')
+                    ])
                 ])
-            ], width=6),
-            
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Component Status Histogram", className="fw-bold"),
-                    dbc.CardBody(
-                        dcc.Graph(id='component-status-histogram')
-                    )
-                ])
-            ], width=6)
+            ], width=12)
         ], className="mb-4"),
         
-        # SECTION 4: Critical Components Analysis
-        html.Hr(),
-        html.H4("⚠️ Critical Components (Anormal & Alerta)", className="mt-4 mb-3"),
-        dbc.Card([
-            dbc.CardHeader("Components Requiring Attention", className="fw-bold"),
-            dbc.CardBody(
-                html.Div(id='critical-components-container')
-            )
-        ])
+        # Hidden store for component grouping toggle state
+        dcc.Store(id='component-grouping-state', data={'use_normalized': False})
         
     ], fluid=True)

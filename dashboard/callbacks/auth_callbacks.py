@@ -6,6 +6,9 @@ from dash import Input, Output, State, html
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from dashboard.auth import authenticate_user
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def register_auth_callbacks(app):
@@ -28,30 +31,48 @@ def register_auth_callbacks(app):
     )
     def login(n_clicks, n_submit, username, password):
         """Handle user login from button click or Enter key press."""
+        logger.info(f"Login callback triggered - n_clicks: {n_clicks}, n_submit: {n_submit}, username: {username}")
+        
+        # Check if callback was triggered (either button click or enter key)
+        if n_clicks is None and n_submit is None:
+            logger.warning("Login callback triggered but both n_clicks and n_submit are None")
+            raise PreventUpdate
+        
         if not username or not password:
-            return None, "Please enter username and password", True
+            logger.warning("Login attempt with empty username or password")
+            return None, "Por favor ingrese usuario y contraseña", True
         
         user = authenticate_user(username, password)
         
         if user:
+            logger.info(f"Login successful for user: {username}")
             return user, "", False
         else:
-            return None, "Invalid username or password", True
+            logger.warning(f"Login failed for user: {username}")
+            return None, "Usuario o contraseña inválidos", True
     
     
     @app.callback(
         Output('page-content', 'children'),
         Input('user-info-store', 'data'),
-        prevent_initial_call=False
+        prevent_initial_call=True
     )
     def display_page(user_data):
         """Display login page or main dashboard based on auth status."""
-        from dashboard.layout import create_login_page, create_main_dashboard
+        logger.info(f"Display page callback triggered - user_data: {user_data}")
+        from dashboard.layout import create_main_dashboard
         
-        if user_data is None:
-            return create_login_page()
-        else:
+        # When user logs in (user_data is not None), show dashboard
+        # When user logs out (user_data is None), the logout callback will trigger a page reload
+        if user_data is not None:
+            logger.info(f"Showing dashboard for user: {user_data.get('username')}")
             return create_main_dashboard(user_data)
+        else:
+            # User logged out - could show login page or trigger reload
+            # For now, we'll rely on the layout's initial page-content
+            logger.info("Showing login page")
+            from dashboard.layout import create_login_page
+            return create_login_page()
     
     
     @app.callback(

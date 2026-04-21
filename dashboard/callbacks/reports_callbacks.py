@@ -19,6 +19,77 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def calculate_breached_essays_from_data(sample, limits, client, machine, component):
+    """
+    Calculate breached essays dynamically from sample data and Stewart Limits.
+    
+    This function provides a fallback when the breached_essays field in the data
+    is missing, null, or inconsistent with essays_broken count.
+    
+    Args:
+        sample: pandas Series with sample data
+        limits: Stewart Limits dictionary structure
+        client: Client name
+        machine: Machine name (normalized)
+        component: Component name (normalized)
+    
+    Returns:
+        List of essay names that breached their thresholds (Normal/Alert/Critic)
+    """
+    if not limits or not sample is not None:
+        return []
+    
+    # Normalize component name (remove left/right position indicators)
+    component_normalized = component.lower()
+    for suffix in [' izquierdo', ' derecho', ' izquierda', ' derecha']:
+        if component_normalized.endswith(suffix):
+            component_normalized = component_normalized[:-len(suffix)].strip()
+            break
+    
+    # Get limits for this specific component
+    if client not in limits or machine not in limits[client] or component_normalized not in limits[client][machine]:
+        return []
+    
+    comp_limits = limits[client][machine][component_normalized]
+    
+    # Metadata columns to exclude
+    metadata_cols = {
+        'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName',
+        'machineModel', 'machineBrand', 'machineHours', 'machineSerialNumber',
+        'componentName', 'componentNameNormalized', 'componentHours', 'componentSerialNumber',
+        'oilMeter', 'oilBrand', 'oilType', 'oilWeight',
+        'previousSampleNumber', 'previousSampleDate', 'daysSincePrevious',
+        'group_element', 'essay_score', 'report_status', 'essays_broken',
+        'severity_score', 'desgaste_score',
+        'breached_essays', 'ai_recommendation', 'ai_analysis', 'ai_generated_at',
+        'unitId_generated', 'componentName_generated', 'sampleDate_generated',
+        'client_generated', 'sampleDate_str'
+    }
+    
+    breached = []
+    
+    # Check each essay
+    for col in sample.index:
+        if col in metadata_cols or col not in comp_limits:
+            continue
+        
+        try:
+            value = float(sample[col]) if pd.notna(sample[col]) else None
+            if value is None:
+                continue
+            
+            # Get thresholds
+            normal_threshold = comp_limits[col].get('threshold_normal', float('inf'))
+            
+            # Essay is breached if it exceeds the Normal threshold
+            if value >= normal_threshold:
+                breached.append(col)
+        except (ValueError, TypeError):
+            continue
+    
+    return breached
+
+
 def register_reports_callbacks(app):
     """
     Register callbacks for Reports Detail tab with 4-level hierarchy.
@@ -250,11 +321,14 @@ def register_reports_callbacks(app):
     
     # Main display callback: Update all content when date changes
     @app.callback(
-        [Output('reports-sample-info-display', 'children'),
-         Output('reports-radar-charts-container', 'children'),
-         Output('reports-ai-recommendation-display', 'children'),
+        [Output('reports-identity-display', 'children'),
+         Output('reports-decision-summary', 'children'),
+         Output('reports-evidence-container', 'children'),
+         Output('reports-ai-diagnosis', 'children'),
+         Output('reports-ai-action', 'children'),
          Output('reports-essays-selector', 'options'),
-         Output('reports-historical-comparison', 'children')],
+         Output('reports-essays-selector', 'value'),
+         Output('reports-delta-summary', 'children')],
         [Input('reports-date-selector', 'value'),
          Input('reports-component-selector', 'value'),
          Input('reports-equipo-selector', 'value'),
@@ -263,15 +337,15 @@ def register_reports_callbacks(app):
         prevent_initial_call=True
     )
     def update_report_display(sample_date, component, equipo, familia, client):
-        """Update all report displays."""
+        """Update all report displays with OIL-R compliant sections."""
         from plotly.graph_objects import Figure
         
         logger.info(f"update_report_display called: client={client}, familia={familia}, equipo={equipo}, component={component}, date={sample_date}")
         
         if not all([sample_date, component, equipo, familia, client]):
             logger.warning(f"Missing parameters in update_report_display")
-            return ("Select filters to view report", "", 
-                   "No recommendation", [], "No data")
+            return (html.Div(), html.P("Select filters"), html.Div(), 
+                   html.P("No data"), html.P("No data"), [], None, html.Div())
         
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
@@ -281,8 +355,8 @@ def register_reports_callbacks(app):
         
         if not reports_file.exists():
             logger.error(f"Reports file not found: {reports_file}")
-            return ("No data available", "",
-                   "No recommendation", [], "No data")
+            return (html.Div(), html.P("No data"), html.Div(),
+                   html.P("No data"), html.P("No data"), [], None, html.Div())
         
         try:
             df = safe_read_parquet(reports_file)
@@ -304,34 +378,52 @@ def register_reports_callbacks(app):
             
             if sample_df.empty:
                 logger.warning(f"No sample found after filtering")
-                return ("No sample found", "",
-                       "No recommendation", [], "No data")
+                return (html.Div(), html.P("No sample found"), html.Div(),
+                       html.P("No data"), html.P("No data"), [], None, html.Div())
             
             sample = sample_df.iloc[0]
             logger.info(f"Sample found: {sample.get('sampleNumber', 'N/A')}")
             
-            # 1. Sample Info Card
-            info = create_sample_info_card(sample)
+            # 1. Report Identity (OIL-R-01)
+            identity = create_report_identity_display(sample)
             
-            # 2. Radar Charts by GroupElement (includes tables)
-            radar_charts = create_radar_charts_by_group(sample, limits, df)
+            # 2. Decision Summary (OIL-R-02) - with data quality check
+            decision_summary = create_decision_summary(sample, limits, client, familia, component)
             
-            # 3. AI Recommendation
-            ai_display = create_ai_recommendation_display(sample)
+            # 3. Evidence Tables AND Radar Charts (OIL-R-03)
+            evidence_container = create_evidence_tables_and_radar(sample, limits, df)
             
-            # 4. Essay options for time series
+            # 4. AI Diagnosis and Action (OIL-R-04)
+            ai_diagnosis, ai_action = create_ai_diagnosis_and_action(sample)
+            
+            # 5. Essay selector options and pre-selection (OIL-R-05)
             essay_options = get_essay_options(df)
             
-            # 5. Historical Comparison
-            historical_comp = create_historical_comparison(sample, df, equipo, component)
+            # Pre-select breached essays (up to 6) - use calculated if stored is empty
+            breached_essays = []
+            breached_value = sample.get('breached_essays')
+            if breached_value is not None and not (isinstance(breached_value, float) and pd.isna(breached_value)):
+                try:
+                    breached_essays = json.loads(breached_value)
+                except:
+                    breached_essays = []
+            
+            # Fallback: calculate from data if empty
+            if not breached_essays and limits:
+                breached_essays = calculate_breached_essays_from_data(sample, limits, client, familia, component)
+            
+            breached_essays = breached_essays[:6]  # Limit to 6 for display
+            
+            # 6. Delta Summary (OIL-R-06)
+            delta_summary = create_delta_summary(sample, df, equipo, component, limits, client, familia)
             
             logger.info("Successfully generated all report components")
-            return info, radar_charts, ai_display, essay_options, historical_comp
+            return identity, decision_summary, evidence_container, ai_diagnosis, ai_action, essay_options, breached_essays, delta_summary
             
         except Exception as e:
             logger.exception(f"Error in update_report_display: {e}")
-            return (f"Error: {str(e)}", "",
-                   "Error", [], "Error")
+            return (html.Div(), f"Error: {str(e)}", html.Div(),
+                   "Error", "Error", [], None, html.Div())
     
     
     # Time series callback - Create subplot for each essay
@@ -513,7 +605,7 @@ def create_sample_info_card(sample):
                 dbc.Col([
                     html.P([
                         html.Strong("Sample Date: "), 
-                        f"{pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if pd.notna(sample.get('sampleDate')) else 'N/A'}", 
+                        f"{pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'}", 
                         html.Br(),
                         html.Strong("Status: "), 
                         html.Span(
@@ -950,7 +1042,7 @@ def create_historical_comparison(sample, df, equipo, component):
         if col not in metadata_cols and pd.notna(current[col]):
             try:
                 current_val = float(current[col])
-                previous_val = float(previous[col]) if pd.notna(previous.get(col)) else None
+                previous_val = float(previous[col]) if col in previous.index and pd.notna(previous[col]) else None
                 
                 if previous_val is not None:
                     change = current_val - previous_val
@@ -1039,7 +1131,7 @@ def create_historical_comparison(sample, df, equipo, component):
 
 
 def create_ai_recommendation_display(sample):
-    """Create AI recommendation display."""
+    """DEPRECATED: Use create_ai_diagnosis_and_action instead."""
     ai_rec = sample.get('ai_recommendation', 'No AI recommendation available for this sample.')
     
     status_color = {
@@ -1067,3 +1159,871 @@ def get_essay_options(df):
                     'unitId_generated', 'componentName_generated', 'sampleDate_generated', 'client_generated'}
     essays = [col for col in df.columns if col not in metadata_cols]
     return [{'label': e, 'value': e} for e in sorted(essays)]
+
+
+# ============================================================================
+# NEW HELPER FUNCTIONS FOLLOWING OIL-R REQUIREMENTS
+# ============================================================================
+
+def create_report_identity_display(sample):
+    """
+    Create sticky report identity display (OIL-R-01).
+    
+    Shows: client, machine/unit, component, sample date, report status, severity score.
+    """
+    if sample is None or sample.empty:
+        return html.Div()
+    
+    status_color = {
+        'Anormal': 'danger',
+        'Alerta': 'warning',
+        'Normal': 'success'
+    }.get(sample.get('report_status', 'Normal'), 'secondary')
+    
+    return dbc.Row([
+        dbc.Col([
+            html.Div([
+                html.Small("Client", className="text-muted d-block"),
+                html.Strong(str(sample.get('client', 'N/A')).upper())
+            ])
+        ], width=2),
+        dbc.Col([
+            html.Div([
+                html.Small("Equipment", className="text-muted d-block"),
+                html.Strong(str(sample.get('unitId', 'N/A')).title())
+            ])
+        ], width=2),
+        dbc.Col([
+            html.Div([
+                html.Small("Component", className="text-muted d-block"),
+                html.Strong(str(sample.get('componentName', 'N/A')).title())
+            ])
+        ], width=2),
+        dbc.Col([
+            html.Div([
+                html.Small("Sample Date", className="text-muted d-block"),
+                html.Strong(pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A')
+            ])
+        ], width=2),
+        dbc.Col([
+            html.Div([
+                html.Small("Status", className="text-muted d-block"),
+                html.Span(sample.get('report_status', 'N/A'), className=f"badge bg-{status_color}")
+            ])
+        ], width=2),
+        dbc.Col([
+            html.Div([
+                html.Small("Severity Score", className="text-muted d-block"),
+                html.Strong(f"{sample.get('severity_score', 0):.2f}", 
+                           className=f"text-{status_color}")
+            ])
+        ], width=2)
+    ], className="mt-2")
+
+
+def create_decision_summary(sample, limits, client, machine, component):
+    """
+    Create decision summary section (OIL-R-02).
+    
+    Prioritizes: report status, severity score, desgaste score, essays broken,
+    breached essays summary, previous sample context.
+    
+    Includes data quality validation to ensure essays_broken matches breached_essays.
+    """
+    if sample is None or len(sample) == 0:
+        return html.P("No data available", className="text-muted")
+    
+    status_color = {
+        'Anormal': 'danger',
+        'Alerta': 'warning',
+        'Normal': 'success'
+    }.get(sample.get('report_status', 'Normal'), 'secondary')
+    
+    # Parse stored breached essays
+    stored_breached_essays = []
+    breached_value = sample.get('breached_essays')
+    if breached_value is not None and not (isinstance(breached_value, float) and pd.isna(breached_value)):
+        try:
+            stored_breached_essays = json.loads(breached_value)
+        except:
+            stored_breached_essays = []
+    
+    # Calculate breached essays from actual data
+    calculated_breached_essays = calculate_breached_essays_from_data(sample, limits, client, machine, component) if limits else []
+    
+    # Use calculated if stored is empty or inconsistent
+    essays_broken_count = int(sample.get('essays_broken', 0))
+    if not stored_breached_essays and calculated_breached_essays:
+        breached_essays = calculated_breached_essays
+        data_quality_warning = True
+    else:
+        breached_essays = stored_breached_essays
+        # Check for inconsistency
+        data_quality_warning = (essays_broken_count > 0 and len(stored_breached_essays) == 0) or \
+                              (essays_broken_count != len(stored_breached_essays))
+    
+    breached_text = ", ".join(breached_essays) if breached_essays else "None"
+    
+    # Previous sample context
+    prev_date = "N/A"
+    days_since = "N/A"
+    prev_sample_date = sample.get('previousSampleDate')
+    if prev_sample_date is not None and not (isinstance(prev_sample_date, float) and pd.isna(prev_sample_date)):
+        prev_date = pd.to_datetime(prev_sample_date).strftime('%Y-%m-%d')
+    
+    days_prev = sample.get('daysSincePrevious')
+    if days_prev is not None and not (isinstance(days_prev, float) and pd.isna(days_prev)):
+        days_since = f"{int(days_prev)} days"
+    
+    return dbc.Row([
+        # Left column - Decision metrics
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("🎯 Report Outcome", className="mb-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Div([
+                                html.Small("Report Status", className="text-muted d-block mb-1"),
+                                html.H4(html.Span(sample.get('report_status', 'N/A'), 
+                                       className=f"badge bg-{status_color}"))
+                            ])
+                        ], width=4),
+                        dbc.Col([
+                            html.Div([
+                                html.Small("Severity Score", className="text-muted d-block mb-1"),
+                                html.H4(f"{sample.get('severity_score', 0):.2f}", 
+                                       className=f"text-{status_color}")
+                            ])
+                        ], width=4),
+                        dbc.Col([
+                            html.Div([
+                                html.Small("Desgaste Score", className="text-muted d-block mb-1"),
+                                html.H4(f"{sample.get('desgaste_score', 0):.2f}",
+                                       className=f"text-{status_color}")
+                            ])
+                        ], width=4)
+                    ]),
+                    html.Hr(),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Div([
+                                html.Small("Essays Broken", className="text-muted d-block mb-1"),
+                                html.H3(f"{sample.get('essays_broken', 0)}", 
+                                       className=f"text-{status_color}")
+                            ])
+                        ], width=6),
+                        dbc.Col([
+                            html.Div([
+                                html.Small("Breached Essays", className="text-muted d-block mb-1"),
+                                html.P(breached_text, className="mb-0", 
+                                      style={'fontSize': '0.9rem', 'fontWeight': 'bold'})
+                            ])
+                        ], width=6)
+                    ])
+                ])
+            ], color="light")
+        ], width=8),
+        # Right column - Previous sample context
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("📅 Previous Sample Context", className="mb-3"),
+                    html.Div([
+                        html.Small("Previous Sample Date", className="text-muted d-block"),
+                        html.Strong(prev_date, className="d-block mb-2")
+                    ]),
+                    html.Div([
+                        html.Small("Days Since Previous", className="text-muted d-block"),
+                        html.Strong(days_since, className="d-block")
+                    ])
+                ])
+            ], color="light")
+        ], width=4)
+    ], className="mb-2") if not data_quality_warning else html.Div([
+        dbc.Row([
+            # Left column - Decision metrics
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H5("🎯 Report Outcome", className="mb-3"),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Div([
+                                    html.Small("Report Status", className="text-muted d-block mb-1"),
+                                    html.H4(html.Span(sample.get('report_status', 'N/A'), 
+                                           className=f"badge bg-{status_color}"))
+                                ])
+                            ], width=4),
+                            dbc.Col([
+                                html.Div([
+                                    html.Small("Severity Score", className="text-muted d-block mb-1"),
+                                    html.H4(f"{sample.get('severity_score', 0):.2f}", 
+                                           className=f"text-{status_color}")
+                                ])
+                            ], width=4),
+                            dbc.Col([
+                                html.Div([
+                                    html.Small("Desgaste Score", className="text-muted d-block mb-1"),
+                                    html.H4(f"{sample.get('desgaste_score', 0):.2f}",
+                                           className=f"text-{status_color}")
+                                ])
+                            ], width=4)
+                        ]),
+                        html.Hr(),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Div([
+                                    html.Small("Essays Broken", className="text-muted d-block mb-1"),
+                                    html.H3(f"{essays_broken_count}", 
+                                           className=f"text-{status_color}")
+                                ])
+                            ], width=6),
+                            dbc.Col([
+                                html.Div([
+                                    html.Small("Breached Essays", className="text-muted d-block mb-1"),
+                                    html.P(breached_text, className="mb-0", 
+                                          style={'fontSize': '0.9rem', 'fontWeight': 'bold'})
+                                ])
+                            ], width=6)
+                        ])
+                    ])
+                ], color="light")
+            ], width=8),
+            # Right column - Previous sample context
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H6("📅 Previous Sample Context", className="mb-3"),
+                        html.Div([
+                            html.Small("Previous Sample Date", className="text-muted d-block"),
+                            html.Strong(prev_date, className="d-block mb-2")
+                        ]),
+                        html.Div([
+                            html.Small("Days Since Previous", className="text-muted d-block"),
+                            html.Strong(days_since, className="d-block")
+                        ])
+                    ])
+                ], color="light")
+            ], width=4)
+        ], className="mb-2"),
+        # Data quality warning
+        dbc.Alert([
+            html.Strong("⚠️ Data Quality Notice: "),
+            f"The essays_broken count ({essays_broken_count}) doesn't match the breached_essays list. ",
+            "Showing dynamically calculated breached essays based on actual values and thresholds."
+        ], color="warning", className="mb-0")
+    ])
+
+
+def create_evidence_tables(sample, limits, df):
+    """
+    Create evidence tables grouped by essay category (OIL-R-03).
+    
+    Replaces radar charts with clear tabular evidence showing:
+    - Essay name
+    - Current value
+    - Threshold band
+    - Essay status
+    - Whether it contributes to breached evidence
+    """
+    from pathlib import Path
+    
+    # Load essays_elements to get GroupElement mapping
+    essays_file = Path("data/oil/essays_elements.xlsx")
+    if not essays_file.exists():
+        return html.P("essays_elements.xlsx not found", className="text-muted")
+    
+    try:
+        essays_df = pd.read_excel(essays_file)
+        essays_df = essays_df.dropna(subset=['ElementNameSpanish', 'GroupElement'])
+        
+        # Group essays by GroupElement
+        group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()
+        
+        # Order groups: Desgaste first, then others alphabetically
+        priority_groups = ['Desgaste', 'Contaminacion', 'Aditivos']
+        ordered_groups = []
+        
+        for group in priority_groups:
+            if group in group_mapping:
+                ordered_groups.append(group)
+        
+        remaining_groups = sorted([g for g in group_mapping.keys() if g not in priority_groups])
+        ordered_groups.extend(remaining_groups)
+        
+        # Get limits for this component
+        machine = sample.get('machineName', '')
+        component = sample.get('componentName', '')
+        component_normalized = sample.get('componentNameNormalized', component)
+        client = sample.get('client', '')
+        
+        if not (limits and client in limits and machine in limits[client] and component_normalized in limits[client][machine]):
+            return html.P("No limits available for evidence tables", className="text-muted")
+        
+        comp_limits = limits[client][machine][component_normalized]
+        
+        # Parse breached essays
+        breached_essays = []
+        breached_value = sample.get('breached_essays')
+        if breached_value is not None and not (isinstance(breached_value, float) and pd.isna(breached_value)):
+            try:
+                breached_essays = json.loads(breached_value)
+            except:
+                breached_essays = []
+        
+        # Create evidence tables by group
+        tables = []
+        
+        for group_name in ordered_groups:
+            essays = group_mapping[group_name]
+            
+            # Filter essays that exist in sample and have limits
+            valid_essays = [e for e in essays if e in sample.index and pd.notna(sample[e]) and e in comp_limits]
+            
+            if not valid_essays:
+                continue
+            
+            # Build table data
+            table_data = []
+            for essay in valid_essays:
+                value = float(sample[essay])
+                normal = comp_limits[essay].get('threshold_normal', 0)
+                alert = comp_limits[essay].get('threshold_alert', 0)
+                critic = comp_limits[essay].get('threshold_critic', 0)
+                
+                # Determine status
+                if value >= critic:
+                    status = 'Crítico'
+                    color = '#dc3545'
+                elif value >= alert:
+                    status = 'Condenatorio'
+                    color = '#fd7e14'
+                elif value >= normal:
+                    status = 'Marginal'
+                    color = '#ffc107'
+                else:
+                    status = 'Normal'
+                    color = '#28a745'
+                
+                # Check if breached
+                is_breached = essay in breached_essays
+                
+                table_data.append({
+                    'essay': essay,
+                    'value': round(value, 2),
+                    'threshold_band': f"{round(normal, 1)} / {round(alert, 1)} / {round(critic, 1)}",
+                    'status': status,
+                    'breached': '⚠️ Yes' if is_breached else 'No',
+                    '_color': color
+                })
+            
+            # Sort by status severity (worst first)
+            status_order = {'Crítico': 0, 'Condenatorio': 1, 'Marginal': 2, 'Normal': 3}
+            table_data.sort(key=lambda x: (status_order.get(x['status'], 4), x['essay']))
+            
+            # Create table
+            group_table = dash_table.DataTable(
+                columns=[
+                    {'name': 'Essay', 'id': 'essay'},
+                    {'name': 'Current Value (ppm)', 'id': 'value', 'type': 'numeric'},
+                    {'name': 'Thresholds (N/A/C)', 'id': 'threshold_band'},
+                    {'name': 'Status', 'id': 'status'},
+                    {'name': 'Breached?', 'id': 'breached'}
+                ],
+                data=[{k: v for k, v in item.items() if k != '_color'} for item in table_data],
+                style_cell={
+                    'textAlign': 'left',
+                    'padding': '10px',
+                    'fontSize': '13px'
+                },
+                style_header={
+                    'backgroundColor': '#17a2b8',
+                    'color': 'white',
+                    'fontWeight': 'bold',
+                    'textAlign': 'center'
+                },
+                style_data_conditional=[
+                    {
+                        'if': {'row_index': i, 'column_id': 'status'},
+                        'backgroundColor': item['_color'],
+                        'color': 'white' if item['_color'] in ['#dc3545', '#17a2b8', '#28a745'] else 'black',
+                        'fontWeight': 'bold'
+                    }
+                    for i, item in enumerate(table_data)
+                ] + [
+                    {
+                        'if': {'row_index': i, 'column_id': 'breached'},
+                        'fontWeight': 'bold',
+                        'color': '#dc3545'
+                    }
+                    for i, item in enumerate(table_data) if item['breached'] == '⚠️ Yes'
+                ],
+                page_size=15,
+                style_table={'overflowX': 'auto'}
+            )
+            
+            # Add section for this group
+            tables.append(
+                html.Div([
+                    html.H5(f"📊 {group_name}", className="mt-3 mb-3"),
+                    group_table
+                ], className="mb-4")
+            )
+        
+        return html.Div(tables) if tables else html.P("No evidence data available", className="text-muted")
+        
+    except Exception as e:
+        logger.exception(f"Error creating evidence tables: {e}")
+        return html.P(f"Error: {str(e)}", className="text-danger")
+
+
+def create_evidence_tables_and_radar(sample, limits, df):
+    """
+    Create combined evidence display with BOTH tables AND radar charts (OIL-R-03).
+    
+    Shows evidence grouped by essay category:
+    - Evidence table (primary - for detailed threshold analysis)
+    - Radar chart (secondary - for visual pattern recognition)
+    """
+    from pathlib import Path
+    from dash import dcc
+    import plotly.graph_objects as go
+    
+    # Load essays_elements to get GroupElement mapping
+    essays_file = Path("data/oil/essays_elements.xlsx")
+    if not essays_file.exists():
+        return html.P("essays_elements.xlsx not found", className="text-muted")
+    
+    try:
+        essays_df = pd.read_excel(essays_file)
+        essays_df = essays_df.dropna(subset=['ElementNameSpanish', 'GroupElement'])
+        
+        # Group essays by GroupElement
+        group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()
+        
+        # Order groups: Desgaste first, then others alphabetically
+        priority_groups = ['Desgaste', 'Contaminacion', 'Aditivos']
+        ordered_groups = []
+        
+        for group in priority_groups:
+            if group in group_mapping:
+                ordered_groups.append(group)
+        
+        remaining_groups = sorted([g for g in group_mapping.keys() if g not in priority_groups])
+        ordered_groups.extend(remaining_groups)
+        
+        # Get limits for this component
+        machine = sample.get('machineName', '')
+        component = sample.get('componentName', '')
+        component_normalized = sample.get('componentNameNormalized', component)
+        client = sample.get('client', '')
+        
+        if not (limits and client in limits and machine in limits[client] and component_normalized in limits[client][machine]):
+            return html.P("No limits available for evidence analysis", className="text-muted")
+        
+        comp_limits = limits[client][machine][component_normalized]
+        
+        # Parse breached essays
+        breached_essays = []
+        breached_value = sample.get('breached_essays')
+        if breached_value is not None and not (isinstance(breached_value, float) and pd.isna(breached_value)):
+            try:
+                breached_essays = json.loads(breached_value)
+            except:
+                breached_essays = []
+        
+        # Create combined sections (tables + radar charts) by group
+        sections = []
+        
+        for group_name in ordered_groups:
+            essays = group_mapping[group_name]
+            
+            # Filter essays that exist in sample and have limits
+            valid_essays = [e for e in essays if e in sample.index and pd.notna(sample[e]) and e in comp_limits]
+            
+            if not valid_essays:
+                continue
+            
+            # ============================================================
+            # Build table data
+            # ============================================================
+            table_data = []
+            for essay in valid_essays:
+                value = float(sample[essay])
+                normal = comp_limits[essay].get('threshold_normal', 0)
+                alert = comp_limits[essay].get('threshold_alert', 0)
+                critic = comp_limits[essay].get('threshold_critic', 0)
+                
+                # Determine status
+                if value >= critic:
+                    status = 'Crítico'
+                    color = '#dc3545'
+                elif value >= alert:
+                    status = 'Condenatorio'
+                    color = '#fd7e14'
+                elif value >= normal:
+                    status = 'Marginal'
+                    color = '#ffc107'
+                else:
+                    status = 'Normal'
+                    color = '#28a745'
+                
+                # Check if breached
+                is_breached = essay in breached_essays
+                
+                table_data.append({
+                    'essay': essay,
+                    'value': round(value, 2),
+                    'threshold_band': f"{round(normal, 1)} / {round(alert, 1)} / {round(critic, 1)}",
+                    'status': status,
+                    'breached': '⚠️ Yes' if is_breached else 'No',
+                    '_color': color
+                })
+            
+            # Sort by status severity (worst first)
+            status_order = {'Crítico': 0, 'Condenatorio': 1, 'Marginal': 2, 'Normal': 3}
+            table_data.sort(key=lambda x: (status_order.get(x['status'], 4), x['essay']))
+            
+            # Create table
+            group_table = dash_table.DataTable(
+                columns=[
+                    {'name': 'Essay', 'id': 'essay'},
+                    {'name': 'Value (ppm)', 'id': 'value', 'type': 'numeric'},
+                    {'name': 'Thresholds (N/A/C)', 'id': 'threshold_band'},
+                    {'name': 'Status', 'id': 'status'},
+                    {'name': 'Breached?', 'id': 'breached'}
+                ],
+                data=[{k: v for k, v in item.items() if k != '_color'} for item in table_data],
+                style_cell={
+                    'textAlign': 'left',
+                    'padding': '8px',
+                    'fontSize': '12px'
+                },
+                style_header={
+                    'backgroundColor': '#17a2b8',
+                    'color': 'white',
+                    'fontWeight': 'bold',
+                    'textAlign': 'center'
+                },
+                style_data_conditional=[
+                    {
+                        'if': {'row_index': i, 'column_id': 'status'},
+                        'backgroundColor': item['_color'],
+                        'color': 'white' if item['_color'] in ['#dc3545', '#17a2b8', '#28a745'] else 'black',
+                        'fontWeight': 'bold'
+                    }
+                    for i, item in enumerate(table_data)
+                ] + [
+                    {
+                        'if': {'row_index': i, 'column_id': 'breached'},
+                        'fontWeight': 'bold',
+                        'color': '#dc3545'
+                    }
+                    for i, item in enumerate(table_data) if item['breached'] == '⚠️ Yes'
+                ],
+                page_size=10,
+                style_table={'overflowX': 'auto'}
+            )
+            
+            # ============================================================
+            # Build radar chart
+            # ============================================================
+            # Normalize values for radar
+            normalized_values = []
+            actual_values = []
+            
+            for essay in valid_essays:
+                value = float(sample[essay])
+                actual_values.append(value)
+                
+                normal = comp_limits[essay].get('threshold_normal', 0)
+                alert = comp_limits[essay].get('threshold_alert', 0)
+                critic = comp_limits[essay].get('threshold_critic', 0)
+                
+                norm_value = normalize_value(value, normal, alert, critic)
+                normalized_values.append(norm_value)
+            
+            # Create radar chart
+            fig = go.Figure()
+            
+            # Add threshold rings
+            fig.add_trace(go.Scatterpolar(
+                r=[90] * len(valid_essays),
+                theta=valid_essays,
+                name='Crítico',
+                line=dict(color='red', dash='dash', width=2),
+                fill=None,
+                mode='lines'
+            ))
+            
+            fig.add_trace(go.Scatterpolar(
+                r=[70] * len(valid_essays),
+                theta=valid_essays,
+                name='Alerta',
+                line=dict(color='orange', dash='dash', width=2),
+                fill=None,
+                mode='lines'
+            ))
+            
+            fig.add_trace(go.Scatterpolar(
+                r=[50] * len(valid_essays),
+                theta=valid_essays,
+                name='Normal',
+                line=dict(color='green', dash='dash', width=2),
+                fill=None,
+                mode='lines'
+            ))
+            
+            # Determine color based on status
+            status_color = {
+                'Anormal': '#dc3545',
+                'Alerta': '#ffc107',
+                'Normal': '#28a745'
+            }.get(sample.get('report_status', 'Normal'), '#1f77b4')
+            
+            # Add actual values
+            fig.add_trace(go.Scatterpolar(
+                r=normalized_values,
+                theta=valid_essays,
+                name='Current Values',
+                line=dict(color=status_color, width=3),
+                fill='toself',
+                fillcolor=status_color,
+                opacity=0.4,
+                hovertemplate='<b>%{theta}</b><br>Value: %{customdata}<br>Normalized: %{r:.1f}<extra></extra>',
+                customdata=actual_values
+            ))
+            
+            # Update layout
+            fig.update_layout(
+                polar=dict(
+                    radialaxis=dict(
+                        visible=True,
+                        range=[0, 100],
+                        tickvals=[0, 25, 50, 75, 100]
+                    ),
+                    angularaxis=dict(
+                        rotation=90,
+                        direction='clockwise'
+                    )
+                ),
+                title=dict(
+                    text=f"{group_name} - Radar View",
+                    x=0.5,
+                    xanchor='center',
+                    font=dict(size=13)
+                ),
+                showlegend=True,
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=-0.2,
+                    xanchor='center',
+                    x=0.5,
+                    font=dict(size=9)
+                ),
+                height=350,
+                margin=dict(l=50, r=50, t=50, b=50)
+            )
+            
+            # ============================================================
+            # Combine table and radar in 2-column layout
+            # ============================================================
+            sections.append(
+                html.Div([
+                    html.H5(f"📊 {group_name}", className="mt-3 mb-3"),
+                    dbc.Row([
+                        # Left: Table (primary)
+                        dbc.Col([
+                            html.H6("Evidence Table", className="text-muted mb-2", style={'fontSize': '0.9rem'}),
+                            group_table
+                        ], width=7),
+                        # Right: Radar (secondary)
+                        dbc.Col([
+                            html.H6("Visual Pattern", className="text-muted mb-2", style={'fontSize': '0.9rem'}),
+                            dcc.Graph(figure=fig, config={'displayModeBar': False})
+                        ], width=5)
+                    ])
+                ], className="mb-4")
+            )
+        
+        return html.Div(sections) if sections else html.P("No evidence data available", className="text-muted")
+        
+    except Exception as e:
+        logger.exception(f"Error creating evidence tables and radar: {e}")
+        return html.P(f"Error: {str(e)}", className="text-danger")
+
+
+def create_ai_diagnosis_and_action(sample):
+    """
+    Create AI analysis with separate diagnosis and action (OIL-R-04).
+    
+    Returns: (diagnosis_element, action_element)
+    """
+    ai_rec = sample.get('ai_recommendation', '')
+    
+    if not ai_rec or ai_rec == '':
+        diagnosis = html.P("No diagnosis available", className="text-muted")
+        action = html.P("No action recommended", className="text-muted")
+        return diagnosis, action
+    
+    # Split by common action keywords
+    action_keywords = ['recomienda', 'debe', 'programar', 'realizar', 'verificar', 'solicitar']
+    
+    diagnosis_text = ai_rec
+    action_text = "No specific action identified"
+    
+    # Find first action keyword
+    for keyword in action_keywords:
+        if keyword.lower() in ai_rec.lower():
+            idx = ai_rec.lower().find(keyword.lower())
+            diagnosis_text = ai_rec[:idx].strip()
+            action_text = ai_rec[idx:].strip()
+            break
+    
+    # If no split occurred, treat first sentence as diagnosis
+    if diagnosis_text == ai_rec:
+        sentences = ai_rec.split('.')
+        if len(sentences) > 1:
+            diagnosis_text = sentences[0] + '.'
+            action_text = '.'.join(sentences[1:]).strip()
+    
+    # Create diagnosis element (collapsible if long)
+    if len(diagnosis_text) > 200:
+        diagnosis = html.Div([
+            html.P(diagnosis_text[:200] + "...", id="diagnosis-short", className="mb-2"),
+            dbc.Button("Read more", id="diagnosis-expand-btn", color="link", size="sm", className="p-0"),
+            dbc.Collapse(
+                html.P(diagnosis_text, className="mt-2"),
+                id="diagnosis-full",
+                is_open=False
+            )
+        ])
+    else:
+        diagnosis = html.P(diagnosis_text, style={'whiteSpace': 'pre-wrap'})
+    
+    # Create action element (highlighted)
+    action = dbc.Alert([
+        html.P(action_text, className="mb-0", style={'fontSize': '1.1rem', 'whiteSpace': 'pre-wrap'})
+    ], color="danger")
+    
+    return diagnosis, action
+
+
+def create_delta_summary(sample, df, equipo, component, limits, client, machine):
+    """
+    Create delta summary showing changes from previous report (OIL-R-06).
+    
+    Shows:
+    - Worsening essays
+    - Improving essays
+    - Unchanged critical essays
+    - Net status change
+    - Major severity deltas
+    
+    Uses dynamically calculated breached essays for accuracy.
+    """
+    # Get history for this equipment and component
+    history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate', ascending=False)
+    
+    if len(history) < 2:
+        return dbc.Alert("Need at least 2 reports for comparison. This is the first report for this component.", 
+                        color="info", className="mb-0")
+    
+    # Get current and previous report
+    current = history.iloc[0]
+    previous = history.iloc[1]
+    
+    # Calculate breached essays dynamically for both (more reliable than stored values)
+    current_breached = calculate_breached_essays_from_data(current, limits, client, machine, component) if limits else []
+    previous_breached = calculate_breached_essays_from_data(previous, limits, client, machine, component) if limits else []
+    
+    # Identify worsening, improving, unchanged critical
+    new_breaches = [e for e in current_breached if e not in previous_breached]
+    resolved_breaches = [e for e in previous_breached if e not in current_breached]
+    unchanged_critical = [e for e in current_breached if e in previous_breached]
+    
+    # Status change
+    current_status = current.get('report_status', 'N/A')
+    previous_status = previous.get('report_status', 'N/A')
+    status_changed = current_status != previous_status
+    
+    # Severity delta
+    current_severity = current.get('severity_score', 0)
+    previous_severity = previous.get('severity_score', 0)
+    severity_delta = current_severity - previous_severity
+    
+    # Date context
+    current_date = pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d')
+    previous_date = pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d')
+    
+    # Calculate badge colors
+    status_colors = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger'}
+    current_badge_color = status_colors.get(current_status, 'secondary')
+    previous_badge_color = status_colors.get(previous_status, 'secondary')
+    
+    # Build summary
+    return dbc.Row([
+        # Left - Overview
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("📊 Comparison Overview", className="mb-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Small("Current Report", className="text-muted d-block"),
+                            html.Strong(current_date, className="d-block"),
+                            html.Span(current_status, 
+                                     className=f"badge bg-{current_badge_color}")
+                        ], width=6),
+                        dbc.Col([
+                            html.Small("Previous Report", className="text-muted d-block"),
+                            html.Strong(previous_date, className="d-block"),
+                            html.Span(previous_status,
+                                     className=f"badge bg-{previous_badge_color}")
+                        ], width=6)
+                    ]),
+                    html.Hr(),
+                    html.Div([
+                        html.Small("Severity Change", className="text-muted d-block"),
+                        html.H4([
+                            f"{severity_delta:+.2f}",
+                            html.Span(" ↑" if severity_delta > 0 else " ↓" if severity_delta < 0 else " →",
+                                     className=f"text-{'danger' if severity_delta > 0 else 'success' if severity_delta < 0 else 'muted'}")
+                        ], className="mb-0")
+                    ])
+                ])
+            ])
+        ], width=4),
+        # Middle - Worsening
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("⬆️ Worsening", className="mb-2 text-danger"),
+                    html.P(f"{len(new_breaches)} new breached essays", className="mb-1", style={'fontSize': '0.9rem'}),
+                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in new_breaches[:5]]) if new_breaches else html.P("None", className="text-muted mb-0", style={'fontSize': '0.9rem'})
+                ])
+            ], color="light")
+        ], width=3),
+        # Middle-Right - Improving
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("⬇️ Improving", className="mb-2 text-success"),
+                    html.P(f"{len(resolved_breaches)} resolved breaches", className="mb-1", style={'fontSize': '0.9rem'}),
+                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in resolved_breaches[:5]]) if resolved_breaches else html.P("None", className="text-muted mb-0", style={'fontSize': '0.9rem'})
+                ])
+            ], color="light")
+        ], width=3),
+        # Right - Unchanged Critical
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H6("→ Still Critical", className="mb-2 text-warning"),
+                    html.P(f"{len(unchanged_critical)} persistent breaches", className="mb-1", style={'fontSize': '0.9rem'}),
+                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in unchanged_critical[:5]]) if unchanged_critical else html.P("None", className="text-muted mb-0", style={'fontSize': '0.9rem'})
+                ])
+            ], color="light")
+        ], width=2)
+    ])

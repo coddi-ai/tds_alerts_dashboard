@@ -138,6 +138,7 @@ def create_login_page() -> dbc.Container:
                                     "Sign In"
                                 ],
                                 id='login-button',
+                                n_clicks=0,
                                 color='primary',
                                 size="lg",
                                 className='w-100',
@@ -478,18 +479,18 @@ def create_app_layout() -> html.Div:
         Root layout with stores and page content
     """
     return html.Div([
-        # Store user info
-        dcc.Store(id='user-info-store', storage_type='session'),
+        # Store user info (initialized to None to trigger initial callback)
+        dcc.Store(id='user-info-store', storage_type='session', data=None),
         
         # Store navigation state for cross-page navigation
-        dcc.Store(id='navigation-state', storage_type='memory'),
+        dcc.Store(id='navigation-state', storage_type='memory', data=None),
         
         # Store for active tab
-        dcc.Store(id='active-tab-store', storage_type='memory'),
+        dcc.Store(id='active-tab-store', storage_type='memory', data=None),
         
         # Store for alerts internal navigation
-        dcc.Store(id='alerts-navigation-state', storage_type='memory'),
+        dcc.Store(id='alerts-navigation-state', storage_type='memory', data=None),
         
-        # Page content (login or dashboard)
-        html.Div(id='page-content')
+        # Page content (initialized with login page, will be replaced by callback)
+        html.Div(id='page-content', children=create_login_page())
     ])
