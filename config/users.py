@@ -47,6 +47,21 @@ USERS: Dict[str, Dict[str, any]] = {
         "name": "ENEX User",
         "clients": ["ENEX"],  # Only ENEX data
         "role": "client"
+    },
+    # Arturo Casanga - CDA Stake holder with access to CDA data
+    "a.casanga": {
+        "password": hash_password("Teck.2026"),  # Change in production!
+        "name": "Arturo Casanga",
+        "clients": ["CDA"],  # Only CDA data
+        "role": "client"
+    },
+    
+    # Eduardo Carvajal - Coddi Administrator with access to cda data
+    "e.carvajal": {
+        "password": hash_password("Coddi.2026"),  # Change in production!
+        "name": "Eduardo Carvajal",
+        "clients": ["CDA"],  # Only CDA data
+        "role": "admin"
     }
 }
 
