@@ -69,6 +69,13 @@ USERS: Dict[str, Dict[str, any]] = {
         "name": "Patricio Ortiz",
         "clients": ["CDA", "EMIN", "ENEX"],  # Access to all clients
         "role": "admin"
+    },
+    # Data Team - Coddi Administrator with access to all data
+    "data_team": {
+        "password": hash_password("Coddi.2026"),  # Change in production!
+        "name": "Data Team",
+        "clients": ["CDA", "EMIN", "ENEX"],  # Access to all clients
+        "role": "admin"
     }
 }
 
