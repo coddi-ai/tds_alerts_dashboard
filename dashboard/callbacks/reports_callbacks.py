@@ -1863,7 +1863,8 @@ def create_ai_diagnosis_and_action(sample):
     """
     ai_rec = sample.get('ai_recommendation', '')
     
-    if not ai_rec or ai_rec == '':
+    # Handle NaN, None, or empty string
+    if ai_rec is None or (isinstance(ai_rec, float) and pd.isna(ai_rec)) or ai_rec == '' or not isinstance(ai_rec, str):
         diagnosis = html.P("No diagnosis available", className="text-muted")
         action = html.P("No action recommended", className="text-muted")
         return diagnosis, action
