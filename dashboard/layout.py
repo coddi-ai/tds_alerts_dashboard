@@ -69,7 +69,7 @@ def create_login_page() -> dbc.Container:
                         # Login form section
                         html.Div([
                             html.H4(
-                                "Sign In",
+                                "Iniciar Sesión",
                                 className="mb-1 text-center",
                                 style={"fontWeight": "600", "fontSize": "1.3rem"}
                             ),
@@ -90,7 +90,7 @@ def create_login_page() -> dbc.Container:
                             # Username field
                             html.Div([
                                 html.Label(
-                                    "Username",
+                                    "Usuario",
                                     className="form-label fw-500 mb-2",
                                     style={"fontSize": "0.9rem", "color": "#495057"}
                                 ),
@@ -101,7 +101,7 @@ def create_login_page() -> dbc.Container:
                                     ),
                                     dbc.Input(
                                         id='username-input',
-                                        placeholder='Enter your username',
+                                        placeholder='Ingrese su usuario',
                                         type='text',
                                         style={"fontSize": "0.95rem"},
                                         autoComplete="username"
@@ -112,7 +112,7 @@ def create_login_page() -> dbc.Container:
                             # Password field
                             html.Div([
                                 html.Label(
-                                    "Password",
+                                    "Contraseña",
                                     className="form-label fw-500 mb-2",
                                     style={"fontSize": "0.9rem", "color": "#495057"}
                                 ),
@@ -123,7 +123,7 @@ def create_login_page() -> dbc.Container:
                                     ),
                                     dbc.Input(
                                         id='password-input',
-                                        placeholder='Enter your password',
+                                        placeholder='Ingrese su contraseña',
                                         type='password',
                                         style={"fontSize": "0.95rem"},
                                         autoComplete="current-password"
@@ -135,7 +135,7 @@ def create_login_page() -> dbc.Container:
                             dbc.Button(
                                 [
                                     html.I(className="fas fa-sign-in-alt me-2"),
-                                    "Sign In"
+                                    "Iniciar Sesión"
                                 ],
                                 id='login-button',
                                 n_clicks=0,
@@ -223,7 +223,7 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                     dbc.Col([
                         html.Div([
                             html.Span(
-                                [html.I(className="fas fa-building me-2", style={"fontSize": "0.75rem"}), "Client:"],
+                                [html.I(className="fas fa-building me-2", style={"fontSize": "0.75rem"}), "Cliente:"],
                                 className="text-white-50 me-2",
                                 style={"fontSize": "0.75rem", "fontWeight": "400"}
                             ),
@@ -264,7 +264,7 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                                 className="me-3"
                             ),
                             dbc.Button(
-                                [html.I(className="fas fa-sign-out-alt me-2"), "Logout"],
+                                [html.I(className="fas fa-sign-out-alt me-2"), "Cerrar Sesión"],
                                 id='logout-button',
                                 color="danger",
                                 size="sm",
@@ -304,13 +304,13 @@ def create_placeholder_content(section_name: str) -> html.Div:
             dbc.CardBody([
                 html.Div([
                     html.I(className="fas fa-tools fa-3x mb-3 text-muted"),
-                    html.H3("In Progress", className="text-muted"),
+                    html.H3("En Progreso", className="text-muted"),
                     html.P(
-                        f"The {section_name} section is currently under development.",
+                        f"La sección {section_name} está actualmente en desarrollo.",
                         className="text-muted mb-2"
                     ),
                     html.P(
-                        "This feature will be available soon. Check the migration plan for timeline.",
+                        "Esta funcionalidad estará disponible pronto. Consulte el plan de migración para la línea de tiempo.",
                         className="text-muted small"
                     )
                 ], className="text-center py-5")
@@ -336,7 +336,7 @@ def create_main_dashboard(user_data: dict) -> html.Div:
     navigation_items = [
         {
             'section': 'overview',
-            'label': 'Overview',
+            'label': 'Resumen',
             'icon': 'fas fa-tachometer-alt',
             'subsections': [
                 {'id': 'overview-general', 'label': 'General', 'tab': create_overview_general_tab}
@@ -344,22 +344,22 @@ def create_main_dashboard(user_data: dict) -> html.Div:
         },
         {
             'section': 'monitoring',
-            'label': 'Monitoring',
+            'label': 'Monitoreo',
             'icon': 'fas fa-chart-line',
             'subsections': [
-                {'id': 'monitoring-alerts', 'label': 'Alerts', 'tab': create_alerts_tab},
-                {'id': 'monitoring-telemetry', 'label': 'Telemetry', 'tab': create_telemetry_tab},
-                {'id': 'monitoring-health-index', 'label': 'Health Index', 'tab': create_health_index_tab},
-                {'id': 'monitoring-mantentions', 'label': 'Mantentions', 'tab': layout_mantenciones_general},
-                {'id': 'monitoring-oil', 'label': 'Oil', 'tab': create_oil_tab}
+                {'id': 'monitoring-alerts', 'label': 'Alertas', 'tab': create_alerts_tab},
+                {'id': 'monitoring-telemetry', 'label': 'Telemetría', 'tab': create_telemetry_tab},
+                {'id': 'monitoring-health-index', 'label': 'Índice de Salud', 'tab': create_health_index_tab},
+                {'id': 'monitoring-mantentions', 'label': 'Mantenciones', 'tab': layout_mantenciones_general},
+                {'id': 'monitoring-oil', 'label': 'Aceite', 'tab': create_oil_tab}
             ]
         },
         {
             'section': 'limits',
-            'label': 'Limits',
+            'label': 'Límites',
             'icon': 'fas fa-sliders-h',
             'subsections': [
-                {'id': 'limits-oil', 'label': 'Oil', 'tab': create_limits_tab}
+                {'id': 'limits-oil', 'label': 'Aceite', 'tab': create_limits_tab}
             ]
         }
     ]

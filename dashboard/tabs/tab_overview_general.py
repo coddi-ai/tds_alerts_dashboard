@@ -150,7 +150,7 @@ def create_overview_general_layout():
                         dbc.Card([
                             dbc.CardHeader([
                                 html.Div([
-                                    create_section_header("Tribología - Status Distribution", "fa-oil-can", "warning"),
+                                    create_section_header("Tribología - Distribución de Estado", "fa-oil-can", "warning"),
                                     html.Small(id="overview-oil-timestamp", className="text-muted", style={'fontSize': '10px'})
                                 ])
                             ], className="py-2"),
