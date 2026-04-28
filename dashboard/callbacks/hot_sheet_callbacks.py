@@ -206,7 +206,7 @@ def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.Data
         df_oil: Oil classified dataframe
     
     Returns:
-        DataFrame with columns: Unidad, Estado_Alertas, Estado_Tribologia
+        DataFrame with columns: Unidad, Estado_Telemetria, Estado_Tribologia
     """
     # Get unique units from both sources
     units = set()
@@ -219,7 +219,7 @@ def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.Data
         units.update(df_oil['unitId'].unique())
     
     if not units:
-        return pd.DataFrame(columns=['Unidad', 'Estado_Alertas', 'Estado_Tribologia'])
+        return pd.DataFrame(columns=['Unidad', 'Estado_Telemetria', 'Estado_Tribologia'])
     
     # Calculate status for each unit
     results = []
@@ -229,7 +229,7 @@ def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.Data
         
         results.append({
             'Unidad': unit,
-            'Estado_Alertas': alert_status,
+            'Estado_Telemetria': alert_status,
             'Estado_Tribologia': trib_status
         })
     
@@ -238,12 +238,12 @@ def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.Data
     # Sort by worst status first (anormal > alerta > normal > sin_datos)
     status_priority = {'anormal': 0, 'alerta': 1, 'normal': 2, 'sin_datos': 3}
     
-    df_result['alert_priority'] = df_result['Estado_Alertas'].map(status_priority)
+    df_result['telemetry_priority'] = df_result['Estado_Telemetria'].map(status_priority)
     df_result['trib_priority'] = df_result['Estado_Tribologia'].map(status_priority)
-    df_result['combined_priority'] = df_result['alert_priority'] + df_result['trib_priority']
+    df_result['combined_priority'] = df_result['telemetry_priority'] + df_result['trib_priority']
     
     df_result = df_result.sort_values('combined_priority')
-    df_result = df_result.drop(columns=['alert_priority', 'trib_priority', 'combined_priority'])
+    df_result = df_result.drop(columns=['telemetry_priority', 'trib_priority', 'combined_priority'])
     
     return df_result
 
@@ -292,27 +292,27 @@ def update_hot_sheet_table(client):
         # Create table
         table_header = [html.Thead(html.Tr([
             html.Th("Unidad", style={'width': '33%'}),
-            html.Th("Alertas", style={'width': '33%', 'textAlign': 'center'}),
+            html.Th("Telemetría", style={'width': '33%', 'textAlign': 'center'}),
             html.Th("Tribología", style={'width': '33%', 'textAlign': 'center'})
         ]))]
         
         rows = []
         for idx, row in df_hot.iterrows():
-            alert_status = row['Estado_Alertas']
+            telemetry_status = row['Estado_Telemetria']
             trib_status = row['Estado_Tribologia']
             
             cells = [
                 html.Td(row['Unidad'], style={'fontWeight': 'bold', 'verticalAlign': 'middle'}),
                 html.Td(
                     html.Div([
-                        html.Span(status_icons[alert_status], className="me-2"),
-                        status_text[alert_status]
+                        html.Span(status_icons[telemetry_status], className="me-2"),
+                        status_text[telemetry_status]
                     ], style={'textAlign': 'center'}),
                     style={
-                        'backgroundColor': status_colors[alert_status],
+                        'backgroundColor': status_colors[telemetry_status],
                         'textAlign': 'center',
                         'verticalAlign': 'middle',
-                        'fontWeight': 'bold' if alert_status == 'anormal' else 'normal'
+                        'fontWeight': 'bold' if telemetry_status == 'anormal' else 'normal'
                     }
                 ),
                 html.Td(

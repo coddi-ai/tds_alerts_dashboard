@@ -30,7 +30,7 @@ def create_layout() -> html.Div:
                     "Hot Sheet - Estado de Unidades"
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Vista rápida del estado de todas las unidades basado en alertas y tribología",
+                    "Vista rápida del estado de todas las unidades basado en telemetría y tribología",
                     className="text-muted"
                 )
             ])

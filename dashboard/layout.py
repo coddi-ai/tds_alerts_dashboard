@@ -9,17 +9,18 @@ Custom CSS for navigation and layout styling is automatically loaded from:
 
 from dash import dcc, html
 import dash_bootstrap_components as dbc
-from dashboard.tabs.tab_limits import create_limits_tab
-from dashboard.tabs.tab_machines import create_machines_tab
-from dashboard.tabs.tab_reports import create_reports_tab
+# Commented tabs - not currently active in navigation
+# from dashboard.tabs.tab_limits import create_limits_tab
+# from dashboard.tabs.tab_machines import create_machines_tab
+# from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_alerts import create_layout as create_alerts_tab
-from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
-from dashboard.tabs.tab_telemetry import create_layout as create_telemetry_tab
+# from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
+# from dashboard.tabs.tab_telemetry import create_layout as create_telemetry_tab
 from dashboard.tabs.tab_overview_general import create_layout as create_overview_general_tab
 from dashboard.tabs.tab_oil import create_layout as create_oil_tab
-from dashboard.tabs.tab_health_index import create_layout as create_health_index_tab
-from dashboard.tabs.tab_menace_control import create_layout as create_menace_control_tab
-from dashboard.tabs.tab_hot_sheet import create_layout as create_hot_sheet_tab
+# from dashboard.tabs.tab_health_index import create_layout as create_health_index_tab
+# from dashboard.tabs.tab_menace_control import create_layout as create_menace_control_tab
+# from dashboard.tabs.tab_hot_sheet import create_layout as create_hot_sheet_tab
 
 
 def create_login_page() -> dbc.Container:
@@ -349,23 +350,23 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             'label': 'Monitoreo',
             'icon': 'fas fa-chart-line',
             'subsections': [
-                {'id': 'monitoring-hot-sheet', 'label': 'Hot Sheet', 'tab': create_hot_sheet_tab},
+                # {'id': 'monitoring-hot-sheet', 'label': 'Hot Sheet', 'tab': create_hot_sheet_tab},
                 {'id': 'monitoring-alerts', 'label': 'Alertas', 'tab': create_alerts_tab},
-                {'id': 'monitoring-menace-control', 'label': 'Control de Amenazas', 'tab': create_menace_control_tab},
-                {'id': 'monitoring-telemetry', 'label': 'Telemetría', 'tab': create_telemetry_tab},
-                {'id': 'monitoring-health-index', 'label': 'Índice de Salud', 'tab': create_health_index_tab},
-                {'id': 'monitoring-mantentions', 'label': 'Mantenciones', 'tab': layout_mantenciones_general},
+                # {'id': 'monitoring-menace-control', 'label': 'Control de Amenazas', 'tab': create_menace_control_tab},
+                # {'id': 'monitoring-telemetry', 'label': 'Telemetría', 'tab': create_telemetry_tab},
+                # {'id': 'monitoring-health-index', 'label': 'Índice de Salud', 'tab': create_health_index_tab},
+                # {'id': 'monitoring-mantentions', 'label': 'Mantenciones', 'tab': layout_mantenciones_general},
                 {'id': 'monitoring-oil', 'label': 'Aceite', 'tab': create_oil_tab}
             ]
         },
-        {
-            'section': 'limits',
-            'label': 'Límites',
-            'icon': 'fas fa-sliders-h',
-            'subsections': [
-                {'id': 'limits-oil', 'label': 'Aceite', 'tab': create_limits_tab}
-            ]
-        }
+        # {
+        #     'section': 'limits',
+        #     'label': 'Límites',
+        #     'icon': 'fas fa-sliders-h',
+        #     'subsections': [
+        #         {'id': 'limits-oil', 'label': 'Aceite', 'tab': create_limits_tab}
+        #     ]
+        # }
     ]
     
     # Build left menu with improved styling
