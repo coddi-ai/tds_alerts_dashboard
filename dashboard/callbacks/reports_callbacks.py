@@ -13,6 +13,7 @@ from pathlib import Path
 from config.settings import get_settings
 from src.data.loaders import load_oil_classified, load_essays_mapping, _data_path
 from src.data.loaders import load_stewart_limits_four
+from src.data.sqlite_repository import sqlite_backend_enabled
 from dashboard.components.oil_charts import (
     get_essay_limits_four,
     build_oil_time_series_grid,
@@ -28,6 +29,11 @@ import dash_bootstrap_components as dbc
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _source_available(path):
+    """Treat the configured SQLite publication as the report source."""
+    return sqlite_backend_enabled() or path.exists()
 
 
 def normalize_breached_essays(breached_value):
@@ -204,7 +210,7 @@ def register_reports_callbacks(app):
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             logger.error(f"File not found: {reports_file}")
             return [], None
         
@@ -253,7 +259,7 @@ def register_reports_callbacks(app):
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return [], None
         
         try:
@@ -305,7 +311,7 @@ def register_reports_callbacks(app):
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return [], None, None
         
         try:
@@ -361,7 +367,7 @@ def register_reports_callbacks(app):
         
         logger.info(f"Looking for file: {reports_file}")
         
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             logger.error(f"File not found: {reports_file}")
             return [], None
         
@@ -440,14 +446,14 @@ def register_reports_callbacks(app):
 
         logger.info(f"Reports file: {reports_file}, exists: {reports_file.exists()}")
 
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             logger.error(f"Reports file not found: {reports_file}")
             return (html.Div(), html.P("Sin datos"), html.Div(),
                    html.P("Sin datos"), [], None, html.Div())
 
         try:
             df = load_oil_classified(client)
-            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+            limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
             
             logger.info(f"Loaded {len(df)} rows, filtering for: familia={familia}, equipo={equipo}, component={component}, date={sample_date}")
             
@@ -532,12 +538,12 @@ def register_reports_callbacks(app):
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return Figure()
 
         try:
             df = load_oil_classified(client)
-            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+            limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
             
             # Filter to this equipment and component
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate')
@@ -673,12 +679,12 @@ def register_reports_callbacks(app):
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return html.P("No hay datos disponibles", className="text-muted")
 
         try:
             df = load_oil_classified(client)
-            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+            limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
 
             # Filter to equipment + component
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
@@ -750,12 +756,12 @@ def register_reports_callbacks(app):
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return html.P("No hay datos disponibles", className="text-muted")
 
         try:
             df = load_oil_classified(client)
-            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+            limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
 
             sample_date_only = pd.to_datetime(sample_date).strftime('%Y-%m-%d')
             df['sampleDate_str'] = pd.to_datetime(df['sampleDate']).dt.strftime('%Y-%m-%d')
@@ -771,7 +777,7 @@ def register_reports_callbacks(app):
             sample = sample_df.iloc[0]
 
             essays_file = _data_path("oil", "essays_elements.xlsx")
-            if not essays_file.exists():
+            if not _source_available(essays_file):
                 return html.P("Archivo essays_elements.xlsx no encontrado", className="text-muted")
             essays_df = load_essays_mapping(essays_file)
 
@@ -808,7 +814,7 @@ def register_reports_callbacks(app):
 
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return html.P("Sin datos", className="text-muted")
 
         try:
@@ -896,7 +902,7 @@ def register_reports_callbacks(app):
             return []
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return []
         try:
             df = load_oil_classified(client)
@@ -943,12 +949,12 @@ def register_reports_callbacks(app):
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return html.P("Sin datos", className="text-muted")
 
         try:
             df = load_oil_classified(client)
-            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+            limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
 
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
             if history.empty:
@@ -1442,7 +1448,7 @@ def create_evidence_tables(sample, limits, df):
     
     # Load essays_elements to get GroupElement mapping
     essays_file = _data_path("oil", "essays_elements.xlsx")
-    if not essays_file.exists():
+    if not _source_available(essays_file):
         return html.P("essays_elements.xlsx not found", className="text-muted")
     
     try:

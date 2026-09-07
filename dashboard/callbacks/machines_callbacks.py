@@ -11,11 +11,17 @@ from dash.exceptions import PreventUpdate
 import pandas as pd
 from config.settings import get_settings
 from src.data.loaders import get_latest_component_hours, load_oil_classified, load_machine_status_for_client
+from src.data.sqlite_repository import sqlite_backend_enabled
 from src.utils.logger import get_logger
 from dashboard.components.tables import create_machine_detail_table
 import dash_bootstrap_components as dbc
 
 logger = get_logger(__name__)
+
+
+def _source_available(path):
+    """Treat the configured SQLite publication as the classified-report source."""
+    return sqlite_backend_enabled() or path.exists()
 
 _STATUS_BG = {'Normal': '#d4edda', 'Alerta': '#fff3cd', 'Anormal': '#f8d7da'}
 _STATUS_FG = {'Normal': '#155724', 'Alerta': '#856404', 'Anormal': '#721c24'}
@@ -47,7 +53,7 @@ def register_machines_callbacks(app):
             return []
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return []
         try:
             df = load_oil_classified(client)
@@ -72,7 +78,7 @@ def register_machines_callbacks(app):
             return [], None
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return [], None
         try:
             df = load_oil_classified(client)
@@ -108,7 +114,7 @@ def register_machines_callbacks(app):
             return empty
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return empty
         try:
             df = load_oil_classified(client)
@@ -125,7 +131,7 @@ def register_machines_callbacks(app):
             # Machine statuses
             machine_file = settings.get_machine_status_path(client.lower())
             ms_map = {}
-            if machine_file.exists():
+            if sqlite_backend_enabled() or machine_file.exists():
                 ms_df = load_machine_status_for_client(client)
                 ms_map = dict(zip(ms_df['unit_id'], ms_df['overall_status']))
 
@@ -162,7 +168,7 @@ def register_machines_callbacks(app):
             return [], []
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return [], []
         try:
             df = load_oil_classified(client)
@@ -206,7 +212,7 @@ def register_machines_callbacks(app):
 
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return html.P("Sin datos disponibles", className="text-muted"), ""
 
         try:
@@ -225,7 +231,7 @@ def register_machines_callbacks(app):
 
             machine_file = settings.get_machine_status_path(client.lower())
             ms_map = {}
-            if machine_file.exists():
+            if sqlite_backend_enabled() or machine_file.exists():
                 ms_df = load_machine_status_for_client(client)
                 ms_map = dict(zip(ms_df['unit_id'], ms_df['overall_status']))
 
@@ -366,7 +372,7 @@ def register_machines_callbacks(app):
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client.lower())
         machine_file = settings.get_machine_status_path(client.lower())
-        if not reports_file.exists():
+        if not _source_available(reports_file):
             return "Sin datos", "light", html.Div(), "No hay datos"
 
         try:
@@ -386,7 +392,7 @@ def register_machines_callbacks(app):
             comp_hours_allowed = [c.upper() for c in settings.component_hours_allowed_clients]
             if client.upper() in comp_hours_allowed:
                 chf = settings.get_component_hours_path(client.lower())
-                if chf.exists():
+                if sqlite_backend_enabled() or chf.exists():
                     try:
                         lh = get_latest_component_hours(chf)
                         if not lh.empty:
@@ -408,7 +414,7 @@ def register_machines_callbacks(app):
             ])
 
             rec_card = html.Div()
-            if machine_file.exists():
+            if sqlite_backend_enabled() or machine_file.exists():
                 try:
                     ms_df = load_machine_status_for_client(client)
                     mr = ms_df[ms_df['unit_id'] == unit_id]
@@ -484,7 +490,7 @@ def register_machines_callbacks(app):
         component = col_id
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             raise PreventUpdate
 
         try:
@@ -530,7 +536,7 @@ def register_machines_callbacks(app):
             return [], True, True
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
+        if not _source_available(path):
             return [], True, True
         try:
             df = load_oil_classified(client)
@@ -554,7 +560,7 @@ def register_machines_callbacks(app):
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
         familia = None
-        if path.exists():
+        if _source_available(path):
             try:
                 df = load_oil_classified(client)
                 md = df[df['unitId'] == equipo]

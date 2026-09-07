@@ -336,7 +336,8 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
     charts_to_render = list(TIME_SERIES_CHARTS)
     from src.data.loaders import _data_path
     essays_file = _data_path("oil", "essays_elements.xlsx")
-    if essays_file.exists():
+    from src.data.sqlite_repository import sqlite_backend_enabled
+    if sqlite_backend_enabled() or essays_file.exists():
         from src.data.loaders import load_essays_mapping
         essays_df = load_essays_mapping(essays_file)
         aditivo_essays = essays_df[essays_df['GroupElement'] == 'Aditivo']['ElementNameSpanish'].tolist()

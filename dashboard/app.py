@@ -254,7 +254,10 @@ if __name__ == '__main__':
     data_folder = project_root / 'data'
     logger.info(f"Checking data folder at: {data_folder}")
     
-    if not data_folder.exists():
+    sqlite_backend = os.getenv("DASHBOARD_DATA_BACKEND", "files").strip().lower() == "sqlite"
+    if sqlite_backend:
+        logger.info("SQLite backend selected. Skipping S3 data synchronization.")
+    elif not data_folder.exists():
         logger.warning("Data folder not found. Attempting to sync from S3...")
         try:
             from src.data.s3_downloader import main as s3_sync

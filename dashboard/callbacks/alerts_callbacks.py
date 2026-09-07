@@ -72,10 +72,16 @@ from dashboard.tabs.tab_alerts_detail import (
 from dashboard.components.source_status import render_service_source_status
 from src.utils.logger import get_logger
 from src.utils.date_utils import format_local, to_utc_naive
+from src.data.sqlite_repository import sqlite_backend_enabled
 from config.settings import Settings
 
 logger = get_logger(__name__)
 settings = Settings()
+
+
+def _source_available(path):
+    """Treat the configured SQLite publication as the report source."""
+    return sqlite_backend_enabled() or path.exists()
 
 # Configuration
 M1 = 60  # Minutes before alert
@@ -1225,7 +1231,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         
         # Load essays_elements mapping
         essays_file = _data_path("oil", "essays_elements.xlsx")
-        if not essays_file.exists():
+        if not _source_available(essays_file):
             return html.Div([
                 dbc.Alert("Archivo essays_elements.xlsx no encontrado", color="warning")
             ])
@@ -1237,7 +1243,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         from config.settings import get_settings
         settings = get_settings()
         limits_file = settings.get_stewart_limits_four_path(client)
-        limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+        limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else None
 
         if not limits:
             return html.Div([
@@ -1432,7 +1438,7 @@ def update_oil_tendencia_range(start_date, end_date, context):
 
     settings = get_settings()
     limits_file = settings.get_stewart_limits_four_path(client)
-    limits = load_stewart_limits_four(limits_file) if limits_file.exists() else {}
+    limits = load_stewart_limits_four(limits_file) if _source_available(limits_file) else {}
     comp_limits = limits.get(client, {}).get(context['machine'], {}).get(context['component_normalized'], {})
 
     return _build_oil_tendencia_view(

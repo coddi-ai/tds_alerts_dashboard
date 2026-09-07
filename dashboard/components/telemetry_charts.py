@@ -25,6 +25,7 @@ STATUS_COLORS = {
 # all use the same code -> Spanish description; re-exported here for existing
 # importers (translate_signal() below).
 from src.charts.signals import SIGNAL_LABELS as SIGNAL_TRANSLATION
+from src.data.sqlite_repository import sqlite_backend_enabled
 
 TREND_TRANSLATION = {
     'worsening': 'En deterioro',
@@ -60,6 +61,8 @@ def translate_trend(name: str) -> str:
 @lru_cache(maxsize=1)
 def load_signal_registry(client: str = 'cda') -> Dict[str, str]:
     """Load signal registry and return name → display_name mapping."""
+    if sqlite_backend_enabled():
+        return {}
     from src.data.loaders import _data_path
     path = _data_path("telemetry", "config", client.lower(), "signal_registry.yaml")
     if not path.exists():

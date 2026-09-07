@@ -16,6 +16,7 @@ from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
 from dashboard.auth import current_dashboard_user_data, is_admin
 from dashboard.services_registry import SERVICE_SECTIONS, SERVICE_LABELS, nav_path as _nav_path
+from src.data.sqlite_repository import sqlite_load
 
 
 # Component icon map for predictive nav sections
@@ -34,6 +35,9 @@ def _campbell_ai_enabled() -> bool:
 
 def _discover_predictive_components(client: str) -> list:
     """Discover available predictive component CSVs for a client."""
+    sqlite_components = sqlite_load(client, "predictive_components")
+    if sqlite_components is not None:
+        return list(sqlite_components)
     settings = get_settings()
     data_dir = Path(settings.data_root) / "predictive" / "golden" / client
     if not data_dir.exists():

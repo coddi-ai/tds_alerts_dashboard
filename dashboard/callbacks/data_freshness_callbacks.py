@@ -15,6 +15,7 @@ from functools import lru_cache
 from src.utils.logger import get_logger
 from dashboard.components.labels import NO_DATA_ICON, NO_DATA_BG, NO_DATA_TEXT
 from src.data.catalog import resolve_data_file
+from src.data.sqlite_repository import sqlite_load
 from dashboard.components.source_status import render_service_source_status
 
 logger = get_logger(__name__)
@@ -59,6 +60,9 @@ def load_data_freshness(client: str = "cda") -> pd.DataFrame:
     Returns:
         DataFrame with data freshness information
     """
+    sqlite_frame = sqlite_load(client, "load_data_freshness", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     try:
         file_path = resolve_data_file("auxiliar", client, "Data_Date_Last_Update.csv")
         if file_path is None:

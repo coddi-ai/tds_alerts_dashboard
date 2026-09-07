@@ -24,6 +24,7 @@ from dashboard.components.accumulated_curve import (
     _empty_state as _accumulated_empty_state,
 )
 from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date
+from src.data.sqlite_repository import sqlite_backend_enabled, sqlite_load, _load_repository_class
 from src.data.catalog import dashboard_data_root
 from src.data.fast_io import read_csv as fast_read_csv
 from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT
@@ -51,6 +52,13 @@ def _discover_components(client: str) -> dict:
     (`components.get(component)` / `if not filepath` / `_load_component_data
     (filepath, component, client)`).
     """
+    if sqlite_backend_enabled():
+        try:
+            repository = _load_repository_class().from_environment(client)
+            return {component: Path(f"sqlite://{component}") for component in repository.predictive_components(client)}
+        except Exception as exc:
+            logger.warning("No se pudieron descubrir componentes predictivos SQLite: %s", exc)
+            return {}
     layout = predictive_v2.discover_predictive_layout(client)
     components = {}
     for component, availability in layout.items():
@@ -197,6 +205,26 @@ def _load_component_data_cached(
 def _load_component_data(filepath: Path, component: str, client: str = "cda"):
     """Load a predictive component with invalidation on file generation."""
     filepath = Path(filepath)
+    if sqlite_backend_enabled() and str(filepath).startswith("sqlite://"):
+        frame = sqlite_load(client, "load_predictive_component", client, component)
+        if frame is None or frame.empty:
+            return None, None, {}
+        frame = frame.copy()
+        if "Unit" not in frame.columns:
+            frame["Unit"] = frame.get("equipment_name", "")
+        if "Fecha" not in frame.columns:
+            frame["Fecha"] = frame.get("run_timestamp", frame.get("timestamp"))
+        frame["Fecha"] = pd.to_datetime(frame["Fecha"], errors="coerce")
+        if "ranking" not in frame.columns:
+            frame["ranking"] = pd.to_numeric(frame.get("score", 0), errors="coerce")
+        frame = frame.sort_values(["Unit", "Fecha"], kind="stable")
+        latest = frame.groupby("Unit", as_index=False).last()
+        previous = {}
+        dates = sorted(frame["Fecha"].dropna().unique())
+        if len(dates) > 1:
+            prior = frame[frame["Fecha"] == dates[-2]]
+            previous = dict(zip(prior["Unit"], prior["ranking"]))
+        return frame, latest, previous
     if filepath.suffix == ".csv":
         if not filepath.exists():
             return None, None, {}
@@ -533,6 +561,13 @@ def _load_component_hours_if_available(client: str):
     if not client:
         return None
     try:
+        sqlite_frame = sqlite_load(client, "load_component_hours", client)
+        if sqlite_frame is not None:
+            if sqlite_frame.empty:
+                return None
+            if "sampleDate" in sqlite_frame.columns:
+                sqlite_frame["sampleDate"] = pd.to_datetime(sqlite_frame["sampleDate"], errors="coerce")
+            return sqlite_frame
         settings = get_settings()
         # Ruta directa al parquet, misma que usaba el dashboard antiguo.
         hours_path = dashboard_data_root() / "oil" / "golden" / client.lower() / "cleaned_component_hours.parquet"
@@ -644,7 +679,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
             allowed = [c.upper() for c in settings.component_hours_allowed_clients]
             if client.upper() in allowed:
                 comp_hours_file = settings.get_component_hours_path(client.lower())
-                if comp_hours_file.exists():
+                if sqlite_backend_enabled() or comp_hours_file.exists():
                     all_hours = load_component_hours(comp_hours_file)
                     if not all_hours.empty:
                         def _norm_uid(uid):

@@ -9,6 +9,7 @@ import pandas as pd
 from src.utils.logger import get_logger
 from config.settings import get_settings
 from src.data.loaders import get_latest_component_hours, load_oil_classified
+from src.data.sqlite_repository import sqlite_backend_enabled
 from dashboard.components.predictive_config import (
     resolve_failure_modes,
     resolve_failure_mode_options,
@@ -320,7 +321,7 @@ def register_callbacks(app):
             allowed = [c.upper() for c in settings.component_hours_allowed_clients]
             if client.upper() in allowed:
                 comp_hours_file = settings.get_component_hours_path(client.lower())
-                if comp_hours_file.exists():
+                if sqlite_backend_enabled() or comp_hours_file.exists():
                     try:
                         from src.data.loaders import load_component_hours
                         import re as _re

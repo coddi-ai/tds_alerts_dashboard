@@ -17,6 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from src.data.sqlite_repository import sqlite_backend_enabled, sqlite_capabilities
+
 
 CLIENTS = ("CDA", "EMIN", "ENEX", "CAPSTONE")
 _CATALOG_CACHE_TTL_SECONDS = 15
@@ -245,6 +247,38 @@ def build_client_availability(
     root: str | os.PathLike[str] | Path | None = None,
 ) -> dict[str, SourceProbe]:
     """Probe sources, reusing the catalog during the current refresh window."""
+
+    if sqlite_backend_enabled():
+        capabilities = sqlite_capabilities(client) or {}
+        mapping = {
+            "oil_classified": "tribology",
+            "oil_machine_status": "tribology",
+            "oil_limits_four": "tribology",
+            "alerts_consolidated": "alerts",
+            "telemetry_alert_detail": "telemetry",
+            "telemetry_unit_health": "telemetry",
+            "telemetry_system_health": "telemetry",
+            "telemetry_manifest": "telemetry",
+            "data_freshness": "telemetry",
+            "predictive_components": "predictive",
+            "predictive_ai": "predictive",
+            "maintenance_contract": "maintenance",
+        }
+        result: dict[str, SourceProbe] = {}
+        for source, module in mapping.items():
+            capability = capabilities.get(f"{module}.{module}", {})
+            status = capability.get("status", "missing")
+            result[source] = SourceProbe(
+                client=(client or "").upper(),
+                technique=module,
+                source=source,
+                status=status,
+                path=os.getenv("DASHBOARD_SQLITE_ROOT") or os.getenv("DASHBOARD_SQLITE_PATH"),
+                candidates=(),
+                size_bytes=int(capability.get("row_count") or 0),
+                note=capability.get("note", "SQLite snapshot por cliente"),
+            )
+        return result
 
     root_path = dashboard_data_root(root)
     refresh_bucket = int(time.monotonic() // _CATALOG_CACHE_TTL_SECONDS)

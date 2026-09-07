@@ -10,6 +10,7 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from src.data.loaders import load_silver_telemetry_week, _data_path
+from src.data.sqlite_repository import sqlite_backend_enabled, sqlite_load
 from dashboard.components.telemetry_charts import (
     STATUS_COLORS,
     build_fleet_heatmap,
@@ -592,6 +593,17 @@ def _load_recent_telemetry_signal_cached(
     week; loading eight weeks added I/O without expanding any client-facing
     range.
     """
+    if sqlite_backend_enabled():
+        frame = sqlite_load(
+            client,
+            "load_telemetry_values",
+            projection=["Fecha", "Unit", signal],
+            equipment=[unit],
+            limit=10000,
+        )
+        if frame is None or frame.empty:
+            return pd.DataFrame()
+        return frame.sort_values("Fecha") if "Fecha" in frame.columns else frame
     snapshot = load_telemetry_snapshot(client)
     manifest = snapshot.manifest
     anchor_year = int(manifest.get('evaluation_year', datetime.now().isocalendar()[0]))

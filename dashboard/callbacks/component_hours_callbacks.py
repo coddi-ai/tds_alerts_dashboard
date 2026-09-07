@@ -12,10 +12,23 @@ import plotly.graph_objects as go
 from plotly.graph_objects import Figure
 from config.settings import get_settings
 from src.data.loaders import load_component_hours, get_latest_component_hours
+from src.data.sqlite_repository import sqlite_load
 from src.utils.logger import get_logger
 import dash_bootstrap_components as dbc
 
 logger = get_logger(__name__)
+
+
+def _load_component_hours_for_client(client):
+    """Load component hours from SQLite when selected, otherwise from files."""
+    sqlite_frame = sqlite_load(client, "load_component_hours", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
+    settings = get_settings()
+    path = settings.get_component_hours_path(client.lower())
+    if not path.exists():
+        return None
+    return load_component_hours(path)
 
 
 def register_component_hours_callbacks(app):
@@ -51,15 +64,9 @@ def register_component_hours_callbacks(app):
         if client.upper() not in allowed:
             return []
         
-        comp_hours_file = settings.get_component_hours_path(client.lower())
-        
-        if not comp_hours_file.exists():
-            logger.warning(f"Component hours file not found: {comp_hours_file}")
-            return []
-        
         try:
-            df = load_component_hours(comp_hours_file)
-            if df.empty:
+            df = _load_component_hours_for_client(client)
+            if df is None or df.empty:
                 return []
             
             units = sorted(df['unitId'].unique().tolist())
@@ -91,10 +98,16 @@ def register_component_hours_callbacks(app):
                 []
             )
         
-        settings = get_settings()
-        comp_hours_file = settings.get_component_hours_path(client.lower())
-        
-        if not comp_hours_file.exists():
+        try:
+            df = _load_component_hours_for_client(client)
+        except Exception as e:
+            logger.exception(f"Error loading component hours: {e}")
+            return (
+                html.P(f"Error: {str(e)}", className="text-danger"),
+                [],
+                []
+            )
+        if df is None or df.empty:
             return (
                 html.P("No hay datos de horómetro disponibles", className="text-muted"),
                 [],
@@ -102,14 +115,6 @@ def register_component_hours_callbacks(app):
             )
         
         try:
-            df = load_component_hours(comp_hours_file)
-            if df.empty:
-                return (
-                    html.P("Datos de horómetro vacíos", className="text-muted"),
-                    [],
-                    []
-                )
-            
             # Filter by unit
             unit_df = df[df['unitId'] == unit_id].copy()
             
@@ -206,17 +211,14 @@ def register_component_hours_callbacks(app):
         if not components or not unit_id or not client:
             return Figure()
         
-        settings = get_settings()
-        comp_hours_file = settings.get_component_hours_path(client.lower())
-        
-        if not comp_hours_file.exists():
+        try:
+            df = _load_component_hours_for_client(client)
+        except Exception:
+            return Figure()
+        if df is None or df.empty:
             return Figure()
         
         try:
-            df = load_component_hours(comp_hours_file)
-            if df.empty:
-                return Figure()
-            
             # Filter by unit and selected components
             plot_df = df[(df['unitId'] == unit_id) & (df['componentName'].isin(components))].copy()
             plot_df = plot_df.sort_values('sampleDate')

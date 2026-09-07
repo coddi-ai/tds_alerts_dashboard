@@ -441,6 +441,12 @@ def load_predictive_oil_limits_four(client: str, component: str) -> dict:
     """
     from config.settings import get_settings
     from src.data.loaders import load_stewart_limits_four
+    from src.data.sqlite_repository import sqlite_backend_enabled, sqlite_load
+
+    if sqlite_backend_enabled():
+        limits = sqlite_load(client, "load_stewart_limits_four", client)
+        if isinstance(limits, dict):
+            return limits.get(client.upper(), {}).get(PREDICTIVE_STEWART_MACHINE, {}).get(component, {})
 
     settings = get_settings()
     limits_file = settings.get_stewart_limits_four_path(client)

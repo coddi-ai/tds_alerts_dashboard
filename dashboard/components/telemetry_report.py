@@ -25,6 +25,7 @@ from src.data.loaders import (
     load_telemetry_unit_health,
 )
 from src.data.loaders import _data_path
+from src.data.sqlite_repository import sqlite_backend_enabled
 from dashboard.components.telemetry_charts import load_signal_registry, translate_signal, translate_system, translate_trend
 
 
@@ -55,6 +56,8 @@ def _snapshot_copy(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_signal_metadata(client: str) -> Dict[str, Dict[str, Any]]:
+    if sqlite_backend_enabled():
+        return {}
     path = _data_path("telemetry", "config", client.lower(), "signal_registry.yaml")
     if not path.exists():
         return {}
@@ -71,6 +74,8 @@ def _load_signal_metadata(client: str) -> Dict[str, Dict[str, Any]]:
 
 
 def _load_equipment_models(client: str) -> Dict[str, str]:
+    if sqlite_backend_enabled():
+        return {}
     path = _data_path("telemetry", "config", client.lower(), "equipment_registry.yaml")
     if not path.exists():
         return {}

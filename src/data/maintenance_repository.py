@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
 import logging
+import os
 
 from src.data.dummy_generator import generate_dummy_tables
 from src.data.loaders import (
@@ -15,6 +16,115 @@ from src.data.loaders import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SQLiteMaintenanceRepository:
+    """Read the maintenance dashboard contract from one client SQLite file."""
+
+    def __init__(self, client="cda"):
+        from src.data.sqlite_repository import _load_repository_class
+
+        self.client = client.lower()
+        self._repository = _load_repository_class().from_environment(self.client)
+
+    def get_available_systems(self):
+        return self._repository.maintenance_available_systems()
+
+    def get_available_equipment(self, systems=None):
+        return self._repository.maintenance_available_equipment(systems)
+
+    def get_data_period_info(self):
+        df = self._repository.load_maintenance_actions_all_equipment(self.client)
+        if df.empty:
+            return {"period_start": None, "period_end": None, "period_label": "Sin datos"}
+        date_column = "change_date" if "change_date" in df.columns else "event_timestamp"
+        dates = pd.to_datetime(df[date_column], errors="coerce", utc=True).dropna()
+        if dates.empty:
+            return {"period_start": None, "period_end": None, "period_label": "Sin datos"}
+        latest = dates.max().tz_convert(None)
+        month_names = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        return {"period_start": latest.replace(day=1), "period_end": latest, "period_label": f"{month_names[latest.month - 1]} {latest.year}"}
+
+    def get_status_counts(self, systems=None, equipment=None):
+        return self._repository.maintenance_status_counts(systems=systems, equipment=equipment)
+
+    def _actions(self, systems=None, equipment=None, date_start=None, date_end=None):
+        frame = self._repository.load_maintenance_actions_all_equipment(self.client)
+        if frame.empty:
+            return frame
+        system_column = "action_system_name" if "action_system_name" in frame.columns else "system_name"
+        equipment_column = "machine_code" if "machine_code" in frame.columns else "equipment_name"
+        date_column = "change_date" if "change_date" in frame.columns else "event_timestamp"
+        if systems and system_column in frame:
+            frame = frame[frame[system_column].isin(systems)]
+        if equipment and equipment_column in frame:
+            frame = frame[frame[equipment_column].isin(equipment)]
+        dates = pd.to_datetime(frame[date_column], errors="coerce", utc=True)
+        if date_start:
+            frame = frame[dates >= pd.Timestamp(date_start, tz="UTC")]
+            dates = dates.loc[frame.index]
+        if date_end:
+            frame = frame[dates < pd.Timestamp(date_end, tz="UTC") + timedelta(days=1)]
+        return frame.copy()
+
+    def get_downtime_by_day_mtd(self, systems=None, equipment=None, date_start=None, date_end=None):
+        frame = self._actions(systems, equipment, date_start, date_end)
+        if frame.empty:
+            return pd.DataFrame(columns=["date", "downtime_hours"])
+        date_column = "change_date" if "change_date" in frame.columns else "event_timestamp"
+        days = pd.to_datetime(frame[date_column], errors="coerce", utc=True).dt.date
+        result = frame.assign(date=days).groupby("date").size().reset_index(name="action_count")
+        result["downtime_hours"] = result["action_count"] * 1.5
+        return result[["date", "downtime_hours"]]
+
+    def get_downtime_mtd(self, systems=None, equipment=None, date_start=None, date_end=None):
+        daily = self.get_downtime_by_day_mtd(systems, equipment, date_start, date_end)
+        return pd.DataFrame([{"total_downtime_hours_mtd": float(daily["downtime_hours"].sum()) if not daily.empty else 0.0}])
+
+    def get_last_detentions(self, n_per_machine=3, systems=None, equipment=None, date_start=None, date_end=None):
+        frame = self._actions(systems, equipment, date_start, date_end)
+        if frame.empty:
+            return pd.DataFrame(columns=["machine_code", "record_id", "start_date", "end_date", "ongoing", "duration_hours", "job_types"])
+        machine = "machine_code" if "machine_code" in frame.columns else "equipment_name"
+        event = "event_ts" if "event_ts" in frame.columns else "event_timestamp"
+        frame = frame.sort_values(event, ascending=False).copy()
+        frame["machine_code"] = frame[machine]
+        frame["record_id"] = frame.get("record_id", frame.index.astype(str))
+        frame["start_date"] = pd.to_datetime(frame[event], errors="coerce", utc=True)
+        frame["end_date"] = frame["start_date"]
+        frame["ongoing"] = False
+        frame["duration_hours"] = 1.5
+        frame["job_types"] = frame.get("action_type_name", frame.get("action_type", "Sin información"))
+        return frame.groupby("machine_code", dropna=True).head(n_per_machine)[["machine_code", "record_id", "start_date", "end_date", "ongoing", "duration_hours", "job_types"]]
+
+    def get_jobs_last_week(self, systems=None, equipment=None, date_start=None, date_end=None):
+        frame = self._actions(systems, equipment, date_start, date_end)
+        if frame.empty:
+            return pd.DataFrame(columns=["job_id", "machine_code", "system_name", "subsystem_name", "job_type", "start_date", "end_date", "ongoing", "notes"])
+        machine = "machine_code" if "machine_code" in frame.columns else "equipment_name"
+        frame["job_id"] = frame.get("job_id", frame.get("action_id", frame.index.astype(str)))
+        frame["machine_code"] = frame[machine]
+        frame["system_name"] = frame.get("job_system_name", frame.get("action_system_name", frame.get("system_name")))
+        frame["subsystem_name"] = frame.get("job_subsystem_name", frame.get("action_subsystem_name", frame.get("subsystem_name")))
+        frame["job_type"] = frame.get("action_type_name", frame.get("action_type"))
+        frame["start_date"] = pd.to_datetime(frame.get("event_ts", frame.get("event_timestamp")), errors="coerce", utc=True)
+        frame["end_date"] = frame["start_date"]
+        frame["ongoing"] = False
+        frame["notes"] = frame.get("action_detail_clean", frame.get("action_detail_raw"))
+        return frame.sort_values("start_date", ascending=False).head(100)[["job_id", "machine_code", "system_name", "subsystem_name", "job_type", "start_date", "end_date", "ongoing", "notes"]]
+
+    def get_maintenance_by_system(self, systems=None, equipment=None, date_start=None, date_end=None):
+        frame = self._actions(systems, equipment, date_start, date_end)
+        if frame.empty:
+            return pd.DataFrame(columns=["system_name", "count", "cumulative_pct"])
+        column = "action_system_name" if "action_system_name" in frame.columns else "system_name"
+        counts = frame[column].fillna("Sin Sistema").value_counts().reset_index()
+        counts.columns = ["system_name", "count"]
+        total = counts["count"].sum()
+        counts["cumulative_pct"] = counts["count"].cumsum() / total * 100 if total else 0.0
+        if not counts.empty:
+            counts.loc[counts.index[-1], "cumulative_pct"] = 100.0
+        return counts
 
 
 class MaintenanceRepository:
@@ -816,7 +926,9 @@ def get_repository(mode="dummy", client="cda") -> MaintenanceRepository:
         MaintenanceRepository instance
     """
     global _repositories
+    if os.getenv("DASHBOARD_DATA_BACKEND", "files").strip().lower() == "sqlite":
+        mode = "sqlite"
     key = (mode, client.lower())
     if key not in _repositories:
-        _repositories[key] = MaintenanceRepository(mode, client)
+        _repositories[key] = SQLiteMaintenanceRepository(client) if mode == "sqlite" else MaintenanceRepository(mode, client)
     return _repositories[key]

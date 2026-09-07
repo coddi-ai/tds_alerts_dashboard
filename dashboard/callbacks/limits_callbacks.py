@@ -8,7 +8,19 @@ import pandas as pd
 from pathlib import Path
 from config.settings import get_settings
 from src.utils.file_utils import safe_read_parquet
+from src.data.sqlite_repository import sqlite_load
 from dashboard.components.tables import create_limits_table
+
+
+def _load_limits_for_client(client):
+    sqlite_frame = sqlite_load(client, "load_stewart_limits_four", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
+    settings = get_settings()
+    limits_file = settings.get_stewart_limits_four_path(client)
+    if not limits_file.exists():
+        return None
+    return safe_read_parquet(limits_file)
 
 
 def register_limits_callbacks(app):
@@ -29,16 +41,11 @@ def register_limits_callbacks(app):
         if not client:
             return [], None
         
-        settings = get_settings()
-        # Load four-limit Stewart limits (LIC/LIM/LSM/LSC) for specific client from golden layer
-        limits_file = settings.get_stewart_limits_four_path(client)
-        
-        if not limits_file.exists():
+        df = _load_limits_for_client(client)
+        if df is None:
             return [], None
         
         try:
-            df = safe_read_parquet(limits_file)
-            
             machines = sorted(df['machine'].unique().tolist())
             options = [{'label': m, 'value': m} for m in machines]
             
@@ -60,16 +67,11 @@ def register_limits_callbacks(app):
         if not client:
             return [], None
         
-        settings = get_settings()
-        # Load four-limit Stewart limits (LIC/LIM/LSM/LSC) for specific client from golden layer
-        limits_file = settings.get_stewart_limits_four_path(client)
-        
-        if not limits_file.exists():
+        df = _load_limits_for_client(client)
+        if df is None:
             return [], None
         
         try:
-            df = safe_read_parquet(limits_file)
-            
             if machine:
                 df = df[df['machine'] == machine]
             
@@ -95,17 +97,11 @@ def register_limits_callbacks(app):
         if not client:
             return html.Div("Please select a client to view limits", className="text-muted p-3")
         
-        settings = get_settings()
-        
-        # Load four-limit Stewart Limits (LIC/LIM/LSM/LSC) for specific client from golden layer
-        limits_file = settings.get_stewart_limits_four_path(client)
-        
-        if not limits_file.exists():
+        df = _load_limits_for_client(client)
+        if df is None:
             return html.Div("No limits data available", className="text-warning p-3")
         
         try:
-            df = safe_read_parquet(limits_file)
-            
             # Filter by machine if selected
             if machine:
                 df = df[df['machine'] == machine]

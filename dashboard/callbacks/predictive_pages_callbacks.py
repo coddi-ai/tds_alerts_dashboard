@@ -18,6 +18,7 @@ from config.settings import get_settings
 from config.client_services import is_service_enabled
 from src.data import predictive_v2
 from src.utils.logger import get_logger
+from src.data.sqlite_repository import sqlite_backend_enabled
 
 logger = get_logger(__name__)
 
@@ -40,11 +41,16 @@ def _render_component(client: str, component: str):
     # Change 1: single shared discovery function - no more inline CSV-only
     # existence check. A component is available whether it's on the new
     # partitioned layout (risk_scores) or still legacy-CSV-only.
-    layout = predictive_v2.discover_predictive_layout(client)
-    availability = layout.get(component)
-    has_data = availability is not None and (
-        availability.risk_scores or availability.legacy_csv is not None
-    )
+    if sqlite_backend_enabled():
+        from dashboard.tabs.tab_predictive_overview import _discover_components
+
+        has_data = component in _discover_components(client)
+    else:
+        layout = predictive_v2.discover_predictive_layout(client)
+        availability = layout.get(component)
+        has_data = availability is not None and (
+            availability.risk_scores or availability.legacy_csv is not None
+        )
 
     if not has_data:
         logger.warning(

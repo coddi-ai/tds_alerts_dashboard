@@ -30,6 +30,7 @@ from dashboard.components.health_index_tables import (
 )
 from src.utils.logger import get_logger
 from config.settings import get_settings
+from src.data.sqlite_repository import sqlite_load
 
 logger = get_logger(__name__)
 
@@ -54,6 +55,9 @@ def load_health_index_data() -> pd.DataFrame:
     Returns:
         DataFrame with health index data
     """
+    sqlite_frame = sqlite_load("CDA", "load_telemetry_unit_health", "CDA")
+    if sqlite_frame is not None:
+        return sqlite_frame
     try:
         data_path = get_health_index_data_path()
         logger.info(f"Loading Health Index data from: {data_path}")

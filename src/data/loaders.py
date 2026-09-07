@@ -23,6 +23,7 @@ from src.data.fast_io import (
     read_csv_filtered as fast_read_csv_filtered,
     read_parquet as fast_read_parquet,
 )
+from src.data.sqlite_repository import sqlite_load
 
 logger = get_logger(__name__)
 
@@ -30,6 +31,12 @@ logger = get_logger(__name__)
 def _data_path(*parts: str) -> Path:
     """Resolve dashboard data below the mounted/configured data root."""
     return Path(os.getenv("DASHBOARD_DATA_ROOT", "data")).expanduser().joinpath(*parts)
+
+
+def _sqlite_frame(client: str, method: str, *args, **kwargs):
+    """Return the SQLite contract result, or ``None`` when files are active."""
+
+    return sqlite_load(client, method, *args, **kwargs)
 
 
 # These files are read by several Dash callbacks during a single interaction
@@ -147,6 +154,14 @@ def load_component_hours(file_path: str | Path) -> pd.DataFrame:
         DataFrame with columns: client, unitId, componentName, sampleDate,
         componentHours, componentHours_cleaned
     """
+    sqlite_client = os.getenv("CLIENT_NAME", "cda")
+    for candidate in ("cda", "capstone", "emin", "enex"):
+        if candidate in str(file_path).lower():
+            sqlite_client = candidate
+            break
+    sqlite_frame = _sqlite_frame(sqlite_client, "load_component_hours")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = Path(file_path)
     logger.info(f"Loading component hours from {file_path}")
     
@@ -320,6 +335,35 @@ def _load_stewart_limits_four_cached(path: str, mtime_ns: int, size: int) -> Dic
 def load_stewart_limits_four(file_path: str | Path) -> Dict:
     """Return four-limit Stewart data without reparsing unchanged Parquet."""
     path = Path(file_path)
+    if os.getenv("DASHBOARD_DATA_BACKEND", "files").strip().lower() == "sqlite":
+        client = os.getenv("CLIENT_NAME", "cda")
+        for candidate in ("cda", "capstone", "emin", "enex"):
+            if candidate in str(path).lower():
+                client = candidate
+                break
+        frame = _sqlite_frame(client, "load_stewart_limits_four", client)
+        if frame is not None:
+            if frame.empty:
+                return {}
+            limits: Dict = {}
+            for _, row in frame.iterrows():
+                client_name = row.get("client", client)
+                machine = row.get("machine", row.get("equipment_name", "GLOBAL"))
+                component = row.get("component", row.get("component_name", "GLOBAL"))
+                essay = row.get("essay", row.get("assay_name", "GLOBAL"))
+                oil_hour_range = row.get("oilHourRange", "ALL")
+                limits.setdefault(client_name, {}).setdefault(machine, {}).setdefault(component, {}).setdefault(essay, {})
+                limits[client_name][machine][component][essay][oil_hour_range] = {
+                    "LIC": None if pd.isna(row.get("LIC")) else row.get("LIC"),
+                    "LIM": None if pd.isna(row.get("LIM")) else row.get("LIM"),
+                    "LSM": None if pd.isna(row.get("LSM")) else row.get("LSM"),
+                    "LSC": None if pd.isna(row.get("LSC")) else row.get("LSC"),
+                    "min_value": None if pd.isna(row.get("min_value")) else row.get("min_value"),
+                    "GroupElement": row.get("GroupElement"),
+                    "sample_count": row.get("sample_count", 0),
+                    "calculation_date": row.get("calculation_date"),
+                }
+            return limits
     if not path.exists():
         return {}
     stat = path.stat()
@@ -540,6 +584,9 @@ def _load_alerts_data_cached(client: str, path: str, mtime_ns: int, size: int) -
 
 def load_alerts_data(client: str) -> pd.DataFrame:
     """Return alerts data cached by the current source generation."""
+    sqlite_frame = _sqlite_frame(client, "load_alerts_data")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("alerts", "golden", (client or '').lower(), "consolidated_alerts.csv")
     if not file_path.exists():
         return pd.DataFrame()
@@ -559,6 +606,9 @@ def load_telemetry_values(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with telemetry values (Fecha, Unit, sensor columns)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_values")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("telemetry", "silver", client.lower(), "telemetry_values_wide.parquet")
     logger.info(f"Loading telemetry values from {file_path}")
     
@@ -587,6 +637,9 @@ def load_telemetry_states(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with telemetry states (Fecha, Unit, Estado, EstadoCarga)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_states")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("telemetry", "silver", client.lower(), "telemetry_states.parquet")
     logger.info(f"Loading telemetry states from {file_path}")
     
@@ -615,6 +668,9 @@ def load_telemetry_limits(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with limits (Unit, Feature, Estado, EstadoCarga, Limit_Lower, Limit_Upper)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_limits")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("telemetry", "silver", client.upper(), "limits_config.parquet")
     logger.info(f"Loading telemetry limits from {file_path}")
     
@@ -642,6 +698,9 @@ def load_telemetry_alerts_metadata(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with alerts metadata (AlertID, Trigger, etc.)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_alerts_metadata")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("telemetry", "golden", client.lower(), "alerts_data.csv")
     logger.info(f"Loading telemetry alerts metadata from {file_path}")
     
@@ -670,6 +729,9 @@ def load_component_mapping(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with Component, PrimaryFeature, System, SubSystem, Meaning, RelatedFeatures
     """
+    sqlite_frame = _sqlite_frame(client, "load_component_mapping")
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("telemetry", "golden", client.lower(), "component_mapping.parquet")
     logger.info(f"Loading component mapping from {file_path}")
     
@@ -697,6 +759,9 @@ def load_feature_names(client: str) -> Dict[str, str]:
     Returns:
         Dictionary mapping feature codes to Spanish names
     """
+    sqlite_mapping = _sqlite_frame(client, "load_feature_names")
+    if sqlite_mapping is not None:
+        return sqlite_mapping
     file_path = _data_path("telemetry", "features_mapping_name.json")
     logger.info(f"Loading feature names from {file_path}")
     
@@ -763,6 +828,9 @@ def load_telemetry_alerts_detail_golden(client: str, *, copy: bool = True) -> pd
     75MB defensive copy while callers that may mutate data retain the safe
     default.
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_alerts_detail_golden")
+    if sqlite_frame is not None:
+        return sqlite_frame.copy(deep=True) if copy else sqlite_frame
     file_path = _data_path(
         "telemetry", "golden", (client or '').lower(), "alerts_detail_wide_with_gps.csv"
     )
@@ -816,6 +884,15 @@ def load_telemetry_alert_detail_for_alert(
     preserving behavior on installations that have not installed Polars yet.
     """
 
+    sqlite_frame = _sqlite_frame(
+        client,
+        "load_telemetry_alert_detail_for_alert",
+        client,
+        alert_ids,
+        unit_id,
+    )
+    if sqlite_frame is not None:
+        return sqlite_frame
     identifiers = tuple(str(value).strip() for value in alert_ids if str(value).strip())
     unit_id = str(unit_id or "").strip()
     if not identifiers or not unit_id:
@@ -867,6 +944,9 @@ def _load_oil_classified_cached(
 
 def load_oil_classified(client: str) -> pd.DataFrame:
     """Return the current classified oil generation as a defensive copy."""
+    sqlite_frame = _sqlite_frame(client, "load_oil_classified")
+    if sqlite_frame is not None:
+        return sqlite_frame
     client_key = (client or '').lower()
     file_path = _data_path("oil", "golden", client_key, "classified.parquet")
     if not file_path.exists():
@@ -917,6 +997,9 @@ def _load_analisis_inteligente_cached(
 
 def load_analisis_inteligente(client: str) -> pd.DataFrame:
     """Return the current AI analysis generation as a defensive copy."""
+    sqlite_frame = _sqlite_frame(client, "load_analisis_inteligente")
+    if sqlite_frame is not None:
+        return sqlite_frame
     client_key = (client or '').lower()
     file_path = _data_path(
         "predictive", "golden", client_key, "analisis_inteligente.parquet"
@@ -1009,6 +1092,9 @@ def _load_machine_status_cached(
 
 def load_machine_status_for_client(client: str) -> pd.DataFrame:
     """Return the current machine status generation as a defensive copy."""
+    sqlite_frame = _sqlite_frame(client, "load_machine_status")
+    if sqlite_frame is not None:
+        return sqlite_frame
     client_key = (client or '').lower()
     file_path = _data_path("oil", "golden", client_key, "machine_status.parquet")
     if not file_path.exists():
@@ -1184,6 +1270,9 @@ def load_telemetry_unit_health(client: str) -> pd.DataFrame:
     not something to repeat on every login. A caller mutating the returned
     frame in place (e.g. reassigning a column) only affects its own copy.
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_unit_health", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     client_key = (client or '').lower()
     base = _data_path("telemetry", "golden", client_key, "unit_health")
     if not base.exists():
@@ -1205,6 +1294,9 @@ def load_telemetry_system_health(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with system-level health (system_score, system_status, explanation, etc.)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_system_health", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     base = _data_path("telemetry", "golden", client.lower(), "system_health")
     logger.info(f"Loading telemetry system health from {base}")
 
@@ -1233,6 +1325,9 @@ def load_telemetry_deviation_results(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with per-signal deviation risk scores and abnormal percentages
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_deviation_results", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     root = _data_path("telemetry", "golden", client.lower())
     return _load_latest_telemetry_output(
         [root / "deviation_summary", root / "technique_results" / "deviation"],
@@ -1251,6 +1346,9 @@ def load_telemetry_events(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with abnormal episodes (duration, severity, classification)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_events", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     root = _data_path("telemetry", "golden", client.lower())
     return _load_latest_telemetry_output(
         [root / "event_results", root / "technique_results" / "events"],
@@ -1273,6 +1371,9 @@ def load_telemetry_trends(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with trend significance, slopes, and interpretations
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_trends", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     root = _data_path("telemetry", "golden", client.lower())
     return _load_latest_telemetry_output(
         [root / "trend_results", root / "technique_results" / "trend"],
@@ -1291,6 +1392,9 @@ def load_telemetry_baselines(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with percentile thresholds per model_specification/signal/state
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_baselines", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     baselines_dir = _data_path("telemetry", "silver", client.lower(), "baselines")
     if not baselines_dir.exists():
         logger.warning(f"Baselines directory not found: {baselines_dir}")
@@ -1317,6 +1421,9 @@ def load_telemetry_manifest(client: str) -> dict:
     Returns dict with keys: evaluation_week, evaluation_year, execution_timestamp,
     silver_weeks_available, baseline_version. Returns empty dict if not found.
     """
+    sqlite_manifest = _sqlite_frame(client, "load_telemetry_manifest", client)
+    if sqlite_manifest is not None:
+        return sqlite_manifest
     manifest_path = _data_path("telemetry", "golden", client.lower(), "latest.json")
     if not manifest_path.exists():
         logger.warning(f"Telemetry manifest not found: {manifest_path}")
@@ -1343,6 +1450,9 @@ def load_telemetry_limits(client: str) -> pd.DataFrame:
     Returns:
         DataFrame with percentile thresholds (P2, P5, P95, P98 at minimum)
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_limits", client)
+    if sqlite_frame is not None:
+        return sqlite_frame
     # Try limits directory first (new schema)
     limits_dir = _data_path("telemetry", "silver", client.lower(), "limits")
     if limits_dir.exists():
@@ -1376,6 +1486,16 @@ def load_silver_telemetry_week(
     Returns:
         DataFrame with raw sensor data (wide format with states)
     """
+    sqlite_frame = _sqlite_frame(
+        client,
+        "load_silver_telemetry_week",
+        client,
+        week,
+        year,
+        columns,
+    )
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path(
         "telemetry", "silver", client.lower(), "Telemetry_Wide_With_States",
         f"Week{week:02d}Year{year}.parquet",
@@ -1418,6 +1538,9 @@ def load_telemetry_ai_comments(client: str, level: str) -> pd.DataFrame:
         DataFrame with AI comments for the specified level.
         Returns empty DataFrame if data not available.
     """
+    sqlite_frame = _sqlite_frame(client, "load_telemetry_ai_comments", client, level)
+    if sqlite_frame is not None:
+        return sqlite_frame
     root = _data_path("telemetry", "golden", client.lower())
     if level not in {"unit", "system", "signal"}:
         logger.warning("Unknown telemetry AI comment level: %s", level)
@@ -1476,6 +1599,9 @@ def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
     Returns:
         DataFrame with maintenance records for the week
     """
+    sqlite_frame = _sqlite_frame(client, "load_maintenance_week", client, week)
+    if sqlite_frame is not None:
+        return sqlite_frame
     file_path = _data_path("mantentions", "golden", client.lower(), f"{week}.csv")
     logger.info(f"Loading maintenance data from {file_path}")
     
@@ -1554,6 +1680,9 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
                  action_detail_version, source_system, record_original_text
     """
     if base_path is None:
+        sqlite_frame = _sqlite_frame(client, "load_maintenance_actions_all_equipment", client)
+        if sqlite_frame is not None:
+            return sqlite_frame
         base_path = _get_mantentions_data_path(client)
         if base_path is None:
             logger.warning(f"No maintenance data available for client: {client}")
@@ -1605,6 +1734,9 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
                  reference_date
     """
     if base_path is None:
+        sqlite_frame = _sqlite_frame(client, "load_business_kpis", client)
+        if sqlite_frame is not None:
+            return sqlite_frame
         base_path = _get_mantentions_data_path(client)
         if base_path is None:
             logger.warning(f"No business KPIs data available for client: {client}")

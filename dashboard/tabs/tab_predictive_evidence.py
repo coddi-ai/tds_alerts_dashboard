@@ -31,6 +31,7 @@ from dashboard.components.predictive_tables import create_oil_variables_table
 from dashboard.components.oil_charts import get_essay_limits_four, classify_four_limit_value
 from dashboard.components.ai_analysis_panel import create_ai_analysis_panel
 from src.data.loaders import load_analisis_inteligente
+from src.data.sqlite_repository import sqlite_backend_enabled
 from src.data import predictive_v2
 from dashboard.tabs.tab_predictive_overview import (
     attach_status,
@@ -692,7 +693,7 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
         # falls back to the legacy wide-column chart for components still on
         # the CSV, whose telemetry rate columns never appear in the
         # risk_scores-derived wide frame.
-        layout = predictive_v2.discover_predictive_layout(client) if client else {}
+        layout = predictive_v2.discover_predictive_layout(client) if client and not sqlite_backend_enabled() else {}
         use_long_signal = bool(layout.get(component)) and layout[component].signal_daily_status
         df_signal_unit = None
         if use_long_signal:
