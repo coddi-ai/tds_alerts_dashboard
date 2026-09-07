@@ -20,6 +20,7 @@ class Source(str, Enum):
     telemetria = "telemetria"
     aceites = "aceites"
     predictivo = "predictivo"
+    pautas = "pautas"
 
 
 SOURCE_LABELS: dict[Source, str] = {
@@ -27,6 +28,7 @@ SOURCE_LABELS: dict[Source, str] = {
     Source.telemetria: "Telemetría",
     Source.aceites: "Aceites",
     Source.predictivo: "Predictivo",
+    Source.pautas: "Pautas",
 }
 
 
@@ -40,6 +42,7 @@ class System(str, Enum):
     mando_final = "mando_final"
     rueda = "rueda"
     frenos = "frenos"
+    lubricacion = "lubricacion"
 
 
 SYSTEM_LABELS: dict[System, str] = {
@@ -52,6 +55,7 @@ SYSTEM_LABELS: dict[System, str] = {
     System.mando_final: "Mando Final",
     System.rueda: "Rueda",
     System.frenos: "Frenos",
+    System.lubricacion: "Lubricación",
 }
 
 
