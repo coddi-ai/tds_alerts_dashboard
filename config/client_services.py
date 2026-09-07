@@ -49,15 +49,19 @@ CONFIG_PATH = Path(__file__).parent / "client_services.json"
 
 # Canonical, ordered list of service identifiers. Order here drives both nav
 # ordering and default-route resolution. Matches the app's internal
-# nav-id/route identifiers (dashboard/services_registry.py). Predictive is a
-# single umbrella service covering all `/predictive/<component>` routes.
+# nav-id/route identifiers (dashboard/services_registry.py). Each predictive
+# component (`/predictive/<component>` route) is its own service id
+# (`predictive-<component>`) so clients can be granted access per component
+# instead of all-or-nothing.
 KNOWN_SERVICE_IDS: List[str] = [
     "overview-general",
     "overview-data-freshness",
     "monitoring-alerts",
     "monitoring-telemetry",
     "monitoring-oil",
-    "predictive",
+    "monitoring-mantenciones",
+    "predictive-motor",
+    "predictive-transmision",
     "agents-campbell-ai",
     "integration-validacion-avisos",
     "integration-seguimiento-avisos",

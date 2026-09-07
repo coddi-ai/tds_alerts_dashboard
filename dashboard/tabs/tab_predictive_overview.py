@@ -5,19 +5,20 @@ Supports multi-component model: auto-discovers component CSVs (motor, transmisio
 
 from dash import html, dcc
 import pandas as pd
-import os
 import re
 from functools import lru_cache
 from pathlib import Path
 from config.settings import get_settings
 from src.utils.logger import get_logger
 from dashboard.components.predictive_config import (
-    get_failure_modes_for_component,
     get_failure_modes_dict,
+    resolve_failure_modes,
 )
+from src.data import predictive_v2
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.accumulated_curve import (
     render_accumulated_section,
+    render_accumulated_section_from_curve,
     build_accumulated_data,
     build_accumulated_figure,
     _empty_state as _accumulated_empty_state,
@@ -29,40 +30,35 @@ from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT
 
 logger = get_logger(__name__)
 
+# TEMP FLAG: upstream `unit_status_summary.estado` is currently mis-computed
+# by the data team. Until they ship a fix, compute status client-side instead
+# of trusting the estado column. Set back to False once upstream confirms the
+# fix has landed. Feeds attach_status() below, which every status call site
+# (this tab, tab_predictive_evidence.py, predictive_callbacks.py) goes through.
+COMPUTE_STATUS = True
+
 
 # ── Data Loading (Multi-Component) ────────────────────────────────────────────
 
-@lru_cache(maxsize=16)
-def _discover_components_cached(client: str, data_dir: str, directory_mtime_ns: int) -> dict:
-    """Cache component discovery until the directory generation changes."""
-
-    data_path = Path(data_dir)
-    if not data_path.exists():
-        return {}
-
-    components = {}
-    for fname in sorted(os.listdir(data_path)):
-        if fname.endswith(".csv"):
-            component_name = fname.replace(".csv", "")
-            components[component_name] = data_path / fname
-    return components
-
-
 def _discover_components(client: str) -> dict:
-    """Auto-discover available component CSV files for a client.
+    """Auto-discover available components for a client (Change 1: single
+    shared discovery function, backed by predictive_v2.discover_predictive_layout).
 
-    The cache key includes the directory mtime so a newly materialized
-    component becomes visible without restarting the worker.
+    Returns {component: Path} where Path is the new-layout `risk_scores`
+    partition directory when it exists (preferred - richer data), else the
+    legacy CSV file. `_load_component_data` below branches on which kind of
+    path it received. This keeps every existing call site working unchanged
+    (`components.get(component)` / `if not filepath` / `_load_component_data
+    (filepath, component, client)`).
     """
-    data_dir = dashboard_data_root() / "predictive" / "golden" / client.lower()
-
-    if not data_dir.exists():
-        return {}
-    try:
-        directory_mtime_ns = data_dir.stat().st_mtime_ns
-    except OSError:
-        return {}
-    return _discover_components_cached(client.lower(), str(data_dir), directory_mtime_ns)
+    layout = predictive_v2.discover_predictive_layout(client)
+    components = {}
+    for component, availability in layout.items():
+        if availability.risk_scores:
+            components[component] = predictive_v2.risk_scores_base_path(client, component)
+        elif availability.legacy_csv is not None:
+            components[component] = availability.legacy_csv
+    return components
 
 
 @lru_cache(maxsize=16)
@@ -85,17 +81,36 @@ def _load_component_data_cached(
     first, since these objects are shared across calls.
     """
     filepath = Path(filepath)
-    if not filepath.exists():
-        logger.warning(f"Predictive data not found: {filepath}")
-        return None, None, {}
+    is_legacy_csv = filepath.suffix == ".csv"
 
-    df = fast_read_csv(filepath)
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
-    df = df.copy()  # defragment after column assignment
+    if is_legacy_csv:
+        if not filepath.exists():
+            logger.warning(f"Predictive data not found: {filepath}")
+            return None, None, {}
 
-    # Get component-specific failure modes
-    failure_modes = get_failure_modes_dict(component, client)
-    fm_keys = list(failure_modes.keys())
+        df = fast_read_csv(filepath)
+        df["Fecha"] = pd.to_datetime(df["Fecha"])
+        df = df.copy()  # defragment after column assignment
+
+        # Get component-specific failure modes
+        failure_modes = get_failure_modes_dict(component, client)
+        fm_keys = list(failure_modes.keys())
+    else:
+        # New Data Contract v2.0 layout (Change 1/2): `filepath` is the
+        # risk_scores partition directory. Pivot the long-format table into
+        # the same wide shape the legacy CSV produced (one column per mode
+        # + "ranking") so the rolling-window computation below - already
+        # written generically off fm_keys/score_cols, not hardcoded column
+        # names - keeps working unchanged. fm_keys comes from whatever modes
+        # are actually present in this component's data, not from config
+        # (Change 3: no hardcoded mode count).
+        df_long = predictive_v2.load_risk_scores(client, component)
+        if df_long.empty:
+            logger.warning(f"No risk_scores data found for {client}/{component}")
+            return None, None, {}
+        df = predictive_v2.risk_scores_to_wide(df_long)
+        fm_keys = [c for c in df.columns if c not in ("Unit", "Fecha", "ranking")]
+
     score_cols = [c for c in fm_keys if c in df.columns] + ["ranking"]
 
     # Sort once by Unit+Fecha. Every per-unit "last row" / rolling computation
@@ -158,17 +173,41 @@ def _load_component_data_cached(
         df_prev = df[df["Fecha"] == prev_date]
         prev_ranking = dict(zip(df_prev["Unit"], df_prev["ranking"]))
 
+    if not is_legacy_csv:
+        # Change 5: the overall ranking's 30d average is precomputed
+        # upstream - overwrite the client-side rolling value with
+        # unit_status_summary.media_30d wherever that table exists for this
+        # client/component, carrying dias_media_30d alongside for coverage.
+        # Per-mode 30/60/90d columns (driver bars, sort dropdown) stay
+        # client-side rolling - there's no upstream per-mode equivalent and
+        # 60d/90d are explicitly out of scope.
+        df_status = predictive_v2.load_unit_status_summary(client, component)
+        if not df_status.empty and "media_30d" in df_status.columns:
+            media_map = dict(zip(df_status["Unit"], df_status["media_30d"]))
+            df_latest["avg_ranking_30d"] = (
+                df_latest["Unit"].map(media_map).combine_first(df_latest["avg_ranking_30d"])
+            )
+            if "dias_media_30d" in df_status.columns:
+                dias_map = dict(zip(df_status["Unit"], df_status["dias_media_30d"]))
+                df_latest["dias_media_30d"] = df_latest["Unit"].map(dias_map)
+
     return df, df_latest, prev_ranking
 
 
 def _load_component_data(filepath: Path, component: str, client: str = "cda"):
     """Load a predictive component with invalidation on file generation."""
     filepath = Path(filepath)
-    if not filepath.exists():
-        return None, None, {}
-    stat = filepath.stat()
+    if filepath.suffix == ".csv":
+        if not filepath.exists():
+            return None, None, {}
+        stat = filepath.stat()
+        mtime_ns, size = stat.st_mtime_ns, stat.st_size
+    else:
+        if not filepath.is_dir():
+            return None, None, {}
+        mtime_ns, size = predictive_v2.risk_scores_generation(client, component)
     result = _load_component_data_cached(
-        str(filepath), component, client, stat.st_mtime_ns, stat.st_size
+        str(filepath), component, client, mtime_ns, size
     )
     # The cached frames are treated as immutable by the presentation layer.
     # Avoid copying tens of MB when Resumen and Evidencia mount together.
@@ -203,24 +242,71 @@ def _normalize_unit_id(uid) -> str:
     return f"{m.group(1)}{m.group(2)}" if m else str(uid)
 
 
-def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataFrame:
-    """Attach `estado` from analisis_inteligente.parquet as `status` (REQ-PR-04).
+def _classify_status_from_scores(row: pd.Series) -> str:
+    """Client-side status classification (temporary, see COMPUTE_STATUS):
+    - Anormal: media_30d >= 60 or some mode >= 80 or ranking_of_the_day >= 70
+    - Alerta:  media_30d >= 35 or some mode >= 50 or ranking_of_the_day >= 40
+    - Normal:  otherwise
+    `max_fm_30d` is already the max across per-mode 30d rolling averages
+    (computed in _load_component_data_cached), so both mode thresholds check
+    against it. `ranking` is the overall ranking's latest (most recent day's
+    raw, non-rolling) value.
+    """
+    media_30d = row.get("avg_ranking_30d")
+    max_fm_30d = row.get("max_fm_30d")
+    ranking_today = row.get("ranking")
+    media_hit = pd.notna(media_30d) and media_30d >= 60
+    mode_hit_80 = pd.notna(max_fm_30d) and max_fm_30d >= 80
+    today_hit_70 = pd.notna(ranking_today) and ranking_today >= 70
+    if media_hit or mode_hit_80 or today_hit_70:
+        return "Anormal"
+    media_hit = pd.notna(media_30d) and media_30d >= 35
+    mode_hit_50 = pd.notna(max_fm_30d) and max_fm_30d >= 50
+    today_hit_40 = pd.notna(ranking_today) and ranking_today >= 40
+    if media_hit or mode_hit_50 or today_hit_40:
+        return "Alerta"
+    return "Normal"
 
-    Units with no analisis_inteligente row (e.g. not yet scored) default to
-    "Normal" so only the three file-defined labels ever appear (REQ-PR-05).
+
+def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataFrame:
+    """Attach `estado` as `status` (REQ-PR-04).
+
+    Change 4: prefers `unit_status_summary.estado` (Data Contract v2.0) when
+    that table exists for this client/component; falls back to
+    analisis_inteligente.parquet's `estado` for components not yet migrated
+    (e.g. cda/transmision). Units with no row in either default to "Normal"
+    so only the three known labels ever appear (REQ-PR-05).
+
+    When COMPUTE_STATUS is True (temporary override - upstream `estado` is
+    currently mis-computed), the estado sources above are bypassed entirely
+    and status is instead classified from the 30d scores already present in
+    `latest` via _classify_status_from_scores.
     """
     latest = latest.copy()
-    ai_latest = get_latest_analisis_inteligente(client, component) if client else pd.DataFrame()
-    if not ai_latest.empty and "estado" in ai_latest.columns:
-        # Title-case the raw value: the file's casing isn't guaranteed (seen as
-        # both "Normal" and "normal"), but status/color/sort lookups below key
+
+    if COMPUTE_STATUS:
+        latest["status"] = latest.apply(_classify_status_from_scores, axis=1)
+        latest["_status_rank"] = latest["status"].map(_STATUS_RANK).fillna(3)
+        return latest
+
+    def _estado_map(df, unit_col="Unit", estado_col="estado"):
+        if df.empty or estado_col not in df.columns:
+            return {}
+        # Title-case the raw value: casing isn't guaranteed across sources
+        # ("Normal" vs "normal"), but status/color/sort lookups below key
         # off the exact capitalized labels "Normal"/"Alerta"/"Anormal".
-        estado_map = {
+        return {
             _normalize_unit_id(u): str(e).strip().title()
-            for u, e in zip(ai_latest["Unit"], ai_latest["estado"])
+            for u, e in zip(df[unit_col], df[estado_col])
         }
-    else:
-        estado_map = {}
+
+    estado_map = {}
+    if client:
+        status_df = predictive_v2.load_unit_status_summary(client, component)
+        estado_map = _estado_map(status_df)
+    if not estado_map and client:
+        estado_map = _estado_map(get_latest_analisis_inteligente(client, component))
+
     latest["status"] = latest["Unit"].apply(
         lambda u: estado_map.get(_normalize_unit_id(u), "Normal")
     )
@@ -472,17 +558,19 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     """
     Render overview content for a specific component.
 
-    Status (Anormal / Alerta / Normal) comes from `estado` in
-    analisis_inteligente.parquet for every client (REQ-PR-04/05) - there is a
-    single hero regardless of whether component-hours data is available. The
-    accumulated-risk curve, when buildable, is still shown as its own section
-    further down the page; it no longer drives the hero's counts.
+    Status (Anormal / Alerta / Normal) comes from `estado` - unit_status_summary
+    when it exists for this client/component, else analisis_inteligente.parquet
+    (REQ-PR-04/05, Change 4) - there is a single hero regardless of whether
+    component-hours data is available. The accumulated-risk curve, when
+    buildable, is still shown as its own section further down the page; it
+    no longer drives the hero's counts.
 
     Args:
         df: histórico completo del componente (Unit, Fecha, ranking, ...),
-            necesario para construir la curva acumulada. Si es None, se omite.
+            necesario para construir la curva acumulada (fallback legacy). Si
+            es None, se omite.
     """
-    failure_modes = get_failure_modes_dict(component, client)
+    failure_modes = resolve_failure_modes(component, client)
 
     latest = attach_status(df_latest, client, component)
     avg_ranking = float(latest["ranking"].mean())
@@ -495,22 +583,39 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     model_run_date = get_model_run_date(client, component) if client else None
     model_run_date_str = model_run_date.strftime("%d %b %Y") if model_run_date is not None else "—"
 
-    # ── Curva acumulada (solo si hay horas de componente) ──
-    # Requiere el histórico completo (df) y que exista el parquet de horas para
-    # este cliente; si algo falta, la sección se omite (no afecta el hero).
-    df_component_hours = _load_component_hours_if_available(client)
+    # ── Curva acumulada ──
+    # Change 6: prefiere `cumulative_risk_curve` (precomputada upstream,
+    # horas ya cruzadas) cuando existe para este cliente/componente -
+    # verificada de forma independiente de risk_scores/unit_status_summary,
+    # ya que puede faltar aunque esos dos existan (p.ej. cda/motor hoy). Si
+    # no existe, cae al pipeline cliente-side (join contra Oil) sin romper
+    # nada para los clientes/componentes que aún no la tienen.
     accumulated = None
-
-    if df is not None and not df.empty and df_component_hours is not None:
+    df_curve = None
+    if client:
         try:
-            df_acum = build_accumulated_data(df, df_component_hours, component)
-            if not df_acum.empty:
-                _fig, _resumen = build_accumulated_figure(df_acum, component=component)
-                if _fig is not None:
-                    accumulated = render_accumulated_section(df, df_component_hours, component)
+            df_curve = predictive_v2.read_cumulative_risk_curve(client, component)
         except Exception as exc:  # noqa: BLE001 - la curva nunca rompe el overview
-            logger.warning(f"No se pudo construir la curva acumulada para {client}/{component}: {exc}")
-            accumulated = None
+            logger.warning(f"No se pudo leer cumulative_risk_curve para {client}/{component}: {exc}")
+            df_curve = None
+
+    if df_curve is not None and not df_curve.empty:
+        accumulated = render_accumulated_section_from_curve(df_curve, component)
+
+    if accumulated is None:
+        # Requiere el histórico completo (df) y que exista el parquet de horas
+        # para este cliente; si algo falta, la sección se omite (no afecta el hero).
+        df_component_hours = _load_component_hours_if_available(client)
+        if df is not None and not df.empty and df_component_hours is not None:
+            try:
+                df_acum = build_accumulated_data(df, df_component_hours, component)
+                if not df_acum.empty:
+                    _fig, _resumen = build_accumulated_figure(df_acum, component=component)
+                    if _fig is not None:
+                        accumulated = render_accumulated_section(df, df_component_hours, component)
+            except Exception as exc:  # noqa: BLE001 - la curva nunca rompe el overview
+                logger.warning(f"No se pudo construir la curva acumulada para {client}/{component}: {exc}")
+                accumulated = None
 
     hero = html.Div([
         html.Div([
@@ -546,7 +651,8 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                             m = _re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
                             return f"{m.group(1)}{m.group(2)}" if m else str(uid)
 
-                        comp_hours = all_hours[all_hours['componentName'] == component].copy()
+                        hours_component_name = settings.get_component_hours_name(client, component)
+                        comp_hours = all_hours[all_hours['componentName'] == hours_component_name].copy()
                         if not comp_hours.empty:
                             comp_hours['_uid_norm'] = comp_hours['unitId'].apply(_norm_uid)
                             idx = comp_hours.groupby('_uid_norm')['sampleDate'].idxmax()
