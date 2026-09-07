@@ -217,16 +217,44 @@ def _load_component_data(filepath: Path, component: str, client: str = "cda"):
             frame["Unit"] = frame.get("equipment_name", "")
         if "Fecha" not in frame.columns:
             frame["Fecha"] = frame.get("run_timestamp", frame.get("timestamp"))
-        frame["Fecha"] = pd.to_datetime(frame["Fecha"], errors="coerce")
+        # SQLite contains both ISO timestamps and date-only values; pandas 3
+        # otherwise infers one strict format and discards the other.
+        frame["Fecha"] = pd.to_datetime(frame["Fecha"], errors="coerce", format="mixed")
         if "ranking" not in frame.columns:
             frame["ranking"] = pd.to_numeric(frame.get("score", 0), errors="coerce")
-        frame = frame.sort_values(["Unit", "Fecha"], kind="stable")
+
+        # SQLite returns the denormalized predictive source with numeric
+        # values represented as text in several columns.  Rebuild the small
+        # rolling snapshot expected by the existing overview renderer so the
+        # SQLite and parquet paths expose the same presentation contract.
+        failure_modes = get_failure_modes_dict(component, client)
+        score_cols = [c for c in failure_modes if c in frame.columns] + ["ranking"]
+        for col in score_cols:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame = frame.dropna(subset=["Fecha"]).sort_values(["Unit", "Fecha"], kind="stable")
+        for col in score_cols:
+            grouped = frame.groupby("Unit")[col]
+            frame[f"{col}_30d"] = grouped.transform(
+                lambda values: values.rolling(30, min_periods=1).mean()
+            )
+            frame[f"{col}_60d"] = grouped.transform(
+                lambda values: values.rolling(60, min_periods=1).mean()
+            )
+            frame[f"{col}_90d"] = grouped.transform(
+                lambda values: values.rolling(90, min_periods=1).mean()
+            )
+
         latest = frame.groupby("Unit", as_index=False).last()
+        latest["avg_ranking_30d"] = latest["ranking_30d"]
+        latest["avg_ranking_60d"] = latest["ranking_60d"]
+        latest["ranking_acum_90d"] = latest["ranking_90d"]
+        fm_30d_cols = [f"{col}_30d" for col in failure_modes if f"{col}_30d" in latest]
+        latest["max_fm_30d"] = latest[fm_30d_cols].max(axis=1) if fm_30d_cols else 0.0
         previous = {}
         dates = sorted(frame["Fecha"].dropna().unique())
         if len(dates) > 1:
             prior = frame[frame["Fecha"] == dates[-2]]
-            previous = dict(zip(prior["Unit"], prior["ranking"]))
+            previous = dict(zip(prior["Unit"], pd.to_numeric(prior["ranking"], errors="coerce")))
         return frame, latest, previous
     if filepath.suffix == ".csv":
         if not filepath.exists():
@@ -283,9 +311,11 @@ def _classify_status_from_scores(row: pd.Series) -> str:
     against it. `ranking` is the overall ranking's latest (most recent day's
     raw, non-rolling) value.
     """
-    media_30d = row.get("avg_ranking_30d")
-    max_fm_30d = row.get("max_fm_30d")
-    ranking_today = row.get("ranking")
+    # SQLite preserves the source value types less consistently than parquet;
+    # normalize score fields before applying numeric thresholds.
+    media_30d = pd.to_numeric(row.get("avg_ranking_30d"), errors="coerce")
+    max_fm_30d = pd.to_numeric(row.get("max_fm_30d"), errors="coerce")
+    ranking_today = pd.to_numeric(row.get("ranking"), errors="coerce")
     media_hit = pd.notna(media_30d) and media_30d >= 60
     mode_hit_80 = pd.notna(max_fm_30d) and max_fm_30d >= 80
     today_hit_70 = pd.notna(ranking_today) and ranking_today >= 70
@@ -619,6 +649,10 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     n_normal = counts.get("Normal", 0)
 
     model_run_date = get_model_run_date(client, component) if client else None
+    if isinstance(model_run_date, str):
+        model_run_date = pd.to_datetime(model_run_date, errors="coerce", format="mixed")
+        if pd.isna(model_run_date):
+            model_run_date = None
     model_run_date_str = model_run_date.strftime("%d %b %Y") if model_run_date is not None else "—"
 
     # ── Curva acumulada ──
