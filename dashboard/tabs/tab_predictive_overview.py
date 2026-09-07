@@ -55,7 +55,10 @@ def _discover_components(client: str) -> dict:
     if sqlite_backend_enabled():
         try:
             repository = _load_repository_class().from_environment(client)
-            return {component: Path(f"sqlite://{component}") for component in repository.predictive_components(client)}
+            # Keep the SQLite URI as a string.  Wrapping it in pathlib.Path on
+            # Windows turns ``sqlite://motor`` into ``sqlite:/motor`` and the
+            # loader then mistakes it for a missing filesystem directory.
+            return {component: f"sqlite://{component}" for component in repository.predictive_components(client)}
         except Exception as exc:
             logger.warning("No se pudieron descubrir componentes predictivos SQLite: %s", exc)
             return {}
@@ -204,8 +207,8 @@ def _load_component_data_cached(
 
 def _load_component_data(filepath: Path, component: str, client: str = "cda"):
     """Load a predictive component with invalidation on file generation."""
-    filepath = Path(filepath)
-    if sqlite_backend_enabled() and str(filepath).startswith("sqlite://"):
+    filepath = Path(filepath) if not isinstance(filepath, str) else filepath
+    if sqlite_backend_enabled() and str(filepath).replace("\\", "/").startswith("sqlite:"):
         frame = sqlite_load(client, "load_predictive_component", client, component)
         if frame is None or frame.empty:
             return None, None, {}
