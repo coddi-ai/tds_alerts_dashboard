@@ -114,3 +114,17 @@ def test_mantenciones_service_is_cda_only():
     assert config["CDA"]["monitoring-mantenciones"]["display"] is True
     for client in ("EMIN", "ENEX", "CAPSTONE"):
         assert config.get(client, {}).get("monitoring-mantenciones", {}).get("display", False) is False
+
+
+def test_missing_or_corrupt_action_source_is_explicit(monkeypatch, tmp_path):
+    source_dir = tmp_path / "Maintance_Labeler_Views"
+    source_dir.mkdir()
+    (source_dir / "query_3_actions_all_equipment.parquet").write_bytes(b"not-a-parquet")
+    monkeypatch.setattr(repository_module, "_get_mantentions_data_path", lambda client: source_dir)
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload()
+    assert payload["status"] == "error"
+    assert payload["meta"]["source_status"] == "error"

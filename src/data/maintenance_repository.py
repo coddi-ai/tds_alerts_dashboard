@@ -11,6 +11,8 @@ import logging
 
 from src.data.dummy_generator import generate_dummy_tables
 from src.data.loaders import (
+    _data_path,
+    _get_mantentions_data_path,
     load_maintenance_actions_all_equipment,
     load_business_kpis,
     list_maintenance_weeks,
@@ -178,6 +180,22 @@ class MaintenanceRepository:
         self._parquet_actions_cache = None
         self._parquet_kpis_cache = None
 
+    def _actions_source_state(self) -> tuple[str, str | None]:
+        """Classify the action source without turning failures into empty data."""
+        root = _get_mantentions_data_path(self.client)
+        if root is None:
+            return "missing", "No existe la carpeta de fuentes de mantenciones."
+        path = root / "query_3_actions_all_equipment.parquet"
+        if not path.exists():
+            return "missing", f"No existe {path.name}."
+        try:
+            probe = pd.read_parquet(path, columns=["action_id"])
+        except Exception as exc:
+            return "error", f"No se pudo leer {path.name}: {exc}"
+        if probe.empty:
+            return "empty", f"{path.name} está vacío."
+        return "ok", None
+
     def get_available_subsystems(
         self,
         systems: Optional[List[str]] = None,
@@ -255,6 +273,27 @@ class MaintenanceRepository:
         selected = period or (months[-1] if months else None)
         empty = self._empty_month_data()
         base = self._get_parquet_data()["actions"] if self.mode == "parquet" else pd.DataFrame()
+        source_status, source_error = ("ok", None)
+        if self.mode == "parquet" and base.empty:
+            source_status, source_error = self._actions_source_state()
+            if source_status in {"missing", "error"}:
+                return {
+                    "status": "error",
+                    "meta": {
+                        "period": selected,
+                        "period_label": selected or "Sin datos",
+                        "available_months": months,
+                        "source_start": None,
+                        "source_end": None,
+                        "source_status": source_status,
+                        "error": source_error,
+                        "is_current_period": False,
+                        "detail_total": 0,
+                    },
+                    "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                    "data": empty,
+                }
         required_columns = {
             "action_id", "record_id", "job_id", "machine_code", "event_ts",
             "change_date", "action_type_name", "action_system_name",
@@ -270,6 +309,7 @@ class MaintenanceRepository:
                     "available_months": months,
                     "source_start": None,
                     "source_end": None,
+                    "source_status": source_status,
                     "is_current_period": False,
                     "detail_total": 0,
                     "missing_columns": missing_columns,
@@ -317,6 +357,7 @@ class MaintenanceRepository:
                     "available_months": months,
                     "source_start": source_start,
                     "source_end": source_end,
+                    "source_status": source_status,
                     "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                     "detail_total": 0,
                 },
@@ -392,6 +433,7 @@ class MaintenanceRepository:
                 "available_months": months,
                 "source_start": source_start,
                 "source_end": source_end,
+                "source_status": source_status,
                 "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                 "detail_total": detail_total,
             },
@@ -418,7 +460,30 @@ class MaintenanceRepository:
 
         df = load_maintenance_week(self.client, selected)
         if df.empty:
-            return {"status": "empty", "meta": {"week": selected, "available_weeks": weeks, "invalid_rows": 0}, "summary": [], "tasks": []}
+            weekly_path = _data_path("mantentions", "golden", self.client, f"{selected}.csv")
+            if not weekly_path.exists():
+                return {
+                    "status": "error",
+                    "meta": {
+                        "week": selected,
+                        "available_weeks": weeks,
+                        "invalid_rows": 0,
+                        "error": f"No existe {weekly_path.name}.",
+                    },
+                    "summary": [],
+                    "tasks": [],
+                }
+            return {
+                "status": "error",
+                "meta": {
+                    "week": selected,
+                    "available_weeks": weeks,
+                    "invalid_rows": 0,
+                    "error": f"No se pudo leer {weekly_path.name} o está vacío.",
+                },
+                "summary": [],
+                "tasks": [],
+            }
 
         required_columns = {"UnitId", "Summary", "Tasks_List"}
         missing_columns = sorted(required_columns.difference(df.columns))
