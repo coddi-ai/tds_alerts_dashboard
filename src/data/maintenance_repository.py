@@ -3,6 +3,7 @@ Repository layer for Mantenciones General dashboard.
 Provides data access functions that can work in dummy or production mode.
 """
 
+import json
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -11,7 +12,9 @@ import logging
 from src.data.dummy_generator import generate_dummy_tables
 from src.data.loaders import (
     load_maintenance_actions_all_equipment,
-    load_business_kpis
+    load_business_kpis,
+    list_maintenance_weeks,
+    load_maintenance_week,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,9 +45,14 @@ class MaintenanceRepository:
                 "Loading maintenance actions from parquet files for client: %s",
                 self.client,
             )
-            self._parquet_actions_cache = load_maintenance_actions_all_equipment(
-                client=self.client
-            )
+            frame = load_maintenance_actions_all_equipment(client=self.client)
+            # Keep the repository contract stable even when a test fixture or
+            # an alternate loader supplies ISO strings instead of the loader's
+            # already-normalized UTC columns.
+            for column in ("event_ts", "change_date"):
+                if column in frame.columns:
+                    frame[column] = pd.to_datetime(frame[column], utc=True, format="mixed", errors="coerce")
+            self._parquet_actions_cache = frame
         return self._parquet_actions_cache
 
     def _get_parquet_kpis(self):
@@ -77,6 +85,7 @@ class MaintenanceRepository:
         self,
         systems: Optional[List[str]] = None,
         equipment: Optional[List[str]] = None,
+        subsystems: Optional[List[str]] = None,
         date_start: Optional[str] = None,
         date_end: Optional[str] = None,
     ) -> pd.DataFrame:
@@ -97,10 +106,16 @@ class MaintenanceRepository:
             df = df[df["action_system_name"].isin(systems)]
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
+        if subsystems:
+            df = df[df["action_subsystem_name"].isin(subsystems)]
         if date_start:
-            df = df[df["change_date"] >= pd.Timestamp(date_start, tz="UTC")]
+            start = pd.Timestamp(date_start)
+            start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
+            df = df[df["change_date"] >= start]
         if date_end:
-            df = df[df["change_date"] < pd.Timestamp(date_end, tz="UTC") + timedelta(days=1)]
+            end = pd.Timestamp(date_end)
+            end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+            df = df[df["change_date"] < end + timedelta(days=1)]
 
         # Always a safe-to-mutate copy: callers (e.g. get_downtime_by_day_mtd)
         # add derived columns on the result, which would otherwise risk a
@@ -155,6 +170,309 @@ class MaintenanceRepository:
             return sorted(data["machines"]["machine_code"].tolist())
         else:
             raise NotImplementedError("Production mode not yet implemented")
+
+    def refresh(self) -> None:
+        """Drop this client's in-process caches so a manual refresh sees new files."""
+        self._dummy_cache = None
+        self._parquet_cache = None
+        self._parquet_actions_cache = None
+        self._parquet_kpis_cache = None
+
+    def get_available_subsystems(
+        self,
+        systems: Optional[List[str]] = None,
+        equipment: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Return subsystem options after applying cascading filters."""
+        if self.mode == "parquet":
+            df = self._get_parquet_data()["actions"]
+            if systems:
+                df = df[df["action_system_name"].isin(systems)]
+            if equipment:
+                df = df[df["machine_code"].isin(equipment)]
+            return sorted(df["action_subsystem_name"].dropna().unique().tolist())
+        if self.mode == "dummy":
+            df = self._get_dummy_data()["subsystems"]
+            return sorted(df["subsystem_name"].dropna().unique().tolist())
+        raise NotImplementedError("Production mode not yet implemented")
+
+    def get_available_months(self) -> List[str]:
+        """Return calendar months with valid action dates in YYYY-MM order."""
+        if self.mode != "parquet":
+            if self.mode == "dummy":
+                df = self._get_dummy_data()["jobs"]
+                dates = pd.to_datetime(df.get("start_date"), errors="coerce")
+                return sorted(dates.dropna().dt.strftime("%Y-%m").unique().tolist())
+            raise NotImplementedError("Production mode not yet implemented")
+        df = self._get_parquet_data()["actions"]
+        if df.empty or "change_date" not in df:
+            return []
+        return sorted(df["change_date"].dropna().dt.strftime("%Y-%m").unique().tolist())
+
+    def get_available_weeks(self) -> List[str]:
+        """Return weekly snapshot identifiers available for this client."""
+        if self.mode == "parquet":
+            return list_maintenance_weeks(self.client)
+        if self.mode == "dummy":
+            return []
+        raise NotImplementedError("Production mode not yet implemented")
+
+    @staticmethod
+    def _month_bounds(period: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """Return inclusive-start/exclusive-end UTC bounds for YYYY-MM."""
+        start = pd.Timestamp(f"{period}-01")
+        start = start.tz_localize("UTC")
+        end = start + pd.offsets.MonthBegin(1)
+        return start, end
+
+    @staticmethod
+    def _empty_month_data() -> dict:
+        return {
+            "daily": [],
+            "pareto": [],
+            "equipment": [],
+            "matrix": [],
+            "detail": [],
+        }
+
+    @staticmethod
+    def _json_records(frame: pd.DataFrame) -> list[dict]:
+        """Convert a frame to records without leaking numpy NaN values."""
+        if frame.empty:
+            return []
+        return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
+
+    def get_monthly_payload(
+        self,
+        period: Optional[str] = None,
+        systems: Optional[List[str]] = None,
+        equipment: Optional[List[str]] = None,
+        subsystems: Optional[List[str]] = None,
+        detail_limit: int = 250,
+    ) -> dict:
+        """Build the JSON-safe contract consumed by the productive Mantenciones page."""
+        months = self.get_available_months()
+        selected = period or (months[-1] if months else None)
+        empty = self._empty_month_data()
+        base = self._get_parquet_data()["actions"] if self.mode == "parquet" else pd.DataFrame()
+        required_columns = {
+            "action_id", "record_id", "job_id", "machine_code", "event_ts",
+            "change_date", "action_type_name", "action_system_name",
+            "action_subsystem_name", "action_detail_clean",
+        }
+        missing_columns = sorted(required_columns.difference(base.columns)) if not base.empty else []
+        if missing_columns:
+            return {
+                "status": "error",
+                "meta": {
+                    "period": selected,
+                    "period_label": selected or "Sin datos",
+                    "available_months": months,
+                    "source_start": None,
+                    "source_end": None,
+                    "is_current_period": False,
+                    "detail_total": 0,
+                    "missing_columns": missing_columns,
+                },
+                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "data": empty,
+            }
+        if not selected or selected not in months:
+            return {
+                "status": "empty",
+                "meta": {
+                    "period": selected,
+                    "period_label": "Sin datos",
+                    "available_months": months,
+                    "source_start": None,
+                    "source_end": None,
+                    "is_current_period": False,
+                    "detail_total": 0,
+                },
+                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "data": empty,
+            }
+
+        start, end = self._month_bounds(selected)
+        df = self._filtered_actions(
+            systems=systems,
+            equipment=equipment,
+            subsystems=subsystems,
+            date_start=start.isoformat(),
+            date_end=(end - timedelta(days=1)).date().isoformat(),
+        )
+        source_start = base["change_date"].min() if not base.empty else None
+        source_end = base["change_date"].max() if not base.empty else None
+        source_start = source_start.isoformat() if pd.notna(source_start) else None
+        source_end = source_end.isoformat() if pd.notna(source_end) else None
+
+        if df.empty:
+            return {
+                "status": "empty",
+                "meta": {
+                    "period": selected,
+                    "period_label": selected,
+                    "available_months": months,
+                    "source_start": source_start,
+                    "source_end": source_end,
+                    "is_current_period": selected == datetime.now().strftime("%Y-%m"),
+                    "detail_total": 0,
+                },
+                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "data": empty,
+            }
+
+        action_ids = df["action_id"].astype(str)
+        kpis = {
+            "equipment": int(df["machine_code"].nunique()),
+            "actions": int(action_ids.nunique()),
+            "records": int(df["record_id"].nunique()),
+            "systems": int(df["action_system_name"].dropna().nunique()),
+        }
+
+        daily = (
+            df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
+            .groupby("day", as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"day": "date", "action_id": "count"})
+            .sort_values("date")
+        )
+
+        pareto = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby("system_name", as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "count"})
+            .sort_values(["count", "system_name"], ascending=[False, True])
+            .reset_index(drop=True)
+        )
+        pareto["cumulative_pct"] = pareto["count"].cumsum() / pareto["count"].sum() * 100
+        if not pareto.empty:
+            pareto.loc[pareto.index[-1], "cumulative_pct"] = 100.0
+
+        equipment_df = (
+            df.groupby("machine_code", as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "count"})
+            .sort_values(["count", "machine_code"], ascending=[False, True])
+        )
+        matrix_df = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "count"})
+        )
+
+        detail = df.copy()
+        detail["date"] = detail["change_date"].dt.strftime("%Y-%m-%d")
+        detail["timestamp_utc"] = detail["event_ts"].dt.strftime("%Y-%m-%d %H:%M UTC")
+        detail = detail.rename(
+            columns={
+                "machine_code": "equipment",
+                "action_system_name": "system_name",
+                "action_subsystem_name": "subsystem_name",
+                "action_type_name": "action_type",
+                "action_detail_clean": "detail",
+            }
+        )
+        detail["system_name"] = detail["system_name"].fillna("Sin sistema")
+        detail["subsystem_name"] = detail["subsystem_name"].fillna("Sin subsistema")
+        detail["detail"] = detail["detail"].fillna("Sin detalle")
+        detail = detail.sort_values(["change_date", "event_ts"], ascending=False).head(detail_limit)
+        detail_total = int(len(df))
+
+        return {
+            "status": "ok",
+            "meta": {
+                "period": selected,
+                "period_label": selected,
+                "available_months": months,
+                "source_start": source_start,
+                "source_end": source_end,
+                "is_current_period": selected == datetime.now().strftime("%Y-%m"),
+                "detail_total": detail_total,
+            },
+            "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+            "kpis": kpis,
+            "data": {
+                "daily": self._json_records(daily),
+                "pareto": self._json_records(pareto),
+                "equipment": self._json_records(equipment_df),
+                "matrix": self._json_records(matrix_df),
+                "detail": self._json_records(detail[[
+                    "action_id", "date", "timestamp_utc", "equipment", "system_name",
+                    "subsystem_name", "action_type", "detail", "record_id", "job_id",
+                ]]),
+            },
+        }
+
+    def get_weekly_evidence(self, week: Optional[str] = None, equipment: Optional[List[str]] = None) -> dict:
+        """Parse a weekly CSV into summary and day/system task rows."""
+        weeks = self.get_available_weeks()
+        selected = week or (weeks[-1] if weeks else None)
+        if not selected or selected not in weeks:
+            return {"status": "empty", "meta": {"week": selected, "available_weeks": weeks, "invalid_rows": 0}, "summary": [], "tasks": []}
+
+        df = load_maintenance_week(self.client, selected)
+        if df.empty:
+            return {"status": "empty", "meta": {"week": selected, "available_weeks": weeks, "invalid_rows": 0}, "summary": [], "tasks": []}
+
+        required_columns = {"UnitId", "Summary", "Tasks_List"}
+        missing_columns = sorted(required_columns.difference(df.columns))
+        if missing_columns:
+            return {
+                "status": "error",
+                "meta": {
+                    "week": selected,
+                    "available_weeks": weeks,
+                    "invalid_rows": 0,
+                    "missing_columns": missing_columns,
+                },
+                "summary": [],
+                "tasks": [],
+            }
+
+        if equipment:
+            df = df[df.get("UnitId", pd.Series(dtype=str)).isin(equipment)]
+        summary = []
+        tasks = []
+        invalid_rows = 0
+        for _, row in df.iterrows():
+            unit = str(row.get("UnitId", "Sin equipo"))
+            summary_value = row.get("Summary")
+            if summary_value is None or (not isinstance(summary_value, (dict, list)) and bool(pd.isna(summary_value))):
+                summary_value = "Sin resumen disponible"
+            summary.append({"equipment": unit, "summary": str(summary_value)})
+            raw = row.get("Tasks_List")
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                continue
+            try:
+                parsed = raw if isinstance(raw, (dict, list)) else json.loads(str(raw))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                invalid_rows += 1
+                continue
+            if not isinstance(parsed, dict):
+                invalid_rows += 1
+                continue
+            for day, systems in parsed.items():
+                if not isinstance(systems, dict):
+                    invalid_rows += 1
+                    continue
+                for system, values in systems.items():
+                    values = values if isinstance(values, list) else [values]
+                    for value in values:
+                        tasks.append({"equipment": unit, "day": str(day), "system_name": str(system), "task": str(value)})
+
+        status = "partial" if invalid_rows and (summary or tasks) else ("empty" if not summary else "ok")
+        return {
+            "status": status,
+            "meta": {"week": selected, "available_weeks": weeks, "invalid_rows": invalid_rows},
+            "summary": summary,
+            "tasks": tasks,
+        }
 
     def get_data_period_info(self) -> dict:
         """

@@ -1,5 +1,10 @@
 # Vista "Mantenciones General" - Guía de Uso
 
+> **Nota de vigencia:** la vista productiva actual se documenta en
+> [`PRODUCTIVE_VIEW.md`](PRODUCTIVE_VIEW.md). Este documento conserva la guía
+> histórica de la vista anterior; sus indicadores de disponibilidad, downtime,
+> estado sano/detenido y planes de acción no forman parte del nuevo alcance.
+
 ## 📋 Descripción
 
 La vista **Mantenciones General** proporciona una ventana consolidada del estado de equipos y trabajos de mantenimiento. Incluye:
