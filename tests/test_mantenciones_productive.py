@@ -108,12 +108,12 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     assert len(output_ids) == len(set(output_ids))
 
 
-def test_mantenciones_service_is_cda_only():
+def test_mantenciones_service_is_enabled_for_cda_emin_and_capstone():
     config_path = Path(__file__).parents[1] / "config" / "client_services.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    assert config["CDA"]["monitoring-mantenciones"]["display"] is True
-    for client in ("EMIN", "ENEX", "CAPSTONE"):
-        assert config.get(client, {}).get("monitoring-mantenciones", {}).get("display", False) is False
+    for client in ("CDA", "EMIN", "CAPSTONE"):
+        assert config[client]["monitoring-mantenciones"]["display"] is True
+    assert config.get("ENEX", {}).get("monitoring-mantenciones", {}).get("display", False) is False
 
 
 def test_missing_or_corrupt_action_source_is_explicit(monkeypatch, tmp_path):
