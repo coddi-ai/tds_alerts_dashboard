@@ -327,6 +327,7 @@ class MaintenanceRepository:
                     "available_months": months,
                     "source_start": None,
                     "source_end": None,
+                    "source_status": source_status,
                     "is_current_period": False,
                     "detail_total": 0,
                 },
@@ -460,7 +461,10 @@ class MaintenanceRepository:
 
         df = load_maintenance_week(self.client, selected)
         if df.empty:
-            weekly_path = _data_path("mantentions", "golden", self.client, f"{selected}.csv")
+            weekly_root = _data_path("mantentions", "golden", self.client)
+            if not weekly_root.exists():
+                weekly_root = _data_path("mantentions", "golden", self.client.upper())
+            weekly_path = weekly_root / f"{selected}.csv"
             if not weekly_path.exists():
                 return {
                     "status": "error",
