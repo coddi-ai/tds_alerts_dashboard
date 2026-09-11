@@ -49,6 +49,18 @@ from src.charts.signals import describe_signals as describe_signal_catalog
 logger = logging.getLogger("campbell_ai.runtime")
 
 
+def _with_oil_glossary(instructions: str) -> str:
+    """Append the shared equipo/componente/muestra glossary to an agent's instructions.
+
+    Composed rather than copied into each prompt file: the planner, the query analyst, the
+    visualization analyst, the technical expert and the head all have to read those three
+    levels the same way, and five copies of the same paragraphs drift. The single source is
+    ``prompts/oil_entity_levels.md``, which restates the contract the data layer emits in
+    every oil payload's ``scope_detail``.
+    """
+    return instructions.rstrip() + "\n\n" + load_prompt("oil_entity_levels.md")
+
+
 def _offloading(function_tool):
     """Wrap the SDK's tool decorator so synchronous tool bodies leave the event loop.
 
@@ -498,14 +510,74 @@ class CampbellAgentRuntime:
             )
 
         @function_tool
+        def query_lab_kpis(
+            start_date: str = "",
+            end_date: str = "",
+            unit_id: str = "",
+            limit: int = 15,
+        ) -> str:
+            """Laboratory turnaround times: transit, lab and diagnostic, in whole days.
+
+            The same computation Monitoring > Oil > Laboratorio displays, so the numbers match
+            that screen. The period filters on `reportDate` and defaults to six months up to
+            the newest report available; it is reported back in `period`. Each average carries
+            its own denominator in `valid_samples`, and a missing date is reported as
+            unavailable rather than as a zero.
+            """
+            return safe_data_call(
+                "query_lab_kpis",
+                repository.query_lab_kpis,
+                client,
+                start_date=start_date,
+                end_date=end_date,
+                unit_id=unit_id,
+                limit=limit,
+            )
+
+        @function_tool
+        def describe_oil_limits(
+            unit_id: str,
+            component: str = "",
+            essay: str = "",
+            limit: int = 20,
+        ) -> str:
+            """Reference limits a sample's essays were compared against, and their provenance.
+
+            Returns LIC/LIM/LSM/LSC per essay for the selected sample's component, the
+            calibration version in service, and for each band whether it is calibrated for
+            this sample's oil-hour range or averaged across ranges (an approximation). Use it
+            whenever the question is what a value is being compared to, or whether a reading
+            is really out of limit.
+            """
+            return safe_data_call(
+                "describe_oil_limits",
+                repository.describe_oil_limits,
+                client,
+                unit_id=unit_id,
+                component=component,
+                essay=essay,
+                limit=limit,
+            )
+
+        @function_tool
         def query_oil_components(
             unit_id: str = "",
             component: str = "",
             status: str = "",
             latest_only: bool = True,
             limit: int = 25,
+            start_date: str = "",
+            end_date: str = "",
         ) -> str:
-            """Component-level oil condition with breached essays, severity and evolution."""
+            """Oil condition per component, from its selected sample.
+
+            `latest_only=True` (default) returns the most recent sample available per
+            equipment and component with no date window, which is that component's current
+            condition even if the sample is months old. Use `latest_only=False` only for
+            history or trend. `start_date`/`end_date` narrow both modes: with `latest_only`
+            they mean "the newest sample within that period", without it "every sample of
+            that period".
+            """
             return safe_data_call(
                 "query_oil_components",
                 repository.query_oil_components,
@@ -515,6 +587,8 @@ class CampbellAgentRuntime:
                 status=status,
                 latest_only=latest_only,
                 limit=limit,
+                start_date=start_date,
+                end_date=end_date,
             )
 
         @function_tool
@@ -605,7 +679,7 @@ class CampbellAgentRuntime:
             secondary_dimension: str = "",
             metric: str = "count",
             aggregation: str = "count",
-            days: int = 60,
+            days: int = 0,
             start_date: str = "",
             end_date: str = "",
             unit_id: str = "",
@@ -613,8 +687,18 @@ class CampbellAgentRuntime:
             filter_value: str = "",
             top_n: int = 10,
             title: str = "",
+            scope: str = "",
         ) -> str:
-            """Create a validated Plotly chart, including Pareto, heatmap and time windows."""
+            """Create a validated Plotly chart, including Pareto, heatmap and time windows.
+
+            For the oil source, `scope` states which of three questions the chart answers:
+            "latest_per_unit_component" (current condition, no window),
+            "latest_per_unit_component_in_period" (the newest sample inside the requested
+            period) or "history" (every sample of the period). Left empty it is inferred: a
+            time dimension or a requested period means history, anything else means current
+            condition. `days` left at 0 means no window was requested; any other source falls
+            back to 60 days as before.
+            """
             try:
                 artifact = self.visualizations.create_chart(
                     client=client,
@@ -632,6 +716,7 @@ class CampbellAgentRuntime:
                     filter_value=filter_value,
                     top_n=top_n,
                     title=title,
+                    scope=scope,
                 )
                 generated_visualizations.append(artifact)
                 return record(
@@ -661,7 +746,7 @@ class CampbellAgentRuntime:
         planner = Agent(
             name="Maintenance Planner",
             model=self.settings.model_planner,
-            instructions=load_prompt("planner_base.md"),
+            instructions=_with_oil_glossary(load_prompt("planner_base.md")),
             tools=[],
             model_settings=ModelSettings(temperature=0.1),
         )
@@ -678,6 +763,8 @@ class CampbellAgentRuntime:
             query_maintenance_summary,
             query_oil_status,
             query_oil_components,
+            describe_oil_limits,
+            query_lab_kpis,
             query_telemetry_health,
             query_telemetry_components,
             query_telemetry_series,
@@ -686,7 +773,7 @@ class CampbellAgentRuntime:
         data_analyst = Agent(
             name="Data Analyst Query",
             model=self.settings.model_data_analyst,
-            instructions=load_prompt("data_analyst_query.md"),
+            instructions=_with_oil_glossary(load_prompt("data_analyst_query.md")),
             tools=data_tools,
             model_settings=ModelSettings(temperature=0),
         )
@@ -756,7 +843,7 @@ class CampbellAgentRuntime:
         visualization_analyst = Agent(
             name="Data Visualization Analyst",
             model=self.settings.model_data_analyst,
-            instructions=load_prompt("data_analyst_visualization.md"),
+            instructions=_with_oil_glossary(load_prompt("data_analyst_visualization.md")),
             tools=[
                 list_dashboard_charts,
                 render_dashboard_chart,
@@ -768,7 +855,7 @@ class CampbellAgentRuntime:
         technical_expert = Agent(
             name="Technical Maintenance Expert",
             model=self.settings.model_technical_expert,
-            instructions=(
+            instructions=_with_oil_glossary(
                 load_prompt("technical_expert_base.md")
                 + "\n\n"
                 + load_prompt("five_whys.md")
@@ -871,7 +958,7 @@ class CampbellAgentRuntime:
         head = Agent(
             name="Campbell AI Head Maintenance",
             model=self.settings.model_head,
-            instructions=load_prompt("head_maintenance_base.md"),
+            instructions=_with_oil_glossary(load_prompt("head_maintenance_base.md")),
             tools=[
                 create_analysis_plan,
                 data_analysis,

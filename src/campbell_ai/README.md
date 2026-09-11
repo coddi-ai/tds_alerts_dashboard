@@ -619,9 +619,9 @@ de empujar el chat hacia abajo) "Conversaciones anteriores" lista las conversaci
 con su etiqueta, fecha y cantidad de mensajes; abrir una la deja activa, cierra el panel — elegir
 una conversación es la intención de leerla, no de seguir explorando la lista — y se puede seguir
 conversando en ella. La ventana de mensajes hace scroll automático al último mensaje tanto al
-enviar uno como al cargar una conversación. "Nueva" abre un hilo vacío sin tocar el respaldo, y
-"Limpiar" vacía el hilo visible **sin borrar** lo ya respaldado: vaciar la pantalla no es una
-orden de eliminación.
+enviar uno como al cargar una conversación. Ambos botones **Nueva conversación** abren otro hilo
+sin borrar el anterior. La recuperación requiere respaldo disponible. Los clics repetidos sobre
+el mismo hilo se deduplican durante cinco segundos en un proceso; no es un candado distribuido.
 
 **Al volver a la pestaña.** La conversación ya no desaparece. `campbell-ai-session-company` guarda,
 junto al `session_id` en almacenamiento de sesión, a qué empresa pertenece el hilo. Antes el store de
@@ -714,7 +714,7 @@ puede tardar decenas de segundos. El primer mensaje de una conversación no usa 
 navegador no puede crear la sesión.
 
 **Compositor bloqueado durante toda la solicitud, en ambos caminos.** El compositor (input, botón
-Enviar, Limpiar) se deshabilita mientras `campbell-ai-pending-message-store` tiene un mensaje en
+Enviar y ambos botones Nueva conversación) se deshabilita mientras `campbell-ai-pending-message-store` tiene un mensaje en
 curso, sin importar si termina por streaming o por el camino bloqueante — es la única fuente de
 verdad para ese estado. Antes existían dos mecanismos separados escribiendo la misma propiedad
 (el `running=[...]` de la llamada bloqueante y el gate de streaming), y podían competir: la

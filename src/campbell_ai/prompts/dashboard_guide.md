@@ -17,7 +17,11 @@ canal correspondiente.
 - **Monitoreo**
   - **Alertas**: listado y detalle de alertas por equipo, con evidencia y diagnóstico.
   - **Telemetría**: salud de sensores por equipo, con detalle a nivel de componente y señal.
-  - **Aceite**: análisis de tribología (muestras de aceite) y estado de componentes.
+  - **Aceite**: análisis de tribología (muestras de aceite) y estado de componentes. Tiene
+    pestañas internas; una de ellas es **Laboratorio**, con los tiempos de tránsito, de
+    laboratorio y de diagnóstico de las muestras. Es la referencia funcional de
+    `query_lab_kpis`: si preguntan cuánto demora el laboratorio, responde con esa herramienta
+    y remite a Monitoreo > Aceite > Laboratorio para verlo en pantalla.
 - **Predictivo** (solo visible para empresas con este módulo habilitado)
   - Vistas por componente (por ejemplo Motor, Transmisión) con riesgo de falla y evidencia asociada.
 - **Campbell AI**

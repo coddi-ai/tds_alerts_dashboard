@@ -25,6 +25,15 @@ from src.charts.builders import (
 )
 from src.campbell_ai.errors import CampbellDataError
 from src.campbell_ai.models import VisualizationArtifact
+from src.campbell_ai.oil_entities import (
+    COMPONENT_GROUP_COLUMNS,
+    SAMPLE_ID_COLUMNS,
+    SAMPLE_SCOPES,
+    SCOPE_HISTORY,
+    SCOPE_LATEST,
+    SCOPE_LATEST_IN_PERIOD,
+    latest_sample_per_component,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,11 @@ class _ChartSource:
     # stacking every historical evaluation, matching what the query tools report.
     latest_by: tuple[tuple[str, ...], ...] = ()
     latest_order: tuple[tuple[str, ...], ...] = ()
+    # One row per oil sample, so "current condition" means the newest sample per
+    # (unit, component) and a relative day window must not stand in for it. Resolved per
+    # request rather than fixed on the source, because this same source also answers
+    # historical essay trends. See `_resolve_sample_scope`.
+    sample_scoped: bool = False
 
 
 # Tribology essay/element columns from oil_classified, exposed as chart-able
@@ -159,6 +173,7 @@ CHART_SOURCES: dict[str, _ChartSource] = {
             "classification_score": ("classification_score",),
             **_OIL_ESSAY_METRICS,
         },
+        sample_scoped=True,
     ),
     "maintenance_summary": _ChartSource(
         "maintenance_summary",
@@ -298,6 +313,94 @@ class DashboardVisualizationService:
         if values.notna().sum() == 0:
             raise CampbellDataError("La métrica solicitada no contiene valores numéricos")
         return values
+
+    @staticmethod
+    def _resolve_sample_scope(
+        source: _ChartSource,
+        primary: str,
+        *,
+        days: int,
+        start_date: str,
+        end_date: str,
+        scope: str = "",
+    ) -> str:
+        """Which of the three oil scopes this request is asking for.
+
+        Three, not two, and the third is what was missing: "the newest sample within a
+        period" is neither the current condition nor the history of that period, and the
+        query tool could express it while the chart could not.
+
+        A requested period is honoured whether it arrives as `days` or as explicit dates.
+        Treating a relative window as "no period asked" is what let a `days=30` bar chart
+        include a sample from 200 days earlier: `days` was simply never consulted here.
+
+        `scope` overrides the inference when the caller states its intent outright.
+        """
+        if not source.sample_scoped:
+            return SCOPE_HISTORY
+        requested = str(scope or "").strip().lower()
+        period_requested = (
+            int(days or 0) > 0
+            or bool(str(start_date or "").strip())
+            or bool(str(end_date or "").strip())
+        )
+        if requested in SAMPLE_SCOPES:
+            # "Latest" with a period means latest *within* it; without one it is the plain
+            # current condition. Naming the in-period scope explicitly also works.
+            if requested == SCOPE_LATEST and period_requested:
+                return SCOPE_LATEST_IN_PERIOD
+            if requested == SCOPE_LATEST_IN_PERIOD and not period_requested:
+                raise CampbellDataError(
+                    f"El alcance {SCOPE_LATEST_IN_PERIOD!r} requiere un periodo: "
+                    "usa days, o start_date y end_date"
+                )
+            return requested
+        if requested:
+            raise CampbellDataError(
+                f"Alcance no permitido: {scope!r}. Disponibles: {', '.join(SAMPLE_SCOPES)}"
+            )
+        # A time dimension is a request to see evolution, so every sample of the window.
+        if primary in TIME_DIMENSIONS:
+            return SCOPE_HISTORY
+        if period_requested:
+            return SCOPE_HISTORY
+        return SCOPE_LATEST
+
+    @staticmethod
+    def _sample_dates(frame: pd.DataFrame, date_col: str | None) -> pd.Series | None:
+        """The date of each selected row, aligned to its index.
+
+        Built the same way `filter_date_window` builds its own series - coerced and tz-naive -
+        so a temporal dimension reads identical values whichever scope produced the frame.
+        """
+        if not date_col or date_col not in frame.columns or frame.empty:
+            return None
+        return pd.to_datetime(frame[date_col], errors="coerce", utc=True).dt.tz_localize(None)
+
+    def _latest_samples(
+        self, frame: pd.DataFrame, source: _ChartSource, date_col: str | None
+    ) -> pd.DataFrame:
+        """One sample per (unit, component), using the shared deterministic selection."""
+        return latest_sample_per_component(
+            frame,
+            unit_col=self._column(frame, source.unit_columns),
+            component_col=self._column(frame, COMPONENT_GROUP_COLUMNS),
+            date_col=date_col,
+            sample_id_col=self._column(frame, SAMPLE_ID_COLUMNS),
+        )
+
+    @staticmethod
+    def _latest_scope_window(
+        frame: pd.DataFrame, date_col: str | None, mode: str = SCOPE_LATEST
+    ) -> dict[str, Any]:
+        """Window metadata for a latest-sample scope: dates covered, no window applied."""
+        window: dict[str, Any] = {"mode": mode, "days": None}
+        if date_col and date_col in frame.columns and not frame.empty:
+            dates = pd.to_datetime(frame[date_col], errors="coerce").dropna()
+            if not dates.empty:
+                window["data_min"] = dates.min().isoformat()
+                window["data_max"] = dates.max().isoformat()
+        return window
 
     def _keep_latest(self, frame: pd.DataFrame, source: _ChartSource) -> pd.DataFrame:
         """Reduce a periodically re-evaluated source to its most recent row per group."""
@@ -457,7 +560,11 @@ class DashboardVisualizationService:
         secondary_dimension: str = "",
         metric: str = "count",
         aggregation: str = "count",
-        days: int = 60,
+        # 0 means "no window requested", which is not the same as the 60-day default: for an
+        # oil source that difference decides whether the chart shows current condition or a
+        # period, and treating an explicit `days` as "nothing was asked" is what let a
+        # 30-day chart include a 200-day-old sample.
+        days: int = 0,
         start_date: str = "",
         end_date: str = "",
         unit_id: str = "",
@@ -465,6 +572,7 @@ class DashboardVisualizationService:
         filter_value: str = "",
         top_n: int = 10,
         title: str = "",
+        scope: str = "",
     ) -> VisualizationArtifact:
         source = CHART_SOURCES.get(str(dataset).strip().lower())
         if source is None:
@@ -527,13 +635,50 @@ class DashboardVisualizationService:
         frame = self.repository.load(source.dataset, client).copy()
         frame = self._keep_latest(frame, source)
         date_col = self._column(frame, source.date_columns) if source.date_columns else None
-        frame, dates, window = self.repository.filter_date_window(
-            frame,
-            date_col,
+        sample_scope = self._resolve_sample_scope(
+            source,
+            primary,
             days=days,
             start_date=start_date,
             end_date=end_date,
+            scope=scope,
         )
+        # Every non-oil source keeps the 60-day default it has always had.
+        resolved_days = int(days) if int(days or 0) > 0 else 60
+        if sample_scope == SCOPE_LATEST:
+            # Current condition: one sample per (unit, component), and no relative window.
+            # The 60-day default used to drop every component sampled less often than that,
+            # and counted a component twice when it had two samples inside the window.
+            frame = self._latest_samples(frame, source, date_col)
+            # The selected samples still have their dates, so a temporal dimension over this
+            # scope ("when was each component last sampled") is a legitimate chart. Discarding
+            # the series here made it fail with "la fuente no contiene una fecha utilizable"
+            # even though every selected row was dated.
+            dates = self._sample_dates(frame, date_col)
+            window = self._latest_scope_window(frame, date_col, SCOPE_LATEST)
+        elif sample_scope == SCOPE_LATEST_IN_PERIOD:
+            # Window first, then one sample per component inside it: the same order
+            # `query_oil_components(latest_only=True, start_date=..., end_date=...)` applies,
+            # so both answer that question with the same population.
+            frame, _dates, period = self.repository.filter_date_window(
+                frame,
+                date_col,
+                days=resolved_days,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            frame = self._latest_samples(frame, source, date_col)
+            dates = self._sample_dates(frame, date_col)
+            window = self._latest_scope_window(frame, date_col, SCOPE_LATEST_IN_PERIOD)
+            window["period"] = period
+        else:
+            frame, dates, window = self.repository.filter_date_window(
+                frame,
+                date_col,
+                days=resolved_days,
+                start_date=start_date,
+                end_date=end_date,
+            )
         unit_col = self._column(frame, source.unit_columns)
         if unit_id:
             if not unit_col:
@@ -783,6 +928,10 @@ class DashboardVisualizationService:
             "aggregation": resolved_aggregation,
             "value_label": value_label,
         }
+        if source.sample_scoped:
+            # Declared, so the text answer states the same scope the figure drew and a
+            # months-old sample is reported with its date instead of read as "no data".
+            summary["sample_scope"] = sample_scope
         return VisualizationArtifact(
             title=resolved_title,
             description=self._describe(source, kind, summary, subtitle),
@@ -797,6 +946,7 @@ class DashboardVisualizationService:
                 "metric": resolved_metric,
                 "aggregation": resolved_aggregation,
                 "days": days,
+                "scope": sample_scope if source.sample_scoped else "",
                 "start_date": start_date,
                 "end_date": end_date,
                 "unit_id": unit_id,
@@ -851,6 +1001,19 @@ class DashboardVisualizationService:
         """Human-readable period so the chart states its own coverage."""
         start = str(window.get("data_min") or window.get("start_date") or "")[:10]
         end = str(window.get("data_max") or window.get("end_date") or "")[:10]
+        if window.get("mode") in {SCOPE_LATEST, SCOPE_LATEST_IN_PERIOD}:
+            # States the selection rule, not a period: the samples shown are each
+            # component's newest one and may be far apart in time.
+            covered = f" · muestras entre {start} y {end}" if start and end else ""
+            if window.get("mode") == SCOPE_LATEST_IN_PERIOD:
+                period = window.get("period") or {}
+                first = str(period.get("start_date") or "")[:10]
+                last = str(period.get("end_date") or "")[:10]
+                return (
+                    "Última muestra por equipo y componente dentro del periodo "
+                    f"{first} a {last}{covered}"
+                )
+            return f"Muestra más reciente por equipo y componente{covered}"
         if not start or not end:
             return ""
         if window.get("mode") == "relative" and window.get("days"):

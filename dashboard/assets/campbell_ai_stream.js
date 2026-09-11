@@ -24,6 +24,7 @@
     startedAt: 0,
     lastEventAt: 0,
     running: false,
+    scope: null,
     /*
      * Last whole second already reported by `progress()`. The interval ticks about three
      * times a second while `elapsed` only changes once, so this collapses the surplus
@@ -75,7 +76,7 @@
     if (requestId !== state.requestId) {
       return;
     }
-    state.result = payload;
+    state.result = Object.assign({}, state.scope || {}, payload);
     state.running = false;
   }
 
@@ -127,6 +128,8 @@
     /* Fired when a pending message is created. Returns nothing to Dash. */
     start: function (pending) {
       if (!pending || !pending.message || !pending.stream) {
+        // Navigation and cancellation clear pending even when the old fetch is alive.
+        namespace.campbellAiStream.stop();
         return window.dash_clientside.no_update;
       }
       if (state.controller) {
@@ -137,6 +140,11 @@
       var text = "";
       var settled = false;
       state.controller = controller;
+      state.scope = {
+        session_id: pending.session_id,
+        company_id: pending.company_id,
+        client_message_id: pending.client_message_id,
+      };
       state.result = null;
       state.startedAt = Date.now();
       state.running = true;
@@ -162,6 +170,9 @@
             throw new Error("stream unavailable");
           }
           return consume(response, function (event) {
+            if (requestId !== state.requestId) {
+              return;
+            }
             touch();
             if (event.type === "delta") {
               text += event.text || "";
@@ -222,7 +233,7 @@
           }
           state.running = false;
           state.controller = null;
-          return { ok: false, detail: "", stalled: true };
+          return Object.assign({}, state.scope || {}, { ok: false, detail: "", stalled: true });
         }
         return window.dash_clientside.no_update;
       }
@@ -281,6 +292,7 @@
       state.controller = null;
       state.result = null;
       state.requestId += 1;
+      state.scope = null;
       state.lastReportedElapsed = -1;
       return window.dash_clientside.no_update;
     },

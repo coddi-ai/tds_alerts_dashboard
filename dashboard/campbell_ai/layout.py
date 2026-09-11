@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
@@ -24,7 +27,7 @@ ACCENT_BORDER = "rgba(52, 152, 219, 0.22)"
 # colors — it defaults to the sidebar's blue-gray (dashboard/layout.py's left_menu).
 USER_BUBBLE_COLOR = "#2290ff"
 
-CAMPBELL_AI_VERSION = "1.3.4"
+CAMPBELL_AI_VERSION = "1.3.5"
 
 # Campbell AI typography. Tune these values to adjust normal UI text without
 # changing titles or section headers.
@@ -50,22 +53,210 @@ JOB_POLL_INTERVAL_MS = 1500
 SLOW_ANSWER_SECONDS = 20
 # Each "seguir esperando" buys another stretch of this length before asking again.
 KEEP_WAITING_EXTENSION_SECONDS = 30
+# How often the offered questions are re-resolved against the client's sources. Five minutes
+# rather than seconds: a source appearing or breaking is rare, the check is cached per file
+# generation on the backend, and a failure re-resolves immediately anyway.
+CAPABILITIES_REFRESH_MS = 5 * 60 * 1000
 
-ALERT_SUGGESTIONS = {
-    "weekly-summary": (
-        "¿Cuántas alertas se registraron en los últimos 7 días y qué sistemas "
-        "concentran más?"
+@dataclass(frozen=True)
+class SuggestedQuestion:
+    """One offered question, and the analyses the active client needs to answer it."""
+
+    question_id: str
+    text: str
+    # Capability keys from `client_capabilities`. Every one of them must be *available* for
+    # this client, or the question is not offered.
+    requires: tuple[str, ...]
+    # Grouping label for the heading above the buttons.
+    domain: str
+
+
+# Offered questions, keyed by the capability that answers them rather than a fixed alert list.
+#
+# The four questions here used to be unconditional and all about alerts, so ENEX - a
+# tribology-only client with no alert source at all - was offered four questions none of which
+# could run, and none about the oil data it does have. The catalogue stays deterministic and
+# reviewable; what changes per client is which entries are eligible.
+SUGGESTED_QUESTIONS: tuple[SuggestedQuestion, ...] = (
+    SuggestedQuestion(
+        "weekly-summary",
+        (
+            "¿Cuántas alertas se registraron en los últimos 7 días y qué sistemas "
+            "concentran más?"
+        ),
+        ("alerts",),
+        "alertas",
     ),
-    "top-equipment": (
-        "¿Cuál es el equipo con más alertas durante el último mes?"
+    SuggestedQuestion(
+        "top-equipment",
+        "¿Cuál es el equipo con más alertas durante el último mes?",
+        ("alerts",),
+        "alertas",
     ),
-    "equipment-pareto": (
-        "Genera un Pareto de alertas por equipo para los últimos 30 días."
+    SuggestedQuestion(
+        "equipment-pareto",
+        "Genera un Pareto de alertas por equipo para los últimos 30 días.",
+        ("alerts",),
+        "alertas",
     ),
-    "equipment-system-heatmap": (
-        "Genera un mapa de calor de alertas por equipo y sistema para los últimos 90 días."
+    SuggestedQuestion(
+        "equipment-system-heatmap",
+        "Genera un mapa de calor de alertas por equipo y sistema para los últimos 90 días.",
+        ("alerts",),
+        "alertas",
     ),
+    SuggestedQuestion(
+        "oil-fleet-status",
+        "¿Cómo está la flota según el análisis de aceite y qué equipos priorizo?",
+        ("oil_fleet",),
+        "aceite",
+    ),
+    SuggestedQuestion(
+        "oil-abnormal-components",
+        "¿Qué componentes están anormales por aceite y qué ensayos se salieron de límite?",
+        ("oil_components",),
+        "aceite",
+    ),
+    SuggestedQuestion(
+        "oil-limits-reference",
+        "¿Contra qué límites se comparan los ensayos de la última muestra de un equipo?",
+        ("oil_limits",),
+        "aceite",
+    ),
+    SuggestedQuestion(
+        "lab-turnaround",
+        "¿Cuánto está demorando el laboratorio entre la toma de muestra y el informe?",
+        ("oil_lab_kpis",),
+        "laboratorio",
+    ),
+    SuggestedQuestion(
+        "telemetry-fleet-status",
+        "¿Qué equipos tienen mayor riesgo según telemetría esta semana?",
+        ("telemetry_fleet",),
+        "telemetría",
+    ),
+    SuggestedQuestion(
+        "maintenance-recent",
+        "¿Qué acciones de mantenimiento se registraron en los últimos 30 días?",
+        ("maintenance",),
+        "mantenimiento",
+    ),
+    SuggestedQuestion(
+        "predictive-motor",
+        "¿Qué motores tienen mayor ranking predictivo y qué variables lo explican?",
+        ("predictive_motor",),
+        "predictivo",
+    ),
+)
+
+SUGGESTED_QUESTIONS_BY_ID: dict[str, SuggestedQuestion] = {
+    question.question_id: question for question in SUGGESTED_QUESTIONS
 }
+
+# Kept as a name other modules and tests may still import. It is no longer what the view
+# renders: eligibility is resolved per client by `eligible_suggestions`.
+ALERT_SUGGESTIONS = {
+    question.question_id: question.text
+    for question in SUGGESTED_QUESTIONS
+    if question.domain == "alertas"
+}
+
+
+def available_capability_keys(capabilities: Any) -> set[str]:
+    """The capability keys the API reported as usable for the active client.
+
+    Reads the `available` list of `client_capabilities`, which already accounts for the
+    client's enabled services, its declared sources and the required columns. Anything not in
+    that list is treated as unavailable - including when the payload is missing or malformed,
+    because offering a question that cannot run is the failure being fixed.
+    """
+    if not isinstance(capabilities, dict):
+        return set()
+    entries = capabilities.get("available")
+    if not isinstance(entries, list):
+        return set()
+    return {
+        str(entry.get("key"))
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("key")
+    }
+
+
+def eligible_suggestions(capabilities: Any) -> tuple[SuggestedQuestion, ...]:
+    """Questions the active client can actually have answered."""
+    available = available_capability_keys(capabilities)
+    return tuple(
+        question
+        for question in SUGGESTED_QUESTIONS
+        if available.issuperset(question.requires)
+    )
+
+
+def suggested_question_text(question_id: Any, capabilities: Any) -> str | None:
+    """The question's text, but only while its capability still holds.
+
+    Re-checked at send time rather than trusting the rendered button: sources refresh and the
+    active client can change between the moment a button is drawn and the moment it is
+    clicked.
+    """
+    question = SUGGESTED_QUESTIONS_BY_ID.get(str(question_id or ""))
+    if question is None:
+        return None
+    if not available_capability_keys(capabilities).issuperset(question.requires):
+        return None
+    return question.text
+
+
+def suggested_questions_block(capabilities: Any) -> list:
+    """The suggestion panel for one client: only questions it can have answered.
+
+    Before capabilities are known (first render, or an initialization that failed) nothing is
+    offered. A generic alert question as a placeholder is exactly the fallback that made a
+    tribology-only client click a question with no source behind it.
+    """
+    questions = eligible_suggestions(capabilities)
+    if not questions:
+        if not isinstance(capabilities, dict) or not capabilities:
+            return []
+        return [
+            html.Div(
+                [
+                    html.I(className="fas fa-circle-info me-2", style={"color": ACCENT}),
+                    html.Span(
+                        "No hay preguntas sugeridas para esta empresa: no tiene fuentes "
+                        "habilitadas que puedan responderlas. Puedes preguntar directamente "
+                        "y te indicaré qué análisis están disponibles.",
+                    ),
+                ],
+                className="mb-2",
+                style={
+                    "fontSize": CAMPBELL_AI_AUX_FONT_SIZE,
+                    "color": BRAND_MUTED,
+                },
+            )
+        ]
+    domains = list(dict.fromkeys(question.domain for question in questions))
+    heading = (
+        f"Preguntas sugeridas sobre {domains[0]}"
+        if len(domains) == 1
+        else "Preguntas sugeridas para esta empresa"
+    )
+    return [
+        html.Div(
+            [
+                html.I(className="fas fa-lightbulb me-2", style={"color": ACCENT}),
+                html.Span(heading, style={"fontWeight": "650"}),
+            ],
+            className="mb-2",
+        ),
+        dbc.Row(
+            [
+                _suggested_question_button(question.question_id, question.text)
+                for question in questions
+            ],
+            className="g-2",
+        ),
+    ]
 
 
 def service_error_content(
@@ -278,14 +469,17 @@ def _conversation_history_sidebar() -> list:
         [
             html.Div(
                 [
+                    # Same wording as the header button: one name for one action.
                     dbc.Button(
-                        [html.I(className="fas fa-plus me-2"), "Nueva"],
+                        [html.I(className="fas fa-plus me-2"), "Nueva conversación"],
                         id="campbell-ai-new-conversation",
                         color="link",
                         size="sm",
                         n_clicks=0,
                         className="text-decoration-none",
-                        title="Iniciar una conversación nueva",
+                        title=(
+                            "Iniciar una conversación nueva; la anterior queda en el historial"
+                        ),
                     ),
                     dbc.Button(
                         html.I(className="fas fa-rotate-right me-2"),
@@ -434,6 +628,19 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                 data=_initial_company_state(user_data),
             ),
             dcc.Store(id="campbell-ai-feedback-store", storage_type="session", data={}),
+            # What the active client can be asked, straight from `initialize`. Memory-scoped
+            # on purpose: it must be re-resolved on every remount and every client change,
+            # never carried over from the company that was open before.
+            dcc.Store(id="campbell-ai-capabilities-store", storage_type="memory", data=None),
+            # Sources change under a running session: a file syncs, a file breaks. Without a
+            # trigger the offered questions would keep describing whatever was true when the
+            # thread opened. Deliberately slow - the backend answer is cached per file
+            # generation, so this costs one lightweight call, not a re-read of the data.
+            dcc.Interval(
+                id="campbell-ai-capabilities-refresh",
+                interval=CAPABILITIES_REFRESH_MS,
+                n_intervals=0,
+            ),
             dcc.Store(id="campbell-ai-pending-message-store", storage_type="memory", data=None),
             # Single source for every failure the view has to explain.
             dcc.Store(id="campbell-ai-failure-store", storage_type="memory", data=None),
@@ -539,16 +746,25 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                                 ],
                                                 style={"fontWeight": "600"},
                                             ),
+                                            # "Nueva conversación", not "Limpiar": the action
+                                            # opens a separate thread and the previous one
+                                            # stays readable in the history panel. The old
+                                            # label and trash icon read as deleting the
+                                            # conversation, which is what users avoided doing.
                                             dbc.Button(
                                                 [
-                                                    html.I(className="fas fa-trash-alt me-2"),
-                                                    "Limpiar",
+                                                    html.I(className="fas fa-plus me-2"),
+                                                    "Nueva conversación",
                                                 ],
-                                                id="campbell-ai-clear",
+                                                id="campbell-ai-new-conversation-main",
                                                 color="link",
                                                 size="sm",
                                                 className="text-muted text-decoration-none",
                                                 n_clicks=0,
+                                                title=(
+                                                    "Iniciar una conversación nueva; la "
+                                                    "anterior queda en el historial"
+                                                ),
                                             ),
                                         ],
                                         className="d-flex justify-content-between align-items-center",
@@ -560,28 +776,14 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                         html.Div(
                                             [
                                                 html.Div(
-                                                    [
-                                                        html.Div(
-                                                            [
-                                                                html.I(
-                                                                    className="fas fa-lightbulb me-2",
-                                                                    style={"color": ACCENT},
-                                                                ),
-                                                                html.Span(
-                                                                    "Preguntas sugeridas sobre alertas",
-                                                                    style={"fontWeight": "650"},
-                                                                ),
-                                                            ],
-                                                            className="mb-2",
-                                                        ),
-                                                        dbc.Row(
-                                                            [
-                                                                _suggested_question_button(question_id, question)
-                                                                for question_id, question in ALERT_SUGGESTIONS.items()
-                                                            ],
-                                                            className="g-2",
-                                                        ),
-                                                    ],
+                                                    # Filled by `render_suggested_questions`
+                                                    # once the client's capabilities are
+                                                    # known: which questions are offered
+                                                    # depends on what the active client can
+                                                    # actually be asked, so the layout cannot
+                                                    # decide it up front.
+                                                    id="campbell-ai-suggestions",
+                                                    children=suggested_questions_block(None),
                                                     # Lives inside the same scrolling area as the
                                                     # messages below, so it scrolls out of view as
                                                     # the conversation grows instead of pinning a
