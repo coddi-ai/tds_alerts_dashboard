@@ -2,16 +2,15 @@
 Predictive callbacks - handles internal tab switching and evidence interactivity.
 """
 
-import re
-
 from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import pandas as pd
 from src.utils.logger import get_logger
 from config.settings import get_settings
-from src.data.loaders import get_latest_component_hours, load_oil_classified
+from src.data.loaders import get_latest_component_hours
 from dashboard.components.predictive_config import (
     resolve_failure_modes,
     resolve_failure_mode_options,
+    load_real_oil_samples,
 )
 from dashboard.tabs.tab_predictive_overview import (
     _discover_components,
@@ -29,75 +28,11 @@ from dashboard.tabs.tab_predictive_evidence import (
 
 logger = get_logger(__name__)
 
-# Predictivo component key -> oil componentNameNormalized values it should
-# match, for clients whose oil naming is more specific than Predictivo's
-# coarse key. Applies across all clients (not just the ones that currently
-# need it) - e.g. Capstone's engine oil samples are grouped under "motor
-# diesel" rather than the bare "motor" that CDA uses, but "motor" should
-# always resolve to the diesel engine, never to a traction motor.
-_OIL_COMPONENT_ALIASES = {
-    "motor": {"motor", "motor diesel"},
-}
-
-
-def _normalize_unit_id(unit_id):
-    """T_09 -> T_9, same criterion used across the predictive module."""
-    if pd.isna(unit_id):
-        return unit_id
-    unit_str = str(unit_id)
-    match = re.match(r"^([A-Za-z]+)_(0+)(\d+)$", unit_str)
-    if match:
-        return f"{match.group(1)}_{match.group(3)}"
-    return unit_str
-
-
-def _load_real_oil_samples(client, component, unit):
-    """
-    Load real (non-forward-filled) oil samples for a component/unit from the
-    oil technique's golden layer (data/oil/golden/{client}/classified.parquet).
-
-    Predictivo's component key ("motor", "transmision") is the grouped/coarse
-    granularity, so it's matched against componentNameNormalized (Oil Data
-    Contract v2.8: componentName is the fine-grained original name, e.g.
-    "mando final izquierdo"; componentNameNormalized is the grouped version,
-    e.g. "mando final" - the one that lines up with Predictivo's key). Falls
-    back to componentName only if a client's classified.parquet has no
-    componentNameNormalized column at all.
-
-    Also consults _OIL_COMPONENT_ALIASES so a Predictivo key can match a more
-    specific oil component name (e.g. "motor" -> "motor diesel"), without
-    pulling in unrelated components that merely start with the same word
-    (e.g. Capstone's traction motors).
-
-    Returns None when nothing matches, so the caller can show an empty state
-    instead of a fabricated chart.
-    """
-    try:
-        df_classified = load_oil_classified(client)
-    except Exception as exc:  # noqa: BLE001 - treat as no data on any load issue
-        logger.warning(f"No se pudo cargar classified.parquet para {client}: {exc}")
-        return None
-
-    if df_classified is None or df_classified.empty:
-        return None
-
-    comp_key = (component or "").strip().lower()
-    match_keys = _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key})
-    if "componentNameNormalized" in df_classified.columns:
-        name_col = "componentNameNormalized"
-    elif "componentName" in df_classified.columns:
-        name_col = "componentName"
-    else:
-        return None
-
-    comp_rows = df_classified[df_classified[name_col].astype(str).str.strip().str.lower().isin(match_keys)]
-    if comp_rows.empty or "unitId" not in comp_rows.columns:
-        return None
-
-    unit_norm = _normalize_unit_id(unit)
-    comp_rows = comp_rows[comp_rows["unitId"].apply(_normalize_unit_id) == unit_norm]
-
-    return comp_rows if not comp_rows.empty else None
+# _load_real_oil_samples was moved to
+# dashboard.components.predictive_config.load_real_oil_samples so
+# tab_predictive_evidence.py's oil selector/table (which needs the same real,
+# non-forward-filled oil samples for components on the new parquet Data
+# Contract v2.0 format) can share it without a circular import.
 
 
 def register_callbacks(app):
@@ -556,7 +491,7 @@ def register_callbacks(app):
         # row between samples, which is what produced the staircase. This is
         # now the sole source for this chart; if there are no matching real
         # samples we show an empty state instead of falling back to it.
-        df_oil_real = _load_real_oil_samples(client, component, selected_unit)
+        df_oil_real = load_real_oil_samples(client, component, selected_unit)
         if df_oil_real is None or not any(v in df_oil_real.columns for v in selected_vars):
             return html.P("No hay muestras de aceite reales disponibles para este componente.",
                          className="text-muted", style={"fontSize": "13px", "padding": "20px", "textAlign": "center"})

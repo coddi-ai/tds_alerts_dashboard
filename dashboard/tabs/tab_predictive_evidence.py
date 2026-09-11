@@ -18,6 +18,7 @@ from dashboard.components.predictive_config import (
     OIL_LABELS,
     TELEMETRY_LABELS,
     load_predictive_oil_limits_four,
+    load_real_oil_samples,
 )
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_charts import (
@@ -656,20 +657,33 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
     oil_vars = get_oil_variables_for_mode(failure_mode, component, client)
     oil_subtitle = f"Variables asociadas a {selected_label}"
 
+    # df_unit is the risk-scores-derived wide frame shared with Predictivo >
+    # Resumen: components still on the legacy CSV format carry forward-filled
+    # oil essay columns directly in it, but components on the new parquet
+    # Data Contract v2.0 format (e.g. Capstone's "motor") never do - it only
+    # has failure-mode risk columns. Fall back to the oil technique's own
+    # golden layer (the same real-samples source the oil timeseries chart
+    # already uses) so the selector/table aren't silently empty for those.
+    df_oil = df_unit
+    if oil_vars and not any(v in df_oil.columns for v in oil_vars):
+        df_oil_real = load_real_oil_samples(client, component, unit)
+        if df_oil_real is not None and not df_oil_real.empty:
+            df_oil = df_oil_real
+
     # Build oil variable options for the selector (all associated vars, pre-selected)
-    oil_var_options = [{"label": oil_labels.get(v, v), "value": v} for v in oil_vars if v in df_unit.columns]
-    oil_var_defaults = [v for v in oil_vars if v in df_unit.columns]
+    oil_var_options = [{"label": oil_labels.get(v, v), "value": v} for v in oil_vars if v in df_oil.columns]
+    oil_var_defaults = [v for v in oil_vars if v in df_oil.columns]
 
     # Get oil range for threshold display
     oil_range_val = "LT_1000"
-    if oil_vars and not df_unit.empty:
-        df_sorted_oil = df_unit.sort_values(_oil_date_col(df_unit))
+    if oil_vars and not df_oil.empty:
+        df_sorted_oil = df_oil.sort_values(_oil_date_col(df_oil))
         last_sample = df_sorted_oil.iloc[-1]
         oil_range_val = last_sample.get("oilHourRange", "LT_1000")
 
     # Oil variables table (static, always shows all vars for the mode)
-    if oil_vars and not df_unit.empty:
-        oil_table = create_oil_variables_table(df_unit, oil_vars, oil_labels, oil_limits_four)
+    if oil_vars and not df_oil.empty:
+        oil_table = create_oil_variables_table(df_oil, oil_vars, oil_labels, oil_limits_four)
     else:
         oil_table = html.Div()
 

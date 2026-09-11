@@ -16,6 +16,10 @@ IMPORTANTE (datos de dominio de Capstone):
   (un umbral equivocado es peor que uno ausente).
 """
 
+import re
+
+import pandas as pd
+
 from src.utils.logger import get_logger
 from src.charts.signals import SIGNAL_LABELS
 
@@ -111,6 +115,81 @@ OIL_THRESHOLDS = {
 # every row, for both CDA and CAPSTONE.
 PREDICTIVE_STEWART_MACHINE = 'camion'
 
+# Predictivo component key -> oil component name(s) it should match, for
+# clients whose oil naming is more specific than Predictivo's coarse key.
+# e.g. Capstone's engine oil data is grouped under "motor diesel" rather than
+# the bare "motor" Predictivo uses, but "motor diesel" is the only oil
+# component "motor" should ever resolve to - never a traction motor, even
+# though "motor traccion ..." also starts with the same word. Shared by
+# load_real_oil_samples (real/non-forward-filled oil samples) and
+# load_predictive_oil_limits_four (Stewart Limits) below, so both lookups
+# agree on which oil component a Predictivo key maps to.
+_OIL_COMPONENT_ALIASES = {
+    "motor": {"motor", "motor diesel"},
+}
+
+
+def _normalize_unit_id(unit_id):
+    """T_09 -> T_9, same criterion used across the predictive module."""
+    if pd.isna(unit_id):
+        return unit_id
+    unit_str = str(unit_id)
+    match = re.match(r"^([A-Za-z]+)_(0+)(\d+)$", unit_str)
+    if match:
+        return f"{match.group(1)}_{match.group(3)}"
+    return unit_str
+
+
+def load_real_oil_samples(client: str, component: str, unit: str):
+    """
+    Load real (non-forward-filled) oil samples for a component/unit from the
+    oil technique's golden layer (data/oil/golden/{client}/classified.parquet).
+
+    Predictivo's component key ("motor", "transmision") is the grouped/coarse
+    granularity, so it's matched against componentNameNormalized (Oil Data
+    Contract v2.8: componentName is the fine-grained original name, e.g.
+    "mando final izquierdo"; componentNameNormalized is the grouped version,
+    e.g. "mando final" - the one that lines up with Predictivo's key). Falls
+    back to componentName only if a client's classified.parquet has no
+    componentNameNormalized column at all.
+
+    Also consults _OIL_COMPONENT_ALIASES so a Predictivo key can match a more
+    specific oil component name (e.g. "motor" -> "motor diesel"), without
+    pulling in unrelated components that merely start with the same word
+    (e.g. Capstone's traction motors).
+
+    Returns None when nothing matches, so callers can show an empty state
+    instead of a fabricated chart/table.
+    """
+    from src.data.loaders import load_oil_classified
+
+    try:
+        df_classified = load_oil_classified(client)
+    except Exception as exc:  # noqa: BLE001 - treat as no data on any load issue
+        logger.warning(f"No se pudo cargar classified.parquet para {client}: {exc}")
+        return None
+
+    if df_classified is None or df_classified.empty:
+        return None
+
+    comp_key = (component or "").strip().lower()
+    match_keys = _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key})
+    if "componentNameNormalized" in df_classified.columns:
+        name_col = "componentNameNormalized"
+    elif "componentName" in df_classified.columns:
+        name_col = "componentName"
+    else:
+        return None
+
+    comp_rows = df_classified[df_classified[name_col].astype(str).str.strip().str.lower().isin(match_keys)]
+    if comp_rows.empty or "unitId" not in comp_rows.columns:
+        return None
+
+    unit_norm = _normalize_unit_id(unit)
+    comp_rows = comp_rows[comp_rows["unitId"].apply(_normalize_unit_id) == unit_norm]
+
+    return comp_rows if not comp_rows.empty else None
+
 
 def load_predictive_oil_limits_four(client: str, component: str) -> dict:
     """
@@ -122,13 +201,15 @@ def load_predictive_oil_limits_four(client: str, component: str) -> dict:
     stewart_limits_four.parquet's `component` field 1:1 - e.g. CDA's Stewart
     component is literally 'motor' (an exact match), but CAPSTONE splits
     engine components into 'motor diesel'/'motor traccion derecho'/'motor
-    traccion izquierdo' (no unambiguous match to predictive's generic
-    'motor'). Rather than guess which Capstone sub-component to use - a wrong
-    limit is worse than an absent one, the same principle already applied to
-    OIL_THRESHOLDS["capstone"] above - this only resolves limits when
-    `component` matches a Stewart Limits component name EXACTLY for that
-    client; otherwise it returns {} (no limits shown for that combination),
-    never falling back to the legacy OIL_THRESHOLDS table above.
+    traccion izquierdo'. _OIL_COMPONENT_ALIASES resolves this the same way it
+    already does for real oil samples: 'motor' unambiguously maps to 'motor
+    diesel' for Capstone, never to a traction motor. For any component with
+    no alias entry, this only resolves limits when `component` matches a
+    Stewart Limits component name EXACTLY for that client; otherwise it
+    returns {} (no limits shown for that combination) rather than guessing -
+    a wrong limit is worse than an absent one, the same principle already
+    applied to OIL_THRESHOLDS["capstone"] above. Never falls back to the
+    legacy OIL_THRESHOLDS table above.
 
     Args:
         client: Client key, any case ('cda', 'CDA', 'capstone', ...).
@@ -146,7 +227,14 @@ def load_predictive_oil_limits_four(client: str, component: str) -> dict:
         return {}
 
     limits = load_stewart_limits_four(limits_file)
-    return limits.get(client.upper(), {}).get(PREDICTIVE_STEWART_MACHINE, {}).get(component, {})
+    component_limits = limits.get(client.upper(), {}).get(PREDICTIVE_STEWART_MACHINE, {})
+
+    comp_key = (component or "").strip().lower()
+    for candidate in _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key}):
+        resolved = component_limits.get(candidate, {})
+        if resolved:
+            return resolved
+    return {}
 
 
 # =============================================================================
