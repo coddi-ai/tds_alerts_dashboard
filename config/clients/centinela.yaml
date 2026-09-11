@@ -1,0 +1,15 @@
+# Configuración SAP de Centinela. Los avisos provienen de pautas de inspección:
+# describen una desviación del estándar sin avería ni parada, por lo que el tipo
+# de aviso es M1 (Maintenance Request) y no el M2 (Malfunction Report) que usan
+# los demás clientes. M3 (Activity Report) documenta trabajo ya ejecutado.
+# Los códigos de organización son placeholders hasta que el cliente entregue los
+# suyos (en SAP la planta son 4 caracteres y el grupo de planificación 3).
+client_id: centinela
+client_erp_type: sap
+asset_id_format: equipment
+sap:
+  notification_type: M1
+  planning_plant: "planta_centinela"
+  planner_group: grupo_centinela
+  main_work_center: work_center_centinela
+dedup_time_window_minutes: 1440
