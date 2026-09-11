@@ -17,8 +17,8 @@ doc and the code diverge, the code wins.
 | `warning_id` | string (UUID) | Generated at creation |
 | `client_id` | string | FK → client config |
 | `asset_id` | string | — |
-| `source` | enum | `alertas \| telemetria \| aceites \| predictivo` |
-| `system` | enum | `motor \| transmision \| diferencial \| hidraulico \| convertidor \| direccion \| mando_final \| rueda \| frenos` |
+| `source` | enum | `alertas \| telemetria \| aceites \| predictivo \| inspections` — `inspections` (pautas de inspección) llega en inglés desde el pipeline, observado en los avisos de Centinela |
+| `system` | enum | `motor \| transmision \| diferencial \| hidraulico \| convertidor \| direccion \| mando_final \| rueda \| frenos \| lubricacion` |
 | `condition_label` | enum | `alerta \| anormal`; immutable after generation |
 | `severity` | enum | `low \| medium \| high \| critical` |
 | `title` | string | ≤ 40 chars recommended; non-empty required for approval |
@@ -57,7 +57,7 @@ handoff, but the exact mapping whoever builds it will need)
 
 | Coddi Warning Field | SAP IW21 Field | Req. | Notes |
 |---|---|:-:|---|
-| *(client config `sap.notification_type`)* | Notification Type | 🔴 | e.g. `M2` |
+| *(client config `sap.notification_type`)* | Notification Type | 🔴 | `M2` (malfunction report) for signal-driven clients; Centinela uses `M1` (maintenance request) — its pauta findings are deviations without a breakdown |
 | *(not sent — SAP-generated)* | Notification Number | 🔵 | Returned by SAP; stored as `erp_reference` |
 | `title` | Short Text | 🔴 | ≤ 40 chars recommended |
 | `asset_id` | Equipment / Functional Location | 🔴 | Resolved via client's `asset_id_format` — see §2.1 |
