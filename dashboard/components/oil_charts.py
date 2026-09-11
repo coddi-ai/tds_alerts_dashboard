@@ -20,6 +20,13 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
+
+# The four-limit contract lives in `src` and is read from here, never the other way round.
+from src.campbell_ai.oil_limits import (
+    classify_four_limit,
+    four_limit_for_essay,
+    four_limit_reference,
+)
 from dash import html, dcc
 
 
@@ -229,83 +236,46 @@ def limit_line_color(tiers) -> str:
 
 
 def get_essay_limits_four(comp_limits_four, essay, oil_hour_range):
+    """Four-limit (LIC/LIM/LSM/LSC) essay limits with oil-hour stratification fallback.
+
+    Delegates to `src.campbell_ai.oil_limits`, which now owns the single copy of this rule.
+    The two implementations had drifted apart in one place - this one returned a dict of
+    Nones when no bucket carried an LSM, where the shared one returns None - and a band with
+    no upper marginal limit cannot classify anything, so None is the honest answer.
+
+    The import direction is the safe one: `dashboard` may read `src`, never the reverse (the
+    API container mounts ./src but not ./dashboard, so an import the other way would serve
+    stale code).
     """
-    Get four-limit (LIC/LIM/LSM/LSC) essay limits with oil-hour stratification
-    fallback logic (data contract v2.8).
+    return four_limit_for_essay(comp_limits_four, essay, oil_hour_range)
 
-    Fallback hierarchy:
-    1. Try exact match: oilHourRange from sample
-    2. Try 'ALL'
-    3. Try averaging across all available oil hour ranges
-    4. Return None if essay not found
 
-    Args:
-        comp_limits_four: Nested dict {essay: {oilHourRange: {LIC, LIM, LSM, LSC, ...}}}
-        essay: Essay name
-        oil_hour_range: Oil hour range from sample ('LT_1000', 'GE_1000', 'UNKNOWN')
+def get_essay_limits_four_with_basis(comp_limits_four, essay, oil_hour_range):
+    """Same lookup, plus which mechanism produced the band and from which stored rows.
 
-    Returns:
-        Dict with LIC, LIM, LSM, LSC (LIC/LIM may be None) or None if not found.
+    Returns ``(thresholds, basis, provenance)``. For any view that shows a reference to a
+    user: an averaged band is an approximation, has to be labelled as one, and has to carry
+    the ranges and calibration versions it was derived from - it has no single
+    ``calculation_date`` of its own.
     """
-    if not comp_limits_four or essay not in comp_limits_four:
-        return None
-
-    essay_limits = comp_limits_four[essay]
-    if not essay_limits:
-        return None
-
-    if oil_hour_range in essay_limits:
-        return essay_limits[oil_hour_range]
-
-    if 'ALL' in essay_limits:
-        return essay_limits['ALL']
-
-    available_ranges = list(essay_limits.keys())
-    if not available_ranges:
-        return None
-
-    def _avg(field):
-        # Never treat a missing (null) lower limit as zero: average only over
-        # the buckets where this field is actually present.
-        values = [essay_limits[r][field] for r in available_ranges if essay_limits[r].get(field) is not None]
-        return sum(values) / len(values) if values else None
-
-    return {
-        'LIC': _avg('LIC'),
-        'LIM': _avg('LIM'),
-        'LSM': _avg('LSM'),
-        'LSC': _avg('LSC'),
-    }
+    return four_limit_reference(comp_limits_four, essay, oil_hour_range)
 
 
 def classify_four_limit_value(value: float, LIC, LIM, LSM: float, LSC: float) -> str:
-    """
-    Classify a value against the four-limit Stewart output (data contract v2.8).
+    """Classify a value against the four-limit Stewart output (data contract v2.8).
 
-    Boundary semantics (must match the main service exactly):
+    Boundary semantics, owned by `src.campbell_ai.oil_limits.classify_four_limit` so the chat
+    and the dashboard cannot disagree about the same sample:
         value < LIC            -> Inferior Condenatorio
         LIC <= value < LIM      -> Inferior Marginal
         LIM <= value <= LSM     -> Normal
         LSM < value <= LSC      -> Superior Marginal
         value > LSC             -> Superior Condenatorio
 
-    Lower-limit evaluation is only applied when BOTH LIC and LIM are available
-    (a null lower limit is never treated as a lower limit of zero). Otherwise:
-        value <= LSM            -> Normal
-        LSM < value <= LSC      -> Superior Marginal
-        value > LSC             -> Superior Condenatorio
+    Lower-limit evaluation is only applied when BOTH LIC and LIM are available (a null lower
+    limit is never treated as a lower limit of zero).
     """
-    has_lower = LIC is not None and LIM is not None
-    if has_lower:
-        if value < LIC:
-            return 'Inferior Condenatorio'
-        if value < LIM:
-            return 'Inferior Marginal'
-    if value <= LSM:
-        return 'Normal'
-    if value <= LSC:
-        return 'Superior Marginal'
-    return 'Superior Condenatorio'
+    return classify_four_limit(value, LIC, LIM, LSM, LSC)
 
 
 def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oil_hour_range: str):

@@ -1655,15 +1655,19 @@ def test_the_vocabulary_index_survives_a_restart_and_a_corrupt_file(
     assert reads["n"] == 2
     assert index_module.index_stats()["entries"] == 0
 
-def test_a_declared_dataset_that_never_arrived_fails_when_it_is_read(
+def test_a_declared_dataset_that_never_arrived_is_reported_absent_and_fails_on_read(
     dataset_root, monkeypatch
 ):
-    """The trade this design accepted, asserted end to end.
+    """A declared file that never synced is not an available analysis.
 
-    Validation assumes a declared dataset is present, so a file that failed to sync no longer
-    stops a session from opening. It has to fail somewhere, and that somewhere is the read -
-    with a message that says which file was expected and where, because this is now the primary
-    signal that the data did not arrive.
+    The declaration answers "which columns", and that is still what spares the columns read.
+    It cannot answer "is the file there now": trusting it for presence meant a client whose
+    files had not arrived was still offered every analysis, and the suggestion buttons handed
+    the user questions that could not run. Presence is a cached `stat`, so this costs one
+    filesystem call per dataset rather than a read.
+
+    Opening a session still does not fail - the capability is simply withdrawn - and reading
+    the file anyway still says which file was expected and where.
     """
     import src.campbell_ai.data as data_module
     import src.campbell_ai.schema as schema_module
@@ -1687,10 +1691,18 @@ def test_a_declared_dataset_that_never_arrived_fails_when_it_is_read(
     )
     repo._probe_cache.clear()
 
-    # La validacion lo da por presente: abrir la sesion no falla.
+    # La validacion comprueba la presencia: el dataset no cuenta como disponible.
     item = repo.validate_client("cda")["datasets"]["maintenance_actions"]
-    assert item["exists"] is True
-    assert item["presence"] == "declared"
+    assert item["exists"] is False
+    assert item["valid"] is False
+    assert item["presence"] == "declared_but_unusable"
+    assert item["usability"] == "ausente"
+    # Las columnas siguen viniendo de la declaracion, sin abrir el archivo.
+    assert item["columns"] == ["machine_code", "action_type_name"]
+
+    # Y la capacidad que depende de el deja de anunciarse.
+    capacidades = repo.client_capabilities("cda")
+    assert "maintenance" not in {item["key"] for item in capacidades["available"]}
 
     # Y al leerlo de verdad, falla con un mensaje que sirve para actuar.
     with pytest.raises(CampbellDataError) as fallo:

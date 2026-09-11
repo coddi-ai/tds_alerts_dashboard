@@ -13,6 +13,15 @@ from dash import callback, Input, Output, State, no_update
 import pandas as pd
 import plotly.graph_objects as go
 from config.settings import get_settings
+from src.data.lab_kpis import (
+    REPORT_DATE,
+    compute_lab_kpis,
+    default_lab_period,
+    filter_lab_period,
+    has_positive_lab_time,
+    normalize_lab_frame,
+    resolve_lab_period,
+)
 from src.data.loaders import load_oil_classified
 from src.utils.logger import get_logger
 
@@ -20,11 +29,11 @@ logger = get_logger(__name__)
 
 
 def _load_compliance_data(client: str) -> pd.DataFrame:
-    """
-    Load data and compute Transit Time and Lab Time.
+    """Load the client's classified oil and derive the three turnaround durations.
 
-    Returns DataFrame with: sampleDate, labDate, reportDate, unitId,
-                            transit_time, lab_time, diagnostic_time
+    The parsing, the durations and the period rules live in `src/data/lab_kpis.py` so that
+    Campbell AI answers this tab's numbers from the same code instead of a second copy of the
+    formulas. Only the cached load stays here.
     """
     if not client:
         return pd.DataFrame()
@@ -33,43 +42,19 @@ def _load_compliance_data(client: str) -> pd.DataFrame:
     # Alertas and General.  Compliance is callback-heavy (date range, KPI,
     # weekly chart and unit chart) and used to parse the same Parquet once per
     # callback.
-    df = load_oil_classified(client)
+    return normalize_lab_frame(load_oil_classified(client))
+
+
+def _scoped(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
+    """Rows published inside the selected period, final day included in full."""
     if df.empty:
-        return pd.DataFrame()
-
-    df['sampleDate'] = pd.to_datetime(df['sampleDate'], errors='coerce', utc=True).dt.tz_localize(None)
-
-    if 'labDate' in df.columns:
-        df['labDate'] = pd.to_datetime(df['labDate'], errors='coerce', utc=True).dt.tz_localize(None)
-    else:
-        df['labDate'] = pd.NaT
-
-    if 'reportDate' in df.columns:
-        df['reportDate'] = pd.to_datetime(df['reportDate'], errors='coerce', utc=True).dt.tz_localize(None)
-    else:
-        df['reportDate'] = pd.NaT
-
-    # Need at least sampleDate
-    df = df.dropna(subset=['sampleDate'])
-
-    # Transit Time = labDate - sampleDate (may be NaN if labDate missing)
-    df['transit_time'] = (df['labDate'] - df['sampleDate']).dt.days
-    # Lab Time = reportDate - labDate (may be NaN)
-    df['lab_time'] = (df['reportDate'] - df['labDate']).dt.days
-    # Diagnostic Time = reportDate - sampleDate (fallback)
-    df['diagnostic_time'] = (df['reportDate'] - df['sampleDate']).dt.days
-
-    cols = ['sampleDate', 'labDate', 'reportDate', 'unitId',
-            'transit_time', 'lab_time', 'diagnostic_time']
-    return df[[c for c in cols if c in df.columns]].copy()
+        return df
+    return filter_lab_period(df, resolve_lab_period(df, start_date, end_date))
 
 
 def _has_positive_lab_time(df: pd.DataFrame) -> bool:
-    """Check if Lab Time has any positive values."""
-    if 'lab_time' not in df.columns:
-        return False
-    valid = df['lab_time'].dropna()
-    return (valid > 0).any()
+    """Whether the transit/lab split is meaningful. Shared with Campbell AI."""
+    return has_positive_lab_time(df)
 
 
 # ========================================
@@ -91,14 +76,15 @@ def init_date_range(active_tab, client):
     if df.empty:
         return no_update, no_update, no_update, no_update
 
-    # Use reportDate for date range initialization
-    df_with_report_date = df.dropna(subset=['reportDate'])
-    if df_with_report_date.empty:
+    # Default period from the shared rule, so the tab and the chat open on the same window.
+    dated = df.dropna(subset=[REPORT_DATE])
+    if dated.empty:
         return no_update, no_update, no_update, no_update
 
-    min_d = df_with_report_date['reportDate'].min().date()
-    max_d = df_with_report_date['reportDate'].max().date()
-    start = max(min_d, (pd.Timestamp(max_d) - pd.DateOffset(months=6)).date())
+    period = default_lab_period(dated)
+    min_d = dated[REPORT_DATE].min().date()
+    max_d = dated[REPORT_DATE].max().date()
+    start = period.start.date() if period.start is not None else min_d
     return min_d, max_d, start, max_d
 
 
@@ -125,13 +111,9 @@ def update_kpis(start_date, end_date, client, active_tab):
     if df.empty:
         return defaults
 
-    # Filter by reportDate instead of sampleDate
-    # Drop records without valid reportDate
-    df = df.dropna(subset=['reportDate'])
-    if start_date:
-        df = df[df['reportDate'] >= pd.Timestamp(start_date)]
-    if end_date:
-        df = df[df['reportDate'] <= pd.Timestamp(end_date)]
+    # Shared period rule: filters on reportDate, drops rows without one, and counts the
+    # final day in full (`<= Timestamp(end_date)` used to drop reports published during it).
+    df = _scoped(df, start_date, end_date)
     if df.empty:
         return defaults
 
@@ -173,13 +155,9 @@ def update_weekly_chart(start_date, end_date, client, active_tab):
     if df.empty:
         return empty, default_title
 
-    # Filter by reportDate instead of sampleDate
-    # Drop records without valid reportDate
-    df = df.dropna(subset=['reportDate'])
-    if start_date:
-        df = df[df['reportDate'] >= pd.Timestamp(start_date)]
-    if end_date:
-        df = df[df['reportDate'] <= pd.Timestamp(end_date)]
+    # Shared period rule: filters on reportDate, drops rows without one, and counts the
+    # final day in full (`<= Timestamp(end_date)` used to drop reports published during it).
+    df = _scoped(df, start_date, end_date)
     if df.empty:
         return empty, default_title
 
@@ -264,13 +242,9 @@ def update_unit_chart(start_date, end_date, client, active_tab):
     if df.empty:
         return empty
 
-    # Filter by reportDate instead of sampleDate
-    # Drop records without valid reportDate
-    df = df.dropna(subset=['reportDate'])
-    if start_date:
-        df = df[df['reportDate'] >= pd.Timestamp(start_date)]
-    if end_date:
-        df = df[df['reportDate'] <= pd.Timestamp(end_date)]
+    # Shared period rule: filters on reportDate, drops rows without one, and counts the
+    # final day in full (`<= Timestamp(end_date)` used to drop reports published during it).
+    df = _scoped(df, start_date, end_date)
     if df.empty:
         return empty
 

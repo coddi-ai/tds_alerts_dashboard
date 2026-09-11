@@ -626,6 +626,10 @@ def test_a_background_job_is_not_polled_by_a_different_user():
             [],
             {},
             0,
+            # The thread and company now open. Matching them on purpose, so the ownership
+            # check is what rejects this job and not the newer thread/company check.
+            "s",
+            "cda",
         )
     finally:
         module._current_username = original
