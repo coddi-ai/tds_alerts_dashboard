@@ -44,6 +44,18 @@ logger = logging.getLogger("campbell_ai.oil_limits")
 # Reading order: what is wearing first, then what explains it.
 OIL_GROUP_ORDER = ("Desgaste", "Contaminante", "Aditivo", "Fisico Quimico", "Conteo")
 
+# The five states an *essay* can take under the four-limit contract. Deliberately its own
+# vocabulary: a component's state (Normal / Alerta / Anormal), a machine's aggregate state and
+# the predictive risk band are three other taxonomies, and collapsing any of them into this
+# one is how a reading ends up described with a label its own domain does not use.
+FOUR_LIMIT_ESSAY_STATES = (
+    "Inferior Condenatorio",
+    "Inferior Marginal",
+    "Normal",
+    "Superior Marginal",
+    "Superior Condenatorio",
+)
+
 # Radii for the four thresholds on the 0-100 scale, matching the dashboard's radar.
 RING_RADII = {"LIC": 20, "LIM": 40, "LSM": 60, "LSC": 80}
 
@@ -166,35 +178,119 @@ def oil_element_groups(essays_file: str = "data/oil/essays_elements.xlsx") -> di
 CACHES.register("oil_element_groups", clear_oil_element_groups)
 
 
-def four_limit_for_essay(
+# How the returned band was obtained. An averaged band is an approximation and a caller that
+# shows a reference to a user has to be able to say so; the three mechanisms used to be
+# indistinguishable in the return value.
+LIMIT_BASIS_EXACT = "rango_exacto"
+LIMIT_BASIS_ALL = "rango_ALL"
+LIMIT_BASIS_AVERAGED = "promedio_entre_rangos"
+LIMIT_BASIS_MISSING = "sin_calibracion"
+
+LIMIT_BASIS_LABELS: dict[str, str] = {
+    LIMIT_BASIS_EXACT: "Límite calibrado para el rango de horas de esta muestra",
+    LIMIT_BASIS_ALL: "Límite calibrado para todos los rangos de horas (ALL)",
+    LIMIT_BASIS_AVERAGED: (
+        "Referencia APROXIMADA: promedio de los rangos de horas calibrados, porque no hay "
+        "límite para el rango de esta muestra"
+    ),
+    LIMIT_BASIS_MISSING: "Sin límite calibrado para este ensayo, componente y cliente",
+}
+
+
+def _provenance(ranges: list[str], entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Which stored bands a reference came from, and which calibration versions they carry.
+
+    An averaged band is derived from several rows that were not necessarily calculated on the
+    same day, so it has no single ``calculation_date``. Reporting one would invent it, and
+    reporting none - which is what happened before - leaves an approximation that cannot be
+    traced back to anything. Both source ranges and the distinct versions travel instead, with
+    ``mixed_versions`` saying outright when the derivation crossed more than one.
+    """
+    versions = sorted(
+        {
+            str(entry["calculation_date"])
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("calculation_date") is not None
+        }
+    )
+    counts = [
+        entry.get("sample_count")
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("sample_count") is not None
+    ]
+    provenance: dict[str, Any] = {
+        "source_ranges": list(ranges),
+        "versions": versions,
+        "mixed_versions": len(versions) > 1,
+    }
+    if counts:
+        provenance["sample_counts"] = counts
+    return provenance
+
+
+def four_limit_reference(
     component_limits: dict[str, Any], essay: str, oil_hour_range: str
-) -> Optional[dict[str, Any]]:
-    """Thresholds for one essay, with the same oil-hour fallback the dashboard uses.
+) -> tuple[Optional[dict[str, Any]], str, dict[str, Any]]:
+    """Thresholds for one essay, *how* they were obtained, and *from where*.
 
     Exact range, then ``ALL``, then the average across ranges. Falling back rather than
     returning nothing matters: a sample whose ``oilHourRange`` has no calibrated limits still
     has to be plotted against something, and the averaged band is closer to right than no
-    band at all.
+    band at all. What was missing is the rest - an averaged band is an approximation, and
+    presenting it as a calibrated limit overstates the evidence, while presenting it without
+    its source ranges and versions leaves it impossible to reconstruct.
+
+    The averaging never treats a null lower limit as zero: it averages only the buckets where
+    the field is present, and gives up when no bucket has an ``LSM``, since without an upper
+    marginal limit nothing can be classified.
     """
     if not component_limits or essay not in component_limits:
-        return None
+        return None, LIMIT_BASIS_MISSING, {}
     per_range = component_limits[essay]
     if not per_range:
-        return None
+        return None, LIMIT_BASIS_MISSING, {}
     if oil_hour_range in per_range:
-        return per_range[oil_hour_range]
+        entry = per_range[oil_hour_range]
+        return entry, LIMIT_BASIS_EXACT, _provenance([oil_hour_range], [entry])
     if "ALL" in per_range:
-        return per_range["ALL"]
+        entry = per_range["ALL"]
+        return entry, LIMIT_BASIS_ALL, _provenance(["ALL"], [entry])
 
+    contributing: dict[str, list[str]] = {}
     averaged: dict[str, Any] = {}
     for key in ("LIC", "LIM", "LSM", "LSC"):
-        values = [
-            entry[key]
-            for entry in per_range.values()
+        sources = [
+            name
+            for name, entry in per_range.items()
             if isinstance(entry, dict) and entry.get(key) is not None
         ]
+        values = [per_range[name][key] for name in sources]
         averaged[key] = sum(values) / len(values) if values else None
-    return averaged if averaged.get("LSM") is not None else None
+        if sources:
+            # Per field, because a null lower limit in one bucket means that bucket did not
+            # contribute to LIC/LIM even though it contributed to LSM/LSC.
+            contributing[key] = sorted(sources)
+    if averaged.get("LSM") is None:
+        return None, LIMIT_BASIS_MISSING, {}
+    ranges = sorted(per_range)
+    provenance = _provenance(ranges, [per_range[name] for name in ranges])
+    provenance["averaged_from"] = contributing
+    return averaged, LIMIT_BASIS_AVERAGED, provenance
+
+
+def four_limit_for_essay(
+    component_limits: dict[str, Any], essay: str, oil_hour_range: str
+) -> Optional[dict[str, Any]]:
+    """The thresholds alone, for callers that only plot them.
+
+    Deliberately returns the stored dict unchanged - no extra keys - so the shape every
+    existing consumer reads stays exactly as it was. Use `four_limit_reference` when the
+    answer has to state whether the band is calibrated or approximated, and from what.
+    """
+    thresholds, _basis, _provenance = four_limit_reference(
+        component_limits, essay, oil_hour_range
+    )
+    return thresholds
 
 
 def classify_four_limit(value: float, lic, lim, lsm: float, lsc: float) -> str:

@@ -28,6 +28,10 @@ import plotly.graph_objects as go
 from src.campbell_ai.data import DashboardDataRepository, predictive_band, predictive_module_allows
 from src.campbell_ai.errors import CampbellDataError
 from src.campbell_ai.models import VisualizationArtifact
+from src.campbell_ai.oil_entities import (
+    SAMPLE_ID_COLUMNS,
+    latest_sample_per_component,
+)
 from src.charts.builders import (
     build_category_bar,
     build_gauge,
@@ -241,12 +245,15 @@ class DashboardChartRegistry:
         component = self._column(frame, ("componentNameNormalized", "componentName"))
         status = self._column(frame, ("report_status", "overall_status"))
         date_column = self._column(frame, ("sampleDate", "reportDate"))
-        frame[date_column] = pd.to_datetime(frame[date_column], errors="coerce")
-        frame = (
-            frame.sort_values(date_column)
-            .groupby([unit, component], dropna=False)
-            .tail(1)
-            .copy()
+        # Same selection the query tool applies, so the chart and the text answer describe
+        # the same population of samples rather than two hand-rolled copies of the rule.
+        frame = latest_sample_per_component(
+            frame,
+            unit_col=unit,
+            component_col=component,
+            date_col=date_column,
+            # Optional, so resolved without the raising helper.
+            sample_id_col=DashboardDataRepository._resolve_column(frame, SAMPLE_ID_COLUMNS),
         )
         matrix = (
             frame.groupby([component, status], dropna=False).size().unstack(fill_value=0)
@@ -311,9 +318,23 @@ class DashboardChartRegistry:
                 + (f" y componente {requested_component}" if requested_component else "")
             )
 
+        # Deterministic pick, shared with the query tools: an unreadable date must not win by
+        # sorting last, and two samples on the same day are decided by sample number rather
+        # than by the parquet's row order.
+        scoped = latest_sample_per_component(
+            scoped,
+            unit_col=unit_col,
+            component_col=DashboardDataRepository._resolve_column(
+                scoped, ("componentNameNormalized", "componentName")
+            ),
+            date_col=date_col,
+            # Optional: `_column` raises for an absent column, and a source without a sample
+            # id still has a defined order - the tie-break simply does not apply.
+            sample_id_col=DashboardDataRepository._resolve_column(scoped, SAMPLE_ID_COLUMNS),
+        )
         scoped = scoped.assign(
             __date=pd.to_datetime(scoped[date_col], errors="coerce")
-        ).sort_values("__date")
+        ).sort_values("__date", na_position="first")
         latest = scoped.iloc[-1]
         component = str(latest[component_col])
 

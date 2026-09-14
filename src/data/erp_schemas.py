@@ -20,7 +20,10 @@ class Source(str, Enum):
     telemetria = "telemetria"
     aceites = "aceites"
     predictivo = "predictivo"
-    pautas = "pautas"
+    # El pipeline ERP emite este valor en inglés para los hallazgos de pautas
+    # de inspección (data/warnings/centinela/*.parquet); se conserva tal cual
+    # viene en el archivo y sólo la etiqueta se muestra en español.
+    inspections = "inspections"
 
 
 SOURCE_LABELS: dict[Source, str] = {
@@ -28,7 +31,7 @@ SOURCE_LABELS: dict[Source, str] = {
     Source.telemetria: "Telemetría",
     Source.aceites: "Aceites",
     Source.predictivo: "Predictivo",
-    Source.pautas: "Pautas",
+    Source.inspections: "Pautas",
 }
 
 
