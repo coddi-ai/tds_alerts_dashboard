@@ -18,6 +18,32 @@ import dash_bootstrap_components as dbc
 PARETO_BAR_COLOR = "#355c7d"
 PARETO_LINE_COLOR = "#d08c60"
 
+# Font Awesome is loaded from a remote stylesheet in the dashboard shell. A
+# missing webfont must not turn the executive view into a grid of tofu boxes,
+# so Mantenciones uses plain Unicode fallbacks for decorative icons.
+ICON_GLYPHS = {
+    "fa-gauge-high": "●",
+    "fa-hourglass-half": "◷",
+    "fa-arrows-rotate": "↻",
+    "fa-screwdriver-wrench": "⚒",
+    "fa-truck": "▣",
+    "fa-wrench": "◆",
+    "fa-clipboard-list": "≡",
+    "fa-sitemap": "⌘",
+    "fa-calendar-day": "□",
+    "fa-percentage": "%",
+    "fa-chart-bar": "▥",
+    "fa-chart-line": "╱",
+    "fa-truck-loading": "▤",
+    "fa-th": "▦",
+    "fa-comment-alt": "▰",
+    "fa-calendar-week": "□",
+}
+
+
+def _icon_glyph(icon: str) -> str:
+    return ICON_GLYPHS.get(icon, "•")
+
 
 def create_kpi_card(
     title: str,
@@ -33,7 +59,13 @@ def create_kpi_card(
         dbc.CardBody(
             html.Div(
                 [
-                    html.I(className=f"fas {icon} fa-2x mb-2 text-{color}"),
+                    html.Span(
+                        _icon_glyph(icon),
+                        className=f"maintenance-icon maintenance-kpi-icon text-{color}",
+                        role="img",
+                        style={"display": "inline-block", "fontSize": "1.65rem", "lineHeight": 1, "marginBottom": "0.5rem"},
+                        **{"aria-label": title},
+                    ),
                     html.H3(value, id=value_id, className="mb-0"),
                     html.P(title, className="text-muted mb-0"),
                     html.P(scope_label, className="text-muted small mb-0 fst-italic") if scope_label else None,
@@ -48,7 +80,10 @@ def create_kpi_card(
 def _card(title: str, child, icon: str = "fa-chart-bar"):
     return dbc.Card(
         [
-            dbc.CardHeader([html.I(className=f"fas {icon} me-2"), title]),
+            dbc.CardHeader([
+                html.Span(_icon_glyph(icon), className="maintenance-icon me-2", **{"aria-hidden": "true"}),
+                title,
+            ]),
             dbc.CardBody(child),
         ],
         className="shadow-sm h-100",
@@ -101,7 +136,7 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "320px"}), "fa-sitemap"), md=6),
+                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
                     dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
@@ -119,6 +154,16 @@ def layout_mantenciones_general():
                 [
                     dbc.Col(create_kpi_card("Días con actividad", component_id="maintenance-kpi-days", icon="fa-calendar-day", color="secondary", scope_label="fecha operacional"), md=3),
                     dbc.Col(create_kpi_card("Actividad en Motor", component_id="maintenance-kpi-motor-share", icon="fa-percentage", color="danger", scope_label="% de acciones"), md=3),
+                    dbc.Col(
+                        html.Div(
+                            [
+                                html.P("Contexto de actividad", className="fw-semibold mb-1"),
+                                html.P("Estos agregados ayudan a explicar el Pareto; no reemplazan los KPIs críticos estimados.", className="text-muted small mb-0"),
+                            ],
+                            className="h-100 d-flex flex-column justify-content-center px-3 py-2 border rounded bg-white",
+                        ),
+                        md=6,
+                    ),
                 ],
                 className="g-2",
             ),
@@ -160,7 +205,7 @@ def layout_mantenciones_general():
                 [
                     dbc.Col(
                         [
-                            html.H2([html.I(className="fas fa-wrench me-2"), "Mantenciones"]),
+                            html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), "Mantenciones"]),
                             html.P("Resumen ejecutivo · confiabilidad estimada y actividad de mantenimiento", className="text-muted mb-0"),
                         ],
                         md=7,
@@ -271,10 +316,10 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
         template="plotly_white",
         xaxis_title="Sistema",
         yaxis_title="Acciones únicas",
-        margin={"l": 45, "r": 20, "t": 20, "b": 85},
+        margin={"l": 45, "r": 20, "t": 20, "b": 115},
         showlegend=False,
     )
-    fig.update_xaxes(tickangle=-35)
+    fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
     return fig
 
 

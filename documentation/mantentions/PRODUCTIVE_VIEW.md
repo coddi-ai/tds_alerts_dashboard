@@ -28,6 +28,14 @@ tendencia diaria, y luego mix por sistema/ranking. Los agregados de actividad
 quedan al final como contexto y no compiten visualmente con los indicadores
 críticos.
 
+Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
+disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
+Mantenciones usan glifos Unicode locales con etiquetas accesibles. Los textos,
+valores y títulos siguen siendo la fuente principal de significado. El mix por
+sistema reserva espacio adicional para sus etiquetas inclinadas y el cierre de
+la vista incluye un panel breve de contexto, evitando dejar una segunda fila de
+tarjetas visualmente desbalanceada.
+
 ### KPIs y visuales respaldados
 
 La fuente `query_3_actions_all_equipment.parquet` respalda los siguientes
