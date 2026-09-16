@@ -73,6 +73,12 @@ query_4 no desglosa), se usa el fallback mensual de acciones:
 - `mtbf_est_hours = max(scheduled_hours_proxy − downtime_est_hours, 0) /
   event_count_proxy`.
 
+Se aplica una validación de plausibilidad antes de usar query_4: si el downtime
+70d es negativo, no finito o supera las horas calendario proxy de los equipos
+cubiertos, se rechaza todo el bloque 70d y se usa el fallback mensual. La
+anomalía queda en `meta.estimated_kpis.reason`; no se recorta silenciosamente
+ni se presenta una disponibilidad artificialmente extrema.
+
 Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
 unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
 mantenimiento proxy, no fallas confirmadas; si faltan acciones o registros se

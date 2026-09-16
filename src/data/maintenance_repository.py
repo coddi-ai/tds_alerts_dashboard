@@ -4,6 +4,7 @@ Provides data access functions that can work in dummy or production mode.
 """
 
 import json
+import math
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -148,6 +149,22 @@ def _calculate_estimated_kpis(
         kpi["repairs_70d"] = pd.to_numeric(kpi["repairs_70d"], errors="coerce")
         kpi = kpi.dropna(subset=["downtime_hours_70d"])
         can_use_kpi = not kpi.empty
+    anomaly_reason = None
+    if can_use_kpi:
+        downtime_probe = float(kpi["downtime_hours_70d"].sum())
+        scheduled_probe = int(kpi["machine_code"].nunique()) * 70 * SCHEDULE_HOURS_PER_DAY
+        repairs_values = kpi["repairs_70d"].fillna(0).tolist()
+        if (
+            not math.isfinite(downtime_probe)
+            or downtime_probe < 0
+            or downtime_probe > scheduled_probe
+            or any(not math.isfinite(float(value)) or float(value) < 0 for value in repairs_values)
+        ):
+            anomaly_reason = (
+                "query_4 rechazado por plausibilidad: downtime_hours_70d debe ser finito, no negativo "
+                "y no superar las horas calendario proxy de la misma ventana."
+            )
+            can_use_kpi = False
     if can_use_kpi:
         equipment = int(kpi["machine_code"].nunique())
         downtime = float(kpi["downtime_hours_70d"].sum())
@@ -181,7 +198,7 @@ def _calculate_estimated_kpis(
             equipment=equipment,
             actions=actions,
             records=records,
-            reason=filter_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; se usa fallback mensual.",
+            reason=filter_reason or anomaly_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; se usa fallback mensual.",
         )
         event_count = records
         downtime = actions * ESTIMATED_HOURS_PER_ACTION

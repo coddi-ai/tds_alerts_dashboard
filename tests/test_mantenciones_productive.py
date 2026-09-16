@@ -281,3 +281,22 @@ def test_system_filter_falls_back_to_monthly_action_proxy(monkeypatch):
 
     assert payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
     assert "desglose por sistema" in payload["meta"]["estimated_kpis"]["reason"]
+
+
+def test_implausible_business_downtime_falls_back_to_monthly_proxy(monkeypatch):
+    frame = _actions()
+    business = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "downtime_hours_70d": 4000.0, "repairs_70d": 10, "total_actions_70d": 20, "reference_date": "2026-01-22T10:00:00Z"},
+            {"machine_code": "T_02", "downtime_hours_70d": 0.0, "repairs_70d": 5, "total_actions_70d": 30, "reference_date": "2026-01-22T10:00:00Z"},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01")
+
+    assert payload["kpis"]["downtime_est_hours"] == 6.0
+    assert payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+    assert "plausibilidad" in payload["meta"]["estimated_kpis"]["reason"]
