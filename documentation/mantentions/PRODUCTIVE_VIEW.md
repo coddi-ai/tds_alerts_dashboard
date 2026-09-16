@@ -44,19 +44,27 @@ porcentaje acumulado; no representa frecuencia de fallas.
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
 imprevisto. En esta iteración se incorporan solo como proxies explícitos
-**ESTIMADOS**, porque el Parquet de acciones no aporta horas operativas,
-reparación o downtime medidos. No se presentan como mediciones reales ni como
-frecuencia de fallas.
+**ESTIMADOS**: query_4 aporta downtime y reparaciones precalculados en ventana
+70d, pero no horas operativas gobernadas ni confirmación de fallas. No se
+presentan como mediciones reales ni como frecuencia de fallas.
 
 #### Metodología de los KPIs ESTIMADOS
 
-Los cuatro valores usan exclusivamente `query_3_actions_all_equipment.parquet`
-del período seleccionado y se calculan de forma reproducible:
+Los cuatro valores priorizan `query_4_business_kpis.parquet` cuando están
+disponibles `downtime_hours_70d`, `repairs_70d`, `total_actions_70d` y
+`reference_date`. En ese caso la cobertura es la **ventana móvil de 70 días**
+del KPI precalculado, aunque el selector de Resumen siga mostrando un mes; esa
+diferencia se declara en `meta.estimated_kpis.coverage` y en el banner. Si el
+extracto 70d está ausente/incompleto, o se filtra por sistema/subsistema (que
+query_4 no desglosa), se usa el fallback mensual de acciones:
 
-- `downtime_est_hours = acciones únicas × 1,5 h`; 1,5 h/acción es el proxy
-  conservador y parametrizado de duración/indisponibilidad.
-- `scheduled_hours_proxy = equipos con actividad × días calendario del mes ×
-  24 h`.
+- Con query_4: `downtime_est_hours = sum(downtime_hours_70d)` y el evento proxy
+  es `sum(repairs_70d)`; si no hay reparaciones, se usa `total_actions_70d` y
+  finalmente registros de acciones.
+- En fallback: `downtime_est_hours = acciones únicas × 1,5 h`; 1,5 h/acción es
+  el proxy conservador y parametrizado de duración/indisponibilidad.
+- `scheduled_hours_proxy = equipos cubiertos × días de la ventana × 24 h`
+  (70 días con query_4; días calendario del mes en fallback).
 - `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
   scheduled_hours_proxy × 100`.
 - `mttr_est_hours = downtime_est_hours / registros únicos`.
@@ -66,9 +74,10 @@ del período seleccionado y se calculan de forma reproducible:
 Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
 unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
 mantenimiento proxy, no fallas confirmadas; si faltan acciones o registros se
-devuelve `null` y un estado `unavailable`, nunca cero. La fuente
-`query_4_business_kpis.parquet` contiene un `downtime_hours_70d` pero no se usa
-para estos KPIs mensuales por su cobertura móvil de 70 días.
+devuelve `null` y un estado `unavailable`, nunca cero. Aunque query_4 aporta
+valores precalculados, los cuatro indicadores siguen rotulados **ESTIMADO**:
+no equivalen a una medición de disponibilidad ni confirman que los eventos
+sean fallas.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad

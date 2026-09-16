@@ -59,27 +59,44 @@ def _estimated_kpi_meta(
     actions: int = 0,
     records: int = 0,
     reason: Optional[str] = None,
+    source_kind: str = "actions_monthly_proxy",
+    source: Optional[list[str]] = None,
+    source_columns: Optional[list[str]] = None,
+    window_label: str = "mes seleccionado",
+    reference_start: Optional[str] = None,
+    reference_end: Optional[str] = None,
+    event_count: Optional[int] = None,
+    scheduled_days: Optional[int] = None,
+    downtime_formula: Optional[str] = None,
 ) -> dict:
-    """Describe the conservative activity-derived KPI proxy contract."""
+    """Describe the conservative estimated KPI contract and its coverage."""
     calendar_days = 0
     if period:
         try:
             calendar_days = int(pd.Period(period, freq="M").days_in_month)
         except (TypeError, ValueError):
             calendar_days = 0
-    scheduled_hours = equipment * calendar_days * SCHEDULE_HOURS_PER_DAY
+    schedule_days = calendar_days if scheduled_days is None else scheduled_days
+    scheduled_hours = equipment * schedule_days * SCHEDULE_HOURS_PER_DAY
+    source = source or ["query_3_actions_all_equipment.parquet"]
+    source_columns = source_columns or ["action_id", "record_id", "machine_code", "change_date"]
     meta = {
         "status": status,
         "label": "ESTIMADO",
-        "confidence": "proxy",
-        "source": ["query_3_actions_all_equipment.parquet"],
-        "source_columns": ["action_id", "record_id", "machine_code", "change_date"],
+        "source_kind": source_kind,
+        "confidence": "precalculated_proxy" if source_kind == "business_kpis_70d" else "proxy",
+        "source": source,
+        "source_columns": source_columns,
         "period": period,
         "coverage": {
+            "window_label": window_label,
+            "reference_start": reference_start,
+            "reference_end": reference_end,
             "equipment": equipment,
             "actions": actions,
             "records": records,
-            "calendar_days": calendar_days,
+            "event_count": event_count if event_count is not None else records,
+            "calendar_days": schedule_days,
             "scheduled_hours_proxy": round(scheduled_hours, 3),
         },
         "unit": {
@@ -89,17 +106,17 @@ def _estimated_kpi_meta(
             "mttr_est_hours": "h",
         },
         "assumptions": [
-            f"{ESTIMATED_HOURS_PER_ACTION:g} h por acción única como proxy de indisponibilidad/tiempo de reparación.",
-            "Horas programadas proxy = equipos con actividad × días calendario del mes × 24 h.",
-            "Eventos proxy = registros de mantenimiento únicos; no son fallas confirmadas.",
+            f"{ESTIMATED_HOURS_PER_ACTION:g} h por acción única como fallback de indisponibilidad/tiempo de reparación.",
+            "Horas programadas proxy = equipos cubiertos × días de la ventana × 24 h.",
+            "Eventos proxy = reparaciones_70d o registros/acciones únicos; no son fallas confirmadas.",
             "Horas operativas proxy = max(horas programadas proxy − downtime estimado, 0).",
-            "No se observan horas reales de operación, reparación ni downtime en la fuente de acciones.",
+            "Los valores siguen rotulados ESTIMADO aunque provengan de KPIs precalculados.",
         ],
         "formula": {
-            "downtime_est_hours": f"unique_action_id_count × {ESTIMATED_HOURS_PER_ACTION:g}",
+            "downtime_est_hours": downtime_formula or f"unique_action_id_count × {ESTIMATED_HOURS_PER_ACTION:g}",
             "availability_est_pct": "max(scheduled_hours_proxy − downtime_est_hours, 0) / scheduled_hours_proxy × 100",
-            "mtbf_est_hours": "operating_hours_proxy / unique_record_id_count",
-            "mttr_est_hours": "downtime_est_hours / unique_record_id_count",
+            "mtbf_est_hours": "operating_hours_proxy / event_count_proxy",
+            "mttr_est_hours": "downtime_est_hours / event_count_proxy",
         },
     }
     if reason:
@@ -107,22 +124,74 @@ def _estimated_kpi_meta(
     return meta
 
 
-def _calculate_estimated_kpis(df: pd.DataFrame, period: Optional[str]) -> tuple[dict, dict]:
-    """Calculate activity-derived reliability proxies with explicit metadata."""
+def _calculate_estimated_kpis(
+    df: pd.DataFrame,
+    period: Optional[str],
+    business_kpis: Optional[pd.DataFrame] = None,
+    equipment_filter: Optional[List[str]] = None,
+    filter_reason: Optional[str] = None,
+) -> tuple[dict, dict]:
+    """Prefer the governed 70-day KPI extract; fall back to monthly actions."""
     if df.empty:
         return _empty_estimated_kpis(), _estimated_kpi_meta(period, reason="No hay acciones para el período/filtros.")
     equipment = int(df["machine_code"].nunique())
     actions = int(df["action_id"].dropna().astype(str).nunique())
     records = int(df["record_id"].dropna().astype(str).nunique())
-    meta = _estimated_kpi_meta(period, status="estimated", equipment=equipment, actions=actions, records=records)
+    required = {"machine_code", "downtime_hours_70d", "repairs_70d", "reference_date"}
+    kpi = business_kpis.copy() if business_kpis is not None else pd.DataFrame()
+    can_use_kpi = not kpi.empty and required.issubset(kpi.columns) and not filter_reason
+    if can_use_kpi and equipment_filter:
+        kpi = kpi[kpi["machine_code"].isin(equipment_filter)].copy()
+        can_use_kpi = not kpi.empty
+    if can_use_kpi:
+        kpi["downtime_hours_70d"] = pd.to_numeric(kpi["downtime_hours_70d"], errors="coerce")
+        kpi["repairs_70d"] = pd.to_numeric(kpi["repairs_70d"], errors="coerce")
+        kpi = kpi.dropna(subset=["downtime_hours_70d"])
+        can_use_kpi = not kpi.empty
+    if can_use_kpi:
+        equipment = int(kpi["machine_code"].nunique())
+        downtime = float(kpi["downtime_hours_70d"].sum())
+        repairs = float(kpi["repairs_70d"].fillna(0).sum())
+        event_count = int(repairs) if repairs > 0 else int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else 0
+        if event_count <= 0:
+            event_count = records
+        reference = pd.to_datetime(kpi["reference_date"], utc=True, errors="coerce").dropna()
+        reference_end = reference.max().isoformat() if not reference.empty else None
+        reference_start = (reference.min() - pd.Timedelta(days=69)).isoformat() if not reference.empty else None
+        meta = _estimated_kpi_meta(
+            period,
+            status="estimated",
+            equipment=equipment,
+            actions=int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else actions,
+            records=records,
+            source_kind="business_kpis_70d",
+            source=["query_4_business_kpis.parquet"],
+            source_columns=["machine_code", "downtime_hours_70d", "repairs_70d", "total_actions_70d", "reference_date"],
+            window_label="ventana móvil 70d",
+            reference_start=reference_start,
+            reference_end=reference_end,
+            event_count=event_count,
+            scheduled_days=70,
+            downtime_formula="sum(downtime_hours_70d)",
+        )
+    else:
+        meta = _estimated_kpi_meta(
+            period,
+            status="estimated",
+            equipment=equipment,
+            actions=actions,
+            records=records,
+            reason=filter_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; se usa fallback mensual.",
+        )
+        event_count = records
+        downtime = actions * ESTIMATED_HOURS_PER_ACTION
     scheduled_hours = float(meta["coverage"]["scheduled_hours_proxy"])
-    downtime = actions * ESTIMATED_HOURS_PER_ACTION
     operating = max(scheduled_hours - downtime, 0.0)
     values = {
         "availability_est_pct": round(operating / scheduled_hours * 100, 1) if scheduled_hours else None,
         "downtime_est_hours": round(downtime, 1),
-        "mtbf_est_hours": round(operating / records, 1) if records else None,
-        "mttr_est_hours": round(downtime / records, 1) if records else None,
+        "mtbf_est_hours": round(operating / event_count, 1) if event_count else None,
+        "mttr_est_hours": round(downtime / event_count, 1) if event_count else None,
     }
     return values, meta
 
@@ -507,7 +576,15 @@ class MaintenanceRepository:
             "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
-        estimated_kpis, estimated_meta = _calculate_estimated_kpis(df, selected)
+        business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
+        filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; se usa el fallback mensual." if systems or subsystems else None
+        estimated_kpis, estimated_meta = _calculate_estimated_kpis(
+            df,
+            selected,
+            business_kpis=business_kpis,
+            equipment_filter=equipment,
+            filter_reason=filter_reason,
+        )
         kpis.update(estimated_kpis)
 
         daily = (

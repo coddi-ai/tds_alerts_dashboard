@@ -67,10 +67,10 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-month-status"),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="proxy · 1,5 h/acción"), md=3),
-                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="proxy · horas"), md=3),
-                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="proxy · horas"), md=3),
-                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="proxy · horas"), md=3),
+                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="proxy · cobertura en banner"), md=3),
+                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="proxy · cobertura en banner"), md=3),
+                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="proxy · cobertura en banner"), md=3),
+                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="proxy · cobertura en banner"), md=3),
                 ],
                 className="g-3 mb-4",
             ),

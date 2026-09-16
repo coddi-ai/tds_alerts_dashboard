@@ -241,3 +241,43 @@ def test_estimated_kpi_formatter_keeps_estimated_values_explicit():
     assert _format_estimated(86.25, "%") == "86.2%"
     assert _format_estimated(1128.0, "h") == "1,128.0 h"
     assert _format_estimated(None, "h") == "—"
+
+
+def test_estimated_kpis_prefer_business_70d_and_expose_window(monkeypatch):
+    frame = _actions()
+    business = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "downtime_hours_70d": 100.0, "repairs_70d": 10, "total_actions_70d": 20, "reference_date": "2026-01-22T10:00:00Z"},
+            {"machine_code": "T_02", "downtime_hours_70d": 50.0, "repairs_70d": 5, "total_actions_70d": 30, "reference_date": "2026-01-22T10:00:00Z"},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01")
+
+    assert payload["kpis"]["downtime_est_hours"] == 150.0
+    assert payload["kpis"]["availability_est_pct"] == 95.5
+    assert payload["kpis"]["mtbf_est_hours"] == 214.0
+    assert payload["kpis"]["mttr_est_hours"] == 10.0
+    meta = payload["meta"]["estimated_kpis"]
+    assert meta["source_kind"] == "business_kpis_70d"
+    assert meta["coverage"]["window_label"] == "ventana móvil 70d"
+    assert meta["coverage"]["calendar_days"] == 70
+    assert meta["formula"]["downtime_est_hours"] == "sum(downtime_hours_70d)"
+
+
+def test_system_filter_falls_back_to_monthly_action_proxy(monkeypatch):
+    frame = _actions()
+    business = pd.DataFrame(
+        [{"machine_code": "T_01", "downtime_hours_70d": 100.0, "repairs_70d": 10, "total_actions_70d": 20, "reference_date": "2026-01-22T10:00:00Z"}]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01", systems=["Motor"])
+
+    assert payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+    assert "desglose por sistema" in payload["meta"]["estimated_kpis"]["reason"]

@@ -59,12 +59,16 @@ def _source_alert(meta: dict):
     if not end:
         return html.Div([html.I(className="fas fa-database me-2"), "No hay datos de mantenciones disponibles para este cliente."], className="alert alert-warning")
     date_label = str(end)[:10]
+    estimated = meta.get("estimated_kpis", {})
+    coverage = estimated.get("coverage", {})
+    coverage_label = coverage.get("window_label")
+    estimated_note = f" KPIs ESTIMADOS: {coverage_label}." if coverage_label else ""
     return html.Div(
         [
             html.I(className="fas fa-database me-2"),
             html.Span("Cobertura de fuente: ", className="fw-bold"),
             html.Span(f"{meta.get('source_start', '')[:10]} a {date_label}. "),
-            html.Span("El último período disponible se muestra por defecto; la fuente puede estar histórica.", className="text-muted"),
+            html.Span(f"El último período disponible se muestra por defecto; la fuente puede estar histórica.{estimated_note}", className="text-muted"),
         ],
         className="alert alert-info",
     )
