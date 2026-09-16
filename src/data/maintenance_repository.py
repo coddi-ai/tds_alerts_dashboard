@@ -262,6 +262,7 @@ class MaintenanceRepository:
     def _empty_month_data() -> dict:
         return {
             "daily": [],
+            "system_mix": [],
             "pareto": [],
             "equipment": [],
             "matrix": [],
@@ -321,7 +322,7 @@ class MaintenanceRepository:
                         "pareto_scope": self._pareto_scope(),
                     },
                     "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
                     "data": empty,
                 }
         required_columns = {
@@ -346,7 +347,7 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
                 "data": empty,
             }
         if not selected or selected not in months:
@@ -364,7 +365,7 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
                 "data": empty,
             }
 
@@ -396,16 +397,21 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
                 "data": empty,
             }
 
         action_ids = df["action_id"].astype(str)
+        motor_df = df[self._is_motor_system(df["action_system_name"])].copy()
+        total_actions = int(action_ids.nunique())
+        motor_actions = int(motor_df["action_id"].astype(str).nunique())
         kpis = {
             "equipment": int(df["machine_code"].nunique()),
-            "actions": int(action_ids.nunique()),
+            "actions": total_actions,
             "records": int(df["record_id"].nunique()),
             "systems": int(df["action_system_name"].dropna().nunique()),
+            "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
+            "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
 
         daily = (
@@ -416,10 +422,18 @@ class MaintenanceRepository:
             .sort_values("date")
         )
 
+        system_mix = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby("system_name", as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "count"})
+            .sort_values(["count", "system_name"], ascending=[False, True])
+            .reset_index(drop=True)
+        )
+
         # The Summary Pareto is intentionally scoped to Motor and grouped by
         # equipment.  It counts each action_id once per machine, never mixes
         # other systems, and keeps the existing monthly payload envelope.
-        motor_df = df[self._is_motor_system(df["action_system_name"])].copy()
         pareto = (
             motor_df.groupby("machine_code", as_index=False)["action_id"]
             .nunique()
@@ -483,6 +497,7 @@ class MaintenanceRepository:
             "kpis": kpis,
             "data": {
                 "daily": self._json_records(daily),
+                "system_mix": self._json_records(system_mix),
                 "pareto": self._json_records(pareto),
                 "equipment": self._json_records(equipment_df),
                 "matrix": self._json_records(matrix_df),

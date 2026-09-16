@@ -75,12 +75,25 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Actividad diaria", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-line"), md=6),
-                    dbc.Col(_card("Pareto de actividad por equipo · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(create_kpi_card("Días con actividad", component_id="maintenance-kpi-days", icon="fa-calendar-day", color="secondary", scope_label="fecha operacional"), md=3),
+                    dbc.Col(create_kpi_card("Actividad en Motor", component_id="maintenance-kpi-motor-share", icon="fa-percentage", color="danger", scope_label="% de acciones"), md=3),
                 ],
                 className="g-3 mb-4",
             ),
-            dbc.Row([dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=12)], className="g-3"),
+            dbc.Row(
+                [
+                    dbc.Col(_card("Actividad diaria", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-line"), md=6),
+                    dbc.Col(_card("Actividad registrada por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "310px"}), "fa-sitemap"), md=6),
+                ],
+                className="g-3 mb-4",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(_card("Pareto de actividad por equipo · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "320px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
+                ],
+                className="g-3",
+            ),
         ]
     )
 
@@ -208,6 +221,33 @@ def create_equipment_pareto_chart(df: pd.DataFrame) -> go.Figure:
 
 # Compatibility alias for callers importing the previous builder name.
 create_system_pareto_chart = create_equipment_pareto_chart
+
+
+def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
+    """Render recorded action volume by system, not failure frequency."""
+    if df.empty:
+        return create_empty_figure("Sin actividad por sistema")
+    data = df.sort_values(["count", "system_name"], ascending=[False, True])
+    fig = go.Figure(
+        go.Bar(
+            x=data["system_name"],
+            y=data["count"],
+            name="Acciones registradas",
+            marker_color="#6f8fb3",
+            text=data["count"].astype(int),
+            textposition="outside",
+            cliponaxis=False,
+        )
+    )
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="Sistema",
+        yaxis_title="Acciones únicas",
+        margin={"l": 45, "r": 20, "t": 20, "b": 85},
+        showlegend=False,
+    )
+    fig.update_xaxes(tickangle=-35)
+    return fig
 
 
 def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:

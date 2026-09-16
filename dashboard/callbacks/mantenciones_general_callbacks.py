@@ -15,6 +15,7 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_empty_figure,
     create_equipment_activity_chart,
     create_equipment_pareto_chart,
+    create_system_activity_chart,
     create_week_summary_table,
     create_week_task_table,
 )
@@ -31,8 +32,8 @@ def _empty_contract():
         "status": "empty",
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
-        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
-        "data": {"daily": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
+        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+        "data": {"daily": [], "system_mix": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
     }
 
 
@@ -166,9 +167,12 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-kpi-actions", "children"),
         Output("maintenance-kpi-records", "children"),
         Output("maintenance-kpi-systems", "children"),
+        Output("maintenance-kpi-days", "children"),
+        Output("maintenance-kpi-motor-share", "children"),
         Output("maintenance-month-status", "children"),
         Output("maintenance-chart-daily", "figure"),
         Output("maintenance-chart-pareto", "figure"),
+        Output("maintenance-chart-system-mix", "figure"),
         Output("maintenance-chart-equipment", "figure"),
         Output("maintenance-chart-matrix", "figure"),
         Output("maintenance-activity-table", "children"),
@@ -180,11 +184,11 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -195,14 +199,19 @@ def register_mantenciones_general_callbacks(app):
                 f"Período histórico seleccionado: {meta.get('period_label', 'N/A')}. Último dato de fuente: {str(meta.get('source_end', ''))[:10]}.",
                 className="alert alert-warning",
             )
+        motor_share = kpis.get("motor_share_pct")
+        motor_share_label = f"{motor_share:.1f}%" if isinstance(motor_share, (int, float)) else "—"
         return (
             str(kpis.get("equipment", "—")),
             str(kpis.get("actions", "—")),
             str(kpis.get("records", "—")),
             str(kpis.get("systems", "—")),
+            str(kpis.get("activity_days", "—")),
+            motor_share_label,
             banner,
             create_daily_activity_chart(pd.DataFrame(data.get("daily", []))),
             create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
+            create_system_activity_chart(pd.DataFrame(data.get("system_mix", []))),
             create_equipment_activity_chart(pd.DataFrame(data.get("equipment", []))),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(data.get("detail", [])),

@@ -38,7 +38,19 @@ def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
 
     payload = repo.get_monthly_payload("2026-01")
     assert payload["status"] == "ok"
-    assert payload["kpis"] == {"equipment": 2, "actions": 4, "records": 3, "systems": 2}
+    assert payload["kpis"] == {
+        "equipment": 2,
+        "actions": 4,
+        "records": 3,
+        "systems": 2,
+        "activity_days": 4,
+        "motor_share_pct": 50.0,
+    }
+    assert payload["data"]["system_mix"] == [
+        {"system_name": "Motor", "count": 2},
+        {"system_name": "Hidráulico", "count": 1},
+        {"system_name": "Sin sistema", "count": 1},
+    ]
     assert payload["data"]["pareto"] == [{"equipment": "T_01", "count": 2, "cumulative_pct": 100.0}]
     assert payload["meta"]["pareto_scope"]["dimension"] == "equipment"
     assert payload["meta"]["pareto_scope"]["metric"] == "unique_action_id_count"
@@ -54,6 +66,7 @@ def test_monthly_filters_and_empty_period(monkeypatch):
     filtered = repo.get_monthly_payload("2026-01", systems=["Motor"], equipment=["T_01"], subsystems=["Lubricación"])
     assert filtered["kpis"]["actions"] == 2
     assert {row["equipment"] for row in filtered["data"]["pareto"]} == {"T_01"}
+    assert filtered["data"]["system_mix"] == [{"system_name": "Motor", "count": 2}]
 
     empty = repo.get_monthly_payload("2025-12")
     assert empty["status"] == "empty"
@@ -101,6 +114,15 @@ def test_equipment_pareto_builder_uses_equipment_axis():
     assert figure.layout.xaxis.title.text == "Equipo"
 
 
+def test_system_activity_builder_labels_activity_not_failures():
+    from dashboard.tabs.tab_mantenciones_general import create_system_activity_chart
+
+    figure = create_system_activity_chart(pd.DataFrame([{"system_name": "Motor", "count": 4}]))
+
+    assert list(figure.data[0].x) == ["Motor"]
+    assert figure.layout.yaxis.title.text == "Acciones únicas"
+
+
 def test_weekly_parser_reports_invalid_json(monkeypatch):
     monkeypatch.setattr(repository_module, "list_maintenance_weeks", lambda client: ["03-2026"])
     monkeypatch.setattr(
@@ -142,6 +164,9 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     rendered = str(layout)
     assert "maintenance-activity-table" in rendered
     assert "maintenance-week-task-table" in rendered
+    assert "maintenance-kpi-days" in rendered
+    assert "maintenance-kpi-motor-share" in rendered
+    assert "maintenance-chart-system-mix" in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
 
