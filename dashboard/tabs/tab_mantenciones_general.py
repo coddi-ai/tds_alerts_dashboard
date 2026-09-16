@@ -77,6 +77,30 @@ def create_kpi_card(
     )
 
 
+def create_context_metric(
+    title: str,
+    component_id: str,
+    icon: str,
+    color: str = "secondary",
+    scope_label: str | None = None,
+):
+    """Render a compact secondary metric inside the activity context block."""
+    return html.Div(
+        [
+            html.Span(
+                _icon_glyph(icon),
+                className=f"maintenance-icon text-{color}",
+                role="img",
+                **{"aria-label": title},
+            ),
+            html.P(title, className="text-muted small mb-1"),
+            html.H4("—", id=component_id, className="mb-0"),
+            html.P(scope_label, className="text-muted small mb-0 fst-italic") if scope_label else None,
+        ],
+        className="text-center px-2 py-2 h-100",
+    )
+
+
 def _card(title: str, child, icon: str = "fa-chart-bar"):
     return dbc.Card(
         [
@@ -129,7 +153,7 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Pareto de actividad · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-bar"), md=7),
+                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-bar"), md=7),
                     dbc.Col(_card("Tendencia diaria de acciones", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-line"), md=5),
                 ],
                 className="g-3 mb-4",
@@ -141,31 +165,32 @@ def layout_mantenciones_general():
                 ],
                 className="g-3 mb-4",
             ),
-            dbc.Row(
+            html.Div(
                 [
-                    dbc.Col(create_kpi_card("Equipos con actividad", component_id="maintenance-kpi-equipment", icon="fa-truck", color="info"), md=3),
-                    dbc.Col(create_kpi_card("Acciones registradas", component_id="maintenance-kpi-actions", icon="fa-wrench", color="primary"), md=3),
-                    dbc.Col(create_kpi_card("Registros de mantenimiento", component_id="maintenance-kpi-records", icon="fa-clipboard-list", color="success"), md=3),
-                    dbc.Col(create_kpi_card("Sistemas intervenidos", component_id="maintenance-kpi-systems", icon="fa-sitemap", color="warning"), md=3),
-                ],
-                className="g-2 mb-2",
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(create_kpi_card("Días con actividad", component_id="maintenance-kpi-days", icon="fa-calendar-day", color="secondary", scope_label="fecha operacional"), md=3),
-                    dbc.Col(create_kpi_card("Actividad en Motor", component_id="maintenance-kpi-motor-share", icon="fa-percentage", color="danger", scope_label="% de acciones"), md=3),
-                    dbc.Col(
-                        html.Div(
-                            [
-                                html.P("Contexto de actividad", className="fw-semibold mb-1"),
-                                html.P("Estos agregados ayudan a explicar el Pareto; no reemplazan los KPIs críticos estimados.", className="text-muted small mb-0"),
-                            ],
-                            className="h-100 d-flex flex-column justify-content-center px-3 py-2 border rounded bg-white",
-                        ),
-                        md=6,
+                    html.Div(
+                        [
+                            html.Span("Contexto de actividad", className="fw-semibold"),
+                            html.Span("Agregados del período seleccionado", className="text-muted small ms-2"),
+                        ],
+                        className="mb-2",
+                    ),
+                    dbc.Row(
+                        [
+                            dbc.Col(create_context_metric("Equipos con actividad", "maintenance-kpi-equipment", "fa-truck", "info"), xs=6, md=2),
+                            dbc.Col(create_context_metric("Acciones registradas", "maintenance-kpi-actions", "fa-wrench", "primary"), xs=6, md=2),
+                            dbc.Col(create_context_metric("Registros", "maintenance-kpi-records", "fa-clipboard-list", "success"), xs=6, md=2),
+                            dbc.Col(create_context_metric("Sistemas intervenidos", "maintenance-kpi-systems", "fa-sitemap", "warning"), xs=6, md=2),
+                            dbc.Col(create_context_metric("Días con actividad", "maintenance-kpi-days", "fa-calendar-day", "secondary", "fecha operacional"), xs=6, md=2),
+                            dbc.Col(create_context_metric("Actividad en Motor", "maintenance-kpi-motor-share", "fa-percentage", "danger", "% de acciones"), xs=6, md=2),
+                        ],
+                        className="g-1",
+                    ),
+                    html.P(
+                        "Estos agregados ayudan a explicar el Pareto; no reemplazan los KPIs críticos estimados.",
+                        className="text-muted small mb-0 mt-2",
                     ),
                 ],
-                className="g-2",
+                className="border rounded bg-white shadow-sm p-3",
             ),
         ]
     )
@@ -221,8 +246,11 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-source-alert"),
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=6),
-                    dbc.Col([html.Label("Semana de evidencia", className="small text-muted"), dcc.Dropdown(id="maintenance-week", clearable=False, placeholder="Seleccione una semana")], md=6),
+                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=12),
+                    # The weekly selector remains mounted for its disabled tab's
+                    # callback contract, but is intentionally not exposed while
+                    # Evidencia semanal is hidden from the product shell.
+                    dbc.Col([html.Label("Semana de evidencia", className="small text-muted"), dcc.Dropdown(id="maintenance-week", clearable=False, placeholder="Seleccione una semana")], md=6, style={"display": "none"}),
                 ],
                 className="g-3 mb-4",
             ),
@@ -283,12 +311,41 @@ def create_equipment_pareto_chart(df: pd.DataFrame) -> go.Figure:
     # payloads from the previous contract; new payloads use ``equipment``.
     dimension = "equipment" if "equipment" in df.columns else "system_name"
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=df[dimension], y=df["count"], name="Acciones Motor", marker_color=PARETO_BAR_COLOR, text=df["count"].astype(int), textposition="outside", cliponaxis=False), secondary_y=False)
-    fig.add_trace(go.Scatter(x=df[dimension], y=df["cumulative_pct"], name="% acumulado", mode="lines+markers", line={"color": PARETO_LINE_COLOR, "width": 2}, marker={"color": PARETO_LINE_COLOR}), secondary_y=True)
+    fig.add_trace(
+        go.Bar(
+            x=df[dimension],
+            y=df["count"],
+            name="Acciones Motor",
+            marker_color=PARETO_BAR_COLOR,
+            text=df["count"].astype(int),
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="<b>%{x}</b><br>Acciones Motor: %{y}<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df[dimension],
+            y=df["cumulative_pct"],
+            name="% acumulado",
+            mode="lines+markers",
+            line={"color": PARETO_LINE_COLOR, "width": 2},
+            marker={"color": PARETO_LINE_COLOR},
+            hovertemplate="<b>%{x}</b><br>Acumulado: %{y:.1f}%<extra></extra>",
+        ),
+        secondary_y=True,
+    )
     fig.update_yaxes(title_text="Acciones", rangemode="tozero", secondary_y=False)
     fig.update_yaxes(title_text="% acumulado", range=[0, 100], ticksuffix="%", secondary_y=True)
     fig.update_xaxes(title_text="Equipo", tickangle=-35)
-    fig.update_layout(template="plotly_white", showlegend=False, margin={"l": 45, "r": 45, "t": 20, "b": 85}, hovermode="x unified")
+    fig.update_layout(
+        template="plotly_white",
+        showlegend=True,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        margin={"l": 45, "r": 45, "t": 48, "b": 85},
+        hovermode="x unified",
+    )
     return fig
 
 

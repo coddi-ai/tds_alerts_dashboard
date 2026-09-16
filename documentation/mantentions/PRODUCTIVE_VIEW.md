@@ -21,12 +21,20 @@ En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
+Mientras esas vistas permanecen deshabilitadas, **Resumen** expone solo el
+selector mensual. El selector semanal permanece montado dentro del contrato de
+Evidencia semanal, pero no se muestra en la cabecera ejecutiva.
+
 La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
 referencia: cabecera y cobertura, señales rápidas (ESTIMADO, Motor priorizado,
 fecha operacional), cuatro KPIs críticos primero, Pareto Motor por equipo y
 tendencia diaria, y luego mix por sistema/ranking. Los agregados de actividad
 quedan al final como contexto y no compiten visualmente con los indicadores
 críticos.
+
+El banner de cobertura identifica también el archivo fuente de los KPIs
+**ESTIMADOS**, su ventana de referencia y, cuando corresponde, la razón por la
+que se aplicó el fallback mensual.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
@@ -53,7 +61,8 @@ indicadores del Resumen:
 
 La tendencia diaria agrupa acciones únicas por `change_date`. El mix por
 sistema y el ranking de equipos usan la misma métrica de acciones únicas. El
-Pareto Motor agrupa por equipo, ordena por cantidad descendente y calcula el
+Pareto de actividad de mantenimiento agrupa por equipo dentro de Motor, ordena
+por cantidad descendente y muestra tanto las acciones como la línea de
 porcentaje acumulado; no representa frecuencia de fallas.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,

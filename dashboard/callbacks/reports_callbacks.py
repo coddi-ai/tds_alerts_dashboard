@@ -289,10 +289,10 @@ def register_reports_callbacks(app):
          Output('reports-component-selector', 'value'),
          Output('navigation-state', 'data', allow_duplicate=True)],  # Clear navigation state after use
         [Input('reports-equipo-selector', 'value', allow_optional=True),
-         Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value', allow_optional=True),
-         Input('navigation-state', 'data')],
-        [State('reports-component-selector', 'value', allow_optional=True)],
+         Input('reports-familia-selector', 'value', allow_optional=True)],
+        [State('client-selector', 'value', allow_optional=True),
+         State('navigation-state', 'data', allow_optional=True),
+         State('reports-component-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_component_options(equipo, familia, client, nav_state, current_component):

@@ -119,6 +119,8 @@ def test_equipment_pareto_builder_uses_equipment_axis():
 
     assert list(figure.data[0].x) == ["T_02", "T_01"]
     assert figure.layout.xaxis.title.text == "Equipo"
+    assert figure.layout.showlegend is True
+    assert [trace.name for trace in figure.data] == ["Acciones Motor", "% acumulado"]
 
 
 def test_system_activity_builder_labels_activity_not_failures():
@@ -183,6 +185,8 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
+    assert "'display': 'none'" in rendered or "display: none" in rendered
+    assert "Contexto de actividad" in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
 
@@ -246,6 +250,27 @@ def test_estimated_kpi_formatter_keeps_estimated_values_explicit():
     assert _format_estimated(86.25, "%") == "86.2%"
     assert _format_estimated(1128.0, "h") == "1,128.0 h"
     assert _format_estimated(None, "h") == "—"
+
+
+def test_source_alert_exposes_estimated_source_window_and_fallback_reason():
+    from dashboard.callbacks.mantenciones_general_callbacks import _source_alert
+
+    alert = _source_alert(
+        {
+            "source_start": "2024-12-01",
+            "source_end": "2026-01-22",
+            "estimated_kpis": {
+                "source": ["query_3_actions_all_equipment.parquet"],
+                "coverage": {"window_label": "mes seleccionado"},
+                "reason": "query_4 rechazado por plausibilidad",
+            },
+        }
+    )
+
+    rendered = str(alert)
+    assert "query_3_actions_all_equipment.parquet" in rendered
+    assert "mes seleccionado" in rendered
+    assert "Fallback" in rendered
 
 
 def test_estimated_kpis_prefer_business_70d_and_expose_window(monkeypatch):

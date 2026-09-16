@@ -62,15 +62,27 @@ def _source_alert(meta: dict):
     estimated = meta.get("estimated_kpis", {})
     coverage = estimated.get("coverage", {})
     coverage_label = coverage.get("window_label")
-    estimated_note = f" KPIs ESTIMADOS: {coverage_label}." if coverage_label else ""
+    source_files = estimated.get("source") or []
+    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
+    estimated_note = f"KPIs ESTIMADOS · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
+    reference_start = coverage.get("reference_start")
+    reference_end = coverage.get("reference_end")
+    if reference_start and reference_end:
+        estimated_note += f" Referencia: {str(reference_start)[:10]} a {str(reference_end)[:10]}."
+    reason = estimated.get("reason")
+    if reason:
+        estimated_note += f" Fallback: {reason}"
     return html.Div(
         [
             html.I(className="fas fa-database me-2"),
             html.Span("Cobertura de fuente: ", className="fw-bold"),
-            html.Span(f"{meta.get('source_start', '')[:10]} a {date_label}. "),
-            html.Span(f"El último período disponible se muestra por defecto; la fuente puede estar histórica.{estimated_note}", className="text-muted"),
+            html.Span(f"{str(meta.get('source_start') or '')[:10]} a {date_label}. "),
+            html.Span("El último período disponible se muestra por defecto; la fuente puede estar histórica.", className="text-muted"),
+            html.Br(),
+            html.Span(estimated_note, className="text-muted small"),
         ],
         className="alert alert-info",
+        style={"overflowWrap": "anywhere"},
     )
 
 
