@@ -190,7 +190,7 @@ def register_reports_callbacks(app):
     @app.callback(
         [Output('reports-familia-selector', 'options'),
          Output('reports-familia-selector', 'value')],
-        [Input('client-selector', 'value'),
+        [Input('client-selector', 'value', allow_optional=True),
          Input('navigation-state', 'data')],
         [State('reports-familia-selector', 'value', allow_optional=True)]
     )
@@ -238,7 +238,7 @@ def register_reports_callbacks(app):
         [Output('reports-equipo-selector', 'options'),
          Output('reports-equipo-selector', 'value')],
         [Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value'),
+         Input('client-selector', 'value', allow_optional=True),
          Input('navigation-state', 'data')],
         [State('reports-equipo-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
@@ -290,7 +290,7 @@ def register_reports_callbacks(app):
          Output('navigation-state', 'data', allow_duplicate=True)],  # Clear navigation state after use
         [Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value'),
+         Input('client-selector', 'value', allow_optional=True),
          Input('navigation-state', 'data')],
         [State('reports-component-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
@@ -344,7 +344,7 @@ def register_reports_callbacks(app):
         [Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         [State('reports-date-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
@@ -420,7 +420,7 @@ def register_reports_callbacks(app):
          Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_report_display(sample_date, component, equipo, familia, client):
@@ -513,7 +513,7 @@ def register_reports_callbacks(app):
         [Input('reports-essays-selector', 'value', allow_optional=True),
          Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_time_series(essays, component, equipo, client):
@@ -656,7 +656,7 @@ def register_reports_callbacks(app):
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-date-range-picker', 'start_date', allow_optional=True),
          Input('reports-date-range-picker', 'end_date', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_time_series_grid(component, equipo, start_date, end_date, client):
@@ -738,7 +738,7 @@ def register_reports_callbacks(app):
          Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-familia-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_oil_radar_view(sample_date, component, equipo, familia, client):
@@ -797,7 +797,7 @@ def register_reports_callbacks(app):
         Output('reports-comment-history-container', 'children'),
         [Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_comment_history(component, equipo, client):
@@ -887,7 +887,7 @@ def register_reports_callbacks(app):
         Output('advanced-analytics-variables', 'options'),
         [Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
-         Input('client-selector', 'value')],
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def populate_advanced_analytics_options(component, equipo, client):
@@ -927,7 +927,7 @@ def register_reports_callbacks(app):
          State('reports-equipo-selector', 'value', allow_optional=True),
          State('reports-date-range-picker', 'start_date', allow_optional=True),
          State('reports-date-range-picker', 'end_date', allow_optional=True),
-         State('client-selector', 'value')],
+         State('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def generate_advanced_analytics(n_clicks, variables, show_limits_val,
