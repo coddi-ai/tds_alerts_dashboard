@@ -8,7 +8,7 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 - **Resumen**: selector mensual, cobertura/frescura, equipos con actividad,
   acciones, registros y sistemas intervenidos; tendencia diaria, Pareto de
-  actividad por sistema y ranking de equipos.
+  actividad por equipo con foco en Sistema Motor y ranking de equipos.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
