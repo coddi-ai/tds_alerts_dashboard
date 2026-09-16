@@ -177,6 +177,11 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-kpi-downtime-est" in rendered
     assert "maintenance-kpi-mtbf-est" in rendered
     assert "maintenance-kpi-mttr-est" in rendered
+    assert "maintenance-executive-signals" in rendered
+    assert "Lectura ejecutiva" in rendered
+    assert rendered.index("maintenance-kpi-availability-est") < rendered.index("maintenance-chart-pareto")
+    assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
+    assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered

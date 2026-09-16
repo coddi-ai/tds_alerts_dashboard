@@ -65,6 +65,24 @@ def layout_mantenciones_general():
     summary_tab = html.Div(
         [
             html.Div(id="maintenance-month-status"),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            dbc.Badge("ESTIMADO", color="warning", text_color="dark", className="me-2 px-3 py-2"),
+                            dbc.Badge("Motor priorizado", color="dark", className="me-2 px-3 py-2"),
+                            dbc.Badge("Fecha operacional", color="light", text_color="dark", className="px-3 py-2"),
+                        ],
+                        className="mb-2",
+                    ),
+                    html.P(
+                        "Lectura ejecutiva: priorice los equipos del Pareto y valide los KPIs estimados contra la cobertura indicada arriba.",
+                        className="text-muted small mb-0",
+                    ),
+                ],
+                id="maintenance-executive-signals",
+                className="border-start border-4 border-warning bg-light rounded px-3 py-2 mb-4",
+            ),
             dbc.Row(
                 [
                     dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="proxy · cobertura en banner"), md=3),
@@ -76,33 +94,33 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
+                    dbc.Col(_card("Pareto de actividad · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-bar"), md=7),
+                    dbc.Col(_card("Tendencia diaria de acciones", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-line"), md=5),
+                ],
+                className="g-3 mb-4",
+            ),
+            dbc.Row(
+                [
+                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "320px"}), "fa-sitemap"), md=6),
+                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
+                ],
+                className="g-3 mb-4",
+            ),
+            dbc.Row(
+                [
                     dbc.Col(create_kpi_card("Equipos con actividad", component_id="maintenance-kpi-equipment", icon="fa-truck", color="info"), md=3),
                     dbc.Col(create_kpi_card("Acciones registradas", component_id="maintenance-kpi-actions", icon="fa-wrench", color="primary"), md=3),
                     dbc.Col(create_kpi_card("Registros de mantenimiento", component_id="maintenance-kpi-records", icon="fa-clipboard-list", color="success"), md=3),
                     dbc.Col(create_kpi_card("Sistemas intervenidos", component_id="maintenance-kpi-systems", icon="fa-sitemap", color="warning"), md=3),
                 ],
-                className="g-3 mb-4",
+                className="g-2 mb-2",
             ),
             dbc.Row(
                 [
                     dbc.Col(create_kpi_card("Días con actividad", component_id="maintenance-kpi-days", icon="fa-calendar-day", color="secondary", scope_label="fecha operacional"), md=3),
                     dbc.Col(create_kpi_card("Actividad en Motor", component_id="maintenance-kpi-motor-share", icon="fa-percentage", color="danger", scope_label="% de acciones"), md=3),
                 ],
-                className="g-3 mb-4",
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(_card("Actividad diaria", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-line"), md=6),
-                    dbc.Col(_card("Actividad registrada por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "310px"}), "fa-sitemap"), md=6),
-                ],
-                className="g-3 mb-4",
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(_card("Pareto de actividad por equipo · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "320px"}), "fa-chart-bar"), md=6),
-                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
-                ],
-                className="g-3",
+                className="g-2",
             ),
         ]
     )
@@ -143,7 +161,7 @@ def layout_mantenciones_general():
                     dbc.Col(
                         [
                             html.H2([html.I(className="fas fa-wrench me-2"), "Mantenciones"]),
-                            html.P("Actividad de mantenimiento y evidencia semanal", className="text-muted mb-0"),
+                            html.P("Resumen ejecutivo · confiabilidad estimada y actividad de mantenimiento", className="text-muted mb-0"),
                         ],
                         md=7,
                     ),

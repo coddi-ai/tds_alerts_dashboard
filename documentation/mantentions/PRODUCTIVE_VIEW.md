@@ -21,6 +21,13 @@ En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
+La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
+referencia: cabecera y cobertura, señales rápidas (ESTIMADO, Motor priorizado,
+fecha operacional), cuatro KPIs críticos primero, Pareto Motor por equipo y
+tendencia diaria, y luego mix por sistema/ranking. Los agregados de actividad
+quedan al final como contexto y no compiten visualmente con los indicadores
+críticos.
+
 ### KPIs y visuales respaldados
 
 La fuente `query_3_actions_all_equipment.parquet` respalda los siguientes
