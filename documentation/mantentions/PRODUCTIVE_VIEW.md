@@ -20,8 +20,12 @@ callbacks y contratos de componentes, listas para una futura reactivación.
 
 La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
 se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la
-fecha operacional. El Pareto cuenta cada `action_id` una vez por sistema y se
-presenta como **Pareto de actividad de mantenimiento**; no representa fallas.
+fecha operacional. El Pareto del Resumen se filtra exclusivamente por
+`action_system_name` en el sistema Motor (acepta `Motor`, `Sistema Motor` y
+`Sistema de Motor`), usa `machine_code` como dimensión `equipment` y cuenta
+`action_id` únicos por equipo. Se presenta como **Pareto de actividad de
+mantenimiento por equipo · Sistema Motor**; no representa fallas ni mezcla
+otros sistemas.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
 completa al navegador.
 

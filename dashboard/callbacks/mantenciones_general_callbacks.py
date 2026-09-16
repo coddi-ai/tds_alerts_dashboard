@@ -14,11 +14,11 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_daily_activity_chart,
     create_empty_figure,
     create_equipment_activity_chart,
-    create_system_pareto_chart,
+    create_equipment_pareto_chart,
     create_week_summary_table,
     create_week_task_table,
 )
-from src.data.maintenance_repository import get_repository
+from src.data.maintenance_repository import PARETO_SCOPE, get_repository
 
 
 def _options(values):
@@ -26,9 +26,10 @@ def _options(values):
 
 
 def _empty_contract():
+    pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
         "status": "empty",
-        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0},
+        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
         "data": {"daily": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
@@ -201,7 +202,7 @@ def register_mantenciones_general_callbacks(app):
             str(kpis.get("systems", "—")),
             banner,
             create_daily_activity_chart(pd.DataFrame(data.get("daily", []))),
-            create_system_pareto_chart(pd.DataFrame(data.get("pareto", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
             create_equipment_activity_chart(pd.DataFrame(data.get("equipment", []))),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(data.get("detail", [])),

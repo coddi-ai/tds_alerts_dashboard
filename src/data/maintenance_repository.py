@@ -22,6 +22,21 @@ from src.data.loaders import (
 logger = logging.getLogger(__name__)
 
 
+# Production files label the target as ``Sistema de Motor`` while compact
+# fixtures and some client extracts use ``Motor``/``Sistema Motor``.  These
+# are the only accepted aliases for the Summary Pareto scope; other systems
+# must never enter that aggregation.
+MOTOR_SYSTEM_ALIASES = frozenset({"motor", "sistema motor", "sistema de motor"})
+PARETO_SCOPE = {
+    "system_filter": "Motor",
+    "system_column": "action_system_name",
+    "system_aliases": sorted(MOTOR_SYSTEM_ALIASES),
+    "dimension": "equipment",
+    "dimension_source": "machine_code",
+    "metric": "unique_action_id_count",
+}
+
+
 class MaintenanceRepository:
     """Repository for maintenance data access."""
     
@@ -260,6 +275,20 @@ class MaintenanceRepository:
             return []
         return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
 
+    @staticmethod
+    def _pareto_scope() -> dict:
+        """Return the serializable contract for the Summary Pareto."""
+        return {
+            **PARETO_SCOPE,
+            "system_aliases": list(PARETO_SCOPE["system_aliases"]),
+        }
+
+    @staticmethod
+    def _is_motor_system(values: pd.Series) -> pd.Series:
+        """Match only the canonical Motor system aliases, case-insensitively."""
+        normalized = values.astype("string").str.strip().str.casefold()
+        return normalized.isin(MOTOR_SYSTEM_ALIASES)
+
     def get_monthly_payload(
         self,
         period: Optional[str] = None,
@@ -289,6 +318,7 @@ class MaintenanceRepository:
                         "error": source_error,
                         "is_current_period": False,
                         "detail_total": 0,
+                        "pareto_scope": self._pareto_scope(),
                     },
                     "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                     "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
@@ -313,6 +343,7 @@ class MaintenanceRepository:
                     "is_current_period": False,
                     "detail_total": 0,
                     "missing_columns": missing_columns,
+                    "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
@@ -330,6 +361,7 @@ class MaintenanceRepository:
                     "source_status": source_status,
                     "is_current_period": False,
                     "detail_total": 0,
+                    "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
@@ -361,6 +393,7 @@ class MaintenanceRepository:
                     "source_status": source_status,
                     "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                     "detail_total": 0,
+                    "pareto_scope": self._pareto_scope(),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
@@ -383,15 +416,22 @@ class MaintenanceRepository:
             .sort_values("date")
         )
 
+        # The Summary Pareto is intentionally scoped to Motor and grouped by
+        # equipment.  It counts each action_id once per machine, never mixes
+        # other systems, and keeps the existing monthly payload envelope.
+        motor_df = df[self._is_motor_system(df["action_system_name"])].copy()
         pareto = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
-            .groupby("system_name", as_index=False)["action_id"]
+            motor_df.groupby("machine_code", as_index=False)["action_id"]
             .nunique()
-            .rename(columns={"action_id": "count"})
-            .sort_values(["count", "system_name"], ascending=[False, True])
+            .rename(columns={"machine_code": "equipment", "action_id": "count"})
+            .sort_values(["count", "equipment"], ascending=[False, True])
             .reset_index(drop=True)
         )
-        pareto["cumulative_pct"] = pareto["count"].cumsum() / pareto["count"].sum() * 100
+        pareto["cumulative_pct"] = (
+            pareto["count"].cumsum() / pareto["count"].sum() * 100
+            if not pareto.empty
+            else pd.Series(dtype=float)
+        )
         if not pareto.empty:
             pareto.loc[pareto.index[-1], "cumulative_pct"] = 100.0
 
@@ -437,6 +477,7 @@ class MaintenanceRepository:
                 "source_status": source_status,
                 "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                 "detail_total": detail_total,
+                "pareto_scope": self._pareto_scope(),
             },
             "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
             "kpis": kpis,

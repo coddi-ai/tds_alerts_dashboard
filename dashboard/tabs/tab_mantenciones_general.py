@@ -76,7 +76,7 @@ def layout_mantenciones_general():
             dbc.Row(
                 [
                     dbc.Col(_card("Actividad diaria", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-line"), md=6),
-                    dbc.Col(_card("Pareto de actividad por sistema", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card("Pareto de actividad por equipo · Sistema Motor", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "310px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -190,17 +190,24 @@ def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_system_pareto_chart(df: pd.DataFrame) -> go.Figure:
+def create_equipment_pareto_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
-        return create_empty_figure("Sin actividad por sistema")
+        return create_empty_figure("Sin actividad de Motor por equipo")
+    # ``system_name`` is accepted as a compatibility fallback for cached
+    # payloads from the previous contract; new payloads use ``equipment``.
+    dimension = "equipment" if "equipment" in df.columns else "system_name"
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(go.Bar(x=df["system_name"], y=df["count"], name="Acciones", marker_color=PARETO_BAR_COLOR, text=df["count"].astype(int), textposition="outside", cliponaxis=False), secondary_y=False)
-    fig.add_trace(go.Scatter(x=df["system_name"], y=df["cumulative_pct"], name="% acumulado", mode="lines+markers", line={"color": PARETO_LINE_COLOR, "width": 2}, marker={"color": PARETO_LINE_COLOR}), secondary_y=True)
+    fig.add_trace(go.Bar(x=df[dimension], y=df["count"], name="Acciones Motor", marker_color=PARETO_BAR_COLOR, text=df["count"].astype(int), textposition="outside", cliponaxis=False), secondary_y=False)
+    fig.add_trace(go.Scatter(x=df[dimension], y=df["cumulative_pct"], name="% acumulado", mode="lines+markers", line={"color": PARETO_LINE_COLOR, "width": 2}, marker={"color": PARETO_LINE_COLOR}), secondary_y=True)
     fig.update_yaxes(title_text="Acciones", rangemode="tozero", secondary_y=False)
     fig.update_yaxes(title_text="% acumulado", range=[0, 100], ticksuffix="%", secondary_y=True)
-    fig.update_xaxes(tickangle=-35)
+    fig.update_xaxes(title_text="Equipo", tickangle=-35)
     fig.update_layout(template="plotly_white", showlegend=False, margin={"l": 45, "r": 45, "t": 20, "b": 85}, hovermode="x unified")
     return fig
+
+
+# Compatibility alias for callers importing the previous builder name.
+create_system_pareto_chart = create_equipment_pareto_chart
 
 
 def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:

@@ -39,8 +39,9 @@ def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
     payload = repo.get_monthly_payload("2026-01")
     assert payload["status"] == "ok"
     assert payload["kpis"] == {"equipment": 2, "actions": 4, "records": 3, "systems": 2}
-    assert sum(row["count"] for row in payload["data"]["pareto"]) == 4
-    assert payload["data"]["pareto"][-1]["cumulative_pct"] == 100.0
+    assert payload["data"]["pareto"] == [{"equipment": "T_01", "count": 2, "cumulative_pct": 100.0}]
+    assert payload["meta"]["pareto_scope"]["dimension"] == "equipment"
+    assert payload["meta"]["pareto_scope"]["metric"] == "unique_action_id_count"
     assert json.dumps(payload)
 
 
@@ -52,11 +53,52 @@ def test_monthly_filters_and_empty_period(monkeypatch):
 
     filtered = repo.get_monthly_payload("2026-01", systems=["Motor"], equipment=["T_01"], subsystems=["Lubricación"])
     assert filtered["kpis"]["actions"] == 2
-    assert {row["system_name"] for row in filtered["data"]["pareto"]} == {"Motor"}
+    assert {row["equipment"] for row in filtered["data"]["pareto"]} == {"T_01"}
 
     empty = repo.get_monthly_payload("2025-12")
     assert empty["status"] == "empty"
     assert empty["kpis"]["actions"] == 0
+
+
+def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
+    frame = _actions().copy()
+    frame.loc[frame["action_id"] == "a3", ["machine_code", "action_system_name"]] = ["T_02", "Sistema de Motor"]
+    frame.loc[frame["action_id"] == "a4", ["machine_code", "action_system_name"]] = ["T_02", "Sistema Hidráulico"]
+    motor_extra = frame.iloc[[0]].copy()
+    motor_extra["action_id"] = "a5"
+    motor_extra["machine_code"] = "T_02"
+    motor_extra["action_system_name"] = "Motor"
+    motor_extra["change_date"] = "2026-01-07"
+    motor_extra["event_ts"] = "2026-01-07T05:00:00Z"
+    frame = pd.concat([frame, motor_extra], ignore_index=True)
+
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    pareto = repo.get_monthly_payload("2026-01")["data"]["pareto"]
+
+    assert pareto == [
+        {"equipment": "T_01", "count": 2, "cumulative_pct": 50.0},
+        {"equipment": "T_02", "count": 2, "cumulative_pct": 100.0},
+    ]
+    assert all("Hidráulico" not in str(row) for row in pareto)
+
+
+def test_equipment_pareto_builder_uses_equipment_axis():
+    from dashboard.tabs.tab_mantenciones_general import create_equipment_pareto_chart
+
+    figure = create_equipment_pareto_chart(
+        pd.DataFrame(
+            [
+                {"equipment": "T_02", "count": 3, "cumulative_pct": 75.0},
+                {"equipment": "T_01", "count": 1, "cumulative_pct": 100.0},
+            ]
+        )
+    )
+
+    assert list(figure.data[0].x) == ["T_02", "T_01"]
+    assert figure.layout.xaxis.title.text == "Equipo"
 
 
 def test_weekly_parser_reports_invalid_json(monkeypatch):
