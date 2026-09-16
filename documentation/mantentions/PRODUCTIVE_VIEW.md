@@ -1,9 +1,8 @@
 # Vista productiva de Mantenciones
 
-La ruta protegida `/monitoring/mantenciones` está habilitada únicamente para
-CDA. El acceso se controla con `monitoring-mantenciones` en
-`config/client_services.json`; la arquitectura queda preparada para habilitar
-otros clientes cuando sus fuentes sean validadas.
+La ruta protegida `/monitoring/mantenciones` se controla con
+`monitoring-mantenciones` en `config/client_services.json`. Actualmente está
+habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
@@ -14,6 +13,10 @@ otros clientes cuando sus fuentes sean validadas.
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
   tareas agrupadas por día y sistema.
+
+En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
+**Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
+callbacks y contratos de componentes, listas para una futura reactivación.
 
 La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
 se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la

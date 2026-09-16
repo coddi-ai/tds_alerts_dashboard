@@ -81,12 +81,25 @@ def test_weekly_parser_reports_invalid_json(monkeypatch):
     assert payload["tasks"][0]["system_name"] == "Motor"
 
 
-def test_layout_contains_three_views_without_unsupported_kpis():
+def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     layout = layout_mantenciones_general()
+    tabs = next(component for component in layout.children if getattr(component, "id", None) == "maintenance-tabs")
+    summary, activity, weekly = tabs.children
+
+    assert summary.value == "summary"
+    assert not getattr(summary, "disabled", False)
+    assert activity.value == "activity"
+    assert activity.disabled is True
+    assert activity.style == {"display": "none"}
+    assert weekly.value == "weekly"
+    assert weekly.disabled is True
+    assert weekly.style == {"display": "none"}
+
+    # The hidden tabs remain mounted so their callback targets are still part
+    # of the page contract and can be re-enabled without rebuilding them.
     rendered = str(layout)
-    assert "Resumen" in rendered
-    assert "Actividad" in rendered
-    assert "Evidencia semanal" in rendered
+    assert "maintenance-activity-table" in rendered
+    assert "maintenance-week-task-table" in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
 

@@ -55,7 +55,12 @@ def _card(title: str, child, icon: str = "fa-chart-bar"):
 
 
 def layout_mantenciones_general():
-    """Build the three-level productive Mantenciones page."""
+    """Build the productive Mantenciones page.
+
+    ``Actividad`` and ``Evidencia semanal`` remain mounted and disabled so
+    their callback contracts and component IDs stay available for a future
+    reactivation.  Only ``Resumen`` is exposed in the current product shell.
+    """
     summary_tab = html.Div(
         [
             html.Div(id="maintenance-month-status"),
@@ -144,8 +149,25 @@ def layout_mantenciones_general():
                 value="summary",
                 children=[
                     dcc.Tab(label="Resumen", value="summary", children=summary_tab, className="pt-3"),
-                    dcc.Tab(label="Actividad", value="activity", children=activity_tab, className="pt-3"),
-                    dcc.Tab(label="Evidencia semanal", value="weekly", children=weekly_tab, className="pt-3"),
+                    # Keep the future views mounted for callback/layout
+                    # compatibility, but do not expose them in the product
+                    # shell until their next UX iteration is approved.
+                    dcc.Tab(
+                        label="Actividad",
+                        value="activity",
+                        children=activity_tab,
+                        className="pt-3",
+                        disabled=True,
+                        style={"display": "none"},
+                    ),
+                    dcc.Tab(
+                        label="Evidencia semanal",
+                        value="weekly",
+                        children=weekly_tab,
+                        className="pt-3",
+                        disabled=True,
+                        style={"display": "none"},
+                    ),
                 ],
             ),
         ],
