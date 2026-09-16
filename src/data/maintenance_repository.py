@@ -36,6 +36,96 @@ PARETO_SCOPE = {
     "metric": "unique_action_id_count",
 }
 
+# The action extract has no governed operating-hours or repair-duration
+# measurement.  These constants make the fallback proxy reproducible and
+# deliberately visible in the payload metadata/UI labels.
+ESTIMATED_HOURS_PER_ACTION = 1.5
+SCHEDULE_HOURS_PER_DAY = 24.0
+
+
+def _empty_estimated_kpis() -> dict:
+    return {
+        "availability_est_pct": None,
+        "downtime_est_hours": None,
+        "mtbf_est_hours": None,
+        "mttr_est_hours": None,
+    }
+
+
+def _estimated_kpi_meta(
+    period: Optional[str] = None,
+    status: str = "unavailable",
+    equipment: int = 0,
+    actions: int = 0,
+    records: int = 0,
+    reason: Optional[str] = None,
+) -> dict:
+    """Describe the conservative activity-derived KPI proxy contract."""
+    calendar_days = 0
+    if period:
+        try:
+            calendar_days = int(pd.Period(period, freq="M").days_in_month)
+        except (TypeError, ValueError):
+            calendar_days = 0
+    scheduled_hours = equipment * calendar_days * SCHEDULE_HOURS_PER_DAY
+    meta = {
+        "status": status,
+        "label": "ESTIMADO",
+        "confidence": "proxy",
+        "source": ["query_3_actions_all_equipment.parquet"],
+        "source_columns": ["action_id", "record_id", "machine_code", "change_date"],
+        "period": period,
+        "coverage": {
+            "equipment": equipment,
+            "actions": actions,
+            "records": records,
+            "calendar_days": calendar_days,
+            "scheduled_hours_proxy": round(scheduled_hours, 3),
+        },
+        "unit": {
+            "availability_est_pct": "%",
+            "downtime_est_hours": "h",
+            "mtbf_est_hours": "h",
+            "mttr_est_hours": "h",
+        },
+        "assumptions": [
+            f"{ESTIMATED_HOURS_PER_ACTION:g} h por acción única como proxy de indisponibilidad/tiempo de reparación.",
+            "Horas programadas proxy = equipos con actividad × días calendario del mes × 24 h.",
+            "Eventos proxy = registros de mantenimiento únicos; no son fallas confirmadas.",
+            "Horas operativas proxy = max(horas programadas proxy − downtime estimado, 0).",
+            "No se observan horas reales de operación, reparación ni downtime en la fuente de acciones.",
+        ],
+        "formula": {
+            "downtime_est_hours": f"unique_action_id_count × {ESTIMATED_HOURS_PER_ACTION:g}",
+            "availability_est_pct": "max(scheduled_hours_proxy − downtime_est_hours, 0) / scheduled_hours_proxy × 100",
+            "mtbf_est_hours": "operating_hours_proxy / unique_record_id_count",
+            "mttr_est_hours": "downtime_est_hours / unique_record_id_count",
+        },
+    }
+    if reason:
+        meta["reason"] = reason
+    return meta
+
+
+def _calculate_estimated_kpis(df: pd.DataFrame, period: Optional[str]) -> tuple[dict, dict]:
+    """Calculate activity-derived reliability proxies with explicit metadata."""
+    if df.empty:
+        return _empty_estimated_kpis(), _estimated_kpi_meta(period, reason="No hay acciones para el período/filtros.")
+    equipment = int(df["machine_code"].nunique())
+    actions = int(df["action_id"].dropna().astype(str).nunique())
+    records = int(df["record_id"].dropna().astype(str).nunique())
+    meta = _estimated_kpi_meta(period, status="estimated", equipment=equipment, actions=actions, records=records)
+    scheduled_hours = float(meta["coverage"]["scheduled_hours_proxy"])
+    downtime = actions * ESTIMATED_HOURS_PER_ACTION
+    operating = max(scheduled_hours - downtime, 0.0)
+    values = {
+        "availability_est_pct": round(operating / scheduled_hours * 100, 1) if scheduled_hours else None,
+        "downtime_est_hours": round(downtime, 1),
+        "mtbf_est_hours": round(operating / records, 1) if records else None,
+        "mttr_est_hours": round(downtime / records, 1) if records else None,
+    }
+    return values, meta
+
 
 class MaintenanceRepository:
     """Repository for maintenance data access."""
@@ -320,9 +410,10 @@ class MaintenanceRepository:
                         "is_current_period": False,
                         "detail_total": 0,
                         "pareto_scope": self._pareto_scope(),
+                        "estimated_kpis": _estimated_kpi_meta(selected, reason=source_error),
                     },
                     "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                     "data": empty,
                 }
         required_columns = {
@@ -345,9 +436,10 @@ class MaintenanceRepository:
                     "detail_total": 0,
                     "missing_columns": missing_columns,
                     "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="Faltan columnas requeridas en la fuente."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
         if not selected or selected not in months:
@@ -363,9 +455,10 @@ class MaintenanceRepository:
                     "is_current_period": False,
                     "detail_total": 0,
                     "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="El período no está disponible."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
 
@@ -395,16 +488,17 @@ class MaintenanceRepository:
                     "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                     "detail_total": 0,
                     "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="No hay acciones para los filtros seleccionados."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
 
-        action_ids = df["action_id"].astype(str)
+        action_ids = df["action_id"].dropna().astype(str)
         motor_df = df[self._is_motor_system(df["action_system_name"])].copy()
         total_actions = int(action_ids.nunique())
-        motor_actions = int(motor_df["action_id"].astype(str).nunique())
+        motor_actions = int(motor_df["action_id"].dropna().astype(str).nunique())
         kpis = {
             "equipment": int(df["machine_code"].nunique()),
             "actions": total_actions,
@@ -413,6 +507,8 @@ class MaintenanceRepository:
             "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
+        estimated_kpis, estimated_meta = _calculate_estimated_kpis(df, selected)
+        kpis.update(estimated_kpis)
 
         daily = (
             df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
@@ -492,6 +588,7 @@ class MaintenanceRepository:
                 "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                 "detail_total": detail_total,
                 "pareto_scope": self._pareto_scope(),
+                "estimated_kpis": estimated_meta,
             },
             "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
             "kpis": kpis,

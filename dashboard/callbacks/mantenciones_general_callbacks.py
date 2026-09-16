@@ -30,9 +30,9 @@ def _empty_contract():
     pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
         "status": "empty",
-        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope},
+        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
-        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None},
+        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
         "data": {"daily": [], "system_mix": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
     }
 
@@ -43,6 +43,15 @@ def _refresh_requested() -> bool:
         return ctx.triggered_id == "btn-refresh-maintenance"
     except MissingCallbackContextException:
         return False
+
+
+def _format_estimated(value, suffix: str) -> str:
+    """Format proxy KPIs without inventing a zero for missing values."""
+    if not isinstance(value, (int, float)):
+        return "—"
+    if suffix == "%":
+        return f"{value:.1f}%"
+    return f"{value:,.1f} h"
 
 
 def _source_alert(meta: dict):
@@ -163,6 +172,10 @@ def register_mantenciones_general_callbacks(app):
 
 
     @app.callback(
+        Output("maintenance-kpi-availability-est", "children"),
+        Output("maintenance-kpi-downtime-est", "children"),
+        Output("maintenance-kpi-mtbf-est", "children"),
+        Output("maintenance-kpi-mttr-est", "children"),
         Output("maintenance-kpi-equipment", "children"),
         Output("maintenance-kpi-actions", "children"),
         Output("maintenance-kpi-records", "children"),
@@ -184,11 +197,11 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -202,6 +215,10 @@ def register_mantenciones_general_callbacks(app):
         motor_share = kpis.get("motor_share_pct")
         motor_share_label = f"{motor_share:.1f}%" if isinstance(motor_share, (int, float)) else "—"
         return (
+            _format_estimated(kpis.get("availability_est_pct"), "%"),
+            _format_estimated(kpis.get("downtime_est_hours"), "h"),
+            _format_estimated(kpis.get("mtbf_est_hours"), "h"),
+            _format_estimated(kpis.get("mttr_est_hours"), "h"),
             str(kpis.get("equipment", "—")),
             str(kpis.get("actions", "—")),
             str(kpis.get("records", "—")),

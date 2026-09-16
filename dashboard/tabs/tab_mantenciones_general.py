@@ -1,8 +1,9 @@
 """Productive Mantenciones view.
 
-The page deliberately reports maintenance activity, not inferred downtime or
-failure reliability metrics. Its hierarchy is inspired by the client reports
-while using the Coddi dashboard shell and neutral labels.
+The page keeps the auditable activity breakdown from the client reports and
+adds clearly labelled ESTIMADO reliability proxies. The proxies are derived
+from action activity only; they are never presented as measured downtime or
+failure metrics.
 """
 
 from __future__ import annotations
@@ -64,6 +65,15 @@ def layout_mantenciones_general():
     summary_tab = html.Div(
         [
             html.Div(id="maintenance-month-status"),
+            dbc.Row(
+                [
+                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="proxy · 1,5 h/acción"), md=3),
+                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="proxy · horas"), md=3),
+                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="proxy · horas"), md=3),
+                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="proxy · horas"), md=3),
+                ],
+                className="g-3 mb-4",
+            ),
             dbc.Row(
                 [
                     dbc.Col(create_kpi_card("Equipos con actividad", component_id="maintenance-kpi-equipment", icon="fa-truck", color="info"), md=3),

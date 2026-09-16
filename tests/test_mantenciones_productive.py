@@ -45,7 +45,14 @@ def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
         "systems": 2,
         "activity_days": 4,
         "motor_share_pct": 50.0,
+        "availability_est_pct": 99.6,
+        "downtime_est_hours": 6.0,
+        "mtbf_est_hours": 494.0,
+        "mttr_est_hours": 2.0,
     }
+    assert payload["meta"]["estimated_kpis"]["status"] == "estimated"
+    assert payload["meta"]["estimated_kpis"]["coverage"]["calendar_days"] == 31
+    assert "unique_action_id_count × 1.5" in payload["meta"]["estimated_kpis"]["formula"]["downtime_est_hours"]
     assert payload["data"]["system_mix"] == [
         {"system_name": "Motor", "count": 2},
         {"system_name": "Hidráulico", "count": 1},
@@ -166,6 +173,10 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-week-task-table" in rendered
     assert "maintenance-kpi-days" in rendered
     assert "maintenance-kpi-motor-share" in rendered
+    assert "maintenance-kpi-availability-est" in rendered
+    assert "maintenance-kpi-downtime-est" in rendered
+    assert "maintenance-kpi-mtbf-est" in rendered
+    assert "maintenance-kpi-mttr-est" in rendered
     assert "maintenance-chart-system-mix" in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
@@ -208,3 +219,25 @@ def test_missing_or_corrupt_action_source_is_explicit(monkeypatch, tmp_path):
     payload = repo.get_monthly_payload()
     assert payload["status"] == "error"
     assert payload["meta"]["source_status"] == "error"
+
+
+def test_estimated_kpis_are_unavailable_without_period_data(monkeypatch):
+    frame = _actions()
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2025-12")
+
+    assert payload["status"] == "empty"
+    assert payload["kpis"]["availability_est_pct"] is None
+    assert payload["kpis"]["downtime_est_hours"] is None
+    assert payload["meta"]["estimated_kpis"]["status"] == "unavailable"
+
+
+def test_estimated_kpi_formatter_keeps_estimated_values_explicit():
+    from dashboard.callbacks.mantenciones_general_callbacks import _format_estimated
+
+    assert _format_estimated(86.25, "%") == "86.2%"
+    assert _format_estimated(1128.0, "h") == "1,128.0 h"
+    assert _format_estimated(None, "h") == "—"

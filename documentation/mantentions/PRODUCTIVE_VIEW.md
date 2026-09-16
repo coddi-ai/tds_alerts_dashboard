@@ -8,7 +8,8 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 - **Resumen**: selector mensual, cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
-  participación de acciones Motor; tendencia diaria, mix de actividad por
+  participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
+  (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
   sistema, Pareto de actividad por equipo con foco en Sistema Motor y ranking
   de equipos.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
@@ -42,10 +43,32 @@ porcentaje acumulado; no representa frecuencia de fallas.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. Esos indicadores quedan fuera de esta iteración: los Parquet
-actuales no aportan una fuente gobernada de horas operativas/reparación,
-clasificación de fallas, backlog o metas, por lo que no se presentan como si
-fueran derivados de actividad de mantenimiento.
+imprevisto. En esta iteración se incorporan solo como proxies explícitos
+**ESTIMADOS**, porque el Parquet de acciones no aporta horas operativas,
+reparación o downtime medidos. No se presentan como mediciones reales ni como
+frecuencia de fallas.
+
+#### Metodología de los KPIs ESTIMADOS
+
+Los cuatro valores usan exclusivamente `query_3_actions_all_equipment.parquet`
+del período seleccionado y se calculan de forma reproducible:
+
+- `downtime_est_hours = acciones únicas × 1,5 h`; 1,5 h/acción es el proxy
+  conservador y parametrizado de duración/indisponibilidad.
+- `scheduled_hours_proxy = equipos con actividad × días calendario del mes ×
+  24 h`.
+- `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
+  scheduled_hours_proxy × 100`.
+- `mttr_est_hours = downtime_est_hours / registros únicos`.
+- `mtbf_est_hours = max(scheduled_hours_proxy − downtime_est_hours, 0) /
+  registros únicos`.
+
+Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
+unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
+mantenimiento proxy, no fallas confirmadas; si faltan acciones o registros se
+devuelve `null` y un estado `unavailable`, nunca cero. La fuente
+`query_4_business_kpis.parquet` contiene un `downtime_hours_70d` pero no se usa
+para estos KPIs mensuales por su cobertura móvil de 70 días.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad
@@ -84,6 +107,8 @@ El botón **Refrescar** invalida las cachés del repositorio. La página abre el
 
 ## Alcance excluido
 
-Esta vista no calcula disponibilidad, MTBF, MTTR, downtime, backlog, estado
-sano/detenido ni planes de acción. Esos conceptos requieren fuentes y
-definiciones que no están respaldadas por el contrato actual de datos.
+Se mantienen fuera de la vista el backlog, estado sano/detenido, planes de
+acción, metas, horas reales de operación/reparación y clasificación de fallas.
+Los cuatro KPIs de confiabilidad visibles son únicamente los proxies
+**ESTIMADOS** descritos arriba y deben reemplazarse por mediciones gobernadas
+cuando exista esa fuente.
