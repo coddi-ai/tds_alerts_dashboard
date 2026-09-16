@@ -67,9 +67,11 @@ query_4 no desglosa), se usa el fallback mensual de acciones:
   (70 días con query_4; días calendario del mes en fallback).
 - `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
   scheduled_hours_proxy × 100`.
-- `mttr_est_hours = downtime_est_hours / registros únicos`.
+- `event_count_proxy = reparaciones_70d`; si no hay reparaciones, `total_actions_70d`
+  y finalmente registros únicos del extracto de acciones.
+- `mttr_est_hours = downtime_est_hours / event_count_proxy`.
 - `mtbf_est_hours = max(scheduled_hours_proxy − downtime_est_hours, 0) /
-  registros únicos`.
+  event_count_proxy`.
 
 Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
 unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
