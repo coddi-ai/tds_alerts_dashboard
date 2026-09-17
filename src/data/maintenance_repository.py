@@ -4,6 +4,7 @@ Provides data access functions that can work in dummy or production mode.
 """
 
 import json
+import math
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -20,6 +21,204 @@ from src.data.loaders import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Production files label the target as ``Sistema de Motor`` while compact
+# fixtures and some client extracts use ``Motor``/``Sistema Motor``.  These
+# are the only accepted aliases for the Summary Pareto scope; other systems
+# must never enter that aggregation.
+MOTOR_SYSTEM_ALIASES = frozenset({"motor", "sistema motor", "sistema de motor"})
+TRAIN_FORCE_SYSTEM_ALIASES = frozenset(
+    {
+        "tren de fuerza",
+        "tren fuerza",
+        "sistema de tren de fuerza",
+        "sistema tren de fuerza",
+    }
+)
+PARETO_SCOPE = {
+    "system_filter": "Motor",
+    "system_column": "action_system_name",
+    "system_aliases": sorted(MOTOR_SYSTEM_ALIASES),
+    "dimension": "equipment",
+    "dimension_source": "machine_code",
+    "metric": "unique_action_id_count",
+}
+
+# The action extract has no governed operating-hours or repair-duration
+# measurement.  These constants make the fallback proxy reproducible and
+# deliberately visible in the payload metadata/UI labels.
+ESTIMATED_HOURS_PER_ACTION = 1.5
+SCHEDULE_HOURS_PER_DAY = 24.0
+
+
+def _empty_estimated_kpis() -> dict:
+    return {
+        "availability_est_pct": None,
+        "downtime_est_hours": None,
+        "mtbf_est_hours": None,
+        "mttr_est_hours": None,
+    }
+
+
+def _estimated_kpi_meta(
+    period: Optional[str] = None,
+    status: str = "unavailable",
+    equipment: int = 0,
+    actions: int = 0,
+    records: int = 0,
+    reason: Optional[str] = None,
+    source_kind: str = "actions_monthly_proxy",
+    source: Optional[list[str]] = None,
+    source_columns: Optional[list[str]] = None,
+    window_label: str = "mes seleccionado",
+    reference_start: Optional[str] = None,
+    reference_end: Optional[str] = None,
+    event_count: Optional[int] = None,
+    scheduled_days: Optional[int] = None,
+    downtime_formula: Optional[str] = None,
+) -> dict:
+    """Describe the conservative estimated KPI contract and its coverage."""
+    calendar_days = 0
+    if period:
+        try:
+            calendar_days = int(pd.Period(period, freq="M").days_in_month)
+        except (TypeError, ValueError):
+            calendar_days = 0
+    schedule_days = calendar_days if scheduled_days is None else scheduled_days
+    scheduled_hours = equipment * schedule_days * SCHEDULE_HOURS_PER_DAY
+    source = source or ["query_3_actions_all_equipment.parquet"]
+    source_columns = source_columns or ["action_id", "record_id", "machine_code", "change_date"]
+    meta = {
+        "status": status,
+        "label": "ESTIMADO",
+        "source_kind": source_kind,
+        "confidence": "precalculated_proxy" if source_kind == "business_kpis_70d" else "proxy",
+        "source": source,
+        "source_columns": source_columns,
+        "period": period,
+        "coverage": {
+            "window_label": window_label,
+            "reference_start": reference_start,
+            "reference_end": reference_end,
+            "equipment": equipment,
+            "actions": actions,
+            "records": records,
+            "event_count": event_count if event_count is not None else records,
+            "calendar_days": schedule_days,
+            "scheduled_hours_proxy": round(scheduled_hours, 3),
+        },
+        "unit": {
+            "availability_est_pct": "%",
+            "downtime_est_hours": "h",
+            "mtbf_est_hours": "h",
+            "mttr_est_hours": "h",
+        },
+        "assumptions": [
+            f"{ESTIMATED_HOURS_PER_ACTION:g} h por acción única como fallback de indisponibilidad/tiempo de reparación.",
+            "Horas programadas proxy = equipos cubiertos × días de la ventana × 24 h.",
+            "Eventos proxy = reparaciones_70d o registros/acciones únicos; no son fallas confirmadas.",
+            "Horas operativas proxy = max(horas programadas proxy − downtime estimado, 0).",
+            "Los valores siguen rotulados ESTIMADO aunque provengan de KPIs precalculados.",
+        ],
+        "formula": {
+            "downtime_est_hours": downtime_formula or f"unique_action_id_count × {ESTIMATED_HOURS_PER_ACTION:g}",
+            "availability_est_pct": "max(scheduled_hours_proxy − downtime_est_hours, 0) / scheduled_hours_proxy × 100",
+            "mtbf_est_hours": "operating_hours_proxy / event_count_proxy",
+            "mttr_est_hours": "downtime_est_hours / event_count_proxy",
+        },
+    }
+    if reason:
+        meta["reason"] = reason
+    return meta
+
+
+def _calculate_estimated_kpis(
+    df: pd.DataFrame,
+    period: Optional[str],
+    business_kpis: Optional[pd.DataFrame] = None,
+    equipment_filter: Optional[List[str]] = None,
+    filter_reason: Optional[str] = None,
+) -> tuple[dict, dict]:
+    """Prefer the governed 70-day KPI extract; fall back to monthly actions."""
+    if df.empty:
+        return _empty_estimated_kpis(), _estimated_kpi_meta(period, reason="No hay acciones para el período/filtros.")
+    equipment = int(df["machine_code"].nunique())
+    actions = int(df["action_id"].dropna().astype(str).nunique())
+    records = int(df["record_id"].dropna().astype(str).nunique())
+    required = {"machine_code", "downtime_hours_70d", "repairs_70d", "reference_date"}
+    kpi = business_kpis.copy() if business_kpis is not None else pd.DataFrame()
+    can_use_kpi = not kpi.empty and required.issubset(kpi.columns) and not filter_reason
+    if can_use_kpi and equipment_filter:
+        kpi = kpi[kpi["machine_code"].isin(equipment_filter)].copy()
+        can_use_kpi = not kpi.empty
+    if can_use_kpi:
+        kpi["downtime_hours_70d"] = pd.to_numeric(kpi["downtime_hours_70d"], errors="coerce")
+        kpi["repairs_70d"] = pd.to_numeric(kpi["repairs_70d"], errors="coerce")
+        kpi = kpi.dropna(subset=["downtime_hours_70d"])
+        can_use_kpi = not kpi.empty
+    anomaly_reason = None
+    if can_use_kpi:
+        downtime_probe = float(kpi["downtime_hours_70d"].sum())
+        scheduled_probe = int(kpi["machine_code"].nunique()) * 70 * SCHEDULE_HOURS_PER_DAY
+        repairs_values = kpi["repairs_70d"].fillna(0).tolist()
+        if (
+            not math.isfinite(downtime_probe)
+            or downtime_probe < 0
+            or downtime_probe > scheduled_probe
+            or any(not math.isfinite(float(value)) or float(value) < 0 for value in repairs_values)
+        ):
+            anomaly_reason = (
+                "query_4 rechazado por plausibilidad: downtime_hours_70d debe ser finito, no negativo "
+                "y no superar las horas calendario proxy de la misma ventana."
+            )
+            can_use_kpi = False
+    if can_use_kpi:
+        equipment = int(kpi["machine_code"].nunique())
+        downtime = float(kpi["downtime_hours_70d"].sum())
+        repairs = float(kpi["repairs_70d"].fillna(0).sum())
+        event_count = int(repairs) if repairs > 0 else int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else 0
+        if event_count <= 0:
+            event_count = records
+        reference = pd.to_datetime(kpi["reference_date"], utc=True, errors="coerce").dropna()
+        reference_end = reference.max().isoformat() if not reference.empty else None
+        reference_start = (reference.min() - pd.Timedelta(days=69)).isoformat() if not reference.empty else None
+        meta = _estimated_kpi_meta(
+            period,
+            status="estimated",
+            equipment=equipment,
+            actions=int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else actions,
+            records=records,
+            source_kind="business_kpis_70d",
+            source=["query_4_business_kpis.parquet"],
+            source_columns=["machine_code", "downtime_hours_70d", "repairs_70d", "total_actions_70d", "reference_date"],
+            window_label="ventana móvil 70d",
+            reference_start=reference_start,
+            reference_end=reference_end,
+            event_count=event_count,
+            scheduled_days=70,
+            downtime_formula="sum(downtime_hours_70d)",
+        )
+    else:
+        meta = _estimated_kpi_meta(
+            period,
+            status="estimated",
+            equipment=equipment,
+            actions=actions,
+            records=records,
+            reason=filter_reason or anomaly_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; se usa fallback mensual.",
+        )
+        event_count = records
+        downtime = actions * ESTIMATED_HOURS_PER_ACTION
+    scheduled_hours = float(meta["coverage"]["scheduled_hours_proxy"])
+    operating = max(scheduled_hours - downtime, 0.0)
+    values = {
+        "availability_est_pct": round(operating / scheduled_hours * 100, 1) if scheduled_hours else None,
+        "downtime_est_hours": round(downtime, 1),
+        "mtbf_est_hours": round(operating / event_count, 1) if event_count else None,
+        "mttr_est_hours": round(downtime / event_count, 1) if event_count else None,
+    }
+    return values, meta
 
 
 class MaintenanceRepository:
@@ -247,8 +446,12 @@ class MaintenanceRepository:
     def _empty_month_data() -> dict:
         return {
             "daily": [],
+            "system_mix": [],
+            "system_mix_detail": [],
             "pareto": [],
+            "train_force_pareto": [],
             "equipment": [],
+            "equipment_system_mix": [],
             "matrix": [],
             "detail": [],
         }
@@ -259,6 +462,26 @@ class MaintenanceRepository:
         if frame.empty:
             return []
         return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
+
+    @staticmethod
+    def _pareto_scope() -> dict:
+        """Return the serializable contract for the Summary Pareto."""
+        return {
+            **PARETO_SCOPE,
+            "system_aliases": list(PARETO_SCOPE["system_aliases"]),
+        }
+
+    @staticmethod
+    def _is_motor_system(values: pd.Series) -> pd.Series:
+        """Match only the canonical Motor system aliases, case-insensitively."""
+        normalized = values.astype("string").str.strip().str.casefold()
+        return normalized.isin(MOTOR_SYSTEM_ALIASES)
+
+    @staticmethod
+    def _is_train_force_system(values: pd.Series) -> pd.Series:
+        """Match the canonical Tren de Fuerza aliases, case-insensitively."""
+        normalized = values.astype("string").str.strip().str.casefold()
+        return normalized.isin(TRAIN_FORCE_SYSTEM_ALIASES)
 
     def get_monthly_payload(
         self,
@@ -289,9 +512,11 @@ class MaintenanceRepository:
                         "error": source_error,
                         "is_current_period": False,
                         "detail_total": 0,
+                        "pareto_scope": self._pareto_scope(),
+                        "estimated_kpis": _estimated_kpi_meta(selected, reason=source_error),
                     },
                     "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                    "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                     "data": empty,
                 }
         required_columns = {
@@ -313,9 +538,11 @@ class MaintenanceRepository:
                     "is_current_period": False,
                     "detail_total": 0,
                     "missing_columns": missing_columns,
+                    "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="Faltan columnas requeridas en la fuente."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
         if not selected or selected not in months:
@@ -330,9 +557,11 @@ class MaintenanceRepository:
                     "source_status": source_status,
                     "is_current_period": False,
                     "detail_total": 0,
+                    "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="El período no está disponible."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
 
@@ -361,29 +590,50 @@ class MaintenanceRepository:
                     "source_status": source_status,
                     "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                     "detail_total": 0,
+                    "pareto_scope": self._pareto_scope(),
+                    "estimated_kpis": _estimated_kpi_meta(selected, reason="No hay acciones para los filtros seleccionados."),
                 },
                 "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
+                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
 
-        action_ids = df["action_id"].astype(str)
+        action_ids = df["action_id"].dropna().astype(str)
+        motor_df = df[self._is_motor_system(df["action_system_name"])].copy()
+        total_actions = int(action_ids.nunique())
+        motor_actions = int(motor_df["action_id"].dropna().astype(str).nunique())
         kpis = {
             "equipment": int(df["machine_code"].nunique()),
-            "actions": int(action_ids.nunique()),
+            "actions": total_actions,
             "records": int(df["record_id"].nunique()),
             "systems": int(df["action_system_name"].dropna().nunique()),
+            "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
+            "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
+        business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
+        filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; se usa el fallback mensual." if systems or subsystems else None
+        estimated_kpis, estimated_meta = _calculate_estimated_kpis(
+            df,
+            selected,
+            business_kpis=business_kpis,
+            equipment_filter=equipment,
+            filter_reason=filter_reason,
+        )
+        kpis.update(estimated_kpis)
 
         daily = (
             df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
-            .groupby("day", as_index=False)["action_id"]
-            .nunique()
-            .rename(columns={"day": "date", "action_id": "count"})
+            .groupby("day", as_index=False)
+            .agg(count=("action_id", "nunique"), equipment_count=("machine_code", "nunique"))
+            .rename(columns={"day": "date"})
             .sort_values("date")
         )
+        # No governed daily downtime duration exists in query_3. Keep the
+        # auditable action count and expose the documented 1.5 h/action proxy
+        # alongside the number of distinct equipment intervened per day.
+        daily["hours_estimated"] = daily["count"] * ESTIMATED_HOURS_PER_ACTION
 
-        pareto = (
+        system_mix = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
             .groupby("system_name", as_index=False)["action_id"]
             .nunique()
@@ -391,9 +641,38 @@ class MaintenanceRepository:
             .sort_values(["count", "system_name"], ascending=[False, True])
             .reset_index(drop=True)
         )
-        pareto["cumulative_pct"] = pareto["count"].cumsum() / pareto["count"].sum() * 100
-        if not pareto.empty:
-            pareto.loc[pareto.index[-1], "cumulative_pct"] = 100.0
+        system_mix_detail = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["system_name", "machine_code"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"machine_code": "equipment", "action_id": "count"})
+            .sort_values(["system_name", "count", "equipment"], ascending=[True, False, True])
+            .reset_index(drop=True)
+        )
+
+        # Summary Paretos are scoped to a system and grouped by equipment. Each
+        # action_id is counted once per machine and the final point is pinned
+        # to 100% so the cumulative line is stable for consumers.
+        def _equipment_pareto(system_frame: pd.DataFrame) -> pd.DataFrame:
+            result = (
+                system_frame.groupby("machine_code", as_index=False)["action_id"]
+                .nunique()
+                .rename(columns={"machine_code": "equipment", "action_id": "count"})
+                .sort_values(["count", "equipment"], ascending=[False, True])
+                .reset_index(drop=True)
+            )
+            result["cumulative_pct"] = (
+                result["count"].cumsum() / result["count"].sum() * 100
+                if not result.empty
+                else pd.Series(dtype=float)
+            )
+            if not result.empty:
+                result.loc[result.index[-1], "cumulative_pct"] = 100.0
+            return result
+
+        pareto = _equipment_pareto(motor_df)
+        train_force_df = df[self._is_train_force_system(df["action_system_name"])].copy()
+        train_force_pareto = _equipment_pareto(train_force_df)
 
         equipment_df = (
             df.groupby("machine_code", as_index=False)["action_id"]
@@ -401,11 +680,31 @@ class MaintenanceRepository:
             .rename(columns={"action_id": "count"})
             .sort_values(["count", "machine_code"], ascending=[False, True])
         )
+        equipment_system = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "system_count"})
+            .sort_values(["machine_code", "system_count", "system_name"], ascending=[True, False, True])
+            .drop_duplicates("machine_code")
+            .rename(columns={"system_name": "primary_system"})
+        )
+        equipment_df = equipment_df.merge(equipment_system[["machine_code", "primary_system"]], on="machine_code", how="left")
         matrix_df = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
             .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
             .nunique()
             .rename(columns={"action_id": "count"})
+        )
+        # Keep the full equipment × system breakdown so the Summary chart can
+        # retain every equipment row while using involved systems as colors.
+        equipment_system_mix = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"machine_code": "machine_code", "action_id": "count"})
+            .sort_values(["machine_code", "count", "system_name"], ascending=[True, False, True])
+            .reset_index(drop=True)
         )
 
         detail = df.copy()
@@ -437,13 +736,19 @@ class MaintenanceRepository:
                 "source_status": source_status,
                 "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                 "detail_total": detail_total,
+                "pareto_scope": self._pareto_scope(),
+                "estimated_kpis": estimated_meta,
             },
             "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
             "kpis": kpis,
             "data": {
                 "daily": self._json_records(daily),
+                "system_mix": self._json_records(system_mix),
+                "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
+                "train_force_pareto": self._json_records(train_force_pareto),
                 "equipment": self._json_records(equipment_df),
+                "equipment_system_mix": self._json_records(equipment_system_mix),
                 "matrix": self._json_records(matrix_df),
                 "detail": self._json_records(detail[[
                     "action_id", "date", "timestamp_utc", "equipment", "system_name",

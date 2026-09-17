@@ -12,26 +12,36 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_activity_matrix,
     create_activity_table,
     create_daily_activity_chart,
+    create_daily_equipment_chart,
+    create_daily_intervention_hours_chart,
     create_empty_figure,
     create_equipment_activity_chart,
-    create_system_pareto_chart,
+    create_equipment_pareto_chart,
+    create_system_activity_chart,
     create_week_summary_table,
     create_week_task_table,
 )
-from src.data.maintenance_repository import get_repository
+from src.data.maintenance_repository import PARETO_SCOPE, get_repository
 
 
 def _options(values):
     return [{"label": value, "value": value} for value in values]
 
 
+def _equipment_options(values):
+    return [{"label": "Todas", "value": "__all__"}] + [
+        {"label": value, "value": value} for value in values if value != "__all__"
+    ]
+
+
 def _empty_contract():
+    pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
         "status": "empty",
-        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0},
+        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
-        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0},
-        "data": {"daily": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
+        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
     }
 
 
@@ -43,19 +53,44 @@ def _refresh_requested() -> bool:
         return False
 
 
+def _format_estimated(value, suffix: str) -> str:
+    """Format proxy KPIs without inventing a zero for missing values."""
+    if not isinstance(value, (int, float)):
+        return "—"
+    if suffix == "%":
+        return f"{value:.1f}%"
+    return f"{value:,.1f} h"
+
+
 def _source_alert(meta: dict):
     end = meta.get("source_end")
     if not end:
         return html.Div([html.I(className="fas fa-database me-2"), "No hay datos de mantenciones disponibles para este cliente."], className="alert alert-warning")
     date_label = str(end)[:10]
+    estimated = meta.get("estimated_kpis", {})
+    coverage = estimated.get("coverage", {})
+    coverage_label = coverage.get("window_label")
+    source_files = estimated.get("source") or []
+    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
+    estimated_note = f"KPIs ESTIMADOS · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
+    reference_start = coverage.get("reference_start")
+    reference_end = coverage.get("reference_end")
+    if reference_start and reference_end:
+        estimated_note += f" Referencia: {str(reference_start)[:10]} a {str(reference_end)[:10]}."
+    reason = estimated.get("reason")
+    if reason:
+        estimated_note += f" Fallback: {reason}"
     return html.Div(
         [
             html.I(className="fas fa-database me-2"),
             html.Span("Cobertura de fuente: ", className="fw-bold"),
-            html.Span(f"{meta.get('source_start', '')[:10]} a {date_label}. "),
+            html.Span(f"{str(meta.get('source_start') or '')[:10]} a {date_label}. "),
             html.Span("El último período disponible se muestra por defecto; la fuente puede estar histórica.", className="text-muted"),
+            html.Br(),
+            html.Span(estimated_note, className="text-muted small"),
         ],
         className="alert alert-info",
+        style={"overflowWrap": "anywhere"},
     )
 
 
@@ -67,6 +102,8 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-source-alert", "children"),
         Output("maintenance-month", "options"),
         Output("maintenance-month", "value"),
+        Output("maintenance-summary-equipment", "options"),
+        Output("maintenance-summary-equipment", "value"),
         Output("maintenance-week", "options"),
         Output("maintenance-week", "value"),
         Output("maintenance-week-equipment", "options"),
@@ -77,7 +114,7 @@ def register_mantenciones_general_callbacks(app):
     )
     def load_maintenance_metadata(client, n_clicks):
         if not client:
-            return {}, _source_alert({}), [], None, [], None, [], []
+            return {}, _source_alert({}), [], None, _equipment_options([]), "__all__", [], None, [], []
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
@@ -100,13 +137,15 @@ def register_mantenciones_general_callbacks(app):
                 _source_alert(meta),
                 _options(months),
                 months[-1] if months else None,
+                _equipment_options(meta["equipment"]),
+                "__all__",
                 _options(weeks),
                 weeks[-1] if weeks else None,
                 _options(meta["equipment"]),
                 _options(meta["systems"]),
             )
         except Exception as exc:
-            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], None, [], []
+            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, _equipment_options([]), "__all__", [], None, [], []
 
 
     @app.callback(
@@ -137,20 +176,22 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-load-timestamp", "data"),
         Input("client-selector", "value"),
         Input("maintenance-month", "value"),
+        Input("maintenance-summary-equipment", "value"),
         Input("maintenance-activity-system", "value"),
         Input("maintenance-activity-subsystem", "value"),
         Input("maintenance-activity-equipment", "value"),
         Input("btn-refresh-maintenance", "n_clicks"),
         prevent_initial_call=False,
     )
-    def load_monthly_payload(client, month, systems, subsystems, equipment, n_clicks):
+    def load_monthly_payload(client, month, summary_equipment, systems, subsystems, equipment, n_clicks):
         if not client:
             return _empty_contract(), None
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
                 repo.refresh()
-            payload = repo.get_monthly_payload(month, systems=systems, equipment=equipment, subsystems=subsystems)
+            selected_equipment = None if summary_equipment in (None, "", "__all__") else [summary_equipment]
+            payload = repo.get_monthly_payload(month, systems=systems, equipment=selected_equipment, subsystems=subsystems)
             return payload, datetime.now().isoformat()
         except Exception as exc:
             return {
@@ -161,13 +202,22 @@ def register_mantenciones_general_callbacks(app):
 
 
     @app.callback(
+        Output("maintenance-kpi-availability-est", "children"),
+        Output("maintenance-kpi-downtime-est", "children"),
+        Output("maintenance-kpi-mtbf-est", "children"),
+        Output("maintenance-kpi-mttr-est", "children"),
         Output("maintenance-kpi-equipment", "children"),
         Output("maintenance-kpi-actions", "children"),
         Output("maintenance-kpi-records", "children"),
         Output("maintenance-kpi-systems", "children"),
+        Output("maintenance-kpi-days", "children"),
+        Output("maintenance-kpi-motor-share", "children"),
         Output("maintenance-month-status", "children"),
         Output("maintenance-chart-daily", "figure"),
+        Output("maintenance-chart-daily-equipment", "figure"),
         Output("maintenance-chart-pareto", "figure"),
+        Output("maintenance-chart-pareto-tren-fuerza", "figure"),
+        Output("maintenance-chart-system-mix", "figure"),
         Output("maintenance-chart-equipment", "figure"),
         Output("maintenance-chart-matrix", "figure"),
         Output("maintenance-activity-table", "children"),
@@ -179,11 +229,11 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -194,15 +244,26 @@ def register_mantenciones_general_callbacks(app):
                 f"Período histórico seleccionado: {meta.get('period_label', 'N/A')}. Último dato de fuente: {str(meta.get('source_end', ''))[:10]}.",
                 className="alert alert-warning",
             )
+        motor_share = kpis.get("motor_share_pct")
+        motor_share_label = f"{motor_share:.1f}%" if isinstance(motor_share, (int, float)) else "—"
         return (
+            _format_estimated(kpis.get("availability_est_pct"), "%"),
+            _format_estimated(kpis.get("downtime_est_hours"), "h"),
+            _format_estimated(kpis.get("mtbf_est_hours"), "h"),
+            _format_estimated(kpis.get("mttr_est_hours"), "h"),
             str(kpis.get("equipment", "—")),
             str(kpis.get("actions", "—")),
             str(kpis.get("records", "—")),
             str(kpis.get("systems", "—")),
+            str(kpis.get("activity_days", "—")),
+            motor_share_label,
             banner,
-            create_daily_activity_chart(pd.DataFrame(data.get("daily", []))),
-            create_system_pareto_chart(pd.DataFrame(data.get("pareto", []))),
-            create_equipment_activity_chart(pd.DataFrame(data.get("equipment", []))),
+            create_daily_intervention_hours_chart(pd.DataFrame(data.get("daily", []))),
+            create_daily_equipment_chart(pd.DataFrame(data.get("daily", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("train_force_pareto", [])), system_label="Tren de Fuerza"),
+            create_system_activity_chart(pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", []))),
+            create_equipment_activity_chart(pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", []))),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(data.get("detail", [])),
         )
