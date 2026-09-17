@@ -162,6 +162,19 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
+                    dbc.Col(
+                        _card(
+                            "Pareto de actividad de mantenimiento · Tren de Fuerza por equipo",
+                            dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "360px"}),
+                            "fa-chart-bar",
+                        ),
+                        md=7,
+                    ),
+                ],
+                className="g-3 mb-4",
+            ),
+            dbc.Row(
+                [
                     dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
                     dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
                 ],
@@ -302,9 +315,9 @@ def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_equipment_pareto_chart(df: pd.DataFrame) -> go.Figure:
+def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor") -> go.Figure:
     if df.empty:
-        return create_empty_figure("Sin actividad de Motor por equipo")
+        return create_empty_figure(f"Sin actividad de {system_label} por equipo")
     # ``system_name`` is accepted as a compatibility fallback for cached
     # payloads from the previous contract; new payloads use ``equipment``.
     dimension = "equipment" if "equipment" in df.columns else "system_name"
@@ -313,12 +326,12 @@ def create_equipment_pareto_chart(df: pd.DataFrame) -> go.Figure:
         go.Bar(
             x=df[dimension],
             y=df["count"],
-            name="Acciones Motor",
+            name=f"Acciones {system_label}",
             marker_color=PARETO_BAR_COLOR,
             text=df["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
-            hovertemplate="<b>%{x}</b><br>Acciones Motor: %{y}<extra></extra>",
+            hovertemplate=f"<b>%{{x}}</b><br>Acciones {system_label}: %{{y}}<extra></extra>",
         ),
         secondary_y=False,
     )
@@ -359,7 +372,12 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
         data = df.loc[~df["system_name"].map(_is_excluded_activity_system)].copy()
         if data.empty:
             return create_empty_figure("Sin sistemas elegibles para este período")
-        systems = data["system_name"].drop_duplicates().tolist()
+        systems = (
+            data.groupby("system_name", as_index=False)["count"]
+            .sum()
+            .sort_values(["count", "system_name"], ascending=[False, True])["system_name"]
+            .tolist()
+        )
         equipment = sorted(data["equipment"].dropna().astype(str).unique().tolist())
         pivot = data.pivot_table(index="system_name", columns="equipment", values="count", aggfunc="sum", fill_value=0).reindex(systems)
         palette = ["#355c7d", "#4f8a8b", "#d08c60", "#7b6ea8", "#6f8fb3", "#b56b78", "#5f9e7a", "#9a7b4f", "#778899", "#c47f3f", "#5b6d8a"]

@@ -33,7 +33,7 @@ def _empty_contract():
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
-        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
     }
 
 
@@ -201,6 +201,7 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-month-status", "children"),
         Output("maintenance-chart-daily", "figure"),
         Output("maintenance-chart-pareto", "figure"),
+        Output("maintenance-chart-pareto-tren-fuerza", "figure"),
         Output("maintenance-chart-system-mix", "figure"),
         Output("maintenance-chart-equipment", "figure"),
         Output("maintenance-chart-matrix", "figure"),
@@ -213,11 +214,11 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -244,6 +245,7 @@ def register_mantenciones_general_callbacks(app):
             banner,
             create_daily_activity_chart(pd.DataFrame(data.get("daily", []))),
             create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("train_force_pareto", [])), system_label="Tren de Fuerza"),
             create_system_activity_chart(pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", []))),
             create_equipment_activity_chart(pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", []))),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),

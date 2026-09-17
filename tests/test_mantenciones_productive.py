@@ -91,18 +91,27 @@ def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypa
     motor_extra["change_date"] = "2026-01-07"
     motor_extra["event_ts"] = "2026-01-07T05:00:00Z"
     frame = pd.concat([frame, motor_extra], ignore_index=True)
+    train_extra = frame.iloc[[0]].copy()
+    train_extra["action_id"] = "a6"
+    train_extra["machine_code"] = "T_02"
+    train_extra["action_system_name"] = "Tren de Fuerza"
+    train_extra["change_date"] = "2026-01-08"
+    train_extra["event_ts"] = "2026-01-08T05:00:00Z"
+    frame = pd.concat([frame, train_extra], ignore_index=True)
 
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
     monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
     repo = MaintenanceRepository(mode="parquet", client="cda")
 
-    pareto = repo.get_monthly_payload("2026-01")["data"]["pareto"]
+    payload = repo.get_monthly_payload("2026-01")
+    pareto = payload["data"]["pareto"]
 
     assert pareto == [
         {"equipment": "T_01", "count": 2, "cumulative_pct": 50.0},
         {"equipment": "T_02", "count": 2, "cumulative_pct": 100.0},
     ]
     assert all("Hidráulico" not in str(row) for row in pareto)
+    assert payload["data"]["train_force_pareto"] == [{"equipment": "T_02", "count": 1, "cumulative_pct": 100.0}]
 
 
 def test_equipment_pareto_builder_uses_equipment_axis():
@@ -187,6 +196,7 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
+    assert "maintenance-chart-pareto-tren-fuerza" in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
     assert "'display': 'none'" in rendered or "display: none" in rendered
@@ -210,7 +220,7 @@ def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
     )
 
     system_figure = create_system_activity_chart(detailed)
-    assert set(system_figure.data[0].x) == {"Sistema de Motor", "Sistema Hidráulico"}
+    assert list(system_figure.data[0].x) == ["Sistema de Motor", "Sistema Hidráulico"]
     assert all("Equipo" not in str(trace.name) and "Cabina" not in str(trace.name) for trace in system_figure.data)
 
     equipment_figure = create_equipment_activity_chart(

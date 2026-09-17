@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 # are the only accepted aliases for the Summary Pareto scope; other systems
 # must never enter that aggregation.
 MOTOR_SYSTEM_ALIASES = frozenset({"motor", "sistema motor", "sistema de motor"})
+TRAIN_FORCE_SYSTEM_ALIASES = frozenset(
+    {
+        "tren de fuerza",
+        "tren fuerza",
+        "sistema de tren de fuerza",
+        "sistema tren de fuerza",
+    }
+)
 PARETO_SCOPE = {
     "system_filter": "Motor",
     "system_column": "action_system_name",
@@ -439,8 +447,11 @@ class MaintenanceRepository:
         return {
             "daily": [],
             "system_mix": [],
+            "system_mix_detail": [],
             "pareto": [],
+            "train_force_pareto": [],
             "equipment": [],
+            "equipment_system_mix": [],
             "matrix": [],
             "detail": [],
         }
@@ -465,6 +476,12 @@ class MaintenanceRepository:
         """Match only the canonical Motor system aliases, case-insensitively."""
         normalized = values.astype("string").str.strip().str.casefold()
         return normalized.isin(MOTOR_SYSTEM_ALIASES)
+
+    @staticmethod
+    def _is_train_force_system(values: pd.Series) -> pd.Series:
+        """Match the canonical Tren de Fuerza aliases, case-insensitively."""
+        normalized = values.astype("string").str.strip().str.casefold()
+        return normalized.isin(TRAIN_FORCE_SYSTEM_ALIASES)
 
     def get_monthly_payload(
         self,
@@ -629,23 +646,29 @@ class MaintenanceRepository:
             .reset_index(drop=True)
         )
 
-        # The Summary Pareto is intentionally scoped to Motor and grouped by
-        # equipment.  It counts each action_id once per machine, never mixes
-        # other systems, and keeps the existing monthly payload envelope.
-        pareto = (
-            motor_df.groupby("machine_code", as_index=False)["action_id"]
-            .nunique()
-            .rename(columns={"machine_code": "equipment", "action_id": "count"})
-            .sort_values(["count", "equipment"], ascending=[False, True])
-            .reset_index(drop=True)
-        )
-        pareto["cumulative_pct"] = (
-            pareto["count"].cumsum() / pareto["count"].sum() * 100
-            if not pareto.empty
-            else pd.Series(dtype=float)
-        )
-        if not pareto.empty:
-            pareto.loc[pareto.index[-1], "cumulative_pct"] = 100.0
+        # Summary Paretos are scoped to a system and grouped by equipment. Each
+        # action_id is counted once per machine and the final point is pinned
+        # to 100% so the cumulative line is stable for consumers.
+        def _equipment_pareto(system_frame: pd.DataFrame) -> pd.DataFrame:
+            result = (
+                system_frame.groupby("machine_code", as_index=False)["action_id"]
+                .nunique()
+                .rename(columns={"machine_code": "equipment", "action_id": "count"})
+                .sort_values(["count", "equipment"], ascending=[False, True])
+                .reset_index(drop=True)
+            )
+            result["cumulative_pct"] = (
+                result["count"].cumsum() / result["count"].sum() * 100
+                if not result.empty
+                else pd.Series(dtype=float)
+            )
+            if not result.empty:
+                result.loc[result.index[-1], "cumulative_pct"] = 100.0
+            return result
+
+        pareto = _equipment_pareto(motor_df)
+        train_force_df = df[self._is_train_force_system(df["action_system_name"])].copy()
+        train_force_pareto = _equipment_pareto(train_force_df)
 
         equipment_df = (
             df.groupby("machine_code", as_index=False)["action_id"]
@@ -719,6 +742,7 @@ class MaintenanceRepository:
                 "system_mix": self._json_records(system_mix),
                 "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
+                "train_force_pareto": self._json_records(train_force_pareto),
                 "equipment": self._json_records(equipment_df),
                 "equipment_system_mix": self._json_records(equipment_system_mix),
                 "matrix": self._json_records(matrix_df),
