@@ -58,6 +58,8 @@ def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
         {"system_name": "Hidráulico", "count": 1},
         {"system_name": "Sin sistema", "count": 1},
     ]
+    assert payload["data"]["daily"][0]["equipment_count"] == 1
+    assert payload["data"]["daily"][0]["hours_estimated"] == 1.5
     assert payload["data"]["pareto"] == [{"equipment": "T_01", "count": 2, "cumulative_pct": 100.0}]
     assert payload["meta"]["pareto_scope"]["dimension"] == "equipment"
     assert payload["meta"]["pareto_scope"]["metric"] == "unique_action_id_count"
@@ -139,6 +141,23 @@ def test_system_activity_builder_labels_activity_not_failures():
 
     assert list(figure.data[0].x) == ["Motor"]
     assert figure.layout.yaxis.title.text == "Acciones únicas"
+
+
+def test_daily_intervention_hours_chart_shows_hours_and_equipment():
+    from dashboard.tabs.tab_mantenciones_general import create_daily_intervention_hours_chart
+
+    figure = create_daily_intervention_hours_chart(
+        pd.DataFrame(
+            [
+                {"date": "2026-01-01", "count": 2, "hours_estimated": 3.0, "equipment_count": 2},
+                {"date": "2026-01-02", "count": 1, "hours_estimated": 1.5, "equipment_count": 1},
+            ]
+        )
+    )
+
+    assert [trace.name for trace in figure.data] == ["Horas de intervención (proxy)", "Equipos intervenidos"]
+    assert figure.layout.yaxis.title.text == "Horas de intervención (proxy)"
+    assert figure.layout.yaxis2.title.text == "Equipos intervenidos"
 
 
 def test_weekly_parser_reports_invalid_json(monkeypatch):

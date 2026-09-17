@@ -623,11 +623,15 @@ class MaintenanceRepository:
 
         daily = (
             df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
-            .groupby("day", as_index=False)["action_id"]
-            .nunique()
-            .rename(columns={"day": "date", "action_id": "count"})
+            .groupby("day", as_index=False)
+            .agg(count=("action_id", "nunique"), equipment_count=("machine_code", "nunique"))
+            .rename(columns={"day": "date"})
             .sort_values("date")
         )
+        # No governed daily downtime duration exists in query_3. Keep the
+        # auditable action count and expose the documented 1.5 h/action proxy
+        # alongside the number of distinct equipment intervened per day.
+        daily["hours_estimated"] = daily["count"] * ESTIMATED_HOURS_PER_ACTION
 
         system_mix = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))

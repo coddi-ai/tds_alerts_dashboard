@@ -156,7 +156,7 @@ def layout_mantenciones_general():
             dbc.Row(
                 [
                     dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-bar"), md=7),
-                    dbc.Col(_card("Tendencia diaria de acciones", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-line"), md=5),
+                    dbc.Col(_card("Tendencia diaria de horas de intervención · equipos intervenidos", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-line"), md=5),
                 ],
                 className="g-3 mb-4",
             ),
@@ -312,6 +312,60 @@ def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
         return create_empty_figure()
     fig = go.Figure(go.Scatter(x=df["date"], y=df["count"], mode="lines+markers", name="Acciones", line={"color": "#2f80ed", "width": 3}, marker={"size": 7}, fill="tozeroy", fillcolor="rgba(47,128,237,0.12)"))
     fig.update_layout(template="plotly_white", xaxis_title="Fecha operacional", yaxis_title="Acciones", hovermode="x unified", margin={"l": 45, "r": 20, "t": 20, "b": 45})
+    return fig
+
+
+def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
+    """Render daily intervention hours proxy with distinct equipment count.
+
+    The action extract has no measured start/end duration.  ``hours_estimated``
+    therefore remains explicitly labelled as a proxy and is reconciled to the
+    unique action count; ``equipment_count`` shows how many units were touched
+    on each operational date.
+    """
+    if df.empty:
+        return create_empty_figure("Sin actividad diaria de intervención")
+    data = df.copy()
+    if "hours_estimated" not in data.columns:
+        counts = data["count"] if "count" in data.columns else pd.Series(0, index=data.index)
+        data["hours_estimated"] = pd.to_numeric(counts, errors="coerce").fillna(0) * 1.5
+    if "equipment_count" not in data.columns:
+        equipment_count = pd.Series([None] * len(data), index=data.index)
+    else:
+        equipment_count = data["equipment_count"]
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Bar(
+            x=data["date"],
+            y=data["hours_estimated"],
+            name="Horas de intervención (proxy)",
+            marker_color="#6f8fb3",
+            hovertemplate="<b>%{x}</b><br>Horas intervención (proxy): %{y:.1f} h<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+    if equipment_count.notna().any():
+        fig.add_trace(
+            go.Scatter(
+                x=data["date"],
+                y=equipment_count,
+                name="Equipos intervenidos",
+                mode="lines+markers",
+                line={"color": "#d08c60", "width": 2},
+                marker={"color": "#d08c60", "size": 6},
+                hovertemplate="<b>%{x}</b><br>Equipos intervenidos: %{y}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+    fig.update_yaxes(title_text="Horas de intervención (proxy)", rangemode="tozero", secondary_y=False)
+    fig.update_yaxes(title_text="Equipos intervenidos", rangemode="tozero", dtick=1, secondary_y=True)
+    fig.update_xaxes(title_text="Fecha operacional")
+    fig.update_layout(
+        template="plotly_white",
+        margin={"l": 55, "r": 55, "t": 48, "b": 48},
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+    )
     return fig
 
 
