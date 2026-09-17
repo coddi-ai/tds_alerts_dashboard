@@ -571,8 +571,15 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
         raw = df.copy()
         raw["machine_code"] = raw["machine_code"].astype(str)
         eligible = raw.loc[~raw["system_name"].map(_is_excluded_activity_system)].copy()
-        equipment_totals = raw.groupby("machine_code", as_index=False)["count"].sum().sort_values(
-            ["count", "machine_code"], ascending=[False, True]
+        # Keep one canonical order for both the trace data and the category
+        # axis: highest total activity first, then the equipment code as a
+        # deterministic tie-breaker.  Plotly reverses the categorical y-axis
+        # so the first item is rendered at the top of the horizontal ranking.
+        equipment_totals = (
+            raw.groupby("machine_code", as_index=False)["count"]
+            .sum()
+            .sort_values(["count", "machine_code"], ascending=[False, True], kind="mergesort")
+            .reset_index(drop=True)
         )
         equipment = equipment_totals["machine_code"].tolist()
         if eligible.empty:
@@ -607,7 +614,9 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
         fig.update_yaxes(categoryorder="array", categoryarray=equipment, autorange="reversed")
         return fig
 
-    data = df.sort_values("count", ascending=True).copy()
+    data = df.copy()
+    data["machine_code"] = data["machine_code"].astype(str)
+    data = data.sort_values(["count", "machine_code"], ascending=[False, True], kind="mergesort").reset_index(drop=True)
     systems = data.get("primary_system", pd.Series("Sin sistema", index=data.index)).fillna("Sin sistema").astype(str)
     short_systems = systems.str.replace("Sistema de ", "", regex=False).str.replace("Sistema ", "", regex=False)
     labels = data["machine_code"].astype(str) + " · " + short_systems
@@ -625,6 +634,7 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
         )
     )
     fig.update_layout(template="plotly_white", xaxis_title="Acciones", yaxis_title="Equipo · sistema predominante", margin={"l": 105, "r": 45, "t": 20, "b": 45})
+    fig.update_yaxes(categoryorder="array", categoryarray=labels.tolist(), autorange="reversed")
     return fig
 
 

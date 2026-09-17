@@ -291,6 +291,33 @@ def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
     assert list(pareto_figure.data[0].marker.color) == [mix_colors["T_02"]]
 
 
+def test_equipment_activity_ranking_is_descending_top_down_with_unit_filter():
+    from dashboard.tabs.tab_mantenciones_general import create_equipment_activity_chart
+
+    detailed = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "system_name": "Sistema de Motor", "count": 10},
+            {"machine_code": "T_01", "system_name": "Sistema Hidráulico", "count": 1},
+            {"machine_code": "T_02", "system_name": "Sistema de Motor", "count": 20},
+            {"machine_code": "T_02", "system_name": "Sistema Hidráulico", "count": 10},
+            {"machine_code": "T_03", "system_name": "Sistema de Motor", "count": 15},
+        ]
+    )
+
+    figure = create_equipment_activity_chart(detailed)
+    expected = ["T_02", "T_03", "T_01"]
+    assert list(figure.layout.yaxis.categoryarray) == expected
+    assert figure.layout.yaxis.autorange == "reversed"
+    assert all(list(trace.y) == expected for trace in figure.data)
+
+    # A unit-filtered payload must preserve the same contract, rather than
+    # falling back to an arbitrary/alphabetical category order.
+    filtered = create_equipment_activity_chart(detailed.loc[detailed["machine_code"] == "T_02"])
+    assert list(filtered.layout.yaxis.categoryarray) == ["T_02"]
+    assert filtered.layout.yaxis.autorange == "reversed"
+    assert all(list(trace.y) == ["T_02"] for trace in filtered.data)
+
+
 def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 
