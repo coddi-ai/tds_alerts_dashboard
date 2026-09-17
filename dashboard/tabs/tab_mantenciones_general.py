@@ -144,10 +144,10 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="proxy · cobertura en banner"), md=3),
-                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="proxy · cobertura en banner"), md=3),
-                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="proxy · cobertura en banner"), md=3),
-                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="proxy · cobertura en banner"), md=3),
+                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
+                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
+                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
+                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
                 ],
                 className="g-3 mb-4",
             ),
@@ -169,7 +169,7 @@ def layout_mantenciones_general():
                 [
                     html.Div(
                         [
-                            html.Span("Contexto de actividad", className="fw-semibold"),
+                            html.Span("Indicadores de Interés", className="fw-semibold"),
                             html.Span("Agregados del período seleccionado", className="text-muted small ms-2"),
                         ],
                         className="mb-2",
@@ -184,10 +184,6 @@ def layout_mantenciones_general():
                             dbc.Col(create_context_metric("Actividad en Motor", "maintenance-kpi-motor-share", "fa-percentage", "danger", "% de acciones"), xs=6, md=2),
                         ],
                         className="g-1",
-                    ),
-                    html.P(
-                        "Estos agregados ayudan a explicar el Pareto; no reemplazan los KPIs críticos estimados.",
-                        className="text-muted small mb-0 mt-2",
                     ),
                 ],
                 className="border rounded bg-white shadow-sm p-3",
@@ -243,7 +239,7 @@ def layout_mantenciones_general():
                 ],
                 className="mb-3",
             ),
-            html.Div(id="maintenance-source-alert"),
+            html.Div(id="maintenance-source-alert", style={"display": "none"}),
             dbc.Row(
                 [
                     dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=12),
@@ -357,6 +353,34 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
     """Render recorded action volume by system, not failure frequency."""
     if df.empty:
         return create_empty_figure("Sin actividad por sistema")
+    if "equipment" in df.columns:
+        data = df.copy()
+        systems = data["system_name"].drop_duplicates().tolist()
+        equipment = sorted(data["equipment"].dropna().astype(str).unique().tolist())
+        pivot = data.pivot_table(index="system_name", columns="equipment", values="count", aggfunc="sum", fill_value=0).reindex(systems)
+        palette = ["#355c7d", "#4f8a8b", "#d08c60", "#7b6ea8", "#6f8fb3", "#b56b78", "#5f9e7a", "#9a7b4f", "#778899", "#c47f3f", "#5b6d8a"]
+        fig = go.Figure()
+        for index, unit in enumerate(equipment):
+            values = pivot[unit] if unit in pivot.columns else [0] * len(systems)
+            fig.add_trace(
+                go.Bar(
+                    x=systems,
+                    y=values,
+                    name=unit,
+                    marker_color=palette[index % len(palette)],
+                    hovertemplate=f"<b>%{{x}}</b><br>Equipo: {unit}<br>Acciones: %{{y}}<extra></extra>",
+                )
+            )
+        fig.update_layout(
+            template="plotly_white",
+            barmode="stack",
+            xaxis_title="Sistema",
+            yaxis_title="Acciones únicas",
+            margin={"l": 45, "r": 20, "t": 20, "b": 115},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        )
+        fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
+        return fig
     data = df.sort_values(["count", "system_name"], ascending=[False, True])
     fig = go.Figure(
         go.Bar(
@@ -383,9 +407,24 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
 def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return create_empty_figure("Sin actividad por equipo")
-    data = df.sort_values("count", ascending=True)
-    fig = go.Figure(go.Bar(x=data["count"], y=data["machine_code"], orientation="h", marker_color="#4f8a8b", text=data["count"].astype(int), textposition="outside", cliponaxis=False))
-    fig.update_layout(template="plotly_white", xaxis_title="Acciones", yaxis_title="Equipo", margin={"l": 60, "r": 45, "t": 20, "b": 45})
+    data = df.sort_values("count", ascending=True).copy()
+    systems = data.get("primary_system", pd.Series("Sin sistema", index=data.index)).fillna("Sin sistema").astype(str)
+    short_systems = systems.str.replace("Sistema de ", "", regex=False).str.replace("Sistema ", "", regex=False)
+    labels = data["machine_code"].astype(str) + " · " + short_systems
+    fig = go.Figure(
+        go.Bar(
+            x=data["count"],
+            y=labels,
+            orientation="h",
+            marker_color="#4f8a8b",
+            text=data["count"].astype(int),
+            textposition="outside",
+            cliponaxis=False,
+            customdata=systems,
+            hovertemplate="<b>%{y}</b><br>Sistema: %{customdata}<br>Acciones: %{x}<extra></extra>",
+        )
+    )
+    fig.update_layout(template="plotly_white", xaxis_title="Acciones", yaxis_title="Equipo · sistema predominante", margin={"l": 105, "r": 45, "t": 20, "b": 45})
     return fig
 
 

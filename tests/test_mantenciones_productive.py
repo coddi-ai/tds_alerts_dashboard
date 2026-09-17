@@ -185,8 +185,11 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
+    assert "maintenance-source-alert" in rendered
+    assert "Indicadores de Interés" in rendered
     assert "'display': 'none'" in rendered or "display: none" in rendered
-    assert "Contexto de actividad" in rendered
+    assert "Indicadores de Interés" in rendered
+    assert "Estos agregados ayudan a explicar el Pareto" not in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
 

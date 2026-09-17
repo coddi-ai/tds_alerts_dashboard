@@ -620,6 +620,14 @@ class MaintenanceRepository:
             .sort_values(["count", "system_name"], ascending=[False, True])
             .reset_index(drop=True)
         )
+        system_mix_detail = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["system_name", "machine_code"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"machine_code": "equipment", "action_id": "count"})
+            .sort_values(["system_name", "count", "equipment"], ascending=[True, False, True])
+            .reset_index(drop=True)
+        )
 
         # The Summary Pareto is intentionally scoped to Motor and grouped by
         # equipment.  It counts each action_id once per machine, never mixes
@@ -645,6 +653,16 @@ class MaintenanceRepository:
             .rename(columns={"action_id": "count"})
             .sort_values(["count", "machine_code"], ascending=[False, True])
         )
+        equipment_system = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"action_id": "system_count"})
+            .sort_values(["machine_code", "system_count", "system_name"], ascending=[True, False, True])
+            .drop_duplicates("machine_code")
+            .rename(columns={"system_name": "primary_system"})
+        )
+        equipment_df = equipment_df.merge(equipment_system[["machine_code", "primary_system"]], on="machine_code", how="left")
         matrix_df = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
             .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
@@ -689,6 +707,7 @@ class MaintenanceRepository:
             "data": {
                 "daily": self._json_records(daily),
                 "system_mix": self._json_records(system_mix),
+                "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
                 "equipment": self._json_records(equipment_df),
                 "matrix": self._json_records(matrix_df),

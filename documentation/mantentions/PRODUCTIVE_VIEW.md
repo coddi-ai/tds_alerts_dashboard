@@ -32,17 +32,18 @@ tendencia diaria, y luego mix por sistema/ranking. Los agregados de actividad
 quedan al final como contexto y no compiten visualmente con los indicadores
 críticos.
 
-El banner de cobertura identifica también el archivo fuente de los KPIs
-**ESTIMADOS**, su ventana de referencia y, cuando corresponde, la razón por la
-que se aplicó el fallback mensual.
+La metadata del contrato conserva el archivo fuente de los KPIs **ESTIMADOS**,
+su ventana de referencia y, cuando corresponde, la razón del fallback mensual;
+estos detalles técnicos no se muestran en la cabecera ejecutiva.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
 Mantenciones usan glifos Unicode locales con etiquetas accesibles. Los textos,
 valores y títulos siguen siendo la fuente principal de significado. El mix por
-sistema reserva espacio adicional para sus etiquetas inclinadas y el cierre de
-la vista incluye un panel breve de contexto, evitando dejar una segunda fila de
-tarjetas visualmente desbalanceada.
+sistema reserva espacio adicional para sus etiquetas inclinadas. El mix se
+colorea por unidad y el ranking de equipos muestra el sistema predominante de
+cada unidad. El cierre de la vista agrupa los indicadores secundarios bajo
+**Indicadores de Interés**.
 
 ### KPIs y visuales respaldados
 
