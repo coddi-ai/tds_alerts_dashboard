@@ -144,7 +144,7 @@ def test_system_activity_builder_labels_activity_not_failures():
 
 
 def test_daily_intervention_hours_chart_shows_hours_and_equipment():
-    from dashboard.tabs.tab_mantenciones_general import create_daily_intervention_hours_chart
+    from dashboard.tabs.tab_mantenciones_general import create_daily_equipment_chart, create_daily_intervention_hours_chart
 
     figure = create_daily_intervention_hours_chart(
         pd.DataFrame(
@@ -155,9 +155,20 @@ def test_daily_intervention_hours_chart_shows_hours_and_equipment():
         )
     )
 
-    assert [trace.name for trace in figure.data] == ["Horas de intervención (proxy)", "Equipos intervenidos"]
-    assert figure.layout.yaxis.title.text == "Horas de intervención (proxy)"
-    assert figure.layout.yaxis2.title.text == "Equipos intervenidos"
+    assert [trace.name for trace in figure.data] == ["Horas de intervención"]
+    assert figure.layout.yaxis.title.text == "Horas de intervención"
+    assert "proxy" not in str(figure).lower()
+
+    equipment_figure = create_daily_equipment_chart(
+        pd.DataFrame(
+            [
+                {"date": "2026-01-01", "equipment_count": 2},
+                {"date": "2026-01-02", "equipment_count": 1},
+            ]
+        )
+    )
+    assert [trace.name for trace in equipment_figure.data] == ["Equipos intervenidos"]
+    assert equipment_figure.layout.yaxis.title.text == "Equipos intervenidos"
 
 
 def test_weekly_parser_reports_invalid_json(monkeypatch):
@@ -216,6 +227,8 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
     assert "maintenance-chart-pareto-tren-fuerza" in rendered
+    assert "maintenance-chart-daily-equipment" in rendered
+    assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
     assert "'display': 'none'" in rendered or "display: none" in rendered
@@ -226,7 +239,7 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
 
 
 def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
-    from dashboard.tabs.tab_mantenciones_general import create_system_activity_chart, create_equipment_activity_chart
+    from dashboard.tabs.tab_mantenciones_general import create_equipment_activity_chart, create_equipment_pareto_chart, create_system_activity_chart
 
     detailed = pd.DataFrame(
         [
@@ -248,6 +261,12 @@ def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
     assert equipment_figure.layout.barmode == "stack"
     assert set(equipment_figure.layout.yaxis.categoryarray) == {"T_01", "T_02"}
     assert {trace.name for trace in equipment_figure.data} == {"Sistema de Motor", "Sistema Hidráulico"}
+
+    pareto_figure = create_equipment_pareto_chart(
+        pd.DataFrame([{"equipment": "T_02", "count": 3, "cumulative_pct": 100.0}])
+    )
+    mix_colors = {trace.name: trace.marker.color for trace in system_figure.data}
+    assert list(pareto_figure.data[0].marker.color) == [mix_colors["T_02"]]
 
 
 def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():

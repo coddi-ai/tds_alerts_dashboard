@@ -12,6 +12,7 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_activity_matrix,
     create_activity_table,
     create_daily_activity_chart,
+    create_daily_equipment_chart,
     create_daily_intervention_hours_chart,
     create_empty_figure,
     create_equipment_activity_chart,
@@ -201,6 +202,7 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-kpi-motor-share", "children"),
         Output("maintenance-month-status", "children"),
         Output("maintenance-chart-daily", "figure"),
+        Output("maintenance-chart-daily-equipment", "figure"),
         Output("maintenance-chart-pareto", "figure"),
         Output("maintenance-chart-pareto-tren-fuerza", "figure"),
         Output("maintenance-chart-system-mix", "figure"),
@@ -215,11 +217,11 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -245,6 +247,7 @@ def register_mantenciones_general_callbacks(app):
             motor_share_label,
             banner,
             create_daily_intervention_hours_chart(pd.DataFrame(data.get("daily", []))),
+            create_daily_equipment_chart(pd.DataFrame(data.get("daily", []))),
             create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
             create_equipment_pareto_chart(pd.DataFrame(data.get("train_force_pareto", [])), system_label="Tren de Fuerza"),
             create_system_activity_chart(pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", []))),

@@ -17,6 +17,50 @@ import dash_bootstrap_components as dbc
 
 PARETO_BAR_COLOR = "#355c7d"
 PARETO_LINE_COLOR = "#d08c60"
+EQUIPMENT_COLORS = (
+    "#355c7d",
+    "#4f8a8b",
+    "#d08c60",
+    "#7b6ea8",
+    "#6f8fb3",
+    "#b56b78",
+    "#5f9e7a",
+    "#9a7b4f",
+    "#778899",
+    "#c47f3f",
+    "#5b6d8a",
+    "#cc79a7",
+    "#86bc86",
+    "#e07b91",
+    "#8c6bb1",
+    "#72b7b2",
+    "#e58606",
+    "#5d8aa8",
+    "#a05d56",
+    "#7a9e9f",
+    "#c29a5b",
+    "#6b7c93",
+    "#9c755f",
+    "#4d908e",
+)
+SYSTEM_COLORS = (
+    "#4e79a7",
+    "#59a14f",
+    "#f28e2b",
+    "#e15759",
+    "#b07aa1",
+    "#76b7b2",
+    "#edc949",
+    "#af7aa1",
+)
+SYSTEM_COLOR_ORDER = (
+    "Sistema de Motor",
+    "Sistema Hidráulico",
+    "Tren de Fuerza",
+    "Sistema de Frenado",
+    "Sistema de Dirección",
+    "Sin sistema",
+)
 
 # Generic source labels that are not actionable maintenance systems in the
 # executive charts.  They remain available in the detail payload, but should
@@ -60,6 +104,40 @@ def _icon_glyph(icon: str) -> str:
 def _is_excluded_activity_system(value) -> bool:
     normalized = " ".join(str(value or "").strip().lower().split())
     return normalized in EXCLUDED_ACTIVITY_SYSTEMS or normalized.endswith(" - cabina")
+
+
+def _equipment_color_map(values) -> dict[str, str]:
+    """Return stable equipment colors for every chart in the Summary."""
+    equipment = sorted({str(value) for value in values if value is not None})
+    colors = {}
+    used_indexes = set()
+    unassigned = []
+    for value in equipment:
+        suffix = value.rsplit("_", 1)[-1]
+        if suffix.isdigit() and 1 <= int(suffix) <= len(EQUIPMENT_COLORS):
+            index = int(suffix) - 1
+            colors[value] = EQUIPMENT_COLORS[index]
+            used_indexes.add(index)
+        else:
+            unassigned.append(value)
+    available = (index for index in range(len(EQUIPMENT_COLORS)) if index not in used_indexes)
+    for value, index in zip(unassigned, available):
+        colors[value] = EQUIPMENT_COLORS[index]
+    return colors
+
+
+def _system_color_map(values) -> dict[str, str]:
+    systems = {str(value) for value in values if value is not None}
+    colors = {}
+    used_indexes = set()
+    for index, system in enumerate(SYSTEM_COLOR_ORDER):
+        if system in systems and index < len(SYSTEM_COLORS):
+            colors[system] = SYSTEM_COLORS[index]
+            used_indexes.add(index)
+    available = (index for index in range(len(SYSTEM_COLORS)) if index not in used_indexes)
+    for system, index in zip(sorted(systems - set(colors)), available):
+        colors[system] = SYSTEM_COLORS[index]
+    return colors
 
 
 def create_kpi_card(
@@ -155,21 +233,15 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-bar"), md=7),
-                    dbc.Col(_card("Tendencia diaria de horas de intervención · equipos intervenidos", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "360px"}), "fa-chart-line"), md=5),
+                    dbc.Col(_card("Tendencia diaria de horas de intervención", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "300px"}), "fa-chart-line"), md=6),
+                    dbc.Col(_card("Equipos intervenidos por día", dcc.Graph(id="maintenance-chart-daily-equipment", config={"displayModeBar": False}, style={"height": "300px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
             dbc.Row(
                 [
-                    dbc.Col(
-                        _card(
-                            "Pareto de actividad de mantenimiento · Tren de Fuerza por equipo",
-                            dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "360px"}),
-                            "fa-chart-bar",
-                        ),
-                        md=7,
-                    ),
+                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -316,55 +388,58 @@ def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
-    """Render daily intervention hours proxy with distinct equipment count.
-
-    The action extract has no measured start/end duration.  ``hours_estimated``
-    therefore remains explicitly labelled as a proxy and is reconciled to the
-    unique action count; ``equipment_count`` shows how many units were touched
-    on each operational date.
-    """
+    """Render daily intervention hours from the auditable action aggregation."""
     if df.empty:
         return create_empty_figure("Sin actividad diaria de intervención")
     data = df.copy()
     if "hours_estimated" not in data.columns:
         counts = data["count"] if "count" in data.columns else pd.Series(0, index=data.index)
         data["hours_estimated"] = pd.to_numeric(counts, errors="coerce").fillna(0) * 1.5
-    if "equipment_count" not in data.columns:
-        equipment_count = pd.Series([None] * len(data), index=data.index)
-    else:
-        equipment_count = data["equipment_count"]
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(
+    fig = go.Figure(
         go.Bar(
             x=data["date"],
             y=data["hours_estimated"],
-            name="Horas de intervención (proxy)",
+            name="Horas de intervención",
             marker_color="#6f8fb3",
-            hovertemplate="<b>%{x}</b><br>Horas intervención (proxy): %{y:.1f} h<extra></extra>",
-        ),
-        secondary_y=False,
-    )
-    if equipment_count.notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=data["date"],
-                y=equipment_count,
-                name="Equipos intervenidos",
-                mode="lines+markers",
-                line={"color": "#d08c60", "width": 2},
-                marker={"color": "#d08c60", "size": 6},
-                hovertemplate="<b>%{x}</b><br>Equipos intervenidos: %{y}<extra></extra>",
-            ),
-            secondary_y=True,
+            hovertemplate="<b>%{x}</b><br>Horas de intervención: %{y:.1f} h<extra></extra>",
         )
-    fig.update_yaxes(title_text="Horas de intervención (proxy)", rangemode="tozero", secondary_y=False)
-    fig.update_yaxes(title_text="Equipos intervenidos", rangemode="tozero", dtick=1, secondary_y=True)
+    )
+    fig.update_yaxes(title_text="Horas de intervención", rangemode="tozero")
     fig.update_xaxes(title_text="Fecha operacional")
     fig.update_layout(
         template="plotly_white",
-        margin={"l": 55, "r": 55, "t": 48, "b": 48},
-        hovermode="x unified",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        margin={"l": 55, "r": 25, "t": 25, "b": 48},
+        showlegend=False,
+    )
+    return fig
+
+
+def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
+    """Render the daily count of distinct equipment with an intervention."""
+    if df.empty:
+        return create_empty_figure("Sin equipos intervenidos por día")
+    if "equipment_count" not in df.columns:
+        return create_empty_figure("Sin equipos intervenidos por día")
+    fig = go.Figure(
+        go.Scatter(
+            x=df["date"],
+            y=df["equipment_count"],
+            mode="lines+markers",
+            name="Equipos intervenidos",
+            line={"color": "#4f8a8b", "width": 3},
+            marker={"color": "#4f8a8b", "size": 7},
+            fill="tozeroy",
+            fillcolor="rgba(79,138,139,0.14)",
+            hovertemplate="<b>%{x}</b><br>Equipos intervenidos: %{y}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        template="plotly_white",
+        xaxis_title="Fecha operacional",
+        yaxis_title="Equipos intervenidos",
+        yaxis={"rangemode": "tozero", "dtick": 1},
+        margin={"l": 55, "r": 25, "t": 25, "b": 48},
+        showlegend=False,
     )
     return fig
 
@@ -381,7 +456,7 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
             x=df[dimension],
             y=df["count"],
             name=f"Acciones {system_label}",
-            marker_color=PARETO_BAR_COLOR,
+            marker_color=[_equipment_color_map(df[dimension])[str(value)] for value in df[dimension]],
             text=df["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
@@ -434,7 +509,7 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
         )
         equipment = sorted(data["equipment"].dropna().astype(str).unique().tolist())
         pivot = data.pivot_table(index="system_name", columns="equipment", values="count", aggfunc="sum", fill_value=0).reindex(systems)
-        palette = ["#355c7d", "#4f8a8b", "#d08c60", "#7b6ea8", "#6f8fb3", "#b56b78", "#5f9e7a", "#9a7b4f", "#778899", "#c47f3f", "#5b6d8a"]
+        palette = _equipment_color_map(equipment)
         fig = go.Figure()
         for index, unit in enumerate(equipment):
             values = pivot[unit] if unit in pivot.columns else [0] * len(systems)
@@ -443,7 +518,7 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
                     x=systems,
                     y=values,
                     name=unit,
-                    marker_color=palette[index % len(palette)],
+                    marker_color=palette[unit],
                     hovertemplate=f"<b>%{{x}}</b><br>Equipo: {unit}<br>Acciones: %{{y}}<extra></extra>",
                 )
             )
@@ -505,7 +580,7 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
         pivot = eligible.pivot_table(
             index="machine_code", columns="system_name", values="count", aggfunc="sum", fill_value=0
         ).reindex(index=equipment, columns=systems, fill_value=0).fillna(0)
-        palette = ["#355c7d", "#4f8a8b", "#d08c60", "#7b6ea8", "#6f8fb3", "#b56b78", "#5f9e7a", "#9a7b4f", "#778899", "#c47f3f", "#5b6d8a"]
+        palette = _system_color_map(systems)
         fig = go.Figure()
         for index, system in enumerate(systems):
             values = pivot[system].astype(int)
@@ -515,7 +590,7 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
                     y=equipment,
                     orientation="h",
                     name=system,
-                    marker_color=palette[index % len(palette)],
+                    marker_color=palette[system],
                     customdata=values,
                     hovertemplate=f"<b>%{{y}}</b><br>Sistema: {system}<br>Acciones: %{{x}}<extra></extra>",
                 )
