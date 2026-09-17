@@ -669,6 +669,16 @@ class MaintenanceRepository:
             .nunique()
             .rename(columns={"action_id": "count"})
         )
+        # Keep the full equipment × system breakdown so the Summary chart can
+        # retain every equipment row while using involved systems as colors.
+        equipment_system_mix = (
+            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"machine_code": "machine_code", "action_id": "count"})
+            .sort_values(["machine_code", "count", "system_name"], ascending=[True, False, True])
+            .reset_index(drop=True)
+        )
 
         detail = df.copy()
         detail["date"] = detail["change_date"].dt.strftime("%Y-%m-%d")
@@ -710,6 +720,7 @@ class MaintenanceRepository:
                 "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
                 "equipment": self._json_records(equipment_df),
+                "equipment_system_mix": self._json_records(equipment_system_mix),
                 "matrix": self._json_records(matrix_df),
                 "detail": self._json_records(detail[[
                     "action_id", "date", "timestamp_utc", "equipment", "system_name",

@@ -18,6 +18,18 @@ import dash_bootstrap_components as dbc
 PARETO_BAR_COLOR = "#355c7d"
 PARETO_LINE_COLOR = "#d08c60"
 
+# Generic source labels that are not actionable maintenance systems in the
+# executive charts.  They remain available in the detail payload, but should
+# not dominate the visual activity breakdown.
+EXCLUDED_ACTIVITY_SYSTEMS = frozenset(
+    {
+        "equipo",
+        "cabina",
+        "estacion del operador - cabina",
+        "estación del operador - cabina",
+    }
+)
+
 # Font Awesome is loaded from a remote stylesheet in the dashboard shell. A
 # missing webfont must not turn the executive view into a grid of tofu boxes,
 # so Mantenciones uses plain Unicode fallbacks for decorative icons.
@@ -43,6 +55,11 @@ ICON_GLYPHS = {
 
 def _icon_glyph(icon: str) -> str:
     return ICON_GLYPHS.get(icon, "•")
+
+
+def _is_excluded_activity_system(value) -> bool:
+    normalized = " ".join(str(value or "").strip().lower().split())
+    return normalized in EXCLUDED_ACTIVITY_SYSTEMS or normalized.endswith(" - cabina")
 
 
 def create_kpi_card(
@@ -123,31 +140,16 @@ def layout_mantenciones_general():
     """
     summary_tab = html.Div(
         [
-            html.Div(id="maintenance-month-status"),
-            html.Div(
-                [
-                    html.Div(
-                        [
-                            dbc.Badge("ESTIMADO", color="warning", text_color="dark", className="me-2 px-3 py-2"),
-                            dbc.Badge("Motor priorizado", color="dark", className="me-2 px-3 py-2"),
-                            dbc.Badge("Fecha operacional", color="light", text_color="dark", className="px-3 py-2"),
-                        ],
-                        className="mb-2",
-                    ),
-                    html.P(
-                        "Lectura ejecutiva: priorice los equipos del Pareto y valide los KPIs estimados contra la cobertura indicada arriba.",
-                        className="text-muted small mb-0",
-                    ),
-                ],
-                id="maintenance-executive-signals",
-                className="border-start border-4 border-warning bg-light rounded px-3 py-2 mb-4",
-            ),
+            # The callback target remains mounted for backwards compatibility,
+            # but period/source banners are intentionally not part of the
+            # productive summary surface.
+            html.Div(id="maintenance-month-status", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad ESTIMADA", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
-                    dbc.Col(create_kpi_card("Downtime ESTIMADO", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
-                    dbc.Col(create_kpi_card("MTBF ESTIMADO", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
-                    dbc.Col(create_kpi_card("MTTR ESTIMADO", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
+                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
+                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
+                    dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
+                    dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
                 ],
                 className="g-3 mb-4",
             ),
@@ -354,7 +356,9 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return create_empty_figure("Sin actividad por sistema")
     if "equipment" in df.columns:
-        data = df.copy()
+        data = df.loc[~df["system_name"].map(_is_excluded_activity_system)].copy()
+        if data.empty:
+            return create_empty_figure("Sin sistemas elegibles para este período")
         systems = data["system_name"].drop_duplicates().tolist()
         equipment = sorted(data["equipment"].dropna().astype(str).unique().tolist())
         pivot = data.pivot_table(index="system_name", columns="equipment", values="count", aggfunc="sum", fill_value=0).reindex(systems)
@@ -381,7 +385,10 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
         )
         fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
         return fig
-    data = df.sort_values(["count", "system_name"], ascending=[False, True])
+    data = df.loc[~df["system_name"].map(_is_excluded_activity_system)].copy()
+    if data.empty:
+        return create_empty_figure("Sin sistemas elegibles para este período")
+    data = data.sort_values(["count", "system_name"], ascending=[False, True])
     fig = go.Figure(
         go.Bar(
             x=data["system_name"],
@@ -407,6 +414,51 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
 def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return create_empty_figure("Sin actividad por equipo")
+
+    # Detailed equipment × system data enables a stacked horizontal chart:
+    # equipment remain the y-axis entities while eligible systems become the
+    # color/legend categories.  Equipo/Cabina are omitted from the visual but
+    # do not remove the equipment rows themselves.
+    if "system_name" in df.columns:
+        raw = df.copy()
+        raw["machine_code"] = raw["machine_code"].astype(str)
+        eligible = raw.loc[~raw["system_name"].map(_is_excluded_activity_system)].copy()
+        equipment_totals = raw.groupby("machine_code", as_index=False)["count"].sum().sort_values(
+            ["count", "machine_code"], ascending=[False, True]
+        )
+        equipment = equipment_totals["machine_code"].tolist()
+        if eligible.empty:
+            return create_empty_figure("Sin sistemas elegibles para este período")
+        systems = sorted(eligible["system_name"].dropna().astype(str).unique().tolist())
+        pivot = eligible.pivot_table(
+            index="machine_code", columns="system_name", values="count", aggfunc="sum", fill_value=0
+        ).reindex(index=equipment, columns=systems, fill_value=0).fillna(0)
+        palette = ["#355c7d", "#4f8a8b", "#d08c60", "#7b6ea8", "#6f8fb3", "#b56b78", "#5f9e7a", "#9a7b4f", "#778899", "#c47f3f", "#5b6d8a"]
+        fig = go.Figure()
+        for index, system in enumerate(systems):
+            values = pivot[system].astype(int)
+            fig.add_trace(
+                go.Bar(
+                    x=values,
+                    y=equipment,
+                    orientation="h",
+                    name=system,
+                    marker_color=palette[index % len(palette)],
+                    customdata=values,
+                    hovertemplate=f"<b>%{{y}}</b><br>Sistema: {system}<br>Acciones: %{{x}}<extra></extra>",
+                )
+            )
+        fig.update_layout(
+            template="plotly_white",
+            barmode="stack",
+            xaxis_title="Acciones",
+            yaxis_title="Equipo",
+            margin={"l": 65, "r": 45, "t": 45, "b": 65},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        )
+        fig.update_yaxes(categoryorder="array", categoryarray=equipment, autorange="reversed")
+        return fig
+
     data = df.sort_values("count", ascending=True).copy()
     systems = data.get("primary_system", pd.Series("Sin sistema", index=data.index)).fillna("Sin sistema").astype(str)
     short_systems = systems.str.replace("Sistema de ", "", regex=False).str.replace("Sistema ", "", regex=False)

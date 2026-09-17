@@ -179,8 +179,10 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-kpi-downtime-est" in rendered
     assert "maintenance-kpi-mtbf-est" in rendered
     assert "maintenance-kpi-mttr-est" in rendered
-    assert "maintenance-executive-signals" in rendered
-    assert "Lectura ejecutiva" in rendered
+    assert "maintenance-executive-signals" not in rendered
+    assert "Lectura ejecutiva" not in rendered
+    assert "ESTIMADA" not in rendered
+    assert "ESTIMADO" not in rendered
     assert rendered.index("maintenance-kpi-availability-est") < rendered.index("maintenance-chart-pareto")
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
@@ -192,6 +194,31 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "Estos agregados ayudan a explicar el Pareto" not in rendered
     assert "Equipos Sanos" not in rendered
     assert "Horas Detenidas" not in rendered
+
+
+def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
+    from dashboard.tabs.tab_mantenciones_general import create_system_activity_chart, create_equipment_activity_chart
+
+    detailed = pd.DataFrame(
+        [
+            {"system_name": "Equipo", "equipment": "T_01", "count": 8},
+            {"system_name": "Estación del Operador - Cabina", "equipment": "T_01", "count": 4},
+            {"system_name": "Sistema de Motor", "equipment": "T_01", "count": 5},
+            {"system_name": "Sistema Hidráulico", "equipment": "T_01", "count": 3},
+            {"system_name": "Sistema de Motor", "equipment": "T_02", "count": 2},
+        ]
+    )
+
+    system_figure = create_system_activity_chart(detailed)
+    assert set(system_figure.data[0].x) == {"Sistema de Motor", "Sistema Hidráulico"}
+    assert all("Equipo" not in str(trace.name) and "Cabina" not in str(trace.name) for trace in system_figure.data)
+
+    equipment_figure = create_equipment_activity_chart(
+        detailed.rename(columns={"equipment": "machine_code"})
+    )
+    assert equipment_figure.layout.barmode == "stack"
+    assert set(equipment_figure.layout.yaxis.categoryarray) == {"T_01", "T_02"}
+    assert {trace.name for trace in equipment_figure.data} == {"Sistema de Motor", "Sistema Hidráulico"}
 
 
 def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():

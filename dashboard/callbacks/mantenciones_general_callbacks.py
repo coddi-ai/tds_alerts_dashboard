@@ -33,7 +33,7 @@ def _empty_contract():
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
-        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "equipment": [], "matrix": [], "detail": []},
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
     }
 
 
@@ -245,7 +245,7 @@ def register_mantenciones_general_callbacks(app):
             create_daily_activity_chart(pd.DataFrame(data.get("daily", []))),
             create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
             create_system_activity_chart(pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", []))),
-            create_equipment_activity_chart(pd.DataFrame(data.get("equipment", []))),
+            create_equipment_activity_chart(pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", []))),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(data.get("detail", [])),
         )
