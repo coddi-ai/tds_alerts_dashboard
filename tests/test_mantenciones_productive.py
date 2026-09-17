@@ -82,6 +82,25 @@ def test_monthly_filters_and_empty_period(monkeypatch):
     assert empty["kpis"]["actions"] == 0
 
 
+def test_summary_unit_filter_reconciles_all_payload_aggregates(monkeypatch):
+    frame = _actions()
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01", equipment=["T_01"])
+
+    assert payload["status"] == "ok"
+    assert payload["filters"]["equipment"] == ["T_01"]
+    assert payload["kpis"]["equipment"] == 1
+    assert payload["kpis"]["actions"] == 3
+    assert {row["equipment"] for row in payload["data"]["pareto"]} == {"T_01"}
+    assert {row["machine_code"] for row in payload["data"]["equipment"]} == {"T_01"}
+    assert {row["machine_code"] for row in payload["data"]["equipment_system_mix"]} == {"T_01"}
+    assert {row["equipment"] for row in payload["data"]["detail"]} == {"T_01"}
+    assert all(row["equipment_count"] == 1 for row in payload["data"]["daily"])
+
+
 def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
     frame = _actions().copy()
     frame.loc[frame["action_id"] == "a3", ["machine_code", "action_system_name"]] = ["T_02", "Sistema de Motor"]
@@ -223,11 +242,14 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "ESTIMADA" not in rendered
     assert "ESTIMADO" not in rendered
     assert rendered.index("maintenance-kpi-availability-est") < rendered.index("maintenance-chart-pareto")
+    assert rendered.index("maintenance-chart-daily") < rendered.index("maintenance-chart-system-mix")
+    assert rendered.index("maintenance-chart-system-mix") < rendered.index("maintenance-chart-pareto")
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
     assert "maintenance-chart-system-mix" in rendered
     assert "maintenance-chart-pareto-tren-fuerza" in rendered
     assert "maintenance-chart-daily-equipment" in rendered
+    assert "maintenance-summary-equipment" in rendered
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
@@ -284,6 +306,16 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
         outputs = entry["output"] if isinstance(entry["output"], list) else [entry["output"]]
         output_ids.extend((output.component_id, output.component_property) for output in outputs)
     assert len(output_ids) == len(set(output_ids))
+
+
+def test_summary_equipment_options_include_all_sentinel():
+    from dashboard.callbacks.mantenciones_general_callbacks import _equipment_options
+
+    assert _equipment_options(["T_01", "T_02"]) == [
+        {"label": "Todas", "value": "__all__"},
+        {"label": "T_01", "value": "T_01"},
+        {"label": "T_02", "value": "T_02"},
+    ]
 
 
 def test_mantenciones_service_is_enabled_for_cda_emin_and_capstone():

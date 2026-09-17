@@ -240,15 +240,15 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
-                    dbc.Col(_card("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
+                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
-                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
+                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -329,7 +329,8 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-source-alert", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=12),
+                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=6),
+                    dbc.Col([html.Label("Unidad", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": "Todas", "value": "__all__"}], value="__all__", placeholder="Todas")], md=6),
                     # The weekly selector remains mounted for its disabled tab's
                     # callback contract, but is intentionally not exposed while
                     # Evidencia semanal is hidden from the product shell.

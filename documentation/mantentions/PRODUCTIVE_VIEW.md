@@ -6,12 +6,13 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
-- **Resumen**: selector mensual, cobertura/frescura, equipos con actividad,
+- **Resumen**: selector mensual y selector ejecutivo de unidad (``Todas`` o una
+  unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
   (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
-  sistema, Pareto de actividad por equipo con foco en Sistema Motor y ranking
-  de equipos.
+  sistema, ranking de equipos y Paretos de actividad por equipo para Motor y
+  Tren de Fuerza.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
@@ -21,16 +22,23 @@ En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
-Mientras esas vistas permanecen deshabilitadas, **Resumen** expone solo el
-selector mensual. El selector semanal permanece montado dentro del contrato de
-Evidencia semanal, pero no se muestra en la cabecera ejecutiva.
+Mientras esas vistas permanecen deshabilitadas, **Resumen** expone el selector
+mensual y el selector ejecutivo de unidad. El selector semanal permanece
+montado dentro del contrato de Evidencia semanal, pero no se muestra en la
+cabecera ejecutiva.
 
 La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
-referencia: cabecera y cobertura, señales rápidas (ESTIMADO, Motor priorizado,
-fecha operacional), cuatro KPIs críticos primero, Pareto Motor por equipo y
-tendencia diaria, y luego mix por sistema/ranking. Los agregados de actividad
-quedan al final como contexto y no compiten visualmente con los indicadores
-críticos.
+referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
+separadas de horas de intervención y equipos intervenidos, mix por sistema y
+ranking de equipos, y finalmente los Paretos de Motor y Tren de Fuerza. Los
+agregados de actividad quedan al final como contexto y no compiten visualmente
+con los indicadores críticos.
+
+El selector de unidad aplica de forma conjunta a disponibilidad, downtime,
+MTBF, MTTR, actividad diaria, mix, ranking, ambos Paretos e indicadores de
+contexto. ``Todas`` no agrega un filtro y conserva el agregado del período;
+una unidad se traduce al filtro ``machine_code`` del repositorio antes de
+construir el contrato mensual.
 
 La metadata del contrato conserva el archivo fuente de los KPIs **ESTIMADOS**,
 su ventana de referencia y, cuando corresponde, la razón del fallback mensual;

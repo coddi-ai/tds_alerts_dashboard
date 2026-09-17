@@ -28,6 +28,12 @@ def _options(values):
     return [{"label": value, "value": value} for value in values]
 
 
+def _equipment_options(values):
+    return [{"label": "Todas", "value": "__all__"}] + [
+        {"label": value, "value": value} for value in values if value != "__all__"
+    ]
+
+
 def _empty_contract():
     pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
@@ -96,6 +102,8 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-source-alert", "children"),
         Output("maintenance-month", "options"),
         Output("maintenance-month", "value"),
+        Output("maintenance-summary-equipment", "options"),
+        Output("maintenance-summary-equipment", "value"),
         Output("maintenance-week", "options"),
         Output("maintenance-week", "value"),
         Output("maintenance-week-equipment", "options"),
@@ -106,7 +114,7 @@ def register_mantenciones_general_callbacks(app):
     )
     def load_maintenance_metadata(client, n_clicks):
         if not client:
-            return {}, _source_alert({}), [], None, [], None, [], []
+            return {}, _source_alert({}), [], None, _equipment_options([]), "__all__", [], None, [], []
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
@@ -129,13 +137,15 @@ def register_mantenciones_general_callbacks(app):
                 _source_alert(meta),
                 _options(months),
                 months[-1] if months else None,
+                _equipment_options(meta["equipment"]),
+                "__all__",
                 _options(weeks),
                 weeks[-1] if weeks else None,
                 _options(meta["equipment"]),
                 _options(meta["systems"]),
             )
         except Exception as exc:
-            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], None, [], []
+            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, _equipment_options([]), "__all__", [], None, [], []
 
 
     @app.callback(
@@ -166,20 +176,22 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-load-timestamp", "data"),
         Input("client-selector", "value"),
         Input("maintenance-month", "value"),
+        Input("maintenance-summary-equipment", "value"),
         Input("maintenance-activity-system", "value"),
         Input("maintenance-activity-subsystem", "value"),
         Input("maintenance-activity-equipment", "value"),
         Input("btn-refresh-maintenance", "n_clicks"),
         prevent_initial_call=False,
     )
-    def load_monthly_payload(client, month, systems, subsystems, equipment, n_clicks):
+    def load_monthly_payload(client, month, summary_equipment, systems, subsystems, equipment, n_clicks):
         if not client:
             return _empty_contract(), None
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
                 repo.refresh()
-            payload = repo.get_monthly_payload(month, systems=systems, equipment=equipment, subsystems=subsystems)
+            selected_equipment = None if summary_equipment in (None, "", "__all__") else [summary_equipment]
+            payload = repo.get_monthly_payload(month, systems=systems, equipment=selected_equipment, subsystems=subsystems)
             return payload, datetime.now().isoformat()
         except Exception as exc:
             return {
