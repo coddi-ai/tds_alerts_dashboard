@@ -8,6 +8,9 @@ failure metrics.
 
 from __future__ import annotations
 
+import colorsys
+import hashlib
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -134,9 +137,17 @@ def _system_color_map(values) -> dict[str, str]:
         if system in systems and index < len(SYSTEM_COLORS):
             colors[system] = SYSTEM_COLORS[index]
             used_indexes.add(index)
-    available = (index for index in range(len(SYSTEM_COLORS)) if index not in used_indexes)
-    for system, index in zip(sorted(systems - set(colors)), available):
+    available = [index for index in range(len(SYSTEM_COLORS)) if index not in used_indexes]
+    remaining = sorted(systems - set(colors))
+    for system, index in zip(remaining, available):
         colors[system] = SYSTEM_COLORS[index]
+    for system in remaining[len(available):]:
+        digest = hashlib.sha256(system.casefold().encode("utf-8")).digest()
+        hue = int.from_bytes(digest[:2], "big") % 360 / 360
+        saturation = 0.52 + digest[2] / 255 * 0.16
+        lightness = 0.42 + digest[3] / 255 * 0.12
+        red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+        colors[system] = f"#{round(red * 255):02X}{round(green * 255):02X}{round(blue * 255):02X}"
     return colors
 
 
@@ -247,8 +258,8 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Pareto de actividad de mantenimiento · Motor por equipo", dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
-                    dbc.Col(_card("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card(html.Span("Pareto de actividad de mantenimiento · Motor por equipo", id="maintenance-chart-pareto-title"), dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card(html.Span("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", id="maintenance-chart-pareto-tren-fuerza-title"), dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -451,13 +462,16 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
     # ``system_name`` is accepted as a compatibility fallback for cached
     # payloads from the previous contract; new payloads use ``equipment``.
     dimension = "equipment" if "equipment" in df.columns else "system_name"
+    dimension_values = df[dimension].astype(str)
+    dimension_colors = _equipment_color_map(dimension_values) if dimension == "equipment" else _system_color_map(dimension_values)
+    dimension_title = "Equipo" if dimension == "equipment" else "Sistema"
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
         go.Bar(
             x=df[dimension],
             y=df["count"],
             name=f"Acciones {system_label}",
-            marker_color=[_equipment_color_map(df[dimension])[str(value)] for value in df[dimension]],
+            marker_color=[dimension_colors[str(value)] for value in df[dimension]],
             text=df["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
@@ -479,7 +493,7 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
     )
     fig.update_yaxes(title_text="Acciones", rangemode="tozero", secondary_y=False)
     fig.update_yaxes(title_text="% acumulado", range=[0, 100], ticksuffix="%", secondary_y=True)
-    fig.update_xaxes(title_text="Equipo", tickangle=-35)
+    fig.update_xaxes(title_text=dimension_title, tickangle=-35)
     fig.update_layout(
         template="plotly_white",
         showlegend=True,
@@ -494,12 +508,14 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
 create_system_pareto_chart = create_equipment_pareto_chart
 
 
-def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
+def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = False) -> go.Figure:
     """Render recorded action volume by system, not failure frequency."""
     if df.empty:
         return create_empty_figure("Sin actividad por sistema")
     if "equipment" in df.columns:
-        data = df.loc[~df["system_name"].map(_is_excluded_activity_system)].copy()
+        data = df.copy()
+        if not include_all_systems:
+            data = data.loc[~data["system_name"].map(_is_excluded_activity_system)].copy()
         if data.empty:
             return create_empty_figure("Sin sistemas elegibles para este período")
         systems = (
@@ -533,7 +549,9 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
         )
         fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
         return fig
-    data = df.loc[~df["system_name"].map(_is_excluded_activity_system)].copy()
+    data = df.copy()
+    if not include_all_systems:
+        data = data.loc[~data["system_name"].map(_is_excluded_activity_system)].copy()
     if data.empty:
         return create_empty_figure("Sin sistemas elegibles para este período")
     data = data.sort_values(["count", "system_name"], ascending=[False, True])
@@ -559,7 +577,7 @@ def create_system_activity_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
+def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool = False) -> go.Figure:
     if df.empty:
         return create_empty_figure("Sin actividad por equipo")
 
@@ -570,7 +588,9 @@ def create_equipment_activity_chart(df: pd.DataFrame) -> go.Figure:
     if "system_name" in df.columns:
         raw = df.copy()
         raw["machine_code"] = raw["machine_code"].astype(str)
-        eligible = raw.loc[~raw["system_name"].map(_is_excluded_activity_system)].copy()
+        eligible = raw.copy()
+        if not include_all_systems:
+            eligible = eligible.loc[~eligible["system_name"].map(_is_excluded_activity_system)].copy()
         # Keep one canonical order for both the trace data and the category
         # axis: highest total activity first, then the equipment code as a
         # deterministic tie-breaker.  Plotly reverses the categorical y-axis

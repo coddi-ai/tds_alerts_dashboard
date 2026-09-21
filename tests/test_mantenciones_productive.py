@@ -3,6 +3,7 @@ from pathlib import Path
 
 import dash
 import pandas as pd
+import pytest
 
 from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from src.data import maintenance_repository as repository_module
@@ -133,6 +134,113 @@ def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypa
     ]
     assert all("Hidráulico" not in str(row) for row in pareto)
     assert payload["data"]["train_force_pareto"] == [{"equipment": "T_02", "count": 1, "cumulative_pct": 100.0}]
+
+
+@pytest.mark.parametrize("client", ["emin", "capstone"])
+def test_emin_and_capstone_pareto_and_mix_include_all_systems(monkeypatch, client):
+    frame = _actions()
+    extra = frame.iloc[[0, 1, 2]].copy().reset_index(drop=True)
+    extra["action_id"] = ["a5", "a6", "a7"]
+    extra["record_id"] = ["r4", "r5", "r6"]
+    extra["job_id"] = ["j4", "j5", "j6"]
+    extra["machine_id"] = "m2"
+    extra["machine_code"] = "T_02"
+    extra["action_system_name"] = [
+        "Equipo",
+        "Estación del Operador - Cabina",
+        "Sistema de Dirección",
+    ]
+    extra["job_system_name"] = extra["action_system_name"]
+    extra["change_date"] = ["2026-01-07", "2026-01-08", "2026-01-09"]
+    extra["event_ts"] = [
+        "2026-01-07T05:00:00Z",
+        "2026-01-08T05:00:00Z",
+        "2026-01-09T05:00:00Z",
+    ]
+    frame = pd.concat([frame, extra], ignore_index=True)
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+
+    payload = MaintenanceRepository(mode="parquet", client=client).get_monthly_payload("2026-01")
+
+    assert payload["meta"]["client"] == client.upper()
+    assert payload["meta"]["pareto_scope"]["mode"] == "all_systems"
+    assert payload["meta"]["pareto_scope"]["system_filter"] is None
+    assert payload["meta"]["pareto_scope"]["system_aliases"] == []
+    assert {row["system_name"] for row in payload["data"]["system_pareto"]} >= {
+        "Equipo",
+        "Estación del Operador - Cabina",
+        "Sistema de Dirección",
+    }
+    assert {row["system_name"] for row in payload["data"]["system_mix"]} >= {
+        "Equipo",
+        "Estación del Operador - Cabina",
+        "Sistema de Dirección",
+    }
+    assert {row["equipment"]: row["count"] for row in payload["data"]["pareto"]}["T_02"] == 4
+    assert payload["data"]["train_force_pareto"] == []
+    assert payload["data"]["system_pareto"][-1]["cumulative_pct"] == 100.0
+
+
+@pytest.mark.parametrize("client, expected_generic_systems", [
+    ("emin", {"Equipo", "Estación del Operador - Cabina"}),
+    ("capstone", {"Equipo", "Estación del Operador - Cabina"}),
+    ("cda", set()),
+])
+def test_legacy_system_pareto_is_unrestricted_only_for_emin_and_capstone(monkeypatch, client, expected_generic_systems):
+    frame = _actions()
+    extra = frame.iloc[[0, 1]].copy().reset_index(drop=True)
+    extra["action_id"] = ["generic-equipment", "generic-cabina"]
+    extra["action_system_name"] = ["Equipo", "Estación del Operador - Cabina"]
+    frame = pd.concat([frame, extra], ignore_index=True)
+    repo = MaintenanceRepository(mode="parquet", client=client)
+    monkeypatch.setattr(repo, "_filtered_actions", lambda **kwargs: frame.copy())
+
+    pareto = repo.get_maintenance_by_system()
+
+    assert expected_generic_systems <= set(pareto["system_name"])
+    if client == "cda":
+        assert not expected_generic_systems.intersection(set(pareto["system_name"]))
+    assert pareto.iloc[-1]["cumulative_pct"] == 100.0
+
+
+def test_system_activity_charts_can_include_all_systems_and_large_legends():
+    from dashboard.tabs.tab_mantenciones_general import (
+        _system_color_map,
+        create_equipment_activity_chart,
+        create_system_activity_chart,
+    )
+
+    systems = ["Equipo", "Estación del Operador - Cabina"] + [f"Sistema auxiliar {i}" for i in range(1, 12)]
+    detailed = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "equipment": "T_01", "system_name": system, "count": len(systems) - index}
+            for index, system in enumerate(systems)
+        ]
+    )
+
+    system_figure = create_system_activity_chart(detailed.drop(columns="machine_code"), include_all_systems=True)
+    equipment_figure = create_equipment_activity_chart(detailed, include_all_systems=True)
+
+    assert {trace.name for trace in system_figure.data} == {"T_01"}
+    assert list(system_figure.data[0].x) == systems
+    assert {trace.name for trace in equipment_figure.data} == set(systems)
+    assert len(_system_color_map(systems)) == len(systems)
+    assert _system_color_map(systems) == _system_color_map(reversed(systems))
+
+
+def test_pareto_titles_are_unrestricted_only_for_emin_and_capstone():
+    from dashboard.callbacks.mantenciones_general_callbacks import _pareto_presentation
+
+    emin = _pareto_presentation("EMIN")
+    capstone = _pareto_presentation("CAPSTONE")
+    cda = _pareto_presentation("CDA")
+
+    assert emin["all_systems"] is True
+    assert "todos los sistemas" in emin["equipment_title"]
+    assert "por sistema" in capstone["system_title"]
+    assert cda["all_systems"] is False
+    assert "Motor por equipo" in cda["equipment_title"]
 
 
 def test_equipment_pareto_builder_uses_equipment_axis():

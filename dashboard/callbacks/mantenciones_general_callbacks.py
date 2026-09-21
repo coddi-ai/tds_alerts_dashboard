@@ -41,7 +41,26 @@ def _empty_contract():
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
         "filters": {"systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
-        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
+    }
+
+
+def _pareto_presentation(client, meta=None):
+    """Select client-specific Pareto labels and all-system chart semantics."""
+    client_name = str(client or (meta or {}).get("client") or "").strip().upper()
+    scope_mode = ((meta or {}).get("pareto_scope") or {}).get("mode")
+    if client_name in {"EMIN", "CAPSTONE"} or scope_mode == "all_systems":
+        return {
+            "all_systems": True,
+            "equipment_title": "Pareto de actividad de mantenimiento · todos los sistemas por equipo",
+            "system_title": "Pareto de actividad de mantenimiento · todos los sistemas por sistema",
+            "system_label": "todos los sistemas",
+        }
+    return {
+        "all_systems": False,
+        "equipment_title": "Pareto de actividad de mantenimiento · Motor por equipo",
+        "system_title": "Pareto de actividad de mantenimiento · Tren de Fuerza por equipo",
+        "system_label": "Motor",
     }
 
 
@@ -197,7 +216,7 @@ def register_mantenciones_general_callbacks(app):
             return {
                 **_empty_contract(),
                 "status": "error",
-                "meta": {"period": month, "period_label": month or "Sin datos", "error": str(exc)},
+                "meta": {"client": str(client).upper(), "period": month, "period_label": month or "Sin datos", "error": str(exc)},
             }, None
 
 
@@ -221,23 +240,26 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-chart-equipment", "figure"),
         Output("maintenance-chart-matrix", "figure"),
         Output("maintenance-activity-table", "children"),
+        Output("maintenance-chart-pareto-title", "children"),
+        Output("maintenance-chart-pareto-tren-fuerza-title", "children"),
         Input("maintenance-monthly-store", "data"),
     )
     def render_monthly_payload(payload):
         payload = payload or _empty_contract()
         status = payload.get("status")
+        meta = payload.get("meta", {}) or {}
+        presentation = _pareto_presentation(meta.get("client"), meta)
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger"), presentation["equipment_title"], presentation["system_title"]
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3"), presentation["equipment_title"], presentation["system_title"]
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
-        meta = payload.get("meta", {})
         banner = None
         if not meta.get("is_current_period"):
             banner = html.Div(
@@ -260,12 +282,23 @@ def register_mantenciones_general_callbacks(app):
             banner,
             create_daily_intervention_hours_chart(pd.DataFrame(data.get("daily", []))),
             create_daily_equipment_chart(pd.DataFrame(data.get("daily", []))),
-            create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", []))),
-            create_equipment_pareto_chart(pd.DataFrame(data.get("train_force_pareto", [])), system_label="Tren de Fuerza"),
-            create_system_activity_chart(pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", []))),
-            create_equipment_activity_chart(pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", [])), system_label=presentation["system_label"]),
+            create_equipment_pareto_chart(
+                pd.DataFrame(data.get("system_pareto", []) if presentation["all_systems"] else data.get("train_force_pareto", [])),
+                system_label=presentation["system_label"] if presentation["all_systems"] else "Tren de Fuerza",
+            ),
+            create_system_activity_chart(
+                pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", [])),
+                include_all_systems=presentation["all_systems"],
+            ),
+            create_equipment_activity_chart(
+                pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", [])),
+                include_all_systems=presentation["all_systems"],
+            ),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(data.get("detail", [])),
+            presentation["equipment_title"],
+            presentation["system_title"],
         )
 
 

@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Production files label the target as ``Sistema de Motor`` while compact
 # fixtures and some client extracts use ``Motor``/``Sistema Motor``.  These
-# are the only accepted aliases for the Summary Pareto scope; other systems
-# must never enter that aggregation.
+# CDA keeps this focused Summary Pareto scope. EMIN and CAPSTONE opt into all
+# source systems through ``ALL_SYSTEMS_CLIENTS`` below.
 MOTOR_SYSTEM_ALIASES = frozenset({"motor", "sistema motor", "sistema de motor"})
+ALL_SYSTEMS_CLIENTS = frozenset({"emin", "capstone"})
 TRAIN_FORCE_SYSTEM_ALIASES = frozenset(
     {
         "tren de fuerza",
@@ -37,6 +38,7 @@ TRAIN_FORCE_SYSTEM_ALIASES = frozenset(
     }
 )
 PARETO_SCOPE = {
+    "mode": "focused",
     "system_filter": "Motor",
     "system_column": "action_system_name",
     "system_aliases": sorted(MOTOR_SYSTEM_ALIASES),
@@ -449,6 +451,7 @@ class MaintenanceRepository:
             "system_mix": [],
             "system_mix_detail": [],
             "pareto": [],
+            "system_pareto": [],
             "train_force_pareto": [],
             "equipment": [],
             "equipment_system_mix": [],
@@ -463,13 +466,21 @@ class MaintenanceRepository:
             return []
         return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
 
-    @staticmethod
-    def _pareto_scope() -> dict:
-        """Return the serializable contract for the Summary Pareto."""
-        return {
+    def _pareto_scope(self) -> dict:
+        """Return this client's serializable scope for Summary Pareto charts."""
+        scope = {
             **PARETO_SCOPE,
             "system_aliases": list(PARETO_SCOPE["system_aliases"]),
         }
+        if self.client in ALL_SYSTEMS_CLIENTS:
+            scope.update(
+                {
+                    "mode": "all_systems",
+                    "system_filter": None,
+                    "system_aliases": [],
+                }
+            )
+        return scope
 
     @staticmethod
     def _is_motor_system(values: pd.Series) -> pd.Series:
@@ -503,6 +514,7 @@ class MaintenanceRepository:
                 return {
                     "status": "error",
                     "meta": {
+                        "client": self.client.upper(),
                         "period": selected,
                         "period_label": selected or "Sin datos",
                         "available_months": months,
@@ -529,6 +541,7 @@ class MaintenanceRepository:
             return {
                 "status": "error",
                 "meta": {
+                    "client": self.client.upper(),
                     "period": selected,
                     "period_label": selected or "Sin datos",
                     "available_months": months,
@@ -549,6 +562,7 @@ class MaintenanceRepository:
             return {
                 "status": "empty",
                 "meta": {
+                    "client": self.client.upper(),
                     "period": selected,
                     "period_label": "Sin datos",
                     "available_months": months,
@@ -582,6 +596,7 @@ class MaintenanceRepository:
             return {
                 "status": "empty",
                 "meta": {
+                    "client": self.client.upper(),
                     "period": selected,
                     "period_label": selected,
                     "available_months": months,
@@ -670,7 +685,27 @@ class MaintenanceRepository:
                 result.loc[result.index[-1], "cumulative_pct"] = 100.0
             return result
 
-        pareto = _equipment_pareto(motor_df)
+        def _system_pareto(system_frame: pd.DataFrame) -> pd.DataFrame:
+            result = (
+                system_frame.assign(system_name=system_frame["action_system_name"].fillna("Sin sistema"))
+                .groupby("system_name", as_index=False)["action_id"]
+                .nunique()
+                .rename(columns={"action_id": "count"})
+                .sort_values(["count", "system_name"], ascending=[False, True])
+                .reset_index(drop=True)
+            )
+            result["cumulative_pct"] = (
+                result["count"].cumsum() / result["count"].sum() * 100
+                if not result.empty
+                else pd.Series(dtype=float)
+            )
+            if not result.empty:
+                result.loc[result.index[-1], "cumulative_pct"] = 100.0
+            return result
+
+        all_systems_mode = self.client in ALL_SYSTEMS_CLIENTS
+        pareto = _equipment_pareto(df if all_systems_mode else motor_df)
+        system_pareto = _system_pareto(df) if all_systems_mode else pd.DataFrame()
         train_force_df = df[self._is_train_force_system(df["action_system_name"])].copy()
         train_force_pareto = _equipment_pareto(train_force_df)
 
@@ -728,6 +763,7 @@ class MaintenanceRepository:
         return {
             "status": "ok",
             "meta": {
+                "client": self.client.upper(),
                 "period": selected,
                 "period_label": selected,
                 "available_months": months,
@@ -746,6 +782,7 @@ class MaintenanceRepository:
                 "system_mix": self._json_records(system_mix),
                 "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
+                "system_pareto": self._json_records(system_pareto),
                 "train_force_pareto": self._json_records(train_force_pareto),
                 "equipment": self._json_records(equipment_df),
                 "equipment_system_mix": self._json_records(equipment_system_mix),
@@ -1304,9 +1341,8 @@ class MaintenanceRepository:
             # TODO: Implement SQL query for production
             raise NotImplementedError("Production mode not yet implemented")
     
-    # Excluded from the by-system Pareto: "Equipo" is a generic catch-all
-    # system (not a specific one) and "Estación del Operador - Cabina" is out
-    # of scope for this view - both would otherwise dominate the chart.
+    # CDA's legacy by-system Pareto omits these generic categories; EMIN and
+    # CAPSTONE retain every source system, including these labels.
     _PARETO_EXCLUDED_SYSTEMS = {"Equipo", "Estación del Operador - Cabina"}
 
     def get_maintenance_by_system(
@@ -1318,7 +1354,7 @@ class MaintenanceRepository:
     ) -> pd.DataFrame:
         """
         Get maintenance record counts grouped by system, for a Pareto chart.
-        Excludes _PARETO_EXCLUDED_SYSTEMS.
+        CDA excludes generic categories; EMIN and CAPSTONE retain every system.
 
         Returns:
             DataFrame with columns: system_name, count, cumulative_pct
@@ -1355,7 +1391,8 @@ class MaintenanceRepository:
             # TODO: Implement SQL query for production
             raise NotImplementedError("Production mode not yet implemented")
 
-        counts = counts[~counts["system_name"].isin(self._PARETO_EXCLUDED_SYSTEMS)]
+        if self.client not in ALL_SYSTEMS_CLIENTS:
+            counts = counts[~counts["system_name"].isin(self._PARETO_EXCLUDED_SYSTEMS)]
         counts = counts.sort_values("count", ascending=False).reset_index(drop=True)
         total = int(counts["count"].sum())
         counts["cumulative_pct"] = (counts["count"].cumsum() / total * 100) if total else 0.0

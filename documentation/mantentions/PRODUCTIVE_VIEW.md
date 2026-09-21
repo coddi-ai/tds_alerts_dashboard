@@ -11,8 +11,9 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
   (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
-  sistema, ranking de equipos y Paretos de actividad por equipo para Motor y
-  Tren de Fuerza.
+  sistema, ranking de equipos y Paretos de actividad. CDA conserva sus Paretos
+  enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
+  sistemas tanto por equipo como por sistema.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
@@ -30,9 +31,9 @@ cabecera ejecutiva.
 La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
 referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
 separadas de horas de intervención y equipos intervenidos, mix por sistema y
-ranking de equipos, y finalmente los Paretos de Motor y Tren de Fuerza. Los
-agregados de actividad quedan al final como contexto y no compiten visualmente
-con los indicadores críticos.
+ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
+actividad quedan al final como contexto y no compiten visualmente con los
+indicadores críticos.
 
 El selector de unidad aplica de forma conjunta a disponibilidad, downtime,
 MTBF, MTTR, actividad diaria, mix, ranking, ambos Paretos e indicadores de
@@ -49,9 +50,10 @@ disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
 Mantenciones usan glifos Unicode locales con etiquetas accesibles. Los textos,
 valores y títulos siguen siendo la fuente principal de significado. El mix por
 sistema reserva espacio adicional para sus etiquetas inclinadas. El mix se
-colorea por unidad y el ranking de equipos muestra el sistema predominante de
-cada unidad. El cierre de la vista agrupa los indicadores secundarios bajo
-**Indicadores de Interés**.
+colorea por unidad y el ranking de equipos muestra los sistemas involucrados.
+Para CDA se omiten las categorías genéricas Equipo/Cabina; para EMIN y CAPSTONE
+se muestran todas las categorías disponibles. El cierre de la vista agrupa los
+indicadores secundarios bajo **Indicadores de Interés**.
 
 ### KPIs y visuales respaldados
 
@@ -69,10 +71,12 @@ indicadores del Resumen:
   Motor`.
 
 La tendencia diaria agrupa acciones únicas por `change_date`. El mix por
-sistema y el ranking de equipos usan la misma métrica de acciones únicas. El
-Pareto de actividad de mantenimiento agrupa por equipo dentro de Motor, ordena
-por cantidad descendente y muestra tanto las acciones como la línea de
-porcentaje acumulado; no representa frecuencia de fallas.
+sistema y el ranking de equipos usan la misma métrica de acciones únicas. Los
+Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
+de porcentaje acumulado; no representan frecuencia de fallas. CDA mantiene el
+foco en Motor y Tren de Fuerza. EMIN y CAPSTONE no aplican una lista permitida
+de sistemas: muestran un Pareto total por equipo y otro Pareto por todos los
+sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
@@ -130,12 +134,12 @@ registrada auditable.
 
 La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
 se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la
-fecha operacional. El Pareto del Resumen se filtra exclusivamente por
-`action_system_name` en el sistema Motor (acepta `Motor`, `Sistema Motor` y
-`Sistema de Motor`), usa `machine_code` como dimensión `equipment` y cuenta
-`action_id` únicos por equipo. Se presenta como **Pareto de actividad de
-mantenimiento por equipo · Sistema Motor**; no representa fallas ni mezcla
-otros sistemas.
+fecha operacional. Los Paretos usan `action_id` únicos y `machine_code` para
+los cortes por equipo. En CDA el primer Pareto se filtra por Motor (acepta
+`Motor`, `Sistema Motor` y `Sistema de Motor`) y el segundo por Tren de Fuerza.
+En EMIN y CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
+segundo agrupa las acciones por sistema, sin excluir categorías de origen. Los
+títulos y `meta.pareto_scope` declaran el modo aplicado.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
 completa al navegador.
 
