@@ -37,6 +37,7 @@ class ComponentAvailability:
     unit_status_summary: bool = False
     cumulative_risk_curve: bool = False
     signal_daily_status: bool = False
+    failure_mode_diagnosis: bool = False
     legacy_csv: Optional[Path] = None
 
 
@@ -60,6 +61,10 @@ def unit_status_summary_base_path(client: str, component: str) -> Path:
 
 def cumulative_risk_curve_base_path(client: str, component: str) -> Path:
     return _predictive_root(client) / component / "cumulative_risk_curve"
+
+
+def failure_mode_diagnosis_base_path(client: str, component: str) -> Path:
+    return _predictive_root(client) / component / "failure_mode_diagnosis"
 
 
 def signal_daily_status_base_path(client: str, component: str) -> Path:
@@ -91,6 +96,7 @@ def _discover_predictive_layout_cached(client: str, root_mtime_ns: int) -> dict:
                 signal_daily_status=_has_partitions(
                     _telemetry_root(client) / component / "signal_daily_status"
                 ),
+                failure_mode_diagnosis=_has_partitions(entry / "failure_mode_diagnosis"),
                 legacy_csv=candidate_csv if candidate_csv.is_file() else None,
             )
         elif entry.suffix == ".csv":
@@ -216,6 +222,47 @@ def load_risk_scores(client: str, component: str) -> pd.DataFrame:
 
 def load_unit_status_summary(client: str, component: str) -> pd.DataFrame:
     return read_latest_partition(unit_status_summary_base_path(client, component))
+
+
+def load_failure_mode_diagnosis(client: str, component: str) -> pd.DataFrame:
+    """`failure_mode_diagnosis` (Data Contract v2.1): one row per unit x flagged
+    mode, published upstream to replace `analisis_inteligente.parquet`. Same
+    run-snapshot pattern as `unit_status_summary` - only the latest partition
+    matters, and a unit with no flagged mode that week simply has no rows."""
+    return read_latest_partition(failure_mode_diagnosis_base_path(client, component))
+
+
+def get_unit_failure_mode_diagnosis(client: str, component: str, unit: str) -> pd.DataFrame:
+    """`failure_mode_diagnosis` rows for `unit`, ordered by `modos_ordenados`
+    severity (highest first), same join pattern as the data contract's §3.
+    Empty DataFrame if the table doesn't exist for this client/component or
+    the unit has no flagged mode this week - callers should fall back to the
+    legacy `analisis_inteligente.parquet` routing in that case.
+    """
+    df_diag = load_failure_mode_diagnosis(client, component)
+    if df_diag.empty or "Unit" not in df_diag.columns:
+        return pd.DataFrame()
+    rows = df_diag[df_diag["Unit"] == unit].copy()
+    if rows.empty or "failure_mode" not in rows.columns:
+        return rows
+
+    df_status = load_unit_status_summary(client, component)
+    scores = {}
+    if not df_status.empty and "modos_ordenados" in df_status.columns:
+        match = df_status[df_status["Unit"] == unit]
+        if not match.empty:
+            raw = match.iloc[0].get("modos_ordenados")
+            if raw:
+                try:
+                    scores = json.loads(raw)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    logger.warning(
+                        "No se pudo parsear modos_ordenados para %s/%s/%s", client, component, unit
+                    )
+    if scores:
+        rows["_score"] = rows["failure_mode"].map(scores)
+        rows = rows.sort_values("_score", ascending=False, na_position="last")
+    return rows
 
 
 def load_signal_daily_status(client: str, component: str) -> pd.DataFrame:

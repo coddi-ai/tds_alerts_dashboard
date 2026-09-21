@@ -30,12 +30,19 @@ from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT
 
 logger = get_logger(__name__)
 
-# TEMP FLAG: upstream `unit_status_summary.estado` is currently mis-computed
-# by the data team. Until they ship a fix, compute status client-side instead
-# of trusting the estado column. Set back to False once upstream confirms the
-# fix has landed. Feeds attach_status() below, which every status call site
-# (this tab, tab_predictive_evidence.py, predictive_callbacks.py) goes through.
-COMPUTE_STATUS = True
+# Data Contract v2.1 (documentation/predictive/predictive_data_contracts.md §6)
+# explains what was previously reported as upstream `estado` being
+# "mis-computed": `estado` is derived from the cumulative curve's last-point
+# zone for the unit's current cycle, not the flat 30/50/60/80 rule this
+# module used to apply client-side - the two were never the same criterion.
+# The old rule now travels alongside it as `estado_umbral` (fallback when a
+# unit has no curve, audit trail otherwise). Flip back to True only if a
+# fresh data sync shows `estado`/`estado_origen`/`estado_umbral` are missing
+# or nonsensical (e.g. every unit's `estado_origen` reading "umbral", which
+# would mean no unit actually has a curve). Feeds attach_status() below,
+# which every status call site (this tab, tab_predictive_evidence.py,
+# predictive_callbacks.py) goes through.
+COMPUTE_STATUS = False
 
 
 # ── Data Loading (Multi-Component) ────────────────────────────────────────────
@@ -271,16 +278,17 @@ def _classify_status_from_scores(row: pd.Series) -> str:
 def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataFrame:
     """Attach `estado` as `status` (REQ-PR-04).
 
-    Change 4: prefers `unit_status_summary.estado` (Data Contract v2.0) when
-    that table exists for this client/component; falls back to
+    Change 4: prefers `unit_status_summary.estado` (Data Contract v2.1 -
+    curve-derived, see module-level COMPUTE_STATUS comment) when that table
+    exists for this client/component; falls back to
     analisis_inteligente.parquet's `estado` for components not yet migrated
     (e.g. cda/transmision). Units with no row in either default to "Normal"
     so only the three known labels ever appear (REQ-PR-05).
 
-    When COMPUTE_STATUS is True (temporary override - upstream `estado` is
-    currently mis-computed), the estado sources above are bypassed entirely
-    and status is instead classified from the 30d scores already present in
-    `latest` via _classify_status_from_scores.
+    When COMPUTE_STATUS is True (safety-net override, see module-level
+    comment), the estado sources above are bypassed entirely and status is
+    instead classified from the 30d scores already present in `latest` via
+    _classify_status_from_scores.
     """
     latest = latest.copy()
 

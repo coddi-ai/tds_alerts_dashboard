@@ -229,9 +229,9 @@ def register_callbacks(app):
             if filepath:
                 _, df_latest = _load_evidence_component(filepath, component, client)
                 if df_latest is not None and not df_latest.empty:
-                    # Status from analisis_inteligente.parquet's `estado` (same
-                    # source as Estado de Flota, REQ-PR-04) so the banner never
-                    # disagrees with the priority cards for the same unit.
+                    # Status via attach_status() (same source as Estado de
+                    # Flota, REQ-PR-04) so the banner never disagrees with the
+                    # priority cards for the same unit.
                     latest_with_status = attach_status(df_latest, client, component)
                     row = latest_with_status[latest_with_status["Unit"] == selected_unit]
                     if not row.empty:
