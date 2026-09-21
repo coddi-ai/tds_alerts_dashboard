@@ -286,6 +286,22 @@ def layout_mantenciones_general():
                 ],
                 className="border rounded bg-white shadow-sm p-3",
             ),
+            html.Div(
+                _card(
+                    "Detalle de actividades realizadas",
+                    html.Div(
+                        [
+                            html.P(
+                                "Hasta 250 actividades del período para mantener ágil la vista; puedes ordenar y filtrar las columnas.",
+                                className="text-muted small mb-3",
+                            ),
+                            html.Div(id="maintenance-summary-detail-table"),
+                        ]
+                    ),
+                    "fa-clipboard-list",
+                ),
+                className="mt-4",
+            ),
         ]
     )
 
@@ -340,8 +356,9 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-source-alert", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=6),
-                    dbc.Col([html.Label("Unidad", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": "Todas", "value": "__all__"}], value="__all__", placeholder="Todas")], md=6),
+                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=4),
+                    dbc.Col([html.Label("Flota", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder="Todas las flotas"), html.Small("Prefijo del código de unidad", className="text-muted")], md=4),
+                    dbc.Col([html.Label("Unidad", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": "Todas", "value": "__all__"}], value="__all__", placeholder="Todas")], md=4),
                     # The weekly selector remains mounted for its disabled tab's
                     # callback contract, but is intentionally not exposed while
                     # Evidencia semanal is hidden from the product shell.
@@ -403,7 +420,9 @@ def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
     """Render daily intervention hours from the auditable action aggregation."""
     if df.empty:
         return create_empty_figure("Sin actividad diaria de intervención")
-    data = df.copy()
+    # This is a time series, so it keeps operational-date order rather than
+    # being ranked by value like the categorical activity charts below.
+    data = df.sort_values("date", kind="mergesort").copy()
     if "hours_estimated" not in data.columns:
         counts = data["count"] if "count" in data.columns else pd.Series(0, index=data.index)
         data["hours_estimated"] = pd.to_numeric(counts, errors="coerce").fillna(0) * 1.5
@@ -411,6 +430,7 @@ def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
         go.Bar(
             x=data["date"],
             y=data["hours_estimated"],
+            orientation="v",
             name="Horas de intervención",
             marker_color="#6f8fb3",
             hovertemplate="<b>%{x}</b><br>Horas de intervención: %{y:.1f} h<extra></extra>",
@@ -462,6 +482,12 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
     # ``system_name`` is accepted as a compatibility fallback for cached
     # payloads from the previous contract; new payloads use ``equipment``.
     dimension = "equipment" if "equipment" in df.columns else "system_name"
+    df = df.sort_values(["count", dimension], ascending=[False, True], kind="mergesort").reset_index(drop=True)
+    counts = pd.to_numeric(df["count"], errors="coerce").fillna(0)
+    total = counts.sum()
+    df["cumulative_pct"] = counts.cumsum() / total * 100 if total else 0.0
+    if not df.empty and total:
+        df.loc[df.index[-1], "cumulative_pct"] = 100.0
     dimension_values = df[dimension].astype(str)
     dimension_colors = _equipment_color_map(dimension_values) if dimension == "equipment" else _system_color_map(dimension_values)
     dimension_title = "Equipo" if dimension == "equipment" else "Sistema"
@@ -470,6 +496,7 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
         go.Bar(
             x=df[dimension],
             y=df["count"],
+            orientation="v",
             name=f"Acciones {system_label}",
             marker_color=[dimension_colors[str(value)] for value in df[dimension]],
             text=df["count"].astype(int),
@@ -512,65 +539,36 @@ def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = F
     """Render recorded action volume by system, not failure frequency."""
     if df.empty:
         return create_empty_figure("Sin actividad por sistema")
-    if "equipment" in df.columns:
-        data = df.copy()
-        if not include_all_systems:
-            data = data.loc[~data["system_name"].map(_is_excluded_activity_system)].copy()
-        if data.empty:
-            return create_empty_figure("Sin sistemas elegibles para este período")
-        systems = (
-            data.groupby("system_name", as_index=False)["count"]
-            .sum()
-            .sort_values(["count", "system_name"], ascending=[False, True])["system_name"]
-            .tolist()
-        )
-        equipment = sorted(data["equipment"].dropna().astype(str).unique().tolist())
-        pivot = data.pivot_table(index="system_name", columns="equipment", values="count", aggfunc="sum", fill_value=0).reindex(systems)
-        palette = _equipment_color_map(equipment)
-        fig = go.Figure()
-        for index, unit in enumerate(equipment):
-            values = pivot[unit] if unit in pivot.columns else [0] * len(systems)
-            fig.add_trace(
-                go.Bar(
-                    x=systems,
-                    y=values,
-                    name=unit,
-                    marker_color=palette[unit],
-                    hovertemplate=f"<b>%{{x}}</b><br>Equipo: {unit}<br>Acciones: %{{y}}<extra></extra>",
-                )
-            )
-        fig.update_layout(
-            template="plotly_white",
-            barmode="stack",
-            xaxis_title="Sistema",
-            yaxis_title="Acciones únicas",
-            margin={"l": 45, "r": 20, "t": 20, "b": 115},
-            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
-        )
-        fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
-        return fig
     data = df.copy()
     if not include_all_systems:
         data = data.loc[~data["system_name"].map(_is_excluded_activity_system)].copy()
     if data.empty:
         return create_empty_figure("Sin sistemas elegibles para este período")
-    data = data.sort_values(["count", "system_name"], ascending=[False, True])
+    data = (
+        data.groupby("system_name", as_index=False)["count"]
+        .sum()
+        .sort_values(["count", "system_name"], ascending=[False, True], kind="mergesort")
+        .reset_index(drop=True)
+    )
+    palette = _system_color_map(data["system_name"])
     fig = go.Figure(
         go.Bar(
             x=data["system_name"],
             y=data["count"],
+            orientation="v",
             name="Acciones registradas",
-            marker_color="#6f8fb3",
+            marker_color=[palette[str(system)] for system in data["system_name"]],
             text=data["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
+            hovertemplate="<b>%{x}</b><br>Acciones únicas: %{y}<extra></extra>",
         )
     )
     fig.update_layout(
         template="plotly_white",
         xaxis_title="Sistema",
         yaxis_title="Acciones únicas",
-        margin={"l": 45, "r": 20, "t": 20, "b": 115},
+        margin={"l": 45, "r": 20, "t": 20, "b": 85},
         showlegend=False,
     )
     fig.update_xaxes(tickangle=-35, automargin=True, tickfont={"size": 10})
@@ -581,29 +579,26 @@ def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool 
     if df.empty:
         return create_empty_figure("Sin actividad por equipo")
 
-    # Detailed equipment × system data enables a stacked horizontal chart:
-    # equipment remain the y-axis entities while eligible systems become the
-    # color/legend categories.  Equipo/Cabina are omitted from the visual but
-    # do not remove the equipment rows themselves.
+    # Detailed equipment × system data enables a stacked vertical chart:
+    # equipment remain the x-axis entities while systems become the
+    # color/legend categories.
     if "system_name" in df.columns:
         raw = df.copy()
         raw["machine_code"] = raw["machine_code"].astype(str)
         eligible = raw.copy()
         if not include_all_systems:
             eligible = eligible.loc[~eligible["system_name"].map(_is_excluded_activity_system)].copy()
-        # Keep one canonical order for both the trace data and the category
-        # axis: highest total activity first, then the equipment code as a
-        # deterministic tie-breaker.  Plotly reverses the categorical y-axis
-        # so the first item is rendered at the top of the horizontal ranking.
+        if eligible.empty:
+            return create_empty_figure("Sin sistemas elegibles para este período")
+        # Rank only the systems actually shown; the x-axis then reads
+        # left-to-right from highest to lowest total activity.
         equipment_totals = (
-            raw.groupby("machine_code", as_index=False)["count"]
+            eligible.groupby("machine_code", as_index=False)["count"]
             .sum()
             .sort_values(["count", "machine_code"], ascending=[False, True], kind="mergesort")
             .reset_index(drop=True)
         )
         equipment = equipment_totals["machine_code"].tolist()
-        if eligible.empty:
-            return create_empty_figure("Sin sistemas elegibles para este período")
         systems = sorted(eligible["system_name"].dropna().astype(str).unique().tolist())
         pivot = eligible.pivot_table(
             index="machine_code", columns="system_name", values="count", aggfunc="sum", fill_value=0
@@ -614,47 +609,46 @@ def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool 
             values = pivot[system].astype(int)
             fig.add_trace(
                 go.Bar(
-                    x=values,
-                    y=equipment,
-                    orientation="h",
+                    x=equipment,
+                    y=values,
+                    orientation="v",
                     name=system,
                     marker_color=palette[system],
                     customdata=values,
-                    hovertemplate=f"<b>%{{y}}</b><br>Sistema: {system}<br>Acciones: %{{x}}<extra></extra>",
+                    hovertemplate=f"<b>%{{x}}</b><br>Sistema: {system}<br>Acciones: %{{y}}<extra></extra>",
                 )
             )
         fig.update_layout(
             template="plotly_white",
             barmode="stack",
-            xaxis_title="Acciones",
-            yaxis_title="Equipo",
-            margin={"l": 65, "r": 45, "t": 45, "b": 65},
+            xaxis_title="Equipo",
+            yaxis_title="Acciones",
+            margin={"l": 55, "r": 30, "t": 45, "b": 90},
             legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         )
-        fig.update_yaxes(categoryorder="array", categoryarray=equipment, autorange="reversed")
+        fig.update_xaxes(categoryorder="array", categoryarray=equipment, tickangle=-35, automargin=True)
         return fig
 
     data = df.copy()
     data["machine_code"] = data["machine_code"].astype(str)
     data = data.sort_values(["count", "machine_code"], ascending=[False, True], kind="mergesort").reset_index(drop=True)
     systems = data.get("primary_system", pd.Series("Sin sistema", index=data.index)).fillna("Sin sistema").astype(str)
-    short_systems = systems.str.replace("Sistema de ", "", regex=False).str.replace("Sistema ", "", regex=False)
-    labels = data["machine_code"].astype(str) + " · " + short_systems
+    palette = _system_color_map(systems)
     fig = go.Figure(
         go.Bar(
-            x=data["count"],
-            y=labels,
-            orientation="h",
-            marker_color="#4f8a8b",
+            x=data["machine_code"],
+            y=data["count"],
+            orientation="v",
+            marker_color=[palette[str(system)] for system in systems],
             text=data["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
             customdata=systems,
-            hovertemplate="<b>%{y}</b><br>Sistema: %{customdata}<br>Acciones: %{x}<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Sistema predominante: %{customdata}<br>Acciones: %{y}<extra></extra>",
         )
     )
-    fig.update_layout(template="plotly_white", xaxis_title="Acciones", yaxis_title="Equipo · sistema predominante", margin={"l": 105, "r": 45, "t": 20, "b": 45})
-    fig.update_yaxes(categoryorder="array", categoryarray=labels.tolist(), autorange="reversed")
+    fig.update_layout(template="plotly_white", xaxis_title="Equipo", yaxis_title="Acciones", margin={"l": 55, "r": 30, "t": 20, "b": 90}, showlegend=False)
+    fig.update_xaxes(categoryorder="array", categoryarray=data["machine_code"].tolist(), tickangle=-35, automargin=True)
     return fig
 
 

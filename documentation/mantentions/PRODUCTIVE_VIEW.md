@@ -6,12 +6,13 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
-- **Resumen**: selector mensual y selector ejecutivo de unidad (``Todas`` o una
-  unidad), cobertura/frescura, equipos con actividad,
+- **Resumen**: selector mensual, filtro de flota derivado del prefijo de unidad
+  y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
   (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
-  sistema, ranking de equipos y Paretos de actividad. CDA conserva sus Paretos
+  sistema sin desglose por unidad, ranking de equipos y Paretos de actividad,
+  seguido de una tabla con el detalle de las actividades realizadas. CDA conserva sus Paretos
   enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
   sistemas tanto por equipo como por sistema.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
@@ -24,7 +25,7 @@ En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
 callbacks y contratos de componentes, listas para una futura reactivación.
 
 Mientras esas vistas permanecen deshabilitadas, **Resumen** expone el selector
-mensual y el selector ejecutivo de unidad. El selector semanal permanece
+mensual, el filtro de flota y el selector ejecutivo de unidad. El selector semanal permanece
 montado dentro del contrato de Evidencia semanal, pero no se muestra en la
 cabecera ejecutiva.
 
@@ -35,11 +36,14 @@ ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
 actividad quedan al final como contexto y no compiten visualmente con los
 indicadores críticos.
 
-El selector de unidad aplica de forma conjunta a disponibilidad, downtime,
-MTBF, MTTR, actividad diaria, mix, ranking, ambos Paretos e indicadores de
-contexto. ``Todas`` no agrega un filtro y conserva el agregado del período;
-una unidad se traduce al filtro ``machine_code`` del repositorio antes de
-construir el contrato mensual.
+El filtro de flota y el selector de unidad se aplican a disponibilidad,
+downtime, MTBF, MTTR, actividad diaria, mix, ranking, ambos Paretos, indicadores
+de contexto y detalle tabular. La flota se deriva del fragmento de
+``machine_code`` anterior al primer guion bajo (por ejemplo ``T_01`` pertenece
+a la flota ``T``); si no hay guion bajo, el código completo identifica la
+flota. La unidad se filtra por ``machine_code`` y sus opciones se limitan a las
+flotas seleccionadas. Sin selección de flota/unidad se conserva todo el
+período.
 
 La metadata del contrato conserva el archivo fuente de los KPIs **ESTIMADOS**,
 su ventana de referencia y, cuando corresponde, la razón del fallback mensual;
@@ -48,9 +52,12 @@ estos detalles técnicos no se muestran en la cabecera ejecutiva.
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
 Mantenciones usan glifos Unicode locales con etiquetas accesibles. Los textos,
-valores y títulos siguen siendo la fuente principal de significado. El mix por
-sistema reserva espacio adicional para sus etiquetas inclinadas. El mix se
-colorea por unidad y el ranking de equipos muestra los sistemas involucrados.
+valores y títulos siguen siendo la fuente principal de significado. Los
+gráficos de barras usan orientación vertical y los rankings categóricos se
+ordenan de mayor a menor de izquierda a derecha. Las tendencias diarias
+conservan el orden cronológico. El mix por sistema agrega las acciones sin
+mostrar la unidad; el ranking de equipos muestra los sistemas involucrados
+como colores apilados.
 Para CDA se omiten las categorías genéricas Equipo/Cabina; para EMIN y CAPSTONE
 se muestran todas las categorías disponibles. El cierre de la vista agrupa los
 indicadores secundarios bajo **Indicadores de Interés**.
@@ -71,7 +78,9 @@ indicadores del Resumen:
   Motor`.
 
 La tendencia diaria agrupa acciones únicas por `change_date`. El mix por
-sistema y el ranking de equipos usan la misma métrica de acciones únicas. Los
+sistema agrega por sistema y no expone series o leyenda por unidad; el ranking
+de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
+misma métrica de acciones únicas. Los
 Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
 de porcentaje acumulado; no representan frecuencia de fallas. CDA mantiene el
 foco en Motor y Tren de Fuerza. EMIN y CAPSTONE no aplican una lista permitida
@@ -141,7 +150,9 @@ En EMIN y CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
 segundo agrupa las acciones por sistema, sin excluir categorías de origen. Los
 títulos y `meta.pareto_scope` declaran el modo aplicado.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
-completa al navegador.
+completa al navegador. En Resumen se presenta después de **Indicadores de
+Interés** como una tabla paginada, ordenable y filtrable con fecha, unidad,
+sistema, subsistema, tipo de acción y detalle.
 
 La evidencia semanal usa los archivos `ww-yyyy.csv`. `Tasks_List` se interpreta
 como JSON y los archivos con filas inválidas se muestran como `partial`, sin

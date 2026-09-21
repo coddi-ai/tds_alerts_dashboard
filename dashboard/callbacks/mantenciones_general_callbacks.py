@@ -39,7 +39,7 @@ def _empty_contract():
     return {
         "status": "empty",
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
-        "filters": {"systems": [], "equipment": [], "subsystems": []},
+        "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
         "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
     }
@@ -121,8 +121,8 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-source-alert", "children"),
         Output("maintenance-month", "options"),
         Output("maintenance-month", "value"),
-        Output("maintenance-summary-equipment", "options"),
-        Output("maintenance-summary-equipment", "value"),
+        Output("maintenance-summary-fleet", "options"),
+        Output("maintenance-summary-fleet", "value"),
         Output("maintenance-week", "options"),
         Output("maintenance-week", "value"),
         Output("maintenance-week-equipment", "options"),
@@ -133,7 +133,7 @@ def register_mantenciones_general_callbacks(app):
     )
     def load_maintenance_metadata(client, n_clicks):
         if not client:
-            return {}, _source_alert({}), [], None, _equipment_options([]), "__all__", [], None, [], []
+            return {}, _source_alert({}), [], None, [], [], [], None, [], []
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
@@ -147,6 +147,7 @@ def register_mantenciones_general_callbacks(app):
                     "available_months": months,
                     "available_weeks": weeks,
                     "equipment": repo.get_available_equipment(),
+                    "fleets": repo.get_available_fleets(),
                     "systems": repo.get_available_systems(),
                     "subsystems": repo.get_available_subsystems(),
                 }
@@ -156,15 +157,37 @@ def register_mantenciones_general_callbacks(app):
                 _source_alert(meta),
                 _options(months),
                 months[-1] if months else None,
-                _equipment_options(meta["equipment"]),
-                "__all__",
+                _options(meta["fleets"]),
+                [],
                 _options(weeks),
                 weeks[-1] if weeks else None,
                 _options(meta["equipment"]),
                 _options(meta["systems"]),
             )
         except Exception as exc:
-            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, _equipment_options([]), "__all__", [], None, [], []
+            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], [], [], None, [], []
+
+
+    @app.callback(
+        Output("maintenance-summary-equipment", "options"),
+        Output("maintenance-summary-equipment", "value"),
+        Input("maintenance-summary-fleet", "value"),
+        Input("client-selector", "value"),
+        State("maintenance-summary-equipment", "value"),
+    )
+    def update_summary_equipment_options(selected_fleets, client, current_equipment):
+        if not client:
+            return _equipment_options([]), "__all__"
+        repo = get_repository(mode="parquet", client=client)
+        equipment = repo.get_available_equipment(fleets=selected_fleets or None)
+        try:
+            if ctx.triggered_id == "client-selector":
+                current_equipment = "__all__"
+        except MissingCallbackContextException:
+            pass
+        if current_equipment not in (None, "", "__all__") and current_equipment not in equipment:
+            current_equipment = "__all__"
+        return _equipment_options(equipment), current_equipment or "__all__"
 
 
     @app.callback(
@@ -195,6 +218,7 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-load-timestamp", "data"),
         Input("client-selector", "value"),
         Input("maintenance-month", "value"),
+        Input("maintenance-summary-fleet", "value"),
         Input("maintenance-summary-equipment", "value"),
         Input("maintenance-activity-system", "value"),
         Input("maintenance-activity-subsystem", "value"),
@@ -202,7 +226,7 @@ def register_mantenciones_general_callbacks(app):
         Input("btn-refresh-maintenance", "n_clicks"),
         prevent_initial_call=False,
     )
-    def load_monthly_payload(client, month, summary_equipment, systems, subsystems, equipment, n_clicks):
+    def load_monthly_payload(client, month, selected_fleets, summary_equipment, systems, subsystems, equipment, n_clicks):
         if not client:
             return _empty_contract(), None
         try:
@@ -210,7 +234,13 @@ def register_mantenciones_general_callbacks(app):
             if _refresh_requested():
                 repo.refresh()
             selected_equipment = None if summary_equipment in (None, "", "__all__") else [summary_equipment]
-            payload = repo.get_monthly_payload(month, systems=systems, equipment=selected_equipment, subsystems=subsystems)
+            payload = repo.get_monthly_payload(
+                month,
+                systems=systems,
+                equipment=selected_equipment,
+                subsystems=subsystems,
+                fleets=selected_fleets or None,
+            )
             return payload, datetime.now().isoformat()
         except Exception as exc:
             return {
@@ -240,6 +270,7 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-chart-equipment", "figure"),
         Output("maintenance-chart-matrix", "figure"),
         Output("maintenance-activity-table", "children"),
+        Output("maintenance-summary-detail-table", "children"),
         Output("maintenance-chart-pareto-title", "children"),
         Output("maintenance-chart-pareto-tren-fuerza-title", "children"),
         Input("maintenance-monthly-store", "data"),
@@ -252,11 +283,13 @@ def register_mantenciones_general_callbacks(app):
         if status == "error":
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, html.P("No se pudo cargar el detalle.", className="text-danger"), presentation["equipment_title"], presentation["system_title"]
+            detail_message = html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, html.P(message, className="text-muted text-center p-3"), presentation["equipment_title"], presentation["system_title"]
+            detail_message = html.P(message, className="text-muted text-center p-3")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
@@ -288,7 +321,7 @@ def register_mantenciones_general_callbacks(app):
                 system_label=presentation["system_label"] if presentation["all_systems"] else "Tren de Fuerza",
             ),
             create_system_activity_chart(
-                pd.DataFrame(data.get("system_mix_detail") or data.get("system_mix", [])),
+                pd.DataFrame(data.get("system_mix", [])),
                 include_all_systems=presentation["all_systems"],
             ),
             create_equipment_activity_chart(
@@ -296,6 +329,7 @@ def register_mantenciones_general_callbacks(app):
                 include_all_systems=presentation["all_systems"],
             ),
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
+            create_activity_table(data.get("detail", [])),
             create_activity_table(data.get("detail", [])),
             presentation["equipment_title"],
             presentation["system_title"],

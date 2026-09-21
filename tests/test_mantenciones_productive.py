@@ -102,6 +102,51 @@ def test_summary_unit_filter_reconciles_all_payload_aggregates(monkeypatch):
     assert all(row["equipment_count"] == 1 for row in payload["data"]["daily"])
 
 
+def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monkeypatch):
+    frame = _actions().copy()
+    extra_l = frame.loc[frame["action_id"] == "a4"].copy()
+    extra_l["action_id"] = "a5"
+    extra_l["record_id"] = "r4"
+    extra_l["machine_code"] = "L_01"
+    extra_r = frame.iloc[[0]].copy()
+    extra_r["action_id"] = "a6"
+    extra_r["record_id"] = "r5"
+    extra_r["machine_code"] = "R_01"
+    extra_r["change_date"] = "2026-01-07"
+    extra_r["event_ts"] = "2026-01-07T05:00:00Z"
+    extra_unknown = frame.iloc[[0]].copy()
+    extra_unknown["action_id"] = "a7"
+    extra_unknown["record_id"] = "r6"
+    extra_unknown["machine_code"] = None
+    extra_unknown["change_date"] = "2026-01-08"
+    extra_unknown["event_ts"] = "2026-01-08T05:00:00Z"
+    frame = pd.concat([frame, extra_l, extra_r, extra_unknown], ignore_index=True)
+    business_kpis = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "downtime_hours_70d": 10.0, "repairs_70d": 2, "total_actions_70d": 4, "reference_date": "2026-01-20"},
+            {"machine_code": "T_02", "downtime_hours_70d": 20.0, "repairs_70d": 3, "total_actions_70d": 5, "reference_date": "2026-01-20"},
+            {"machine_code": "L_01", "downtime_hours_70d": 100.0, "repairs_70d": 4, "total_actions_70d": 6, "reference_date": "2026-01-20"},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business_kpis.copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01", fleets=["T"])
+
+    assert repo.get_available_fleets() == ["L", "R", "Sin flota", "T"]
+    assert repo.get_available_equipment(fleets=["L"]) == ["L_01"]
+    assert payload["filters"]["fleets"] == ["T"]
+    assert payload["kpis"]["actions"] == 4
+    assert payload["kpis"]["downtime_est_hours"] == 30.0
+    assert {row["equipment"] for row in payload["data"]["detail"]} == {"T_01", "T_02"}
+
+    unknown_fleet_payload = repo.get_monthly_payload("2026-01", fleets=["Sin flota"])
+    assert unknown_fleet_payload["kpis"]["actions"] == 1
+    assert unknown_fleet_payload["kpis"]["downtime_est_hours"] == 1.5
+    assert unknown_fleet_payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+
+
 def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
     frame = _actions().copy()
     frame.loc[frame["action_id"] == "a3", ["machine_code", "action_system_name"]] = ["T_02", "Sistema de Motor"]
@@ -222,7 +267,7 @@ def test_system_activity_charts_can_include_all_systems_and_large_legends():
     system_figure = create_system_activity_chart(detailed.drop(columns="machine_code"), include_all_systems=True)
     equipment_figure = create_equipment_activity_chart(detailed, include_all_systems=True)
 
-    assert {trace.name for trace in system_figure.data} == {"T_01"}
+    assert {trace.name for trace in system_figure.data} == {"Acciones registradas"}
     assert list(system_figure.data[0].x) == systems
     assert {trace.name for trace in equipment_figure.data} == set(systems)
     assert len(_system_color_map(systems)) == len(systems)
@@ -358,6 +403,9 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-chart-pareto-tren-fuerza" in rendered
     assert "maintenance-chart-daily-equipment" in rendered
     assert "maintenance-summary-equipment" in rendered
+    assert "maintenance-summary-fleet" in rendered
+    assert "maintenance-summary-detail-table" in rendered
+    assert rendered.index("Indicadores de Interés") < rendered.index("maintenance-summary-detail-table")
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
@@ -383,20 +431,22 @@ def test_activity_charts_exclude_non_system_labels_and_keep_system_legend():
 
     system_figure = create_system_activity_chart(detailed)
     assert list(system_figure.data[0].x) == ["Sistema de Motor", "Sistema Hidráulico"]
-    assert all("Equipo" not in str(trace.name) and "Cabina" not in str(trace.name) for trace in system_figure.data)
+    assert len(system_figure.data) == 1
+    assert system_figure.data[0].orientation == "v"
+    assert system_figure.data[0].name == "Acciones registradas"
 
     equipment_figure = create_equipment_activity_chart(
         detailed.rename(columns={"equipment": "machine_code"})
     )
     assert equipment_figure.layout.barmode == "stack"
-    assert set(equipment_figure.layout.yaxis.categoryarray) == {"T_01", "T_02"}
+    assert list(equipment_figure.layout.xaxis.categoryarray) == ["T_01", "T_02"]
+    assert all(trace.orientation == "v" for trace in equipment_figure.data)
     assert {trace.name for trace in equipment_figure.data} == {"Sistema de Motor", "Sistema Hidráulico"}
 
     pareto_figure = create_equipment_pareto_chart(
         pd.DataFrame([{"equipment": "T_02", "count": 3, "cumulative_pct": 100.0}])
     )
-    mix_colors = {trace.name: trace.marker.color for trace in system_figure.data}
-    assert list(pareto_figure.data[0].marker.color) == [mix_colors["T_02"]]
+    assert list(pareto_figure.data[0].marker.color) == ["#4f8a8b"]
 
 
 def test_equipment_activity_ranking_is_descending_top_down_with_unit_filter():
@@ -414,16 +464,58 @@ def test_equipment_activity_ranking_is_descending_top_down_with_unit_filter():
 
     figure = create_equipment_activity_chart(detailed)
     expected = ["T_02", "T_03", "T_01"]
-    assert list(figure.layout.yaxis.categoryarray) == expected
-    assert figure.layout.yaxis.autorange == "reversed"
-    assert all(list(trace.y) == expected for trace in figure.data)
+    assert list(figure.layout.xaxis.categoryarray) == expected
+    assert all(list(trace.x) == expected for trace in figure.data)
+    assert all(trace.orientation == "v" for trace in figure.data)
 
     # A unit-filtered payload must preserve the same contract, rather than
     # falling back to an arbitrary/alphabetical category order.
     filtered = create_equipment_activity_chart(detailed.loc[detailed["machine_code"] == "T_02"])
-    assert list(filtered.layout.yaxis.categoryarray) == ["T_02"]
-    assert filtered.layout.yaxis.autorange == "reversed"
-    assert all(list(trace.y) == ["T_02"] for trace in filtered.data)
+    assert list(filtered.layout.xaxis.categoryarray) == ["T_02"]
+    assert all(list(trace.x) == ["T_02"] for trace in filtered.data)
+    assert all(trace.orientation == "v" for trace in filtered.data)
+
+
+def test_maintenance_bar_charts_use_vertical_orientation_and_descending_rank():
+    from dashboard.tabs.tab_mantenciones_general import (
+        create_daily_intervention_hours_chart,
+        create_equipment_pareto_chart,
+        create_system_activity_chart,
+    )
+
+    mix = create_system_activity_chart(
+        pd.DataFrame(
+            [
+                {"system_name": "Hidráulico", "count": 2},
+                {"system_name": "Motor", "count": 7},
+                {"system_name": "Frenos", "count": 4},
+            ]
+        )
+    )
+    pareto = create_equipment_pareto_chart(
+        pd.DataFrame(
+            [
+                {"equipment": "T_02", "count": 2, "cumulative_pct": 100.0},
+                {"equipment": "T_01", "count": 7, "cumulative_pct": 50.0},
+            ]
+        )
+    )
+    daily = create_daily_intervention_hours_chart(
+        pd.DataFrame(
+            [
+                {"date": "2026-01-02", "hours_estimated": 1.5},
+                {"date": "2026-01-01", "hours_estimated": 3.0},
+            ]
+        )
+    )
+
+    assert mix.data[0].orientation == "v"
+    assert list(mix.data[0].x) == ["Motor", "Frenos", "Hidráulico"]
+    assert pareto.data[0].orientation == "v"
+    assert list(pareto.data[0].x) == ["T_01", "T_02"]
+    assert list(pareto.data[1].y) == pytest.approx([77.77777777777777, 100.0])
+    assert daily.data[0].orientation == "v"
+    assert list(daily.data[0].x) == ["2026-01-01", "2026-01-02"]
 
 
 def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
@@ -434,8 +526,11 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     register_mantenciones_general_callbacks(app)
 
     output_keys = list(app.callback_map)
-    assert len(output_keys) == 6
+    assert len(output_keys) == 7
     assert any("maintenance-monthly-store" in key for key in output_keys)
+    assert any("maintenance-summary-detail-table" in key for key in output_keys)
+    monthly_callback = next(entry for key, entry in app.callback_map.items() if "maintenance-monthly-store" in key)
+    assert any(dependency["id"] == "maintenance-summary-fleet" for dependency in monthly_callback["inputs"])
     output_ids = []
     for entry in app.callback_map.values():
         outputs = entry["output"] if isinstance(entry["output"], list) else [entry["output"]]

@@ -63,6 +63,16 @@ def _empty_estimated_kpis() -> dict:
     }
 
 
+def _fleet_from_machine_code(value) -> str:
+    """Use the token before the first underscore as the fleet code."""
+    if pd.isna(value):
+        return "Sin flota"
+    code = str(value).strip()
+    if not code:
+        return "Sin flota"
+    return code.split("_", 1)[0].strip() or "Sin flota"
+
+
 def _estimated_kpi_meta(
     period: Optional[str] = None,
     status: str = "unavailable",
@@ -151,7 +161,7 @@ def _calculate_estimated_kpis(
     required = {"machine_code", "downtime_hours_70d", "repairs_70d", "reference_date"}
     kpi = business_kpis.copy() if business_kpis is not None else pd.DataFrame()
     can_use_kpi = not kpi.empty and required.issubset(kpi.columns) and not filter_reason
-    if can_use_kpi and equipment_filter:
+    if can_use_kpi and equipment_filter is not None:
         kpi = kpi[kpi["machine_code"].isin(equipment_filter)].copy()
         can_use_kpi = not kpi.empty
     if can_use_kpi:
@@ -291,9 +301,10 @@ class MaintenanceRepository:
         subsystems: Optional[List[str]] = None,
         date_start: Optional[str] = None,
         date_end: Optional[str] = None,
+        fleets: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
-        Apply the dashboard's System / Equipment / date-range filters to the
+        Apply the dashboard's Fleet / System / Equipment / date-range filters to the
         raw maintenance-actions table (parquet mode only - every action-based
         get_* method funnels through this so the filters behave identically
         everywhere). Absent filters are a no-op, matching the "no filter ->
@@ -309,6 +320,8 @@ class MaintenanceRepository:
             df = df[df["action_system_name"].isin(systems)]
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
+        if fleets:
+            df = df[df["machine_code"].map(_fleet_from_machine_code).isin(fleets)]
         if subsystems:
             df = df[df["action_subsystem_name"].isin(subsystems)]
         if date_start:
@@ -355,7 +368,22 @@ class MaintenanceRepository:
         else:
             raise NotImplementedError("Production mode not yet implemented")
 
-    def get_available_equipment(self, systems: Optional[List[str]] = None) -> List[str]:
+    def get_available_fleets(self) -> List[str]:
+        """Return fleet prefixes derived from machine_code before the first underscore."""
+        if self.mode == "parquet":
+            machines = self._get_parquet_data()["actions"].get("machine_code", pd.Series(dtype=str))
+        elif self.mode == "dummy":
+            machines = self._get_dummy_data()["machines"].get("machine_code", pd.Series(dtype=str))
+        else:
+            raise NotImplementedError("Production mode not yet implemented")
+        fleets = {_fleet_from_machine_code(value) for value in machines.unique()}
+        return sorted(fleets, key=lambda value: (value.casefold(), value))
+
+    def get_available_equipment(
+        self,
+        systems: Optional[List[str]] = None,
+        fleets: Optional[List[str]] = None,
+    ) -> List[str]:
         """
         Distinct machine codes present in the data, for populating the
         Equipment filter. When `systems` is given, scoped to machines that
@@ -367,10 +395,17 @@ class MaintenanceRepository:
                 return []
             if systems:
                 df_actions = df_actions[df_actions["action_system_name"].isin(systems)]
+            if fleets:
+                df_actions = df_actions[
+                    df_actions["machine_code"].map(_fleet_from_machine_code).isin(fleets)
+                ]
             return sorted(df_actions["machine_code"].dropna().unique().tolist())
         elif self.mode == "dummy":
             data = self._get_dummy_data()
-            return sorted(data["machines"]["machine_code"].tolist())
+            machines = data["machines"]["machine_code"].dropna()
+            if fleets:
+                machines = machines[machines.map(_fleet_from_machine_code).isin(fleets)]
+            return sorted(machines.tolist())
         else:
             raise NotImplementedError("Production mode not yet implemented")
 
@@ -501,6 +536,7 @@ class MaintenanceRepository:
         equipment: Optional[List[str]] = None,
         subsystems: Optional[List[str]] = None,
         detail_limit: int = 250,
+        fleets: Optional[List[str]] = None,
     ) -> dict:
         """Build the JSON-safe contract consumed by the productive Mantenciones page."""
         months = self.get_available_months()
@@ -527,7 +563,7 @@ class MaintenanceRepository:
                         "pareto_scope": self._pareto_scope(),
                         "estimated_kpis": _estimated_kpi_meta(selected, reason=source_error),
                     },
-                    "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                    "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                     "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                     "data": empty,
                 }
@@ -554,7 +590,7 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                     "estimated_kpis": _estimated_kpi_meta(selected, reason="Faltan columnas requeridas en la fuente."),
                 },
-                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
@@ -574,7 +610,7 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                     "estimated_kpis": _estimated_kpi_meta(selected, reason="El período no está disponible."),
                 },
-                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
@@ -586,6 +622,7 @@ class MaintenanceRepository:
             subsystems=subsystems,
             date_start=start.isoformat(),
             date_end=(end - timedelta(days=1)).date().isoformat(),
+            fleets=fleets,
         )
         source_start = base["change_date"].min() if not base.empty else None
         source_end = base["change_date"].max() if not base.empty else None
@@ -608,7 +645,7 @@ class MaintenanceRepository:
                     "pareto_scope": self._pareto_scope(),
                     "estimated_kpis": _estimated_kpi_meta(selected, reason="No hay acciones para los filtros seleccionados."),
                 },
-                "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+                "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
                 "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
                 "data": empty,
             }
@@ -627,11 +664,17 @@ class MaintenanceRepository:
         }
         business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
         filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; se usa el fallback mensual." if systems or subsystems else None
+        equipment_filter = equipment or None
+        if fleets:
+            fleet_equipment = set(self.get_available_equipment(fleets=fleets))
+            if equipment:
+                fleet_equipment.intersection_update(equipment)
+            equipment_filter = sorted(fleet_equipment)
         estimated_kpis, estimated_meta = _calculate_estimated_kpis(
             df,
             selected,
             business_kpis=business_kpis,
-            equipment_filter=equipment,
+            equipment_filter=equipment_filter,
             filter_reason=filter_reason,
         )
         kpis.update(estimated_kpis)
@@ -775,7 +818,7 @@ class MaintenanceRepository:
                 "pareto_scope": self._pareto_scope(),
                 "estimated_kpis": estimated_meta,
             },
-            "filters": {"systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
+            "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
             "kpis": kpis,
             "data": {
                 "daily": self._json_records(daily),
