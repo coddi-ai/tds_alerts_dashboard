@@ -33,8 +33,12 @@ from tests.quality.expectations import (
     PERIOD_PATTERN,
     DataFacts,
     QualityCase,
+    available_capabilities,
     date_variants,
     fold,
+    partition_cases,
+    question_placeholders,
+    render_question,
     resolve_facts,
 )
 
@@ -52,6 +56,7 @@ class CaseResult:
     facts: dict[str, str] = field(default_factory=dict)
     grounding: dict = field(default_factory=dict)
     error: str | None = None
+    prior_turns: list[dict[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -66,6 +71,7 @@ class CaseResult:
             "grounding": self.grounding,
             "error": self.error,
             "response": self.response,
+            "prior_turns": self.prior_turns,
         }
 
 
@@ -74,6 +80,27 @@ def _matches(haystack: str, needle) -> bool:
     if isinstance(needle, tuple):
         return any(_matches(haystack, item) for item in needle)
     return fold(needle) in haystack
+
+
+def _matches_fact(response: str, value: str) -> bool:
+    """Compare integer facts across presentation formats without matching substrings."""
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        normalized = value.rstrip("0").rstrip(".")
+        if "." not in normalized and not normalized.startswith("-"):
+            return _matches_fact(response, normalized)
+        return bool(re.search(
+            r"(?<![\w.,])" + re.escape(normalized).replace(r"\.", "[.,]")
+            + r"0*(?![\w]|[.,]\d)", response,
+        ))
+    if re.fullmatch(r"\d+", value):
+        grouped = f"{int(value):,}"
+        variants = {value, grouped, grouped.replace(",", "."), grouped.replace(",", " ")}
+        return bool(re.search(
+            r"(?<![\w.,])(?:" + "|".join(re.escape(v) for v in variants)
+            + r")(?:[.,]0+)?(?![\w]|[.,]\d)",
+            response.replace("\u00a0", " ").replace("\u202f", " "),
+        ))
+    return _matches(response, date_variants(value))
 
 
 def evaluate(
@@ -104,12 +131,15 @@ def evaluate(
     for name, value in facts.items():
         if not value:
             failures.append(f"el dato esperado {name} vino vacío")
-        elif not _matches(folded, date_variants(value)):
+        elif not _matches_fact(folded, value):
             failures.append(f"no cita {name}={value!r}")
 
     for needle in case.must_not_include:
         if _matches(folded, needle):
             failures.append(f"no debería mencionar {needle!r}")
+    for pattern in case.must_not_include_regex:
+        if re.search(pattern, folded):
+            failures.append(f"afirmación no permitida: {pattern!r}")
 
     if case.expect_bold and not BOLD_PATTERN.search(response):
         failures.append("sin negrita en los datos clave")
@@ -165,8 +195,25 @@ class QualityRunner:
 
     async def run_case(self, case: QualityCase) -> CaseResult:
         started = time.time()
+        prior_turns: list[dict[str, str]] = []
         try:
-            facts = resolve_facts(self.facts, case.must_include_facts)
+            # Placeholders in the question are resolved too, so a case can name a real unit
+            # without hardcoding a machine code that may not exist next month.
+            needed = tuple(
+                dict.fromkeys(case.must_include_facts + question_placeholders(case.question))
+            )
+            facts = resolve_facts(self.facts, needed)
+            question = render_question(case, facts)
+            ancestors: list[QualityCase] = []
+            seen = {case.case_id}
+            parent_id = case.follow_up_of
+            while parent_id:
+                if parent_id in seen:
+                    raise ValueError(f"Ciclo de follow-ups: {parent_id}")
+                seen.add(parent_id)
+                previous = CASE_MAP[parent_id]
+                ancestors.append(previous)
+                parent_id = previous.follow_up_of
         except Exception as exc:
             return CaseResult(
                 case_id=case.case_id,
@@ -179,23 +226,34 @@ class QualityRunner:
         try:
             session = await self.service.initialize(self.username, self.client)
             session_id = session.session_id
-            # A follow-up needs the previous turn in the same session.
-            if case.follow_up_of:
-                previous = CASE_MAP[case.follow_up_of]
-                await self.service.send_message(
-                    self.username, self.client, session_id, previous.question
+            # Replay the whole chain oldest-first, not just the immediate predecessor:
+            # turn three otherwise receives a pronoun without the original entity.
+            for previous in reversed(ancestors):
+                previous_facts = resolve_facts(
+                    self.facts, question_placeholders(previous.question)
                 )
+                previous_question = render_question(previous, previous_facts)
+                previous_result = await self.service.send_message(
+                    self.username,
+                    self.client,
+                    session_id,
+                    previous_question,
+                )
+                prior_turns.append({"case_id": previous.case_id,
+                                    "question": previous_question,
+                                    "response": previous_result.response})
             result = await self.service.send_message(
-                self.username, self.client, session_id, case.question
+                self.username, self.client, session_id, question
             )
         except Exception as exc:
             return CaseResult(
                 case_id=case.case_id,
-                question=case.question,
+                question=question,
                 passed=False,
                 seconds=time.time() - started,
                 error=f"{type(exc).__name__}: {exc}",
                 facts=facts,
+                prior_turns=prior_turns,
             )
 
         charts = [item.model_dump(mode="json") for item in result.visualizations]
@@ -204,12 +262,12 @@ class QualityRunner:
             result.response,
             result.request_type,
             charts,
-            facts,
+            {name: facts[name] for name in case.must_include_facts},
             result.grounding,
         )
         return CaseResult(
             case_id=case.case_id,
-            question=case.question,
+            question=question,
             passed=not failures,
             seconds=time.time() - started,
             failures=failures,
@@ -218,6 +276,7 @@ class QualityRunner:
             charts=[str(chart.get("chart_id", "")) for chart in charts],
             facts=facts,
             grounding=result.grounding,
+            prior_turns=prior_turns,
         )
 
     def _admit_batch(self, concurrency: int) -> None:
@@ -270,14 +329,27 @@ def select_cases(case_ids: list[str], tags: list[str]) -> list[QualityCase]:
     return selected
 
 
-def summarize(results: list[CaseResult]) -> dict:
+def summarize(
+    results: list[CaseResult], not_applicable: list[tuple[QualityCase, str]] | None = None
+) -> dict:
+    """Score the run, keeping "not applicable" outside the pass rate.
+
+    A case the client has no source for is not evidence about the assistant, so counting it
+    as passed would inflate the rate with untested behaviour - and counting it as failed would
+    blame the assistant for a missing file. It is listed separately, with its reason.
+    """
     passed = [item for item in results if item.passed]
+    skipped = not_applicable or []
     return {
         "total": len(results),
         "passed": len(passed),
         "failed": len(results) - len(passed),
         "pass_rate": round(len(passed) / len(results) * 100, 1) if results else 0.0,
         "seconds": round(sum(item.seconds for item in results), 1),
+        "not_applicable": [
+            {"case_id": case.case_id, "question": case.question, "reason": reason}
+            for case, reason in skipped
+        ],
         "cases": [item.as_dict() for item in results],
     }
 
@@ -303,15 +375,28 @@ def main() -> int:
         return 2
 
     runner = QualityRunner(client=args.client)
+    # A client without a source cannot answer the questions that need it. Those are reported
+    # as not applicable instead of being sent and failing for a reason that says nothing
+    # about the assistant.
+    capabilities = available_capabilities(runner.service.repository, args.client)
+    cases, not_applicable = partition_cases(cases, capabilities)
+    for case, reason in not_applicable:
+        print(f"  - {case.case_id}: NO APLICA · {reason}")
+    if not cases:
+        print("Ningun caso aplicable para este cliente")
+        return 2
+
     print(f"Ejecutando {len(cases)} casos para {args.client.upper()} como {runner.username}\n")
     results = asyncio.run(runner.run(cases, concurrency=args.concurrency))
-    summary = summarize(results)
+    summary = summarize(results, not_applicable)
 
     print()
     print(
         f"{summary['passed']}/{summary['total']} casos aprobados "
         f"({summary['pass_rate']}%) en {summary['seconds']}s"
     )
+    if not_applicable:
+        print(f"{len(not_applicable)} casos no aplicables para {args.client.upper()}")
     if args.report:
         Path(args.report).write_text(
             json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8"

@@ -145,6 +145,22 @@ Dimensiones: `unit`, `component`, `status`, `anomaly_type`, `day`, `week`, `mont
 Métricas: `count`, `severity_score`, `classification_score`. Úsala para ver qué componentes
 concentran condición Anormal o Alerta, no solo el estado del equipo.
 
+**Esta fuente tiene una fila por muestra, así que el alcance decide qué se cuenta.** El parámetro
+`scope` admite exactamente tres valores, los mismos que declara `query_oil_components`:
+
+| `scope` | Qué grafica | Cuándo usarlo |
+| --- | --- | --- |
+| `latest_per_unit_component` | La muestra más reciente de cada componente, **sin ventana temporal**. | Condición actual. Es el valor por omisión cuando no se pide período. |
+| `latest_per_unit_component_in_period` | La última muestra de cada componente **dentro** del período pedido. | “¿Cómo estaban al cierre de junio?”. Requiere `days` o `start_date`/`end_date`. |
+| `history` | **Todas** las muestras del período. | Evolución, tendencias, conteos de muestras. |
+
+Si omites `scope`, se infiere: dimensión temporal (`day`/`week`/`month`) o período pedido →
+`history`; en cualquier otro caso → `latest_per_unit_component`. Declara en tu texto el alcance
+que usó el gráfico; viene en `summary.sample_scope`.
+
+**No pidas condición actual con una ventana relativa.** `days=30` es un período, así que excluye
+los componentes muestreados hace más tiempo. Si quieres la condición de hoy, no pases `days`.
+
 **Tendencia histórica de un ensayo de aceite** (`chart_type="line"`, `dimension="day"` o
 `"week"`, `unit_id` para un equipo puntual): además de `severity_score`/`classification_score`,
 `metric` acepta el nombre exacto de cualquier ensayo/elemento de la muestra (`Hierro`, `Aluminio`,
@@ -205,7 +221,10 @@ A nivel de registro (grafican valores individuales, **no** un agregado). Requier
 ## Ventanas de tiempo
 
 - Si el usuario dice “últimos N días/semanas/meses”, convierte la ventana a `days`.
-- Sin periodo explícito usa `days=60`.
+- Sin periodo explícito **no pases `days`**: déjalo en 0 y cada fuente aplica su propio
+  comportamiento por omisión (60 días para alertas, mantenimiento y telemetría; condición actual
+  sin ventana para `oil_components`). Pasar `days=60` “por si acaso” es pedir un período, y en
+  aceite eso descarta los componentes muestreados hace más tiempo.
 - Si entrega fechas, usa `start_date` y `end_date` en formato ISO `YYYY-MM-DD`.
 - No mezcles `days` como interpretación principal cuando se usan fechas explícitas.
 - La ventana relativa se calcula respecto de `window.today`; si la fuente no cubre esa ventana,

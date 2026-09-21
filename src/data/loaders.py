@@ -1465,7 +1465,29 @@ def load_telemetry_ai_comments(client: str, level: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
+def list_maintenance_weeks(client: str = "cda") -> List[str]:
+    """Return weekly maintenance snapshots available for a client."""
+    root = _data_path("mantentions", "golden", client.lower())
+    if not root.exists():
+        return []
+    weeks = [
+        path.stem
+        for path in root.glob("*.csv")
+        if path.stem != "Resumen_Semanal_Completo" and path.stem[:2].isdigit()
+    ]
+    # The file name is ``ww-yyyy``; lexicographic ordering would put all
+    # week 01 files before week 52 files and select the wrong latest snapshot.
+    def _week_key(value: str) -> tuple[int, int, str]:
+        try:
+            week, year = value.split("-", 1)
+            return int(year), int(week), value
+        except (TypeError, ValueError):
+            return (0, 0, value)
+
+    return sorted(weeks, key=_week_key)
+
+
+def load_maintenance_week(client: str, week: str, base_path: Optional[Path] = None) -> pd.DataFrame:
     """
     Load maintenance data for a specific week.
     
@@ -1476,7 +1498,8 @@ def load_maintenance_week(client: str, week: str) -> pd.DataFrame:
     Returns:
         DataFrame with maintenance records for the week
     """
-    file_path = _data_path("mantentions", "golden", client.lower(), f"{week}.csv")
+    root = base_path or _data_path("mantentions", "golden", client.lower())
+    file_path = root / f"{week}.csv"
     logger.info(f"Loading maintenance data from {file_path}")
     
     if not file_path.exists():
@@ -1512,22 +1535,19 @@ def _get_mantentions_data_path(client: str = "cda") -> Optional[Path]:
     # Get client from environment variable if available
     client = os.getenv("CLIENT_NAME", client)
     
-    # Get project root (3 levels up from this file)
-    base_path = Path(__file__).parent.parent.parent
-    
     # Try both lowercase and uppercase variants for compatibility
     # Production structure: data/mantentions/golden/{client}/Maintance_Labeler_Views/
     client_lower = client.lower()
     client_upper = client.upper()
-    
+
     # Try lowercase first (preferred convention)
-    data_path = base_path / "data" / "mantentions" / "golden" / client_lower / "Maintance_Labeler_Views"
+    data_path = _data_path("mantentions", "golden", client_lower, "Maintance_Labeler_Views")
     if data_path.exists():
         logger.info(f"Using mantentions data path: {data_path}")
         return data_path
     
     # Try uppercase if lowercase doesn't exist
-    data_path = base_path / "data" / "mantentions" / "golden" / client_upper / "Maintance_Labeler_Views"
+    data_path = _data_path("mantentions", "golden", client_upper, "Maintance_Labeler_Views")
     if data_path.exists():
         logger.info(f"Using mantentions data path: {data_path}")
         return data_path

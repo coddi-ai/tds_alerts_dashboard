@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from uuid import uuid4
 
 import dash
@@ -12,13 +14,14 @@ from dash.exceptions import PreventUpdate
 from dashboard.auth import resolve_authenticated_username
 from dashboard.campbell_ai.client import CampbellAPIClient, CampbellAPIClientError
 from dashboard.campbell_ai.layout import (
-    ALERT_SUGGESTIONS,
     CAMPBELL_AI_VERSION,
     KEEP_WAITING_EXTENSION_SECONDS,
     SLOW_ANSWER_SECONDS,
     render_chat_history,
     render_conversation_list,
     service_error_content,
+    suggested_question_text,
+    suggested_questions_block,
     unavailable_placeholder,
 )
 from dashboard.campbell_ai.stream import streaming_enabled
@@ -29,6 +32,79 @@ from src.campbell_ai.logging_setup import configure_ui_logging
 logger = logging.getLogger("campbell_ai.ui.callbacks")
 
 _HISTORY_PANEL_ID = "campbell-ai-history-offcanvas"
+
+
+# One "new conversation" per burst of clicks.
+#
+# Two clicks land before the browser has the new stores, so both callbacks see the *same* old
+# thread as their starting point and each mints a session; the first is then abandoned empty.
+# Keyed on (user, company, thread being left), because "start a new conversation from thread X"
+# is the request, and repeating it within a few seconds is one intent, not two.
+#
+# Process-local on purpose: it de-duplicates a double click in one browser, which is what the
+# reproduction shows. It is not a distributed lock and does not pretend to be one.
+_NEW_CONVERSATION_WINDOW_SECONDS = 5.0
+_NEW_CONVERSATION_RESULTS: dict[tuple, tuple[float, str]] = {}
+_NEW_CONVERSATION_LOCKS: dict[tuple, threading.Lock] = {}
+_NEW_CONVERSATION_GUARD = threading.Lock()
+
+
+def _new_conversation_lock(key: tuple) -> threading.Lock:
+    """One lock per (user, company, previous thread), created on first use."""
+    with _NEW_CONVERSATION_GUARD:
+        # Bound the table: these keys are short-lived and a long-running process should not
+        # accumulate one per conversation ever started.
+        if len(_NEW_CONVERSATION_LOCKS) > 256:
+            _NEW_CONVERSATION_LOCKS.clear()
+        return _NEW_CONVERSATION_LOCKS.setdefault(key, threading.Lock())
+
+
+def _recent_new_conversation(key: tuple) -> str | None:
+    """The session a click on this same starting point just created, if it is still fresh."""
+    now = time.monotonic()
+    with _NEW_CONVERSATION_GUARD:
+        stale = [
+            stored
+            for stored, (created, _session) in _NEW_CONVERSATION_RESULTS.items()
+            if now - created > _NEW_CONVERSATION_WINDOW_SECONDS
+        ]
+        for stored in stale:
+            _NEW_CONVERSATION_RESULTS.pop(stored, None)
+        entry = _NEW_CONVERSATION_RESULTS.get(key)
+    if entry is None:
+        return None
+    return entry[1] if now - entry[0] <= _NEW_CONVERSATION_WINDOW_SECONDS else None
+
+
+def _remember_new_conversation(key: tuple, session_id: str) -> None:
+    with _NEW_CONVERSATION_GUARD:
+        _NEW_CONVERSATION_RESULTS[key] = (time.monotonic(), session_id)
+
+
+def _new_conversation_state(session_id: str, company_id: str) -> tuple:
+    """Everything the view resets when a new thread becomes the visible one.
+
+    One definition, so the freshly-created path and the de-duplicated path cannot leave the
+    view in two different states.
+    """
+    return (
+        session_id,
+        [],
+        company_id,
+        f"Listo · {company_id.upper()}",
+        "success",
+        None,
+        # Ratings belong to the thread that was open; the new one has none.
+        {},
+        # A half-typed question belongs to the thread it was being written in.
+        "",
+        # Any answer still in flight was addressed to the previous thread. Dropping the
+        # pending marker keeps a late result from being rendered into this one.
+        None,
+        # And the job handle with it: the poll reads that store, so leaving it behind is how a
+        # finished answer for the old thread landed in the new one.
+        None,
+    )
 
 
 def _company_id_from_state(company_state) -> str | None:
@@ -79,13 +155,51 @@ def _pending_user_message(content: str) -> dict:
     }
 
 
-def _resolve_outgoing_message(triggered_id, typed_message) -> str | None:
-    """Resolve button, Enter and suggested-question events into one message."""
+def _triggered_value():
+    """The value of the input that fired this callback, or None outside a callback."""
+    triggered = getattr(callback_context, "triggered", None) or []
+    if not triggered:
+        return None
+    return triggered[0].get("value")
+
+
+def _clicked(triggered_value) -> bool:
+    """Did this trigger come from a click, or from the component being re-created?
+
+    The suggestion buttons are rendered per client, so the pattern-matching `n_clicks` input
+    fires whenever that list is rebuilt - and a freshly mounted button reports `n_clicks` of
+    0 or None. Reading only the triggered *id* made every re-render look like a click on the
+    first button in the list, which sent its question again, which re-rendered, which sent it
+    again: the reported loop on "¿Cuántas alertas se registraron en los últimos 7 días…".
+
+    A real click always carries a count of at least one.
+    """
+    try:
+        return int(triggered_value or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_outgoing_message(
+    triggered_id, typed_message, capabilities=None, triggered_value=None
+) -> str | None:
+    """Resolve button, Enter and suggested-question events into one message.
+
+    A suggested question is resolved through the same registry that rendered it, and its
+    capability is re-checked here: a button drawn for the previous client, or one whose source
+    stopped being usable, must not be sendable just because it is still on screen.
+
+    `triggered_value` is the `n_clicks` that fired. It is required for the suggestions,
+    because those components are rebuilt when the client's capabilities change and a rebuild
+    must not be read as a click. See `_clicked`.
+    """
     if (
         isinstance(triggered_id, dict)
         and triggered_id.get("type") == "campbell-ai-suggested-question"
     ):
-        question = ALERT_SUGGESTIONS.get(triggered_id.get("question_id"))
+        if not _clicked(triggered_value):
+            return None
+        question = suggested_question_text(triggered_id.get("question_id"), capabilities)
         return str(question).strip() if question else None
     if triggered_id in ("campbell-ai-send", "campbell-ai-input"):
         return str(typed_message or "").strip()
@@ -482,7 +596,6 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             },
             "n_clicks",
         ),
-        Input("campbell-ai-clear", "n_clicks"),
         Input("campbell-ai-retry", "n_clicks"),
         State("campbell-ai-input", "value"),
         State("campbell-ai-session-store", "data"),
@@ -491,13 +604,13 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         State("campbell-ai-failure-store", "data"),
         State("campbell-ai-session-company", "data"),
         State("campbell-ai-state-stamp", "data"),
+        State("campbell-ai-capabilities-store", "data"),
     )
     def synchronize_chat(
         selected_client,
         _send_clicks,
         _input_submits,
         _suggested_clicks,
-        _clear_clicks,
         _retry_clicks,
         message,
         session_id,
@@ -506,6 +619,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         failure,
         stored_session_company,
         state_stamp,
+        capabilities,
     ):
         username = _current_username(session_company)
         company_id = str(selected_client or "").strip().lower()
@@ -594,26 +708,39 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             company_changed = bool(
                 stored_company_id and stored_company_id != company_id
             )
-            if triggered_id == "campbell-ai-clear":
+            suggestion_clicked = (
+                isinstance(triggered_id, dict)
+                and triggered_id.get("type") == "campbell-ai-suggested-question"
+                and _clicked(_triggered_value())
+            )
+            if suggestion_clicked:
                 if not session_id or company_changed:
-                    initialized = client.initialize(username, company_id)
-                    session_id = initialized["session_id"]
-                else:
-                    client.clear(username, company_id, session_id)
-                return (
-                    session_id,
-                    [],
-                    "",
-                    f"Listo · {company_id.upper()}",
-                    "success",
-                    None,
-                    _updated_company_state(session_company, company_id),
-                    None,
-                    company_id,
-                    stamp,
+                    # The client-change callback owns initialization; a disappearing button
+                    # must not create a second thread while that callback is in flight.
+                    return (no_update,) * 10
+                # A button may still be visible between periodic capability refreshes.
+                # Validate its source now, reusing the thread, before admitting a message.
+                refreshed = client.initialize(
+                    username, company_id, session_id
                 )
-
-            normalized_message = _resolve_outgoing_message(triggered_id, message)
+                capabilities = refreshed.get("capabilities") or {}
+                if not suggested_question_text(triggered_id.get("question_id"), capabilities):
+                    return (
+                        session_id, history or [], no_update,
+                        "La fuente de esta pregunta ya no está disponible", "warning",
+                        _failure_state(
+                            "source_unavailable", "La pregunta sugerida ya no está disponible",
+                            "Las fuentes cambiaron. Revisa las sugerencias actualizadas.",
+                        ),
+                        session_company, None, stored_session_company, stamp,
+                    )
+            normalized_message = _resolve_outgoing_message(
+                triggered_id,
+                message,
+                capabilities,
+                # The count that fired, so a rebuilt suggestion button is not a click.
+                _triggered_value(),
+            )
             if normalized_message is not None:
                 if not normalized_message:
                     return (
@@ -915,9 +1042,13 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         State("campbell-ai-history-store", "data"),
         State("campbell-ai-company-store", "data"),
         State("campbell-ai-waiting-ack", "data"),
+        State("campbell-ai-session-store", "data"),
+        State("client-selector", "value"),
         prevent_initial_call=True,
     )
-    def poll_pending_job(_ticks, job, history, session_company, waiting_ack):
+    def poll_pending_job(
+        _ticks, job, history, session_company, waiting_ack, session_id, selected_client
+    ):
         """Collect a background answer, or explain why it is still running.
 
         Every branch here ends in a definite state — answered, failed, or still running
@@ -944,6 +1075,26 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         owner = job.get("username")
         if owner and username and owner != username:
             logger.info("Campbell AI descarta un job de otro usuario tras el cambio")
+            return (
+                no_update, no_update, no_update, no_update,
+                None, None, None, False, "",
+            )
+
+        # The job also belongs to one *thread* and one company. A question asked before the
+        # user opened a new conversation - or switched company - finishes anyway, and writing
+        # its answer into the thread now on screen puts an old exchange in a conversation it
+        # was never part of. The archived thread keeps it; this view does not show it.
+        active_session = str(session_id or "").strip()
+        job_session = str(job.get("session_id") or "").strip()
+        active_company = str(selected_client or "").strip().lower()
+        stale_thread = bool(active_session and job_session and job_session != active_session)
+        stale_company = bool(active_company and company_id and company_id != active_company)
+        if stale_thread or stale_company:
+            logger.info(
+                "Campbell AI descarta un job de otro hilo o empresa (job=%s, activo=%s)",
+                job_session or "?",
+                active_session or "?",
+            )
             return (
                 no_update, no_update, no_update, no_update,
                 None, None, None, False, "",
@@ -1174,7 +1325,8 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
     @app.callback(
         Output("campbell-ai-send", "disabled", allow_duplicate=True),
         Output("campbell-ai-input", "disabled", allow_duplicate=True),
-        Output("campbell-ai-clear", "disabled", allow_duplicate=True),
+        Output("campbell-ai-new-conversation-main", "disabled", allow_duplicate=True),
+        Output("campbell-ai-new-conversation", "disabled", allow_duplicate=True),
         Output("campbell-ai-input", "placeholder"),
         Input("campbell-ai-failure-store", "data"),
         Input("campbell-ai-pending-message-store", "data"),
@@ -1209,7 +1361,9 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             if blocked
             else "Pregúntame sobre mantenimiento o solicita un gráfico…"
         )
-        return disabled, disabled, disabled, placeholder
+        # Both ways into "nueva conversación", not just the header one: leaving the panel
+        # button live let a thread be created while an answer was still on its way.
+        return disabled, disabled, disabled, disabled, placeholder
 
     @app.callback(
         Output("campbell-ai-messages", "children"),
@@ -1394,9 +1548,11 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         State("campbell-ai-session-store", "data"),
         State("campbell-ai-company-store", "data"),
         State("campbell-ai-waiting-ack", "data"),
+        State("client-selector", "value"),
         prevent_initial_call=True,
     )
-    def finalize_stream(result, pending, history, session_id, company_state, waiting_ack):
+    def finalize_stream(result, pending, history, session_id, company_state, waiting_ack,
+                        selected_client=None):
         """Apply a finished stream, report its progress, or fall back to a job.
 
         Three inputs arrive on this one store, because the browser is the only thing
@@ -1405,6 +1561,33 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         """
         if not isinstance(result, dict):
             raise PreventUpdate
+
+        # A stream can finish after navigation, cancellation or opening another thread.
+        # Check both its envelope and the server event before touching any active store.
+        active_company = str(selected_client or _company_id_from_state(company_state) or "").strip().lower()
+        active_session = str(session_id or "").strip()
+        event = result.get("event") or {}
+        for origin in (result, event):
+            if not isinstance(origin, dict):
+                raise PreventUpdate
+            if origin.get("session_id") and str(origin["session_id"]) != active_session:
+                raise PreventUpdate
+            if origin.get("company_id") and str(origin["company_id"]).strip().lower() != active_company:
+                raise PreventUpdate
+        if result.get("ok") and (
+            not active_session or not active_company
+            or event.get("session_id") != active_session
+            or str(event.get("company_id") or "").strip().lower() != active_company
+        ):
+            raise PreventUpdate
+        if isinstance(pending, dict):
+            if pending.get("session_id") and pending["session_id"] != active_session:
+                raise PreventUpdate
+            if pending.get("company_id") and str(pending["company_id"]).lower() != active_company:
+                raise PreventUpdate
+            if (result.get("client_message_id") and pending.get("client_message_id")
+                    and result["client_message_id"] != pending["client_message_id"]):
+                raise PreventUpdate
 
         if result.get("running"):
             # Legacy path, kept deliberately. Progress is now reported entirely in the
@@ -1710,6 +1893,74 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         )
 
     @app.callback(
+        Output("campbell-ai-capabilities-store", "data"),
+        Input("campbell-ai-session-store", "data"),
+        Input("client-selector", "value"),
+        Input("campbell-ai-capabilities-refresh", "n_intervals"),
+        Input("campbell-ai-failure-store", "data"),
+        State("campbell-ai-company-store", "data"),
+        State("campbell-ai-capabilities-store", "data"),
+    )
+    def resolve_client_capabilities(
+        session_id, selected_client, _refresh_ticks, _failure, company_state, stored
+    ):
+        """What the active client can be asked, re-resolved when that could have changed.
+
+        Four triggers, because a stored capability payload goes stale in four ways: opening or
+        restoring a thread, switching company, time passing while a source syncs or breaks, and
+        a failure that may itself be a source that stopped being readable.
+
+        `initialize` is called with the session id already in hand, which reuses that thread
+        instead of minting another one; its response is where `client_capabilities` already
+        lives, and the UI simply used to discard it. The backend answer is memoized per file
+        generation, so the periodic call is light.
+
+        Any failure resolves to "nothing available", which withdraws every suggestion. That
+        is the safe direction: an offered question that cannot run is the defect, while a
+        missing suggestion only costs a shortcut.
+        """
+        company_id = str(selected_client or "").strip().lower()
+        username = _current_username(company_state)
+        if not username or not company_id:
+            return None
+        try:
+            initialized = CampbellAPIClient.from_env().initialize(
+                username, company_id, str(session_id or "").strip() or None
+            )
+        except CampbellAPIClientError as exc:
+            logger.warning(
+                "Campbell AI no pudo resolver capacidades de %s: %s", company_id, exc
+            )
+            return None
+        capabilities = initialized.get("capabilities")
+        if not isinstance(capabilities, dict):
+            return None
+        # Stamped with the company it describes, so a stale payload from the previous client
+        # cannot be mistaken for this one's. Deliberately *not* stamped with the time this
+        # browser resolved it: that changed on every tick, rewrote the store, and rebuilt the
+        # suggestion buttons for no reason. When the sources were checked already travels in
+        # `sources_checked_at`, which the backend keeps stable while its probe is cached.
+        resolved = {**capabilities, "company_id": company_id}
+        if stored == resolved:
+            # Nothing changed, so nothing downstream needs to re-render.
+            return no_update
+        return resolved
+
+    @app.callback(
+        Output("campbell-ai-suggestions", "children"),
+        Input("campbell-ai-capabilities-store", "data"),
+        Input("client-selector", "value"),
+    )
+    def render_suggested_questions(capabilities, selected_client):
+        """Draw only the questions the active client can have answered."""
+        company_id = str(selected_client or "").strip().lower()
+        if isinstance(capabilities, dict) and capabilities.get("company_id") != company_id:
+            # The store still holds the previous client's answer; offer nothing until the
+            # capability callback catches up rather than showing questions from that company.
+            return []
+        return suggested_questions_block(capabilities)
+
+    @app.callback(
         Output("campbell-ai-session-store", "data", allow_duplicate=True),
         Output("campbell-ai-history-store", "data", allow_duplicate=True),
         Output("campbell-ai-session-company", "data", allow_duplicate=True),
@@ -1717,37 +1968,68 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         Output("campbell-ai-status", "color", allow_duplicate=True),
         Output("campbell-ai-failure-store", "data", allow_duplicate=True),
         Output("campbell-ai-feedback-store", "data", allow_duplicate=True),
+        Output("campbell-ai-input", "value", allow_duplicate=True),
+        Output("campbell-ai-pending-message-store", "data", allow_duplicate=True),
+        Output("campbell-ai-job-store", "data", allow_duplicate=True),
         Input("campbell-ai-new-conversation", "n_clicks"),
+        Input("campbell-ai-new-conversation-main", "n_clicks"),
         State("campbell-ai-company-store", "data"),
+        State("campbell-ai-session-store", "data"),
+        State("campbell-ai-history-store", "data"),
+        State("campbell-ai-failure-store", "data"),
         prevent_initial_call=True,
     )
-    def start_new_conversation(clicks, company_state):
-        """Open an empty thread without touching the archived one."""
-        if not clicks:
+    def start_new_conversation(
+        panel_clicks, header_clicks, company_state, session_id, history, failure
+    ):
+        """Open an empty thread, keeping the previous one readable.
+
+        Both entry points land here - the header button and the one in the history panel - so
+        there is a single implementation of "new conversation". The header button used to call
+        the `/clear` endpoint instead, which emptied the *live* thread and kept its id: the
+        conversation the user had just built disappeared from the view with no way back to it,
+        which is why the old "Limpiar" label read as a delete.
+
+        A new id is obtained first and only then does the visible thread change. If
+        initialization fails the previous thread stays exactly as it was and the error is
+        shown as recoverable, rather than leaving the user with neither thread.
+        """
+        if not (panel_clicks or header_clicks):
             raise PreventUpdate
         company_id = _company_id_from_state(company_state)
         username = _current_username(company_state)
         if not username or not company_id:
             raise PreventUpdate
-        try:
-            initialized = CampbellAPIClient.from_env().initialize(username, company_id)
-        except CampbellAPIClientError as exc:
-            logger.warning("Campbell AI could not start a conversation: %s", exc)
-            return (
-                no_update,
-                no_update,
-                no_update,
-                _status_label(exc),
-                "danger",
-                _failure_from_client_error(exc),
-                no_update,
-            )
-        return (
-            initialized["session_id"],
-            [],
-            company_id,
-            f"Listo · {company_id.upper()}",
-            "success",
-            None,
-            {},
-        )
+        # A repeated click on a thread that is already new and healthy has nothing to do.
+        if session_id and not history and not failure:
+            raise PreventUpdate
+        # The double click the browser has not caught up with: both invocations carry the same
+        # previous thread, so the second one adopts the session the first just created instead
+        # of minting another and orphaning it.
+        key = (username, company_id, str(session_id or ""))
+        with _new_conversation_lock(key):
+            already = _recent_new_conversation(key)
+            if already:
+                logger.info(
+                    "Campbell AI reutiliza la conversación recién creada para %s", company_id
+                )
+                return _new_conversation_state(already, company_id)
+            try:
+                initialized = CampbellAPIClient.from_env().initialize(username, company_id)
+            except CampbellAPIClientError as exc:
+                logger.warning("Campbell AI could not start a conversation: %s", exc)
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    _status_label(exc),
+                    "danger",
+                    _failure_from_client_error(exc),
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            created = initialized["session_id"]
+            _remember_new_conversation(key, created)
+        return _new_conversation_state(created, company_id)

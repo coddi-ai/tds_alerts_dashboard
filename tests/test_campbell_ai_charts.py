@@ -120,15 +120,21 @@ def _registry(tmp_path) -> DashboardChartRegistry:
     ).to_parquet(oil / "machine_status.parquet", index=False)
     alerts = tmp_path / "alerts" / "golden" / "cda"
     alerts.mkdir(parents=True)
+    # Relative to today: `alert_ranking` applies a 60-day default window, so absolute dates
+    # here made the fixture expire and the test fail by the calendar instead of by a change.
+    def _ago(days: int, hour: int) -> str:
+        stamp = pd.Timestamp.today().normalize() - pd.Timedelta(days=days)
+        return (stamp + pd.Timedelta(hours=hour)).isoformat()
+
     pd.DataFrame(
         [
-            {"UnitId": "T_9", "Timestamp": "2026-07-01T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_9", "Timestamp": "2026-07-02T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_9", "Timestamp": "2026-07-02T11:00:00", "sistema": "Motor"},
-            {"UnitId": "T_15", "Timestamp": "2026-07-03T10:00:00", "sistema": "Frenos"},
-            {"UnitId": "T_15", "Timestamp": "2026-07-03T11:00:00", "sistema": "Frenos"},
-            {"UnitId": "T_18", "Timestamp": "2026-07-04T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_20", "Timestamp": "2026-07-05T10:00:00", "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(20, 10), "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(19, 10), "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(19, 11), "sistema": "Motor"},
+            {"UnitId": "T_15", "Timestamp": _ago(18, 10), "sistema": "Frenos"},
+            {"UnitId": "T_15", "Timestamp": _ago(18, 11), "sistema": "Frenos"},
+            {"UnitId": "T_18", "Timestamp": _ago(17, 10), "sistema": "Motor"},
+            {"UnitId": "T_20", "Timestamp": _ago(16, 10), "sistema": "Motor"},
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
     return DashboardChartRegistry(DashboardDataRepository(tmp_path))

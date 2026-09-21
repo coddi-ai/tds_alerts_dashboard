@@ -39,8 +39,10 @@ from src.data.erp_schemas import (
     SEVERITY_LABELS,
     Source,
     SOURCE_LABELS,
+    STATUS_LABELS,
     System,
     SYSTEM_LABELS,
+    WarningStatus,
 )
 from src.data.erp_write_operations import MAX_TITLE_LENGTH, approve_and_send, can_approve, reject
 
@@ -53,16 +55,42 @@ _CRITICALITY_PRIORITY = {"anormal": 0, "alerta": 1, "normal": 2}
 # validation-rate trend outcome labels (raw WarningStatus values, not the full STATUS_LABELS set —
 # only "sent"/"rejected" ever appear here since validation_rate_trend restricts to terminal states)
 _OUTCOME_LABELS = {"sent": "Enviado", "rejected": "Rechazado"}
-# Registro de Avisos (2.2): presentation-only title-case for categorical columns. Identifiers
-# (warning_id, asset_id, erp_reference), the operator name, and timestamps are left untouched.
-_TITLECASE_TABLE_COLUMNS = ("source", "system", "condition_label", "severity", "status")
+# Sólo los avisos en estado terminal abren el detalle de fila del Registro de Avisos.
+_ROW_DETAIL_STATUS_LABELS = frozenset(
+    {STATUS_LABELS[WarningStatus.sent], STATUS_LABELS[WarningStatus.rejected]}
+)
+# Registro de Avisos (2.2): las columnas categóricas se muestran con las etiquetas
+# declaradas en erp_schemas — las mismas del filtro y de los gráficos de arriba.
+# Los valores almacenados mezclan idiomas (`inspections`, `medium`, `pending`),
+# así que un title-case sobre el valor crudo dejaba media tabla en inglés.
+# Identificadores (warning_id, asset_id, erp_reference), el operador y las fechas
+# se muestran tal cual.
+_TABLE_LABEL_MAPS = {
+    "source": (Source, SOURCE_LABELS),
+    "system": (System, SYSTEM_LABELS),
+    "condition_label": (ConditionLabel, CONDITION_LABEL_LABELS),
+    "severity": (Severity, SEVERITY_LABELS),
+    "status": (WarningStatus, STATUS_LABELS),
+}
 
 
-def _titlecase_display(df):
+def _label_or_titlecase(enum_cls, labels, value):
+    """Declared label for a stored enum value; title-case for anything unexpected."""
+    try:
+        return labels[enum_cls(value)]
+    except (ValueError, KeyError):
+        return str(value).title()
+
+
+def _labelled_display(df):
     display = df.copy()
-    for col in _TITLECASE_TABLE_COLUMNS:
+    for col, (enum_cls, labels) in _TABLE_LABEL_MAPS.items():
         if col in display.columns:
-            display[col] = display[col].astype(str).str.title()
+            display[col] = display[col].astype(str).map(
+                lambda value, enum_cls=enum_cls, labels=labels: _label_or_titlecase(
+                    enum_cls, labels, value
+                )
+            )
     return display
 
 
@@ -462,7 +490,7 @@ def _refresh(selected_client, user_data, source, system, condition_label, severi
 
     table_source = filtered[erp_warning_store.TABLE_COLUMNS].copy()
     table_source["generated_at"] = table_source["generated_at"].dt.strftime("%d/%m/%Y %H:%M")
-    table_data = _titlecase_display(table_source.astype(str)).to_dict("records")
+    table_data = _labelled_display(table_source.astype(str)).to_dict("records")
     return (
         str(kpis["total"]),
         str(kpis["pending"]),
@@ -487,7 +515,9 @@ def _row_detail(active_cell, table_data):
     if not active_cell or not table_data:
         return ""
     row = table_data[active_cell["row"]]
-    if (row.get("status") or "").lower() not in ("sent", "rejected"):
+    # La tabla muestra el estado ya traducido, así que la comparación va contra
+    # las mismas etiquetas y no contra los valores crudos del store.
+    if row.get("status") not in _ROW_DETAIL_STATUS_LABELS:
         return ""
     logger.info("row detail opened warning_id=%s status=%s", row.get("warning_id"), row.get("status"))
     return dbc.Card(dbc.CardBody(html.Pre(str(row))), className="shadow-sm mt-3")

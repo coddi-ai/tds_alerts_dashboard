@@ -151,6 +151,24 @@
      "calculation_date"
     ]
    },
+   "oil_limits_four": {
+    "format": "parquet",
+    "columns": [
+     "client",
+     "machine",
+     "component",
+     "essay",
+     "oilHourRange",
+     "GroupElement",
+     "min_value",
+     "LIC",
+     "LIM",
+     "LSM",
+     "LSC",
+     "sample_count",
+     "calculation_date"
+    ]
+   },
    "telemetry_machine_status": {
     "format": "parquet",
     "columns": [
@@ -697,6 +715,10 @@
      "calculation_date"
     ]
    },
+   "oil_limits_four": {
+    "format": "parquet",
+    "columns": []
+   },
    "alerts_detail": {
     "format": "csv",
     "columns": [
@@ -810,9 +832,18 @@
      "oil_temp_c_Lower_Limit",
      "oil_temp_c_Upper_Limit",
      "oil_temp_c_Value",
+     "post_engine_pressure_psi_Lower_Limit",
+     "post_engine_pressure_psi_Upper_Limit",
+     "post_engine_pressure_psi_Value",
      "pre_filter_oil_pressure_psi_Lower_Limit",
      "pre_filter_oil_pressure_psi_Upper_Limit",
-     "pre_filter_oil_pressure_psi_Value"
+     "pre_filter_oil_pressure_psi_Value",
+     "rifle_oil_pressure_psi_Lower_Limit",
+     "rifle_oil_pressure_psi_Upper_Limit",
+     "rifle_oil_pressure_psi_Value",
+     "turbo_speed_rpm_Lower_Limit",
+     "turbo_speed_rpm_Upper_Limit",
+     "turbo_speed_rpm_Value"
     ]
    },
    "predictive_motor": {
@@ -1174,7 +1205,12 @@
      "sistema",
      "subsistema",
      "componente",
-     "SourceType"
+     "SourceType",
+     "Marca",
+     "mapping_source",
+     "mensaje_ia_generado",
+     "dominio",
+     "grupo_evento"
     ]
    },
    "oil_classified": {
@@ -1259,7 +1295,17 @@
      "ratio_limit_source",
      "anomalyType",
      "ai_recommendation",
-     "ai_generated_at"
+     "ai_generated_at",
+     "Viscocidad",
+     "Numero Total Basico",
+     "Oxidación",
+     "Hollín",
+     "evolution_ratio_Viscocidad",
+     "evolution_ratio_Numero Total Basico",
+     "evolution_ratio_Oxidación",
+     "evolution_ratio_Hollín",
+     "desgaste_essays_broken",
+     "limit_source_inferior"
     ]
    },
    "oil_machine_status": {
@@ -1290,6 +1336,24 @@
      "threshold_normal",
      "threshold_alert",
      "threshold_critic",
+     "sample_count",
+     "calculation_date"
+    ]
+   },
+   "oil_limits_four": {
+    "format": "parquet",
+    "columns": [
+     "client",
+     "machine",
+     "component",
+     "essay",
+     "oilHourRange",
+     "GroupElement",
+     "min_value",
+     "LIC",
+     "LIM",
+     "LSM",
+     "LSC",
      "sample_count",
      "calculation_date"
     ]
@@ -1452,6 +1516,24 @@
      "threshold_normal",
      "threshold_alert",
      "threshold_critic",
+     "sample_count",
+     "calculation_date"
+    ]
+   },
+   "oil_limits_four": {
+    "format": "parquet",
+    "columns": [
+     "client",
+     "machine",
+     "component",
+     "essay",
+     "oilHourRange",
+     "GroupElement",
+     "min_value",
+     "LIC",
+     "LIM",
+     "LSM",
+     "LSC",
      "sample_count",
      "calculation_date"
     ]

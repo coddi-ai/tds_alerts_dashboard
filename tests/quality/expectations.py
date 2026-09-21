@@ -177,6 +177,115 @@ class DataFacts:
 # ------------------------------------------------------------------------ cases
 
 
+    # ---------------------------------------------------------------- oil samples
+
+    def _oil_components(self, **kwargs) -> dict:
+        return json.loads(self.repository.query_oil_components(self.client, **kwargs))
+
+    def _first_oil_record(self, **kwargs) -> dict:
+        records = self._oil_components(limit=5, **kwargs).get("records") or []
+        if not records:
+            raise RuntimeError("Sin muestras de aceite para anclar el caso")
+        return records[0]
+
+    def sampled_unit(self) -> str:
+        """A unit that really has an oil sample, so a question can name one."""
+        return str(self._first_oil_record().get("unitId") or "")
+
+    def sampled_component(self) -> str:
+        record = self._first_oil_record()
+        return str(
+            record.get("componentNameNormalized") or record.get("componentName") or ""
+        ).strip()
+
+    def latest_sample_number(self) -> str:
+        return str(self._first_oil_record().get("sampleNumber") or "")
+
+    def latest_sample_date(self) -> str:
+        return str(self._first_oil_record().get("sampleDate") or "")[:10]
+
+    def oil_components_total(self) -> str:
+        """How many (unit, component) pairs have a current condition."""
+        return str(self._oil_components(limit=1).get("total_rows", 0))
+
+    def oil_scope_name(self) -> str:
+        return str(self._oil_components(limit=1).get("scope") or "")
+
+    # ----------------------------------------------------------------- oil limits
+
+    def _limits(self) -> dict:
+        return json.loads(
+            self.repository.describe_oil_limits(
+                self.client,
+                unit_id=self.sampled_unit(),
+                component=self.sampled_component(),
+                limit=5,
+            )
+        )
+
+    def limit_version(self) -> str:
+        versions = self._limits().get("limit_versions") or []
+        if not versions:
+            raise RuntimeError("La calibracion vigente no publica fecha de calculo")
+        return str(versions[0])[:10]
+
+    def limited_essay(self) -> str:
+        references = self._limits().get("references") or []
+        for entry in references:
+            if entry.get("LSM") is not None:
+                return str(entry.get("essay") or "")
+        raise RuntimeError("Ningun ensayo del componente tiene banda superior calibrada")
+
+    def limited_upper_marginal(self) -> str:
+        references = self._limits().get("references") or []
+        entry = next(item for item in references if item.get("LSM") is not None)
+        return str(entry["LSM"])
+
+    def limited_upper_condemnatory(self) -> str:
+        references = self._limits().get("references") or []
+        entry = next(item for item in references if item.get("LSM") is not None)
+        if entry.get("LSC") is None:
+            raise RuntimeError("El ensayo seleccionado no publica limite superior condenatorio")
+        return str(entry["LSC"])
+
+    # ------------------------------------------------------------- laboratory KPIs
+
+    def _lab(self) -> dict:
+        return json.loads(self.repository.query_lab_kpis(self.client))
+
+    def lab_total_samples(self) -> str:
+        return str(self._lab().get("total_samples", 0))
+
+    def lab_period_start(self) -> str:
+        return str((self._lab().get("period") or {}).get("start") or "")
+
+    def lab_period_end(self) -> str:
+        return str((self._lab().get("period") or {}).get("end") or "")
+
+    def lab_transit_average(self) -> str:
+        metric = (self._lab().get("metrics") or {}).get("transit_time") or {}
+        value = metric.get("average")
+        if value is None:
+            raise RuntimeError("El tiempo de transito no esta disponible para este cliente")
+        return str(value)
+
+    def lab_diagnostic_average(self) -> str:
+        metric = (self._lab().get("metrics") or {}).get("diagnostic_time") or {}
+        value = metric.get("average")
+        if value is None:
+            raise RuntimeError("El tiempo de diagnostico no esta disponible")
+        return str(value)
+
+    # -------------------------------------------------------------- machine level
+
+    def machine_aggregate_unit(self) -> str:
+        payload = json.loads(self.repository.query_oil_status(self.client, limit=1))
+        records = payload.get("records") or []
+        if not records:
+            raise RuntimeError("Sin estado agregado de equipos para anclar el caso")
+        return str(records[0].get("unit_id") or "")
+
+
 @dataclass
 class QualityCase:
     case_id: str
@@ -189,6 +298,7 @@ class QualityCase:
     # too much to enumerate ("no hay ranking" / "no ha calculado un ranking").
     must_include_regex: tuple[str, ...] = ()
     must_not_include: tuple = ()
+    must_not_include_regex: tuple[str, ...] = ()
     # Names of DataFacts methods whose value must appear in the answer.
     must_include_facts: tuple[str, ...] = ()
     expect_bold: bool = False
@@ -202,6 +312,11 @@ class QualityCase:
     fresh_session: bool = True
     follow_up_of: str | None = None
     tags: tuple[str, ...] = field(default=())
+    # Capability keys (`client_capabilities`) this question needs. A client that lacks them
+    # cannot answer it, and running it anyway produces a failure that says nothing about the
+    # assistant. Such a case is reported as **not applicable, with its reason** - never as
+    # passed, which would hide an untested behaviour behind a green summary.
+    requires_capabilities: tuple[str, ...] = field(default=())
 
 
 CASES: tuple[QualityCase, ...] = (
@@ -508,6 +623,277 @@ CASES: tuple[QualityCase, ...] = (
 CASE_MAP = {case.case_id: case for case in CASES}
 
 
+# ---------------------------------------------------------------------------
+# Certification battery (plan.md, observations C02-C09).
+#
+# Two rules make this block different from the cases above:
+#
+# - **Three formulations per critical scenario.** One phrasing passing proves the model can
+#   answer that sentence, not that it holds the rule. Every id ends in `_a`, `_b` or `_c` and
+#   all three are meant to be run and recorded; picking the one that worked is the failure
+#   mode this guards against.
+# - **Each case declares the capability it needs.** ENEX has no alerts and no predictive
+#   model, so those cases are *not applicable* there and are reported as such - never as
+#   passed. See `partition_cases`.
+CERTIFICATION_CASES: tuple[QualityCase, ...] = (
+    # --- C02: current condition is the latest sample, with no implicit window ------
+    QualityCase(
+        case_id="cert_latest_sample_a",
+        expect_grounded=True,
+        question="¿Cuál es la última muestra de aceite del componente {sampled_component} de {sampled_unit} y de qué fecha es?",
+        why="La muestra más reciente se entrega aunque tenga meses; la fecha debe declararse",
+        must_include_facts=("sampled_unit", "latest_sample_date"),
+        expect_period=True,
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c02", "aceite"),
+    ),
+    QualityCase(
+        case_id="cert_latest_sample_b",
+        expect_grounded=True,
+        question="¿Cómo está hoy el aceite del equipo {sampled_unit}?",
+        why="Misma regla preguntada como condición actual, sin nombrar 'muestra'",
+        must_include_facts=("sampled_unit",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c02", "aceite"),
+    ),
+    QualityCase(
+        case_id="cert_latest_sample_c",
+        expect_grounded=True,
+        question="Dame el último análisis de aceite disponible de {sampled_unit}",
+        why="Tercera formulación: 'último análisis disponible'",
+        must_include_facts=("sampled_unit",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c02", "aceite"),
+    ),
+    QualityCase(
+        case_id="cert_old_sample_is_not_missing_data",
+        question=(
+            "Si la última muestra de un componente tiene más de 60 días, ¿me la entregas "
+            "igual o me dices que no hay datos?"
+        ),
+        why="No debe prometer una ventana implícita de 60 días",
+        must_include_regex=(r"(se entrega|te la entrego|si.*entrego|la entrego)",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c02", "alcance"),
+    ),
+    # --- C04/C07: the machine aggregate is never a sample -------------------------
+    QualityCase(
+        case_id="cert_machine_vs_sample_a",
+        expect_grounded=True,
+        question=(
+            "¿Cuál es el estado de aceite del equipo {machine_aggregate_unit} y qué "
+            "componentes lo explican?"
+        ),
+        why="Debe separar el agregado del equipo de la condición de cada componente",
+        must_include_facts=("machine_aggregate_unit",),
+        must_include_regex=(r"(componente|contribuy)",),
+        requires_capabilities=("oil_fleet", "oil_components"),
+        tags=("certificacion", "c04", "c07", "aceite"),
+    ),
+    QualityCase(
+        case_id="cert_machine_vs_sample_b",
+        question=(
+            "El estado global de un equipo, ¿es el resultado de una muestra de aceite?"
+        ),
+        why="Debe decir que es un agregado ponderado, no una muestra",
+        must_include_regex=(r"agregad",),
+        requires_capabilities=("oil_fleet",),
+        tags=("certificacion", "c04", "c07"),
+    ),
+    QualityCase(
+        case_id="cert_machine_vs_sample_c",
+        expect_grounded=True,
+        question=(
+            "Explícame la diferencia entre el estado del equipo {machine_aggregate_unit} y "
+            "el resultado de la muestra de uno de sus componentes"
+        ),
+        why="Tercera formulación del mismo contrato de niveles",
+        must_include_facts=("machine_aggregate_unit",),
+        requires_capabilities=("oil_fleet", "oil_components"),
+        tags=("certificacion", "c04", "c07"),
+    ),
+    # --- C06: which reference an essay was compared against -----------------------
+    QualityCase(
+        case_id="cert_limits_a",
+        expect_grounded=True,
+        question=(
+            "¿Contra qué límites se comparó el ensayo de {limited_essay} en la última "
+            "muestra de {sampled_component} del equipo {sampled_unit}?"
+        ),
+        why="Debe citar la banda aplicable y su procedencia, no una referencia genérica",
+        must_include_facts=("limited_essay", "limited_upper_marginal", "limited_upper_condemnatory"),
+        must_include_regex=(r"(lsm|lsc|limite superior|l[ií]mite superior)",),
+        requires_capabilities=("oil_limits",),
+        tags=("certificacion", "c06", "limites"),
+    ),
+    QualityCase(
+        case_id="cert_limits_b",
+        question=(
+            "Un límite inferior que la fuente no publica, ¿lo tratas como cero?"
+        ),
+        why="Un límite inferior ausente es ausente, nunca cero",
+        must_include_regex=(r"no.*(cero|0)",),
+        requires_capabilities=("oil_limits",),
+        tags=("certificacion", "c06", "limites"),
+    ),
+    QualityCase(
+        case_id="cert_limits_c",
+        expect_grounded=True,
+        question=(
+            "¿De qué versión de calibración salen los límites de {sampled_component} "
+            "en {sampled_unit}?"
+        ),
+        why="La versión en servicio debe poder citarse para reproducir la respuesta",
+        must_include_facts=("limit_version",),
+        requires_capabilities=("oil_limits",),
+        tags=("certificacion", "c06", "limites"),
+    ),
+    # --- C03: a predictive risk explained with its own variables ------------------
+    QualityCase(
+        case_id="cert_predictive_a",
+        expect_grounded=True,
+        question="¿Qué motores tienen mayor ranking predictivo y qué variables lo explican?",
+        why="Debe nombrar las variables documentadas del modo, no variables plausibles",
+        must_include_regex=(r"(ranking|prioridad)",),
+        must_not_include_regex=(
+            r"(?:ranking|puntaje)\s+(?:es|representa|equivale a|indica)\s+(?:una |la )?probabilidad",
+        ),
+        requires_capabilities=("predictive_motor",),
+        tags=("certificacion", "c03", "predictivo"),
+    ),
+    QualityCase(
+        case_id="cert_predictive_b",
+        question="El ranking predictivo, ¿es una probabilidad de falla?",
+        why="Es un orden de prioridad; convertirlo en porcentaje es inventar",
+        must_include_regex=(r"no.*(probabilidad|porcentaje)",),
+        requires_capabilities=("predictive_motor",),
+        tags=("certificacion", "c03", "predictivo"),
+    ),
+    QualityCase(
+        case_id="cert_predictive_c",
+        question=(
+            "Para el riesgo de degradación de aceite del motor, ¿qué variables considera "
+            "el modelo y cuánto aporta cada una?"
+        ),
+        why="Debe declarar que la contribución por variable no está publicada",
+        must_include_regex=(r"no.*(publica|dispon|entrega).*(contribu|aporte)|contribu.*no",),
+        requires_capabilities=("predictive_motor",),
+        tags=("certificacion", "c03", "predictivo"),
+    ),
+    # --- C09: laboratory turnaround, ENEX's reference question --------------------
+    QualityCase(
+        case_id="cert_lab_a",
+        expect_grounded=True,
+        question="¿Cuánto está demorando el laboratorio entre la toma de muestra y el informe?",
+        why="Debe declarar el período aplicado y usar los promedios de la fuente compartida",
+        must_include_facts=("lab_period_start", "lab_period_end", "lab_diagnostic_average"),
+        expect_period=True,
+        requires_capabilities=("oil_lab_kpis",),
+        tags=("certificacion", "laboratorio", "c09"),
+    ),
+    QualityCase(
+        case_id="cert_lab_b",
+        expect_grounded=True,
+        question="Dame los tiempos de laboratorio y sobre cuántas muestras están calculados",
+        why="Cada promedio debe venir con su denominador",
+        must_include_facts=("lab_total_samples",),
+        requires_capabilities=("oil_lab_kpis",),
+        tags=("certificacion", "laboratorio", "c09"),
+    ),
+    QualityCase(
+        case_id="cert_lab_c",
+        question=(
+            "¿Qué porcentaje de cumplimiento de SLA tiene el laboratorio?"
+        ),
+        why="No hay fórmula ni umbral contractual acordados: debe declararlo, no calcularlo",
+        must_include_regex=(r"(no.*(sla|cumplimiento|acordad|definid)|no dispongo)",),
+        must_not_include=("%",),
+        requires_capabilities=("oil_lab_kpis",),
+        tags=("certificacion", "laboratorio", "c09"),
+    ),
+    QualityCase(
+        case_id="cert_lab_missing_is_not_zero",
+        question=(
+            "Si a una muestra le falta la fecha de recepción en laboratorio, ¿cuenta como "
+            "cero días de tránsito?"
+        ),
+        why="Un dato faltante no es un cero; debe distinguirlos",
+        must_include_regex=(r"no.*(cero|0)",),
+        requires_capabilities=("oil_lab_kpis",),
+        tags=("certificacion", "laboratorio", "c09"),
+    ),
+    # --- C08: what this client can and cannot be asked ---------------------------
+    QualityCase(
+        case_id="cert_capabilities_honesty",
+        question="¿Qué análisis puedes hacer para esta empresa y cuáles no?",
+        why="Debe listar solo lo disponible y explicar la limitación del resto",
+        must_include_regex=(r"(aceite|tribolog)",),
+        tags=("certificacion", "c08", "cobertura"),
+    ),
+    # --- C05: the multi-turn sequence the manual documents ------------------------
+    QualityCase(
+        case_id="cert_context_turn1",
+        expect_grounded=True,
+        question="¿Cuál es la última muestra del componente {sampled_component} de {sampled_unit}?",
+        why="Primer turno: fija equipo y componente explícitamente",
+        must_include_facts=("sampled_unit",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c05", "contexto"),
+    ),
+    QualityCase(
+        case_id="cert_context_turn2",
+        expect_grounded=True,
+        question="¿Qué ensayos explican ese estado?",
+        why="Segundo turno con referencia implícita: debe conservar equipo y componente",
+        follow_up_of="cert_context_turn1",
+        fresh_session=False,
+        must_include_facts=("sampled_component",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c05", "contexto"),
+    ),
+    QualityCase(
+        case_id="cert_context_turn3",
+        question="¿Y de qué fecha es esa muestra?",
+        why="Tercer turno: la fecha debe seguir siendo la de la misma muestra",
+        follow_up_of="cert_context_turn2",
+        fresh_session=False,
+        must_include_facts=("latest_sample_date",),
+        requires_capabilities=("oil_components",),
+        tags=("certificacion", "c05", "contexto"),
+    ),
+)
+
+CASES = CASES + CERTIFICATION_CASES
+# Rebuilt after the battery is appended: the runner resolves a follow-up's predecessor
+# through this map, and a map built from the original tuple would not contain them.
+CASE_MAP = {case.case_id: case for case in CASES}
+
+
+_QUESTION_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+
+
+def question_placeholders(question: str) -> tuple[str, ...]:
+    """`DataFacts` names a question interpolates, e.g. ``{sampled_unit}``."""
+    return tuple(dict.fromkeys(_QUESTION_PLACEHOLDER.findall(str(question or ""))))
+
+
+def render_question(case: QualityCase, values: dict[str, str]) -> str:
+    """The question as the user would type it, with real identifiers filled in.
+
+    Cases name a unit or a component through a placeholder rather than hardcoding one: a
+    machine code is client data, it changes, and a case pinned to a code that disappears fails
+    for the wrong reason. `values` comes from `resolve_facts`, which reads the live source.
+    """
+    rendered = str(case.question or "")
+    for name in question_placeholders(rendered):
+        if name not in values:
+            raise RuntimeError(
+                f"El caso {case.case_id} interpola {{{name}}} pero no se pudo resolver"
+            )
+        rendered = rendered.replace("{" + name + "}", str(values[name]))
+    return rendered
+
+
 def resolve_facts(facts: DataFacts, names: tuple[str, ...]) -> dict[str, str]:
     """Compute the grounded values a case requires from the live data."""
     resolved: dict[str, str] = {}
@@ -564,3 +950,41 @@ PERIOD_PATTERN = re.compile(
     r"(\d{4}-\d{2}-\d{2})|(\d{1,2}\s+de\s+[a-záéíóú]+)|(semana\s+\d+)|(últimos?\s+\d+\s+días)",
     re.IGNORECASE,
 )
+
+
+def available_capabilities(repository: DashboardDataRepository, client: str) -> set[str]:
+    """Capability keys the client can actually be asked about right now."""
+    payload = repository.client_capabilities(client)
+    return {
+        str(entry.get("key"))
+        for entry in payload.get("available") or []
+        if isinstance(entry, dict) and entry.get("key")
+    }
+
+
+def case_applies(case: QualityCase, capabilities: set[str]) -> tuple[bool, str]:
+    """Can this client answer this case? If not, say which capability is missing.
+
+    Returned rather than raised, so the runner can record the case as not applicable with a
+    reason. A case skipped for lack of a source is not evidence of anything and must never be
+    counted as passed.
+    """
+    missing = [key for key in case.requires_capabilities if key not in capabilities]
+    if missing:
+        return False, "Capacidad no disponible para este cliente: " + ", ".join(missing)
+    return True, ""
+
+
+def partition_cases(
+    cases: list[QualityCase], capabilities: set[str]
+) -> tuple[list[QualityCase], list[tuple[QualityCase, str]]]:
+    """Split a selection into what this client can answer and what it cannot."""
+    applicable: list[QualityCase] = []
+    inapplicable: list[tuple[QualityCase, str]] = []
+    for case in cases:
+        applies, reason = case_applies(case, capabilities)
+        if applies:
+            applicable.append(case)
+        else:
+            inapplicable.append((case, reason))
+    return applicable, inapplicable

@@ -384,7 +384,11 @@ def test_text_filters_ignore_accents_and_hint_on_a_near_miss(tmp_path):
         [
             {
                 "UnitId": "T_18",
-                "Timestamp": "2026-07-09T19:13:00",
+                # Inside the 60-day window this asks for, whatever today is: an absolute
+                # date here expired and failed the test by the calendar.
+                "Timestamp": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=10)
+                ).isoformat(),
                 "sistema": "Motor",
                 "subsistema": "Refrigeracion",
                 "Trigger_Var": "EngCoolTemp",
@@ -415,14 +419,19 @@ def test_distributions_survive_list_valued_columns(tmp_path):
         [
             {
                 "machine_code": "T18",
-                "change_date": "2026-07-01",
+                # Relative for the same reason: the query applies a 60-day window.
+                "change_date": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=11)
+                ).isoformat(),
                 "action_type_name": "Reemplazo",
                 "action_system_name": "Sistema de Motor",
                 "component_names": ["Neumáticos", "Filtro"],
             },
             {
                 "machine_code": "T18",
-                "change_date": "2026-07-02",
+                "change_date": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=10)
+                ).isoformat(),
                 "action_type_name": "Inspección",
                 "action_system_name": "Sistema de Motor",
                 "component_names": ["Neumáticos"],
@@ -465,10 +474,12 @@ def test_validation_reports_shape_without_counting_rows(tmp_path, monkeypatch):
 
     alerts = status["datasets"]["alerts"]
     assert alerts["valid"] is True
-    # Declared: columns come from the JSON and nothing on disk is touched, so neither the row
-    # count nor the size is known. Both are informational and deliberately left as None rather
-    # than guessed - `describe_dataset` reads the real numbers when the agent asks.
+    # Declared: the columns come from the JSON. The file is checked for usability - a stat
+    # plus a header read, memoized per file version - but never materialized, so neither the
+    # row count nor the size is reported here. Both are informational and deliberately left as
+    # None rather than guessed; `describe_dataset` reads the real numbers when the agent asks.
     assert alerts["presence"] == "declared"
+    assert alerts["usability"] == "utilizable"
     assert alerts["rows"] is None
     assert alerts["size_bytes"] is None
     assert frames.stats()["entries"] == 0, "validation must not materialize a frame"
