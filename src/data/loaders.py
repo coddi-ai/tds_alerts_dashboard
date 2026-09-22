@@ -1607,6 +1607,39 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         return pd.DataFrame()
 
 
+def load_maintenance_unit_records_actions(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
+    """Load maintenance record intervals from ``query_2``.
+
+    ``first_event_ts`` and ``last_event_ts`` are the source-defined temporal
+    boundaries for a maintenance record.  Keeping this source separate from
+    the action extract lets consumers calculate time from the upstream
+    interval definition instead of inferring a duration from action counts.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+        if base_path is None:
+            logger.warning(f"No maintenance record data available for client: {client}")
+            return pd.DataFrame()
+
+    file_path = base_path / "query_2_unit_records_actions.parquet"
+    try:
+        logger.info(f"Loading maintenance record intervals from {file_path}")
+        df = pd.read_parquet(file_path)
+        for column in ("first_event_ts", "last_event_ts"):
+            if column in df.columns:
+                df[column] = pd.to_datetime(
+                    df[column], utc=True, format="mixed", errors="coerce"
+                )
+        logger.info("Loaded %s maintenance record intervals for %s", len(df), client)
+        return df
+    except FileNotFoundError:
+        logger.warning(f"Maintenance record file not found: {file_path}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Error loading maintenance record intervals: {e}")
+        return pd.DataFrame()
+
+
 def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
     """
     Load pre-calculated business KPIs from query_4_business_kpis.parquet.

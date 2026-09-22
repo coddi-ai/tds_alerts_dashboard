@@ -1,9 +1,7 @@
 """Productive Mantenciones view.
 
 The page keeps the auditable activity breakdown from the client reports and
-adds clearly labelled ESTIMADO reliability proxies. The proxies are derived
-from action activity only; they are never presented as measured downtime or
-failure metrics.
+uses source-defined maintenance intervals for out-of-service time.
 """
 
 from __future__ import annotations
@@ -244,7 +242,7 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Tendencia diaria de horas de intervención", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "300px"}), "fa-chart-line"), md=6),
+                    dbc.Col(_card("Tendencia diaria de horas-equipo fuera de servicio", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "300px"}), "fa-chart-line"), md=6),
                     dbc.Col(_card("Equipos intervenidos por día", dcc.Graph(id="maintenance-chart-daily-equipment", config={"displayModeBar": False}, style={"height": "300px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
@@ -341,7 +339,7 @@ def layout_mantenciones_general():
                     dbc.Col(
                         [
                             html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), "Mantenciones"]),
-                            html.P("Resumen ejecutivo · confiabilidad estimada y actividad de mantenimiento", className="text-muted mb-0"),
+                            html.P("Resumen ejecutivo · horas fuera de servicio y actividad de mantenimiento", className="text-muted mb-0"),
                         ],
                         md=7,
                     ),
@@ -417,26 +415,28 @@ def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
-    """Render daily intervention hours from the auditable action aggregation."""
+    """Render source-defined daily equipment out-of-service hours."""
     if df.empty:
-        return create_empty_figure("Sin actividad diaria de intervención")
+        return create_empty_figure("Sin horas de equipo fuera de servicio")
     # This is a time series, so it keeps operational-date order rather than
     # being ranked by value like the categorical activity charts below.
     data = df.sort_values("date", kind="mergesort").copy()
-    if "hours_estimated" not in data.columns:
-        counts = data["count"] if "count" in data.columns else pd.Series(0, index=data.index)
-        data["hours_estimated"] = pd.to_numeric(counts, errors="coerce").fillna(0) * 1.5
+    if "hours_out_of_service" not in data.columns:
+        return create_empty_figure("La fuente no trae intervalos de fuera de servicio")
+    hours = pd.to_numeric(data["hours_out_of_service"], errors="coerce")
+    if hours.notna().sum() == 0:
+        return create_empty_figure("La fuente no trae intervalos de fuera de servicio")
     fig = go.Figure(
         go.Bar(
             x=data["date"],
-            y=data["hours_estimated"],
+            y=hours,
             orientation="v",
-            name="Horas de intervención",
+            name="Horas-equipo fuera de servicio",
             marker_color="#6f8fb3",
-            hovertemplate="<b>%{x}</b><br>Horas de intervención: %{y:.1f} h<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>Horas-equipo fuera de servicio: %{y:.1f} h<extra></extra>",
         )
     )
-    fig.update_yaxes(title_text="Horas de intervención", rangemode="tozero")
+    fig.update_yaxes(title_text="Horas-equipo fuera de servicio", rangemode="tozero")
     fig.update_xaxes(title_text="Fecha operacional")
     fig.update_layout(
         template="plotly_white",

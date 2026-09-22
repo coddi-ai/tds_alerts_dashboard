@@ -206,21 +206,22 @@ for (machine_id, record_id, machine_code), group in df_actions.groupby(['machine
 
 ---
 
-### Downtime por Día
+### Horas fuera de servicio por día
 
-**Fuente:** `query_3_actions_all_equipment.parquet`
+**Fuente primaria:** `query_2_unit_records_actions.parquet`, columnas
+`first_event_ts` y `last_event_ts`.
 
-**Agrupación:** Por `change_date`
-
-**Cálculo:**
+**Cálculo:** cada intervalo se recorta a la ventana seleccionada y se reparte
+por día UTC. La duración de un registro es:
 ```python
-daily_counts = df_actions.groupby('change_date').size()
-downtime_hours = daily_counts * 1.5  # 1.5 horas por acción (estimado)
+duration_hours = (last_event_ts - first_event_ts).total_seconds() / 3600
 ```
 
-**Justificación:**
-- Cada acción registrada representa ~1.5 horas de trabajo de mantenimiento
-- Es un proxy basado en la actividad diaria registrada
+Si `query_2` no está disponible, se calcula el mínimo/máximo `event_ts` por
+`record_id` desde `query_3` como fallback técnico. No se convierten acciones a
+horas. El resultado es **horas-equipo**: una flota puede superar 24 h en un
+día porque suma varios equipos; un equipo individual no supera 24 h por día
+después de la distribución del intervalo.
 
 ---
 
@@ -253,8 +254,9 @@ total_downtime = df_kpis['downtime_hours_70d'].sum()
 ### Parquet Cache Structure
 ```python
 {
-    "actions": load_maintenance_actions_all_equipment(),  # 659 rows
-    "kpis": load_business_kpis()                         # 11 rows
+    "actions": load_maintenance_actions_all_equipment(),  # acciones
+    "records": load_maintenance_unit_records_actions(),   # intervalos
+    "kpis": load_business_kpis()                          # KPIs 70d
 }
 ```
 
@@ -266,7 +268,7 @@ total_downtime = df_kpis['downtime_hours_70d'].sum()
 | `get_downtime_mtd()` | `query_4` KPIs | Total downtime_hours_70d |
 | `get_last_detentions()` | `query_3` Actions | Top 3 detenciones/máquina |
 | `get_jobs_last_week()` | `query_3` Actions | 100 trabajos recientes |
-| `get_downtime_by_day_mtd()` | `query_3` Actions | Downtime diario estimado |
+| `get_downtime_by_day_mtd()` | `query_2` Records | Horas-equipo fuera de servicio por día |
 
 ---
 
@@ -390,9 +392,10 @@ df_daily = repo.get_downtime_by_day_mtd()
    - Mostrar breakdown de tipos de mantenimiento
    - Gráficos de distribución por categoría
 
-4. **Optimizar estimación de downtime:**
-   - Actualmente usa 1.5 horas/acción
-   - Considerar usar datos reales de duración si están disponibles
+4. **Completar el desglose temporal:**
+   - `query_4` entrega el total móvil de 70 días por equipo.
+   - `query_2` entrega intervalos por registro para distribuir la tendencia
+     diaria; mantener su definición alineada con el origen.
 
 ---
 

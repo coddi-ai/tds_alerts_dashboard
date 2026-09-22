@@ -38,7 +38,7 @@ def _empty_contract():
     pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
         "status": "empty",
-        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "ESTIMADO", "reason": "Sin fuente cargada."}},
+        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "FUENTE", "reason": "Sin fuente cargada."}},
         "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
         "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
@@ -73,7 +73,7 @@ def _refresh_requested() -> bool:
 
 
 def _format_estimated(value, suffix: str) -> str:
-    """Format proxy KPIs without inventing a zero for missing values."""
+    """Format source-backed KPIs without inventing a zero for missing values."""
     if not isinstance(value, (int, float)):
         return "—"
     if suffix == "%":
@@ -91,7 +91,8 @@ def _source_alert(meta: dict):
     coverage_label = coverage.get("window_label")
     source_files = estimated.get("source") or []
     source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
-    estimated_note = f"KPIs ESTIMADOS · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
+    source_label = "KPIs de fuente" if estimated.get("source_kind") == "business_kpis_70d" else "Horas/KPIs no disponibles"
+    estimated_note = f"{source_label} · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
     reference_start = coverage.get("reference_start")
     reference_end = coverage.get("reference_end")
     if reference_start and reference_end:

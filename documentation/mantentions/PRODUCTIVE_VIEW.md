@@ -9,8 +9,9 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 - **Resumen**: selector mensual, filtro de flota/tipo de equipo según el catálogo
   de Tribología (con fallback al código de unidad) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
-  participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
-  (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
+  participación de acciones Motor; KPIs de tiempo respaldados por la fuente
+  (disponibilidad, downtime, MTBF y MTTR); tendencia diaria de horas-equipo
+  fuera de servicio, mix de actividad por
   sistema sin desglose por unidad, ranking de equipos y Paretos de actividad,
   seguido de una tabla con el detalle de las actividades realizadas. CDA conserva sus Paretos
   enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
@@ -31,7 +32,7 @@ cabecera ejecutiva.
 
 La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
 referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
-separadas de horas de intervención y equipos intervenidos, mix por sistema y
+separadas de horas-equipo fuera de servicio y equipos intervenidos, mix por sistema y
 ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
 actividad quedan al final como contexto y no compiten visualmente con los
 indicadores críticos.
@@ -49,8 +50,9 @@ valor vacío queda como ``Sin flota``. La unidad se filtra por ``machine_code``
 y sus opciones se limitan a las flotas seleccionadas. Sin selección de
 flota/unidad se conserva todo el período.
 
-La metadata del contrato conserva el archivo fuente de los KPIs **ESTIMADOS**,
-su ventana de referencia y, cuando corresponde, la razón del fallback mensual;
+La metadata del contrato conserva el archivo fuente de los KPIs de tiempo,
+su ventana de referencia y, cuando corresponde, la razón por la que no están
+disponibles para un filtro;
 estos detalles técnicos no se muestran en la cabecera ejecutiva.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
@@ -81,8 +83,15 @@ indicadores del Resumen:
   `action_system_name` coincide con `Motor`, `Sistema Motor` o `Sistema de
   Motor`.
 
-La tendencia diaria agrupa acciones únicas por `change_date`. El mix por
-sistema agrega por sistema y no expone series o leyenda por unidad; el ranking
+La tendencia diaria calcula horas-equipo fuera de servicio a partir de
+`first_event_ts` y `last_event_ts` de `query_2_unit_records_actions.parquet`,
+distribuyendo cada intervalo por día UTC y recortándolo al mes seleccionado.
+Los intervalos superpuestos se unen por equipo y día antes de sumar la flota.
+Si `query_2` no está disponible, se usa el mínimo/máximo `event_ts` por
+`record_id` de `query_3` como compatibilidad. El total de una flota puede
+superar 24 h en un día porque suma horas de varios equipos; con un equipo
+seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
+sistema y no expone series o leyenda por unidad; el ranking
 de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
 misma métrica de acciones únicas. Los
 Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
@@ -93,49 +102,34 @@ sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. En esta iteración se incorporan solo como proxies explícitos
-**ESTIMADOS**: query_4 aporta downtime y reparaciones precalculados en ventana
-70d, pero no horas operativas gobernadas ni confirmación de fallas. No se
-presentan como mediciones reales ni como frecuencia de fallas.
+imprevisto. En esta iteración se usan las horas definidas por el origen:
+`query_4` aporta el total móvil de 70 días y `query_2` aporta los límites
+temporales de cada registro para la tendencia diaria. No se infieren horas a
+partir del conteo de acciones.
 
-#### Metodología de los KPIs ESTIMADOS
+#### Metodología de los KPIs de tiempo
 
 Los cuatro valores priorizan `query_4_business_kpis.parquet` cuando están
-disponibles `downtime_hours_70d`, `repairs_70d`, `total_actions_70d` y
-`reference_date`. En ese caso la cobertura es la **ventana móvil de 70 días**
-del KPI precalculado, aunque el selector de Resumen siga mostrando un mes; esa
-diferencia se declara en `meta.estimated_kpis.coverage` y en el banner. Si el
-extracto 70d está ausente/incompleto, o se filtra por sistema/subsistema (que
-query_4 no desglosa), se usa el fallback mensual de acciones:
+disponibles `downtime_hours_70d` y `reference_date`. En ese caso la cobertura
+es la **ventana móvil de 70 días** del KPI precalculado, aunque el selector de
+Resumen siga mostrando un mes; esa diferencia se declara en
+`meta.estimated_kpis.coverage` y en el banner. Si el extracto 70d está
+ausente/incompleto, o se filtra por sistema/subsistema (que query_4 no
+desglosa), el tiempo queda `null` con estado `unavailable`:
 
-- Con query_4: `downtime_est_hours = sum(downtime_hours_70d)` y el evento proxy
-  es `sum(repairs_70d)`; si no hay reparaciones, se usa `total_actions_70d` y
-  finalmente registros de acciones.
-- En fallback: `downtime_est_hours = acciones únicas × 1,5 h`; 1,5 h/acción es
-  el proxy conservador y parametrizado de duración/indisponibilidad.
-- `scheduled_hours_proxy = equipos cubiertos × días de la ventana × 24 h`
-  (70 días con query_4; días calendario del mes en fallback).
+- `downtime_est_hours = sum(downtime_hours_70d)`.
+- `scheduled_hours_proxy = equipos cubiertos × 70 días × 24 h`.
 - `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
   scheduled_hours_proxy × 100`.
-- `event_count_proxy = reparaciones_70d`; si no hay reparaciones, `total_actions_70d`
-  y finalmente registros únicos del extracto de acciones.
-- `mttr_est_hours = downtime_est_hours / event_count_proxy`.
-- `mtbf_est_hours = max(scheduled_hours_proxy − downtime_est_hours, 0) /
-  event_count_proxy`.
+- `event_count` usa `repairs_70d`, luego `total_actions_70d` como denominador
+  operativo para MTTR/MTBF.
+- Los valores negativos o no finitos se consideran fuente inválida; no se
+  reemplazan por cero ni por una estimación de acciones.
 
-Se aplica una validación de plausibilidad antes de usar query_4: si el downtime
-70d es negativo, no finito o supera las horas calendario proxy de los equipos
-cubiertos, se rechaza todo el bloque 70d y se usa el fallback mensual. La
-anomalía queda en `meta.estimated_kpis.reason`; no se recorta silenciosamente
-ni se presenta una disponibilidad artificialmente extrema.
-
-Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
-unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
-mantenimiento proxy, no fallas confirmadas; si faltan acciones o registros se
-devuelve `null` y un estado `unavailable`, nunca cero. Aunque query_4 aporta
-valores precalculados, los cuatro indicadores siguen rotulados **ESTIMADO**:
-no equivalen a una medición de disponibilidad ni confirman que los eventos
-sean fallas.
+Cada payload expone en `meta.estimated_kpis` la fuente, columnas, unidad,
+cobertura e hipótesis. Si faltan las columnas de tiempo se devuelve `null` y
+un estado `unavailable`, nunca cero. La aplicación respeta la definición de
+origen; no aplica un tope calendario ni convierte acciones a horas.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad
@@ -177,7 +171,6 @@ El botón **Refrescar** invalida las cachés del repositorio. La página abre el
 ## Alcance excluido
 
 Se mantienen fuera de la vista el backlog, estado sano/detenido, planes de
-acción, metas, horas reales de operación/reparación y clasificación de fallas.
-Los cuatro KPIs de confiabilidad visibles son únicamente los proxies
-**ESTIMADOS** descritos arriba y deben reemplazarse por mediciones gobernadas
-cuando exista esa fuente.
+acción, metas y clasificación de fallas. Las horas mostradas respetan las
+definiciones disponibles en el origen; si falta el desglose temporal para un
+filtro, el valor queda no disponible.

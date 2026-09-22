@@ -7,7 +7,7 @@ import pytest
 
 from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from src.data import maintenance_repository as repository_module
-from src.data.loaders import load_maintenance_actions_all_equipment
+from src.data.loaders import load_maintenance_actions_all_equipment, load_maintenance_unit_records_actions
 from src.data.maintenance_repository import MaintenanceRepository
 
 
@@ -31,6 +31,19 @@ def test_loader_normalizes_mixed_iso_timestamps(tmp_path):
     assert loaded["event_ts"].notna().all()
 
 
+def test_record_loader_normalizes_source_interval_timestamps(tmp_path):
+    frame = pd.DataFrame(
+        [
+            {"record_id": "r1", "machine_code": "T_01", "first_event_ts": "2026-01-02T03:00:00Z", "last_event_ts": "2026-01-03T03:00:00.000000Z"},
+        ]
+    )
+    frame.to_parquet(tmp_path / "query_2_unit_records_actions.parquet", index=False)
+    loaded = load_maintenance_unit_records_actions("cda", base_path=tmp_path)
+    assert str(loaded["first_event_ts"].dtype).endswith(", UTC]")
+    assert str(loaded["last_event_ts"].dtype).endswith(", UTC]")
+    assert loaded["last_event_ts"].notna().all()
+
+
 def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
     frame = _actions()
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
@@ -46,21 +59,21 @@ def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
         "systems": 2,
         "activity_days": 4,
         "motor_share_pct": 50.0,
-        "availability_est_pct": 99.6,
-        "downtime_est_hours": 6.0,
-        "mtbf_est_hours": 494.0,
-        "mttr_est_hours": 2.0,
+        "availability_est_pct": None,
+        "downtime_est_hours": None,
+        "mtbf_est_hours": None,
+        "mttr_est_hours": None,
     }
-    assert payload["meta"]["estimated_kpis"]["status"] == "estimated"
+    assert payload["meta"]["estimated_kpis"]["status"] == "unavailable"
     assert payload["meta"]["estimated_kpis"]["coverage"]["calendar_days"] == 31
-    assert "unique_action_id_count × 1.5" in payload["meta"]["estimated_kpis"]["formula"]["downtime_est_hours"]
+    assert payload["meta"]["estimated_kpis"]["formula"]["downtime_est_hours"] == "unavailable"
     assert payload["data"]["system_mix"] == [
         {"system_name": "Motor", "count": 2},
         {"system_name": "Hidráulico", "count": 1},
         {"system_name": "Sin sistema", "count": 1},
     ]
     assert payload["data"]["daily"][0]["equipment_count"] == 1
-    assert payload["data"]["daily"][0]["hours_estimated"] == 1.5
+    assert payload["data"]["daily"][0]["hours_out_of_service"] == 21.0
     assert payload["data"]["pareto"] == [{"equipment": "T_01", "count": 2, "cumulative_pct": 100.0}]
     assert payload["meta"]["pareto_scope"]["dimension"] == "equipment"
     assert payload["meta"]["pareto_scope"]["metric"] == "unique_action_id_count"
@@ -144,8 +157,8 @@ def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monke
 
     unknown_fleet_payload = repo.get_monthly_payload("2026-01", fleets=["Sin flota"])
     assert unknown_fleet_payload["kpis"]["actions"] == 1
-    assert unknown_fleet_payload["kpis"]["downtime_est_hours"] == 1.5
-    assert unknown_fleet_payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+    assert unknown_fleet_payload["kpis"]["downtime_est_hours"] is None
+    assert unknown_fleet_payload["meta"]["estimated_kpis"]["source_kind"] == "unavailable"
 
 
 def test_fleet_filter_uses_tribologia_catalog_for_emin(monkeypatch):
@@ -348,14 +361,14 @@ def test_daily_intervention_hours_chart_shows_hours_and_equipment():
     figure = create_daily_intervention_hours_chart(
         pd.DataFrame(
             [
-                {"date": "2026-01-01", "count": 2, "hours_estimated": 3.0, "equipment_count": 2},
-                {"date": "2026-01-02", "count": 1, "hours_estimated": 1.5, "equipment_count": 1},
+                {"date": "2026-01-01", "count": 2, "hours_out_of_service": 3.0, "equipment_count": 2},
+                {"date": "2026-01-02", "count": 1, "hours_out_of_service": 1.5, "equipment_count": 1},
             ]
         )
     )
 
-    assert [trace.name for trace in figure.data] == ["Horas de intervención"]
-    assert figure.layout.yaxis.title.text == "Horas de intervención"
+    assert [trace.name for trace in figure.data] == ["Horas-equipo fuera de servicio"]
+    assert figure.layout.yaxis.title.text == "Horas-equipo fuera de servicio"
     assert "proxy" not in str(figure).lower()
 
     equipment_figure = create_daily_equipment_chart(
@@ -530,8 +543,8 @@ def test_maintenance_bar_charts_use_vertical_orientation_and_descending_rank():
     daily = create_daily_intervention_hours_chart(
         pd.DataFrame(
             [
-                {"date": "2026-01-02", "hours_estimated": 1.5},
-                {"date": "2026-01-01", "hours_estimated": 3.0},
+                {"date": "2026-01-02", "hours_out_of_service": 1.5},
+                {"date": "2026-01-01", "hours_out_of_service": 3.0},
             ]
         )
     )
@@ -665,7 +678,7 @@ def test_estimated_kpis_prefer_business_70d_and_expose_window(monkeypatch):
     assert meta["formula"]["downtime_est_hours"] == "sum(downtime_hours_70d)"
 
 
-def test_system_filter_falls_back_to_monthly_action_proxy(monkeypatch):
+def test_system_filter_does_not_infer_hours_from_action_proxy(monkeypatch):
     frame = _actions()
     business = pd.DataFrame(
         [{"machine_code": "T_01", "downtime_hours_70d": 100.0, "repairs_70d": 10, "total_actions_70d": 20, "reference_date": "2026-01-22T10:00:00Z"}]
@@ -676,11 +689,11 @@ def test_system_filter_falls_back_to_monthly_action_proxy(monkeypatch):
 
     payload = repo.get_monthly_payload("2026-01", systems=["Motor"])
 
-    assert payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+    assert payload["meta"]["estimated_kpis"]["source_kind"] == "unavailable"
     assert "desglose por sistema" in payload["meta"]["estimated_kpis"]["reason"]
 
 
-def test_implausible_business_downtime_falls_back_to_monthly_proxy(monkeypatch):
+def test_business_downtime_uses_source_definition_without_calendar_cap(monkeypatch):
     frame = _actions()
     business = pd.DataFrame(
         [
@@ -694,6 +707,6 @@ def test_implausible_business_downtime_falls_back_to_monthly_proxy(monkeypatch):
 
     payload = repo.get_monthly_payload("2026-01")
 
-    assert payload["kpis"]["downtime_est_hours"] == 6.0
-    assert payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
-    assert "plausibilidad" in payload["meta"]["estimated_kpis"]["reason"]
+    assert payload["kpis"]["downtime_est_hours"] == 4000.0
+    assert payload["meta"]["estimated_kpis"]["source_kind"] == "business_kpis_70d"
+    assert payload["meta"]["estimated_kpis"]["formula"]["downtime_est_hours"] == "sum(downtime_hours_70d)"
