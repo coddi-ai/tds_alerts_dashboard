@@ -1,20 +1,15 @@
 # Data Contracts - Predictive Data Product
 
-**Version**: 2.1
-**Last Updated**: September 21, 2026
+**Version**: 2.4
+**Last Updated**: September 22, 2026
 **Owner**: Predictive Module Team
 **Status**: Golden layer migrated from the old wide per-client CSV to a partitioned parquet
 format. **The data lives locally** under `data/{tecnica}/golden/{cliente}/{componente}/{tabla}/`
-— it is synced there manually from S3 (not read live over `s3fs` by the dashboard). The dashboard
-has a **dual-mode loader** (`src/data/predictive_v2.py`): it reads the v2.0 parquet layout when it
-exists for a client/component, falling back to the v1.0 CSV otherwise (see
-[§9 Migration Notes](#-migration-notes-v10--v20) for exactly what is wired up per table). As of
-this version, upstream has also **published `failure_mode_diagnosis`** (previously "still being
-defined") and clarified that `unit_status_summary.estado` is derived from the cumulative curve, not
-flat 30/50/60/80 thresholds. **Both are now implemented and verified against a real sync**
-(September 21, 2026): `attach_status()` trusts upstream `estado` directly
-(`COMPUTE_STATUS = False`), and the evidence tab's AI panel reads `failure_mode_diagnosis` for
-`capstone/motor` — see [§6](#status--classification-rules) and [§9](#-migration-notes-v10--v20).
+— it is synced there manually from S3 (not read live over `s3fs` by the dashboard). The
+dashboard-side readers (`tab_predictive_overview.py`, `tab_predictive_evidence.py`,
+`predictive_config.py`) still target the **v1.0 local-CSV shape** described in the
+[Change Log](#change-log) — see [§9 Migration Notes](#-migration-notes-v10--v20) for what needs to
+change in this repo before this contract is fully live.
 
 ---
 
@@ -39,11 +34,7 @@ This document defines the data contract for the **Predictive** data product: per
 (Motor, Transmisión, ...) failure-mode risk scores combining oil (tribology) and telemetry
 evidence, produced entirely by an **upstream pipeline outside this repo**. This dashboard only
 reads the golden-layer output described below — it does not compute essay classifications, alert
-rates, or failure-mode scores itself. **This includes fleet `estado`**: `tab_predictive_overview.py`
-now trusts the upstream `unit_status_summary.estado` column directly (`COMPUTE_STATUS = False`) —
-a client-side fallback (`_classify_status_from_scores`) still exists in code for the case a
-future data drop breaks this again, but it isn't the active path. See
-[§6](#status--classification-rules) and [§9](#-migration-notes-v10--v20).
+rates, or failure-mode scores itself.
 
 **Data Product Purpose**: Provide a weekly-refreshed, per-unit record of failure-mode risk
 (0-100) so the dashboard can rank units by priority, show which failure mode is driving risk, and
@@ -89,7 +80,7 @@ paths above as the actual contract this repo reads against.
 
 ### Refresh Cadence
 
-Upstream, all four tables regenerate **once per week**, one partition per run. Locally, freshness
+Upstream, all five tables regenerate **once per week**, one partition per run. Locally, freshness
 depends on when the manual sync from S3 was last run — the local mirror can lag the upstream
 partitions. Either way, a stalled/skipped run does not produce an empty partition, so readers
 should use the *last available* partition rather than assume the current calendar week has data.
@@ -101,19 +92,66 @@ should use the *last available* partition rather than assume the current calenda
 | `telemetry / signal_daily_status` | % of the day each engine/transmission signal spent in the alert band and in the critical band | unit × day × signal |
 | `predictive / risk_scores` | Risk score per failure mode, plus the synthetic `ranking`, in **long format** | unit × day × mode |
 | `predictive / unit_status_summary` | Snapshot of each unit's status as of the run's close | unit (one row) |
+| `predictive / mode_failure_analisis` | Probable cause and recommended actions for each flagged failure mode (formerly `failure_mode_diagnosis`) | unit × flagged mode |
+| `predictive / unit_failure_analisis` | One AI-written diagnosis per unit for its worst mode, wide format (formerly `analisis_inteligente`) | unit (one row) |
 | `predictive / cumulative_risk_curve` | Cumulative lifecycle risk curve per unit, with its fleet reference band | unit × day |
-| `predictive / failure_mode_diagnosis` | **Published.** Per-flagged-mode written diagnosis (probable cause + recommended actions) | unit × flagged mode |
 
-`failure_mode_diagnosis` is no longer "still being defined" — as of this version it is the
-**published, public contract** for the weekly narrative diagnosis, documented in full in
-[its own schema section](#predictive--failure_mode_diagnosis-published). It **replaces**
-`analisis_inteligente.parquet`, which upstream now describes as **frozen legacy** (kept readable,
-but not regenerated) — see
-[the `analisis_inteligente.parquet` section](#predictive--analisis_inteligenteparquet-frozen-legacy)
-for how the two differ and what stays valid to read. This repo's dashboard still reads the frozen
-legacy file (`src/data/loaders.py::load_analisis_inteligente`, wired into
-`tab_predictive_evidence.py`) — migrating to `failure_mode_diagnosis` is tracked as a follow-up,
-not done as part of this update (see [§9](#-migration-notes-v10--v20)).
+### `mode_failure_analisis` (published contract, v1.1 — formerly `failure_mode_diagnosis`)
+
+This is the weekly analysis contract, published for both `capstone` and `cda` (motor),
+**alongside** `unit_failure_analisis` (below) — the two are generated and published together by
+the same run, in the same location, neither replaces the other. The table has one row per unit and
+per failure mode whose score is at least **35**. Units with no flagged mode have no row in that
+week's partition.
+
+| Column | Type / meaning |
+|---|---|
+| `Unit` | Unit identifier |
+| `Fecha` | Date of the data used for the analysis |
+| `failure_mode` | Flagged mode, keyed against `reglas_<cliente>_motor.json` |
+| `diagnostico` | What is happening for this unit in this specific mode: severity, trend, fleet position. Distinct from `probable_cause` — no mechanism here. |
+| `probable_cause` | Probable physical mechanism for this mode. No actions or lab/telemetry values beyond what the mechanism implies. |
+| `recommended_actions` | JSON array of exactly 3 ordered actions, stored as a string. Each starts with an explicit timeframe (`Inmediato:` / `Proxima ventana:` / `Proximo PM:`, or the lowercase CDA equivalent). |
+| `limitation` | What single measurement, sample, or inspection would close the open question for this mode. Added in v1.1 — absent in v1.0. |
+| `analysis_status` | `ok`, `fallback_rules`, or `error` |
+
+`diagnostico`, `probable_cause`, `recommended_actions`, and `limitation` are generated by an LLM
+call per unit (one call covers all of that unit's flagged modes), using the same payload as the
+`unit_failure_analisis` narrative below (context, all 9 modes, observations). `probable_cause`
+deliberately stays surface-level: it names the general physical/mechanical phenomenon (wear,
+combustion, lubrication, temperature, etc.) and, if it cites an observation, the variable and its
+direction — it does not walk through the multi-signal reasoning chain (e.g. "sodium and potassium
+rising together signals coolant ingress"); that reasoning stays internal to the model's own
+judgment and to `recommended_actions`, never the published text. If the LLM call fails, or omits
+one of the requested modes, that row falls back to the static `reglas_<cliente>_motor.json` entry
+for that mode (`analysis_status = fallback_rules`); if no complete rule exists either, the row is
+marked `error` with generic text — the underlying exception is never written to a public field.
+
+The table joins to `unit_status_summary` on `Unit` and to `risk_scores` on `Unit` plus
+`failure_mode`. Its weekly snapshot path is
+`MultiTechnique Alerts/predictive/golden/{cliente}/motor/mode_failure_analisis/year=YYYY/week=WW/mode_failure_analisis.parquet`.
+The partition is selected from the matching `unit_status_summary` run. Publish with Zstandard
+compression and no index; validate a staged `_runs/{run_id}` object before promoting it to the
+canonical path.
+
+`analisis_predictivo.ipynb` (repo root) generates and publishes this table for both clients in one
+run each, alongside `unit_failure_analisis`. It does not depend on `FAILURE_MODE_CONFIG` from the
+dashboard repo: the mode → telemetry-signal catalog lives in `telemetry_variables`, inside each
+mode's entry in `reglas_<cliente>_motor.json`, within this repo.
+
+### `unit_failure_analisis` (formerly `analisis_inteligente`)
+
+One AI-written diagnosis per unit for its worst mode, wide format — the same shape the frozen
+legacy `analisis_inteligente.parquet` snapshot documented below always had, just under the new
+name and **no longer frozen**: `analisis_predictivo.ipynb` regenerates and publishes it every run,
+side by side with `mode_failure_analisis`, partitioned the same way, at
+`MultiTechnique Alerts/predictive/golden/{cliente}/motor/unit_failure_analisis/year=YYYY/week=WW/unit_failure_analisis.parquet`.
+Publish with a staged `_runs/{run_id}` object validated before promotion, same as
+`mode_failure_analisis`. Its columns are the ones described just below, in
+"`predictive / analisis_inteligente.parquet` (frozen legacy input...)", including the
+`diagnostico`/`causa_probable`/`acciones`/`limitacion` narrative fields — that section documents
+the shape; treat "frozen" there as describing the original migration-era snapshot, not the current
+`unit_failure_analisis` output.
 
 ### Auto-Discovery
 
@@ -146,21 +184,16 @@ One row per unit — feeds the crítico/alerta/saludable fleet cards.
 |---|---|---|
 | `Unit` | string | Unit identifier |
 | `Fecha` | date | Date of **that unit's** last available reading (not necessarily the run date — see below) |
-| `estado` | string | `anormal` / `alerta` / `normal` — **now sourced from the cumulative curve**, see [§6](#status--classification-rules) |
-| `estado_origen` | string | `"curva"` or `"umbral"` — which of the two criteria below produced `estado` for this unit |
-| `fecha_estado_curva` | date, nullable | Date of the curve point `estado` was read from; null when `estado_origen == "umbral"` |
-| `desfase_estado_dias` | int, nullable | Days between `Fecha` and `fecha_estado_curva` — a large gap means the displayed status is older than the rest of the row; null when `estado_origen == "umbral"` |
-| `ciclo_curva` | int, nullable | Component lifecycle number (`cumulative_risk_curve.ciclo`) at the point `estado` was read from; null when `estado_origen == "umbral"` |
+| `estado` | string | `anormal` / `alerta` / `normal` — see [§6](#status--classification-rules) |
 | `estado_previo` | string | `estado` seven days earlier |
 | `cambio_estado` | string | `"sí"` / `"no"` — whether `estado` changed vs. `estado_previo` |
-| `estado_umbral` | string | `anormal` / `alerta` / `normal` by the old fixed-threshold rule — kept as fallback (when the unit has no curve) and as an audit trail otherwise, see [§6](#status--classification-rules) |
 | `ranking` | float | Synthetic risk score for the day |
 | `delta_ranking` | float | Change in `ranking` over the last 7 days |
 | `media_30d` | float | 30-day rolling mean of `ranking`, **precomputed upstream** |
 | `dias_media_30d` | int | Number of real days the 30-day mean was actually computed over |
 | `peor_modo` | string | Failure mode with the highest score |
 | `peor_valor` | float | That mode's score |
-| `modes_over_threshold_count` | int | Count of modes scoring ≥ 35 (note: this is the `failure_mode_diagnosis` flag threshold, distinct from the 30/50/60/80 thresholds behind `estado_umbral` — see [§6](#status--classification-rules)). Should match the number of `failure_mode_diagnosis` rows for the same unit that week — a mismatch is a data problem, not something to paper over in the UI |
+| `modes_over_threshold_count` | int | Count of modes scoring ≥ 35 (note: this threshold is distinct from the 30/50/60/80 thresholds used for `estado` — see [§6](#status--classification-rules)) |
 | `modos_ordenados` | string (JSON) | All 9 modes with their score, ordered highest → lowest |
 | `dias_sin_datos` | int | Staleness of this unit's snapshot |
 
@@ -225,27 +258,18 @@ zero reading.
 > itself a change worth confirming with the upstream team before touching `OIL_THRESHOLDS` — see
 > [§9](#-migration-notes-v10--v20).
 
-### `predictive / analisis_inteligente.parquet` (frozen legacy)
+### `predictive / analisis_inteligente.parquet` (frozen legacy input — schema now published live as `unit_failure_analisis`)
 
-Observed locally at `data/predictive/golden/{cliente}/analisis_inteligente.parquet` (both
-`capstone` and `cda`). Originally flagged in v2.0 of this document as undocumented upstream and a
-possible preview of `failure_mode_diagnosis` — **now confirmed**: upstream describes it explicitly
-as superseded by the published `failure_mode_diagnosis` table below, and states it **"remains
-frozen and is not regenerated"**. Treat any copy of this file as a point-in-time snapshot that will
-not gain new weeks going forward, not as a live source.
+This section documents the schema of the original, frozen migration-era snapshot. As of the
+`analisis_predictivo.ipynb` pipeline, the same shape is generated fresh every run and published as
+`unit_failure_analisis` (see above) — no longer frozen, and no longer just a migration input.
+Do not publish this wide, one-row-per-unit schema as `mode_failure_analisis`: that contract
+requires one row for every flagged mode, not just the unit's worst one.
 
-This repo's dashboard still reads this file (`load_analisis_inteligente` /
-`get_latest_analisis_inteligente` in `src/data/loaders.py`, consumed by
-`tab_predictive_evidence.py` and `tab_predictive_overview.py::attach_status`) — see
-[§9](#-migration-notes-v10--v20) for what switching to `failure_mode_diagnosis` implies for that
-code.
+**Grain**: one row per unit — a snapshot, not partitioned by `year=`/`week=` like the five public
+tables.
 
-**Grain**: one row per unit — a snapshot, not partitioned by `year=`/`week=` like the other four
-tables (confirmed: 50 rows for 50 distinct `Unit` values in the `capstone` copy, most-recent
-`Fecha` per unit).
-
-**Contents**: one diagnosis per unit, covering only that unit's single worst mode — narrower than
-`failure_mode_diagnosis`, which carries one row per unit **per flagged mode**:
+**Contents**: the legacy row carries per-unit scores and the previous worst-mode narrative:
 
 | Column group | Examples | Description |
 |---|---|---|
@@ -257,96 +281,13 @@ tables (confirmed: 50 rows for 50 distinct `Unit` values in the `capstone` copy,
 | **Narrative (LLM-generated)** | `observaciones` (JSON list of `{severidad, texto}`), `diagnostico`, `causa_probable`, `acciones` (JSON list), `limitacion` | Free-text diagnosis, in Spanish |
 | Provenance | `analisis_fuente` (`"llm"` or `"omitida"`), `analisis_tokens`, `analisis_error` | `"omitida"` rows (seen for `normal`-status units) have no narrative fields populated — the LLM pass appears to be skipped for low-risk units, presumably to save cost |
 
-This directly resolves two things left open by the upstream guide: the **narrative diagnosis
-content does exist** for at least `capstone`/`cda`, and the **failure-mode set is 9**, matching
+The legacy file remains unchanged by the migration notebook. Its per-unit scores supply the
+`failure_mode` rows; the new output uses the contract schema and deterministic rules.
+
+This legacy snapshot confirms that **narrative diagnosis content exists** for at least
+`capstone`/`cda`, and that the **failure-mode set is 9**, matching
 `risk_scores`/`unit_status_summary` (see [§5](#failure-mode--signal-catalog) for the confirmed
 names).
-
-### `predictive / failure_mode_diagnosis` (published)
-
-> **Status: published.** This is the public contract for the weekly Capstone predictive analysis,
-> replacing `analisis_inteligente.parquet` above.
-
-**Grain**: one row per **unit × flagged failure mode** — a structural change from
-`analisis_inteligente.parquet`'s one-row-per-unit shape. A unit with no mode above threshold does
-not appear at all that week (no empty row, no filler text).
-
-| Column | Type | Description |
-|---|---|---|
-| `Unit` | string | Unit identifier |
-| `Fecha` | date | Date of the data the analysis was run on |
-| `failure_mode` | string | The diagnosed mode, one of the 9 declared in `FAILURE_MODE_CONFIG` |
-| `probable_cause` | string | Text: probable cause of the observed behavior |
-| `recommended_actions` | string (JSON array) | Ordered list of recommended actions |
-| `analysis_status` | string | `"ok"` / `"fallback_rules"` / `"error"` — see below |
-
-**`analysis_status`** must drive how the UI treats the row, not just whether it has text:
-
-- `"ok"` — ran normally, display as-is.
-- `"fallback_rules"` — the LLM was unavailable and the text came from fixed rules instead; still
-  valid, but should be flagged visually so it doesn't read as more precise than it is.
-- `"error"` — the analysis failed. `probable_cause`/`recommended_actions` carry a **generic**
-  placeholder message, never the underlying exception. **Never surface raw exception text to the
-  user** — this rule exists because of a real incident where a `BadRequestError` string from a
-  failed call ended up rendered in a unit's report. Show a UI-level error message instead of the
-  field's literal contents whenever `analysis_status == "error"`.
-
-**Threshold and lineage**: the flagging threshold is **35** (the same threshold behind
-`unit_status_summary.modes_over_threshold_count`), versioned in the upstream analysis
-configuration and recorded in the run manifest. `estado == "normal"` does not exclude a unit — a
-unit can be `normal` overall and still have one mode above 35. The model receives all of a unit's
-flagged modes in a single structured request; a missing/invalid mode from the model is completed
-by deterministic fallback rules rather than dropped.
-
-**Reading pattern**: same run-snapshot pattern as `unit_status_summary` — read only the latest
-partition, not `leer_ultimas_semanas`:
-
-```python
-diagnoses = leer_ultima_semana(ruta_tabla("predictive", "failure_mode_diagnosis"))
-```
-
-To show a unit's diagnoses in the same severity order as the summary, join through
-`modos_ordenados`:
-
-```python
-import json
-
-row = summary[summary["Unit"] == "CA-44"].iloc[0]
-scores = json.loads(row["modos_ordenados"])
-
-detail = diagnoses[diagnoses["Unit"] == "CA-44"].copy()
-detail["score"] = detail["failure_mode"].map(scores)
-detail = detail.sort_values("score", ascending=False)
-```
-
-**Cross-references**: `unit_status_summary` says how many modes are flagged and which is worst;
-`failure_mode_diagnosis` says what's going on with each of those modes; `FAILURE_MODE_CONFIG`
-(§5) says which signals to plot as evidence for each. `modes_over_threshold_count` should equal
-the number of `failure_mode_diagnosis` rows for that unit that week — a mismatch is a data
-problem the UI should surface, not silently reconcile.
-
-**Canonical path** (same partition layout as the other four tables):
-
-```text
-predictive/golden/capstone/motor/failure_mode_diagnosis/year=YYYY/week=WW/part-0.parquet
-```
-
-`YYYY`/`WW` come from the same run as `unit_status_summary`. Written with Zstandard compression, no
-index; staged under `_runs/{run_id}` and promoted only after validation. If no modes are flagged
-fleet-wide that week, an **empty** parquet with the same schema is published (not a missing
-partition).
-
-**Verified against the September 21, 2026 sync**: `data/predictive/golden/capstone/motor/failure_mode_diagnosis/year=2026/week=32/part-0.parquet`
-exists and matches the schema above exactly (`Unit`, `Fecha`, `failure_mode`, `probable_cause`,
-`recommended_actions`, `analysis_status`), 36 rows, all `analysis_status == "ok"` in this partition
-(`fallback_rules`/`error` not yet observed in real data — the handling above is implemented but
-untested against a live example of either). **Not present for `cda/motor`** as of this sync — only
-`capstone/motor` has this table so far, confirmed via `discover_predictive_layout`.
-
-**Not this repo's concern**: the upstream guide also documents how the generator loads its own AWS
-S3 / OpenAI credentials in Docker (`Initialize-LocalRun.ps1`, `*_FILE` env-var pattern). That's the
-upstream pipeline's execution environment, not this dashboard's read path — noted here only so it
-isn't mistaken for a change to how this repo authenticates against anything.
 
 ---
 
@@ -441,24 +382,7 @@ are inferred from data, not read from the config dict itself.
 
 ### `unit_status_summary.estado` (fleet cards)
 
-**Changed in this version.** `estado` is **not** the flat threshold rule below — it is the zone of
-the **last point of the unit's current lifecycle** in `cumulative_risk_curve`
-(`cumulative_risk_curve.estado`), lowercased. In other words it compares accumulated risk against
-the fleet band, the same criterion documented in [§7](#cumulative-risk-curve), not a point-in-time
-threshold on `ranking`/`media_30d`.
-
-This has two consequences, both surfaced as their own columns on the row:
-
-- `fecha_estado_curva` can be **earlier** than `Fecha`, because the curve depends on component
-  hours (from oil sampling), which can lag behind the daily ranking series. `desfase_estado_dias`
-  is the gap in days — a large gap means the displayed status is older than the rest of the row.
-- If a unit **has no curve** (e.g. no recorded component hours), `estado` **falls back** to the
-  threshold rule below, and `estado_origen` reads `"umbral"` instead of `"curva"`.
-  `fecha_estado_curva`, `desfase_estado_dias` and `ciclo_curva` come back null in that case.
-
-**`estado_umbral`** — the fixed-threshold rule from v2.0, kept as the fallback criterion above and
-otherwise as an audit trail (it is *not* recomputed to explain `estado`, it's the independent
-result of applying this rule regardless of source):
+Evaluated in this order — `anormal` wins over `alerta`:
 
 | Status | Condition |
 |---|---|
@@ -466,33 +390,18 @@ result of applying this rule regardless of source):
 | `alerta` | `media_30d ≥ 30` **or** any mode `≥ 50` |
 | `normal` | otherwise |
 
-`estado` and `estado_umbral` **can legitimately disagree** for the same unit — one looks at
-accumulated risk against the fleet, the other at point-in-time risk against fixed thresholds. This
-is documented as intentional, not a defect: use `estado` for the cards, `estado_umbral` to explain
-*why* a unit sits where it does. `modes_over_threshold_count` uses a third, unrelated threshold of
-35 (the `failure_mode_diagnosis` flag threshold) and should not be confused with either `estado` or
-`estado_umbral`.
-
-**Code impact**: `tab_predictive_overview.py`'s `COMPUTE_STATUS` flag used to bypass both `estado`
-and `estado_umbral` and reclassify status client-side from 30-day scores, because upstream had told
-this team `estado` was mis-computed. This clarification of how `estado` actually works explains why
-the client-side recomputation and the old upstream `estado` disagreed (they were never the same
-criterion) — **`COMPUTE_STATUS` is now `False`**, verified against the September 21, 2026 sync (see
-[§9](#-migration-notes-v10--v20) for the exact numbers checked before flipping it). The client-side
-classifier (`_classify_status_from_scores`) stays in the code as a safety net, not deleted, in case
-a future data drop regresses `estado` again.
+These thresholds (30/50/60/80) match v1.0's dashboard-side Saludable/Alerta/Crítica thresholds —
+**this rule is now precomputed upstream**, not applied client-side (see
+[§9](#-migration-notes-v10--v20)). `modes_over_threshold_count` uses a separate, unrelated
+threshold of 35 and should not be confused with `estado`.
 
 ### `cumulative_risk_curve.estado` (curve zones)
 
 Uses Title Case (`Normal` / `Alerta` / `Anormal`) and compares the accumulated curve against the
-fleet reference band, **not** the fixed-threshold rule above. This is per-point (one value per
-`Unit`/`Fecha` row along the curve), while `unit_status_summary.estado` above is now **literally
-sourced from this column** — specifically the last point of the unit's current cycle
-(`es_vigente == True`), lowercased. They should therefore agree by construction for the current
-cycle's latest point; what **can** still legitimately disagree with `unit_status_summary.estado` is
-`estado_umbral` (see above), not this column. Label `estado` here distinctly from `zona_final`
-(same status, but repeated across all of a cycle's rows rather than per-point) in any UI that shows
-both.
+fleet reference band, **not** the same 30/50/60/80 rule above. **The two `estado` fields can
+disagree for the same unit** — this mirrors a known v1.0 behavior (the classic hero status vs. the
+accumulated-curve zone status could already disagree; see `project_overview.md` §"Curva Acumulada
+de Riesgo"). Label them distinctly in any UI that shows both.
 
 ---
 
@@ -567,7 +476,7 @@ local parquet (`data/predictive/golden/capstone/motor/cumulative_risk_curve/...`
 | `zona_final` | string | Status of the vigent curve's last point, repeated across all its rows; null for historical cycles |
 | `peor_zona` | string | *Undocumented upstream.* Worst zone reached across the vigent cycle so far |
 | `tendencia_final`, `peor_tendencia` | string | *Undocumented upstream.* Trend-equivalents of `zona_final`/`peor_zona` |
-| `componente` | string | **Re-verified against the September 21, 2026 sync**: still `"MOTOR DIESEL"` (14,420/14,420 rows in `capstone/motor`), not the lowercase `"motor"`/`"transmision"` the upstream guide's own column table shows. The guide's table is simplified/aspirational on this point — **do not hardcode the lowercase form when filtering on this column** |
+| `componente` | string | Observed locally as `"MOTOR DIESEL"`, not the lowercase `"motor"` the reading guide shows — **do not hardcode the lowercase form when filtering on this column** |
 
 Two different nulls: `estado` null means "outside the reference band's domain"; `zona_final` null
 means "historical cycle, not the current one" — don't conflate them. Columns marked *undocumented
@@ -601,114 +510,104 @@ becomes redundant — see [§9](#-migration-notes-v10--v20).
 - ✅ `cumulative_risk_curve` must be read via `leer_curva`, not `pd.read_parquet`, to retain
   `config`/`banda` metadata — otherwise zone boundaries silently drift from what was actually used
   to classify the data.
-- ✅ `failure_mode_diagnosis` is now a published, partitioned table (see
-  [its schema](#predictive--failure_mode_diagnosis-published)) — `analisis_inteligente.parquet` is
-  frozen legacy and will not gain new weeks. This repo's evidence UI still builds against the
-  frozen file; treat that as a known gap to close, not an open question anymore.
-- ⚠️ **Never render `failure_mode_diagnosis` fields when `analysis_status == "error"`** —
-  `probable_cause`/`recommended_actions` carry a generic placeholder in that case, not the failure
-  detail, but any future code path that assumes the fields are always safe to print should still
-  guard on `analysis_status` explicitly (this is the same class of incident that already happened
-  once with `analisis_inteligente.parquet`'s narrative fields).
-- ✅ **Verified against the September 21, 2026 sync**: `unit_status_summary.modes_over_threshold_count`
-  matches the number of `failure_mode_diagnosis` rows for every one of the 50 `capstone/motor`
-  units that week (0 mismatches) — treat a future mismatch as a data-quality issue to surface, not
-  to silently reconcile by trusting one number over the other.
-- ⚠️ `componente` in `cumulative_risk_curve` is `"MOTOR DIESEL"` (re-confirmed on the fresh sync,
-  14,420/14,420 rows), **not** the lowercase `"motor"`/`"transmision"` the upstream guide's own
-  docs show (see [§7](#columns)), and not the lowercase `"motor"` used elsewhere in the
-  path/config (`{componente}` in the S3/local path, or
-  `FAILURE_MODE_CONFIG[...]["components"]["motor"]`). Treat the guide's lowercase form as
-  aspirational/simplified documentation, not the real value.
+- ✅ `mode_failure_analisis` (formerly `failure_mode_diagnosis`) is the published weekly contract;
+  `unit_failure_analisis` (formerly `analisis_inteligente`, no longer frozen) is a distinct,
+  wide, one-row-per-unit companion — not a row-level replacement for either direction.
+- ⚠️ `componente` in `cumulative_risk_curve` is observed as `"MOTOR DIESEL"`, not the lowercase
+  `"motor"` used elsewhere in the path/config (`{componente}` in the S3/local path, or
+  `FAILURE_MODE_CONFIG[...]["components"]["motor"]`) — don't assume the casing/format is
+  consistent across tables.
 
 ---
 
 ## 🔀 Migration Notes (v1.0 → v2.0)
 
-Summary of what changed and what it implies for this repo. **Corrected in this update**: contrary
-to earlier versions of this document, most of this migration is **already implemented** —
-`src/data/predictive_v2.py` provides dual-mode discovery/readers (`discover_predictive_layout`,
-`load_risk_scores`, `load_unit_status_summary`, `read_cumulative_risk_curve`) that prefer the v2.0
-parquet layout per client/component and fall back to the legacy CSV/`analisis_inteligente.parquet`
-otherwise, wired into `tab_predictive_overview.py`/`tab_predictive_evidence.py`/
-`predictive_callbacks.py` through the shared `attach_status()` helper. The table below reflects
-what is actually wired up today, not a still-pending plan — remaining gaps are called out per row.
+Summary of what changed and what it implies for this repo. **None of these are implemented yet** —
+this repo's Predictive tabs, callbacks, and config still read the v1.0 local-CSV shape.
 
-| Area | v1.0 | v2.0 | Status in this repo |
+| Area | v1.0 | v2.0 | Implication |
 |---|---|---|---|
-| Storage | Local per-client CSV, `data/predictive/golden/{client}/{component}.csv` | Partitioned parquet, mirrored locally at `data/{tecnica}/golden/{cliente}/{componente}/{tabla}/year=/week=/`, synced manually from S3 | **Implemented.** `predictive_v2.discover_predictive_layout` / `_list_week_partitions` / `read_latest_partition` / `read_last_n_weeks` read the local `pyarrow` mirror directly, per client/component, with an LRU cache keyed on file mtime/size. Per-component fallback to the legacy CSV path stays in `_discover_components` (`tab_predictive_overview.py`) for components not yet migrated |
-| Shape | Wide: ~250 columns, one per operational-mode × signal × rate-type, plus one column per failure mode | Long: `risk_scores` and `signal_daily_status` are unit × day × (mode\|signal) rows | **Implemented via a pivot shim.** `predictive_v2.risk_scores_to_wide` pivots the long parquet back into the legacy wide shape so the existing rolling-window/table code didn't need a rewrite — this is a deliberate compatibility layer, not a leftover |
-| Failure modes (Motor) | 7, hardcoded in `predictive_config.py::FAILURE_MODE_CONFIG["motor"]` | 9 — confirmed: `abrasive_wear_risk`, `bearing_wear_risk`, `blowby_risk`, `combustion_risk`, `coolant_contamination_risk`, `lubrication_failure_risk`, `oil_degradation_risk`, `thermal_imbalance_risk`, `turbocharger_risk` | **Implemented data-driven, not hardcoded.** `predictive_v2.get_failure_mode_keys` reads the mode list from `modos_ordenados`/`risk_scores` directly rather than a fixed count, so the 2 new modes appear automatically once present in the data — verify `FAILURE_MODE_CONFIG["capstone"]` still carries correct labels/signal mappings for both |
-| Rolling averages | Computed client-side (`30d`/`60d`/`90d` per-`Unit` rolling means, `min_periods=1`) | `media_30d` precomputed upstream in `unit_status_summary`; no `60d`/`90d` equivalent observed | **Partially implemented.** `tab_predictive_overview.py` prefers `unit_status_summary.media_30d`/`dias_media_30d` when that table exists, falling back to client-side rolling computation otherwise; `60d`/`90d` windows still stay client-side either way |
-| Status classification | Applied client-side on `avg_ranking_30d`/`max_fm_30d`, duplicated in 4 call sites | Precomputed upstream as `unit_status_summary.estado` — curve-derived, not the flat 30/50/60/80 rule (see [§6](#status--classification-rules)) | **`COMPUTE_STATUS` flipped to `False`.** Verified against the September 21, 2026 sync before flipping: `capstone/motor` has `estado_origen == "curva"` for all 50 units (no unit stuck on the `"umbral"` fallback), and `estado`/`estado_umbral` disagree for 18/50 units — the documented, intentional divergence, not a sign of bad data. `cda/motor` shows 10 `"curva"` + 1 `"umbral"`, also as expected. `attach_status()` now trusts `unit_status_summary.estado` directly (falling back to `analisis_inteligente.parquet`, then `"Normal"`, unchanged) |
-| Cumulative curve | Built entirely client-side in `accumulated_curve.py` (hours-fill, cycle detection, reference band, zone classification), joined against Oil's `cleaned_component_hours.parquet` | Delivered precomputed as `cumulative_risk_curve`, including `componentHours_filled`, `zona_final`, and ~17 more columns not documented upstream (see [§7](#columns)) | **Implemented alongside the legacy path.** `predictive_v2.read_cumulative_risk_curve` is the dedicated reader (metadata-preserving, per Change 6); `accumulated_curve.py` keeps both `render_accumulated_section` (legacy, client-built) and `render_accumulated_section_from_curve` (new, precomputed) as parallel code paths rather than one replacing the other |
-| Oil variables & thresholds | Separate wide columns per essay (`Hierro`, `Cobre`, ...) plus a static, hardcoded `OIL_THRESHOLDS` table in `predictive_config.py` | No `oil`-technique equivalent of `signal_daily_status` found locally (`data/oil/golden/{client}/` is unchanged: still just `stewart_limits*.parquet`). Raw essay values plus `_mm5`/`_delta30`/`_z90` derived stats now appear per-unit in `analisis_inteligente.parquet` | **Not touched.** `OIL_THRESHOLDS` is still the hardcoded v1.0 table; still not confirmed redundant — the upstream classification signal looks more like a per-unit `z90` baseline than fixed bands. Treat as a genuine behavior change to confirm with upstream before changing |
-| Component-hours cross-module dependency | Predictive read Oil's `data/oil/golden/{client}/cleaned_component_hours.parquet` directly for horómetro figures on priority cards/unit banner | Not present in `unit_status_summary`/`risk_scores`; only `cumulative_risk_curve.componentHours_filled` carries hours, and only for `capstone` (no curve table for `cda` yet) | **Not changed** — the Oil-module join stays the source for any client/component without a `cumulative_risk_curve` table. Confirmed per client, not assumed |
-| Clients/components observed | `CDA`: `motor`, `transmision` (CSV) | New parquet layout confirmed for `capstone/motor` and `cda/motor` (history back to `year=2021` for `cda`); `transmision` not migrated for either client; `cumulative_risk_curve` only observed for `capstone` | **Gated correctly.** `discover_predictive_layout` checks `risk_scores`/`unit_status_summary`/`cumulative_risk_curve` independently per component, so `cda/transmision` (still CSV-only) and `cda`'s missing curve table are each handled by their own fallback, not assumed covered |
-| `failure_mode_diagnosis` | N/A (didn't exist) | Published (see [its schema](#predictive--failure_mode_diagnosis-published)) — one row per unit × flagged mode, replacing `analisis_inteligente.parquet` (frozen, one row per unit) | **Migrated for `capstone/motor`.** `predictive_v2.get_unit_failure_mode_diagnosis` reads the table, sorted worst-mode-first via the `modos_ordenados` join, and `tab_predictive_evidence.py`'s AI panel now shows it (with `fallback_rules` flagged in the panel header and `error` rows never rendering their raw fields). Verified against the September 21, 2026 sync: `capstone/motor` week 32 has 36 rows across the 50 units, all `analysis_status == "ok"` (`fallback_rules`/`error` handling is implemented but not yet exercised by real data), and `modes_over_threshold_count` matches the diagnosis row count for every unit (0 mismatches). **Not available for `cda/motor`** yet — `attach_status()`'s legacy `analisis_inteligente.parquet` fallback (and the rule-based insight engine below that) still cover it, gated automatically by `discover_predictive_layout`'s per-component `failure_mode_diagnosis` flag |
+| Storage | Local per-client CSV, `data/predictive/golden/{client}/{component}.csv` | Partitioned parquet, mirrored locally at `data/{tecnica}/golden/{cliente}/{componente}/{tabla}/year=/week=/`, synced manually from S3 | Loaders (`_load_component_data` in both tabs) need a rewrite around `pyarrow.dataset` (local `data/` root — no live S3 client needed) plus partition-listing/caching, and a way to trigger/detect the manual sync running stale — not a `pd.read_csv` swap |
+| Shape | Wide: ~250 columns, one per operational-mode × signal × rate-type, plus one column per failure mode | Long: `risk_scores` and `signal_daily_status` are unit × day × (mode\|signal) rows | Code that pattern-matches column name substrings (`create_telemetry_signal_chart`, `_analyze_telemetry_observations`) must switch to filtering rows instead |
+| Failure modes (Motor) | 7, hardcoded in `predictive_config.py::FAILURE_MODE_CONFIG["motor"]` | 9 — confirmed: `abrasive_wear_risk`, `bearing_wear_risk`, `blowby_risk`, `combustion_risk`, `coolant_contamination_risk`, `lubrication_failure_risk`, `oil_degradation_risk`, `thermal_imbalance_risk`, `turbocharger_risk` | `FAILURE_MODE_CONFIG` needs the 2 new modes (`turbocharger_risk`, `coolant_contamination_risk`) added, with their label/variable mapping confirmed against the actual `FAILURE_MODE_CONFIG["capstone"]` dict in code, before the failure-mode table and priority-card driver bars are complete |
+| Rolling averages | Computed client-side (`30d`/`60d`/`90d` per-`Unit` rolling means, `min_periods=1`) | `media_30d` precomputed upstream in `unit_status_summary`; no `60d`/`90d` equivalent observed | Client-side 30d rolling-window computation becomes redundant once the dashboard reads `unit_status_summary.media_30d` directly; `60d`/`90d` rolling logic likely still needs to stay client-side (or be requested from upstream) unless confirmed otherwise |
+| Status classification | Applied client-side on `avg_ranking_30d`/`max_fm_30d`, duplicated in 4 call sites (`tab_predictive_overview.py`, `tab_predictive_evidence.py`, twice in `predictive_callbacks.py`) | Precomputed upstream as `unit_status_summary.estado`, same 30/50/60/80 thresholds (verified against local data) | The 4-site duplication risk goes away if the dashboard trusts `estado` directly instead of recomputing it — but the accumulated-curve's separate `estado`/`zona_final` classification stays a second, independently-computed status (unchanged behavior, still worth distinct labeling) |
+| Cumulative curve | Built entirely client-side in `accumulated_curve.py` (hours-fill, cycle detection, reference band, zone classification), joined against Oil's `cleaned_component_hours.parquet` | Delivered precomputed as `cumulative_risk_curve`, including `componentHours_filled`, `zona_final`, and ~17 more columns not documented upstream (see [§7](#columns)) | Most of `accumulated_curve.py` becomes redundant if this table is adopted as-is; the `K_SIGMA=2.0`/`K_ALERTA=1.0` parameters observed locally are close to the old `EXCLUDE_FROM_REFERENCE`/`K_SIGMA=2` constants but now travel as `df.attrs["config"]`/`["banda"]`/`["tendencia"]` parquet metadata instead of hardcoded constants — the extra undocumented columns (`z`, `evaluable`, `tramo_flota`, etc.) should be clarified with upstream before being relied on |
+| Oil variables & thresholds | Separate wide columns per essay (`Hierro`, `Cobre`, ...) plus a static, hardcoded `OIL_THRESHOLDS` table in `predictive_config.py` | No `oil`-technique equivalent of `signal_daily_status` found locally (`data/oil/golden/{client}/` is unchanged: still just `stewart_limits*.parquet`). Raw essay values plus `_mm5`/`_delta30`/`_z90` derived stats now appear per-unit in `analisis_inteligente.parquet` | `OIL_THRESHOLDS` is **not confirmed redundant** — the upstream classification signal looks more like a per-unit `z90` baseline than the old fixed Normal/Alerta/Crítico bands; treat this as a genuine behavior change to confirm with upstream, not just a storage-format change |
+| Component-hours cross-module dependency | Predictive read Oil's `data/oil/golden/{client}/cleaned_component_hours.parquet` directly for horómetro figures on priority cards/unit banner | Not present in `unit_status_summary`/`risk_scores`; only `cumulative_risk_curve.componentHours_filled` carries hours, and only for `capstone` (no curve table for `cda` yet) | Priority-card/unit-banner horómetro display likely still needs the standalone Oil-module join for any client without a `cumulative_risk_curve` table — confirm per-client rather than assuming the new layer covers it everywhere |
+| Clients/components observed | `CDA`: `motor`, `transmision` (CSV) | New parquet layout confirmed for `capstone/motor` and `cda/motor` (history back to `year=2021` for `cda`); `transmision` not migrated for either client; `cumulative_risk_curve` only observed for `capstone` | Do not assume `transmision` is available under the new layout for any client, and don't assume `cumulative_risk_curve` exists for `cda` — gate per client **and** per table, not just per client, before enabling in `predictive_allowed_clients` |
+| `failure_mode_diagnosis` / `analisis_inteligente` | Frozen one-diagnosis-per-unit `analisis_inteligente.parquet` | Published one-row-per-unit-per-flagged-mode contract (v1.1), threshold 35, with `diagnostico`, `probable_cause`, JSON-string `recommended_actions`, `limitation`, and `analysis_status`, renamed `mode_failure_analisis`; plus its unfrozen wide-format companion `unit_failure_analisis` (formerly `analisis_inteligente`), generated and published alongside it every run | `analisis_predictivo.ipynb` generates both for `capstone` and `cda` via an LLM call per unit, falling back to static rules (`reglas_<cliente>_motor.json`) per mode when the call fails; the dashboard migration remains a separate task |
 
-**Net effect of this update**: both previously-open questions — `estado`'s real derivation and
-`failure_mode_diagnosis`'s final schema — are now implemented and verified against the September
-21, 2026 data sync, not just documented. `COMPUTE_STATUS` is `False`; the evidence tab's AI panel
-reads `failure_mode_diagnosis` for `capstone/motor` and falls back to the frozen legacy file
-everywhere else.
+**Net effect**: v2.0 removes most of the client-side computation this module currently does
+(rolling averages, status classification, curve construction) by shifting it upstream, and swaps
+the wide/CSV shape for a long/parquet one. Adopting it is a loader + config rewrite, not a
+column-mapping patch — treat it as a separate, scoped migration task rather than a drop-in change
+to the existing CSV readers.
 
 ---
 
 ## 📝 Change Log
 
-### Version 2.1.1 (September 21, 2026 — data sync + implementation)
-- The client's data sync landed the same day as v2.1's documentation update, so the code changes
-  and verifications proposed there were carried out and checked against real parquet:
-  - `src/data/predictive_v2.py`: added `failure_mode_diagnosis` to `ComponentAvailability`/discovery,
-    plus `load_failure_mode_diagnosis` and `get_unit_failure_mode_diagnosis` (worst-mode-first join
-    via `modos_ordenados`, matching §3's pattern)
-  - `dashboard/tabs/tab_predictive_evidence.py`: AI panel now reads `failure_mode_diagnosis` first,
-    handling `analysis_status` per §3's rules, falling back to `analisis_inteligente.parquet` then
-    the rule-based insight engine
-  - `dashboard/tabs/tab_predictive_overview.py`: `COMPUTE_STATUS` flipped to `False`
-  - Verified against `data/predictive/golden/{capstone,cda}/motor/...` (week 32 / week 29 2026):
-    `capstone/motor`'s `estado_origen` is `"curva"` for all 50 units (0 stuck on `"umbral"`);
-    `estado`/`estado_umbral` disagree for 18/50 units, matching the documented intentional
-    divergence; `cda/motor` shows 10 `"curva"` + 1 `"umbral"`; `failure_mode_diagnosis` exists only
-    for `capstone/motor` (36 rows, all `analysis_status == "ok"`) and `modes_over_threshold_count`
-    matches its row count for all 50 units; `cumulative_risk_curve.componente` is confirmed still
-    `"MOTOR DIESEL"` (resolves the casing discrepancy raised in v2.1 — the guide's lowercase example
-    was aspirational/simplified, not real)
-  - Full test suite run: 589 passed, 1 skipped, 8 failed — all 8 failures are in
-    `tests/test_campbell_ai*.py` (a schema-drift check unrelated to this module, tripped by the same
-    fresh data sync), none touch `predictive_v2`/`attach_status`/`COMPUTE_STATUS`/
-    `failure_mode_diagnosis`
-  - Not exercised: `analysis_status` values `"fallback_rules"`/`"error"` (no real row with either
-    value was present in the synced partition) — the handling code was smoke-tested with synthetic
-    inputs only
+### Version 2.4 (September 22, 2026)
+- Corrected `unit_failure_analisis`'s S3 path: v2.3 said it stayed at the old flat
+  `predictive/golden/{cliente}/unit_failure_analisis.parquet` object (overwritten every run). It
+  is now partitioned like the rest of the golden layer, matching `mode_failure_analisis`:
+  `MultiTechnique Alerts/predictive/golden/{cliente}/motor/unit_failure_analisis/year=YYYY/week=WW/unit_failure_analisis.parquet`,
+  published via the same staged-`_runs/{run_id}`-then-`copy_object` mechanism (size + sha256
+  validated before promotion). Local storage is unaffected — still a flat file under `salidas/`.
+- Changed `mode_failure_analisis`'s leaf filename from `part-0.parquet` to
+  `mode_failure_analisis.parquet`, for consistency with `unit_failure_analisis`'s new
+  table-name-as-filename convention. Only the filename changed; the partitioned path
+  (`.../mode_failure_analisis/year=YYYY/week=WW/...`) is unchanged from v2.3.
+- Any object already published under the v2.3 flat path for `unit_failure_analisis` is stale and
+  should be deleted manually — the pipeline no longer writes there.
+
+### Version 2.3 (September 22, 2026)
+- Renamed the two `analisis_predictivo.ipynb` output tables: `failure_mode_diagnosis` →
+  `mode_failure_analisis`, and `analisis_inteligente` → `unit_failure_analisis`. Same locations
+  (`predictive/golden/{cliente}/...`), same schemas, only the name changed — both local filenames
+  and the S3 table-folder segment for `mode_failure_analisis`'s partitioned path. The two continue
+  to be generated and published together, side by side, in every run.
+- Simplified the required style of `probable_cause` (`mode_failure_analisis`) and `causa_probable`
+  (`unit_failure_analisis`): both now name only the general physical/mechanical phenomenon
+  (wear, combustion, lubrication, temperature, etc.) and, when citing an observation, the variable
+  and its direction of change — never the multi-signal reasoning chain that used to justify the
+  mechanism (e.g. "sodium and potassium rising together is the signature of coolant ingress").
+  That domain reasoning still exists in the prompts as internal reference for choosing accurate
+  `recommended_actions`, it just no longer surfaces in the published `probable_cause` text.
+- Fixed a real defect found while validating the above: the CDA prompts (`cda_motor.md`,
+  `cda_motor_diagnosis.md`) were missing the "no raw column names" prohibition that the Capstone
+  prompts already had, and generated output was leaking literal identifiers (e.g.
+  `combustion_risk`) into `probable_cause`. Added the same prohibition to both CDA prompts;
+  re-validated with real output — zero leaks across the corrected sample.
+- CDA's `causa_probable` domain-hypothesis section (`cda_motor.md`) was also missing
+  `turbocharger_risk` and `coolant_contamination_risk` (the 2 modes added in v2.0) — added,
+  matching what `cda_motor_diagnosis.md` already had.
+
+### Version 2.2 (September 22, 2026)
+- Bumped `failure_mode_diagnosis` to contract v1.1: added `diagnostico` (what is happening for
+  this unit in this mode) and `limitation` (what single measurement would close the question),
+  matching the four-field narrative shape already used by the legacy `analisis_inteligente`
+  output. Schema is now 8 columns instead of 6; both are required, non-null strings.
+- The contract is no longer Capstone-only in practice: `analisis_predictivo.ipynb` (a single
+  notebook, parameterized by client) generates and publishes it for both `capstone` and `cda`
+  (motor). `probable_cause`/`recommended_actions`/`diagnostico`/`limitation` are now generated by
+  an LLM call per unit (covering all of that unit's flagged modes in one call), not by static
+  rules alone — `reglas_<cliente>_motor.json` is used only as the fallback when the LLM call
+  fails or omits a requested mode (`analysis_status = fallback_rules`), matching the original
+  v1.0 design intent of never leaving a flagged mode without a row.
+- Removed the `FAILURE_MODE_CONFIG` (dashboard repo) dependency from the generation pipeline: the
+  mode → telemetry-signal catalog now lives in `telemetry_variables`, added to each mode's entry
+  in `reglas_<cliente>_motor.json`, inside this repo. This was a prerequisite for running the
+  pipeline outside the analyst's machine (e.g. in a container), since the dashboard repo's
+  absolute path obviously does not exist there.
 
 ### Version 2.1 (September 21, 2026)
-- **`failure_mode_diagnosis` is now published**, not "still being defined": documented its full
-  schema (`Unit`, `Fecha`, `failure_mode`, `probable_cause`, `recommended_actions`,
-  `analysis_status`), grain (unit × flagged mode, threshold 35), canonical path, and its
-  `analysis_status` handling rules (`ok`/`fallback_rules`/`error`, never surface raw error text).
-  `analisis_inteligente.parquet` is retitled **frozen legacy** per upstream confirmation that it is
-  superseded and no longer regenerated
-- **Corrected `unit_status_summary.estado`'s derivation**: it is sourced from the cumulative
-  curve's last-point zone for the unit's current cycle, not the flat 30/50/60/80 rule — documented
-  the 5 new lineage columns (`estado_origen`, `fecha_estado_curva`, `desfase_estado_dias`,
-  `ciclo_curva`, `estado_umbral`) and rewrote [§6](#status--classification-rules) accordingly. The
-  old flat rule survives as `estado_umbral` (fallback when a unit has no curve, and an audit trail
-  otherwise)
-- **Corrected this document's own migration-status claim**: v2.0 said "none of this is implemented
-  yet"; in fact `src/data/predictive_v2.py` already implements dual-mode discovery and readers for
-  all four original tables, wired into the dashboard tabs behind `attach_status()`. Rewrote
-  [§9](#-migration-notes-v10--v20) to reflect actual implementation state per area, including the
-  **`COMPUTE_STATUS` temporary override** in `tab_predictive_overview.py` (bypasses upstream
-  `estado` because it was previously reported mis-computed) — flagged as the thing this version's
-  `estado` clarification most likely unblocks, pending verification against live data
-- Flagged an unresolved discrepancy: `cumulative_risk_curve.componente` was observed locally as
-  `"MOTOR DIESEL"`, but the updated upstream guide's own column table now shows lowercase
-  `"motor"`/`"transmision"` — not re-verified locally as part of this update (no local
-  `data/predictive/` mirror was available in this checkout to check against)
-- Source: `predictive_guide.md` (supersedes `new_predictive_data_contracts.md` as the upstream
-  reading guide this document is checked against)
+- Added the published weekly `failure_mode_diagnosis` contract from `predictive_guide.md`,
+  including its six-column schema, per-flagged-mode grain, threshold 35, status values, and
+  canonical partition path
+- Documented a no-model migration from the frozen legacy output using existing deterministic rules
+  for every flagged mode
 
 ### Version 2.0 (September 1, 2026)
 - Documented the new parquet golden layer (`telemetry/signal_daily_status`,

@@ -12,10 +12,12 @@ Lo propio del dashboard es:
     limpias; el wrapper garantiza ambas cosas UNA sola vez por llamada, porque
     los consumidores del dashboard pasan el parquet crudo.
   - Las funciones de UI: classify_curves, build_accumulated_figure,
-    _zone_summary_row, _empty_state, render_accumulated_section, que conservan
-    sus firmas para el resto del dashboard.
+    _curve_badge_row/_curve_chip_row/_curve_controls (selector interactivo de
+    unidades), _empty_state, render_accumulated_section, que conservan sus
+    firmas para el resto del dashboard.
 """
 
+import math
 import re
 
 import numpy as np
@@ -95,8 +97,45 @@ ZONE_COLORS = {
 }
 
 # Etiquetas al final de cada curva
-LABEL_X_PAD = 1.09      # aire a la derecha del eje X para los rotulos
-LABEL_MIN_GAP = 0.03    # separacion vertical minima entre rotulos (fraccion del rango)
+LABEL_MIN_GAP = 0.05    # separacion vertical minima entre rotulos (fraccion del rango)
+                        # 0.03 dejaba <12px entre rotulos de fuente 10px en un
+                        # grafico de 460px (clusters densos - varias unidades
+                        # terminando a horas/ranking casi identicos - se veian
+                        # superpuestos aunque el algoritmo si los separaba en
+                        # unidades de dato); 0.05 da ~17-18px, legible.
+
+# "Normal" es por lejos el grupo mas numeroso (ver _curve_badge_row): con
+# docenas de unidades apretadas en un rango de ranking chico, el anti-solape
+# secuencial (que fuerza una separacion MINIMA entre rotulos consecutivos)
+# es el que mas arrastra rotulos lejos de su marcador real ahi. Reducir solo
+# el tamano de fuente sin tambien reducir el gap exigido no alivia nada: el
+# rotulo queda mas chico pero igual de lejos de su punto. LABEL_MIN_GAP_NORMAL
+# (mitad del gap por defecto) exige la mitad de separacion entre DOS rotulos
+# "Normal" consecutivos, para que el desplazamiento acumulado sea proporcional
+# a su fuente mas chica en vez de heredar el gap pensado para fuente 10px.
+LABEL_MIN_GAP_NORMAL = 0.012
+
+# "Normal" es por lejos el grupo mas numeroso (ver _curve_badge_row), asi que
+# sus rotulos de fin de curva son los que mas se desplazan por el anti-solape
+# de _add_end_of_line_labels; un tamano menor (fijo, no solo cuando hay
+# colision) los hace menos intrusivos y dificulta menos leer Anormal/Alerta.
+UNIT_LABEL_FONT_SIZE = 10
+UNIT_LABEL_FONT_SIZE_NORMAL = 8
+
+# Opacidad base de una curva real vs. su prefijo sintetico punteado; el hover
+# clientside (assets/predictive_curve_interactions.js) lee esto desde
+# trace.meta.baseOpacity para saber a que opacidad volver al des-hover.
+UNIT_BASE_OPACITY = 0.85
+PREFIX_BASE_OPACITY = 0.55
+
+# IDs fijos de los componentes interactivos del selector de unidades. Solo se
+# monta una instancia de esta seccion a la vez (un componente por pestana),
+# asi que un id literal (no pattern-matching) es seguro - mismo criterio que
+# el resto de ids fijos de este tab (predictive-risk-view-selector, etc).
+CURVE_GRAPH_ID = "predictive-curve-graph"
+CURVE_UNIT_SELECT_ID = "predictive-curve-unit-select"
+CURVE_CHIPS_ID = "predictive-curve-chips"
+CURVE_BADGES_ID = "predictive-curve-badges"
 
 
 # =========================================================================
@@ -910,17 +949,274 @@ def classify_curves(df_plot, grid_v, media_v, hi_v):
     return pd.DataFrame(filas)
 
 
-def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
+def _empty_curve_figure(message):
+    """Figura en blanco (sin trazas) con un mensaje centrado.
+
+    Usada cuando el usuario deselecciona todas las unidades (regla funcional:
+    0 unidades seleccionadas -> estado vacio explicito, nunca un fallback
+    silencioso a "todas las unidades").
+    """
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        height=460, margin=dict(l=64, r=56, t=16, b=52),
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        annotations=[dict(
+            text=message, showarrow=False, x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            font=dict(size=13, color="#6C7280", family="DM Sans, Inter, sans-serif"),
+        )],
+    )
+    return fig
+
+
+# Cache de df_acum (pipeline legacy, join contra Oil) por (client, component,
+# id(df), id(df_component_hours)). build_accumulated_data es cara (limpieza +
+# relleno por unidad, puro Python); sin esto, cada click en el selector de
+# unidades o en un badge de riesgo la volveria a correr entera. df/df_hours
+# vienen de loaders ya cacheados por archivo (mtime/size), asi que su id()
+# es estable mientras el archivo no cambie - ver _load_component_data_cached
+# en tab_predictive_overview.py.
+_LEGACY_CURVE_CACHE = {}
+_LEGACY_CURVE_CACHE_MAX = 16
+
+
+def _get_legacy_curve_data(client, component, df, df_component_hours):
+    key = (client, component, id(df), id(df_component_hours))
+    if key not in _LEGACY_CURVE_CACHE:
+        if len(_LEGACY_CURVE_CACHE) >= _LEGACY_CURVE_CACHE_MAX:
+            _LEGACY_CURVE_CACHE.pop(next(iter(_LEGACY_CURVE_CACHE)))
+        _LEGACY_CURVE_CACHE[key] = build_accumulated_data(df, df_component_hours, component)
+    return _LEGACY_CURVE_CACHE[key]
+
+
+def _x_axis_upper_bound(df_plot, hours_col="componentHours_filled"):
+    """Limite superior del eje X: horas maximas de las unidades VISIBLES,
+    redondeadas hacia arriba al centenar. Se recalcula en cada seleccion
+    (build_accumulated_figure* corre completo por cada cambio del selector),
+    a diferencia de color_map/y_top que se fijan sobre el universo completo
+    de unidades para no re-escalar el marco del grafico al filtrar.
+    """
+    if df_plot is None or df_plot.empty:
+        return 100.0
+    x_max = float(df_plot[hours_col].max())
+    if not np.isfinite(x_max) or x_max <= 0:
+        return 100.0
+    return float(math.ceil(x_max / 100.0) * 100.0)
+
+
+def _zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper):
+    """Rotulos de texto de cada zona de riesgo, anclados dentro de su propia
+    banda de color - reemplaza la entrada de leyenda 'Zonas de riesgo' (que
+    se retira por completo).
+
+    Cada rotulo vive en un area de BAJA densidad de datos dentro de su
+    propia banda, no en una unica columna compartida: "Anormal" arriba a la
+    izquierda (ahi la banda Anormal es enorme porque hi_v(x) es chico cerca
+    del origen y casi ninguna curva ha subido todavia), "Alerta" a la derecha
+    a media altura de su propia banda en ese punto, "Normal" abajo a la
+    derecha dentro de su banda. Las tres coordenadas se recalculan siempre
+    contra `hi_v`/`media_v` (banda de referencia) y `x_axis_upper` (eje X
+    dinamico), nunca hardcodeadas, para seguir cayendo dentro del color
+    correcto sin importar el rango de horas de la seleccion vigente.
+    """
+    if grid_v is None or len(grid_v) == 0 or not np.isfinite(x_axis_upper) or x_axis_upper <= 0:
+        return []
+
+    x_max = min(float(x_axis_upper), float(grid_v[-1]))
+
+    x_anormal = x_max * 0.15
+    x_derecha = x_max * 0.85
+
+    hi_at_anormal = float(np.interp(x_anormal, grid_v, hi_v))
+    media_at_derecha = float(np.interp(x_derecha, grid_v, media_v))
+    hi_at_derecha = float(np.interp(x_derecha, grid_v, hi_v))
+
+    specs = [
+        # Arriba-izquierda: bien adentro de la banda Anormal (entre su
+        # umbral inferior en ese x y el techo del grafico).
+        ("Anormal", x_anormal, hi_at_anormal + (y_top - hi_at_anormal) * 0.65, "#a32d2d"),
+        # Derecha, a media altura de la banda Alerta en ese x.
+        ("Alerta", x_derecha, (media_at_derecha + hi_at_derecha) / 2, "#b9790f"),
+        # Abajo-derecha, bien adentro de la banda Normal en ese x.
+        ("Normal", x_derecha, media_at_derecha * 0.25, "#1d9e75"),
+    ]
+    return [
+        dict(
+            x=x, y=y, xref="x", yref="y",
+            text=label, showarrow=False,
+            font=dict(size=11, color=color, family="DM Sans, Inter, sans-serif"),
+            bgcolor="rgba(255,255,255,0.6)", borderpad=3,
+        )
+        for label, x, y, color in specs
+    ]
+
+
+def _zona_map_from_resumen(resumen):
+    """Unit -> zona_final desde `resumen` (salida de classify_curves / el
+    equivalente por-curva-vigente de build_accumulated_figure_from_curve).
+    Fuente unica que comparten badges, chips agrupados y el tamano de fuente
+    de las etiquetas de fin de curva, para que las tres lecturas de
+    clasificacion nunca diverjan entre si.
+    """
+    if resumen is None or resumen.empty or "zona_final" not in resumen.columns:
+        return {}
+    return dict(zip(resumen["Unit"], resumen["zona_final"]))
+
+
+def _add_end_of_line_labels(fig, df_plot, units, color_map, y_col="ranking_acumulado", zona_por_unit=None):
+    """Marcador + rotulo de texto siempre visible en el ultimo punto de cada
+    unidad visible, con anti-solape vertical entre rotulos cercanos (mismo
+    criterio que classify_curves: el 'final' de una curva es su ultimo punto
+    por horas de componente). Agrega tres trazas a `fig` (conectores,
+    marcadores, texto); no agrega nada si no hay unidades visibles.
+
+    `zona_por_unit` (Unit -> zona_final, mismo mapa que usan los badges/chips
+    agrupados) determina el tamano de fuente del ROTULO de texto (no el
+    marcador): las unidades "Normal" - el grupo mas numeroso, y por lo tanto
+    el que mas rotulos empuja el anti-solape - usan una fuente mas chica de
+    forma incondicional, haya o no colision. Unidades sin clasificacion caen
+    en el tamano por defecto (mismo criterio que Anormal/Alerta).
+
+    El gap minimo se calcula como fraccion de `df_plot[y_col].max()` (rango
+    real de las curvas VISIBLES), no del eje Y completo (que incluye la
+    banda Anormal de fondo, mucho mas alta y en su mayoria vacia de datos):
+    usar el eje completo como base infla el gap muy por encima de lo que la
+    legibilidad exige, y con 40+ unidades "Normal" tipico eso basta para que
+    el anti-solape las arrastre decenas de miles de unidades lejos de su
+    punto real. LABEL_MIN_GAP_NORMAL ademas es bastante mas chico que
+    LABEL_MIN_GAP (no solo la mitad): el grupo Normal es el unico que suele
+    tener docenas de unidades apretadas, así que ahi la prioridad es quedar
+    cerca del punto real (con conector si igual hace falta desplazar), no
+    maximizar espaciado.
+    """
+    zona_por_unit = zona_por_unit or {}
+    finales = []
+    for unit in units:
+        g_unit = df_plot[df_plot["Unit"] == unit].sort_values("componentHours_filled")
+        if g_unit.empty:
+            continue
+        finales.append({
+            "unit": unit,
+            "x": float(g_unit["componentHours_filled"].iloc[-1]),
+            "y": float(g_unit[y_col].iloc[-1]),
+            "font_size": (
+                UNIT_LABEL_FONT_SIZE_NORMAL if zona_por_unit.get(unit) == "Normal"
+                else UNIT_LABEL_FONT_SIZE
+            ),
+        })
+
+    if not finales:
+        return
+
+    y_rango = float(df_plot[y_col].max()) or 1.0
+
+    # Mitad del gap de CADA rotulo (proporcional a su propia fuente): la
+    # separacion exigida entre dos rotulos consecutivos es la suma de sus
+    # mitades, asi un par Normal-Normal (fuente chica) queda mas apretado
+    # que un par que incluya Anormal/Alerta (fuente grande), en vez de que
+    # todos hereden el gap pensado para la fuente mas grande.
+    for f in finales:
+        frac = LABEL_MIN_GAP_NORMAL if f["font_size"] == UNIT_LABEL_FONT_SIZE_NORMAL else LABEL_MIN_GAP
+        f["half_gap"] = y_rango * frac / 2
+
+    # Pasada de ida (de abajo hacia arriba) y de vuelta (de arriba hacia
+    # abajo), promediadas: una sola pasada secuencial acumula TODO el
+    # desplazamiento en una direccion (los rotulos de arriba terminan muy
+    # por encima de su punto real); promediar ambas direcciones reparte el
+    # desplazamiento hacia arriba y hacia abajo segun corresponda, en vez de
+    # empujar siempre en el mismo sentido. Una pasada final de ida vuelve a
+    # aplicar el gap minimo exacto sobre el promedio (que por si solo no lo
+    # garantiza) para no reintroducir solapes.
+    finales.sort(key=lambda d: d["y"])
+
+    forward = []
+    y_prev = None
+    half_gap_prev = 0.0
+    for f in finales:
+        y_new = f["y"] if y_prev is None else max(f["y"], y_prev + half_gap_prev + f["half_gap"])
+        forward.append(y_new)
+        y_prev = y_new
+        half_gap_prev = f["half_gap"]
+
+    backward = [None] * len(finales)
+    y_next = None
+    half_gap_next = 0.0
+    for i in range(len(finales) - 1, -1, -1):
+        f = finales[i]
+        y_new = f["y"] if y_next is None else min(f["y"], y_next - half_gap_next - f["half_gap"])
+        backward[i] = y_new
+        y_next = y_new
+        half_gap_next = f["half_gap"]
+
+    y_prev = None
+    half_gap_prev = 0.0
+    for f, y_fwd, y_bwd in zip(finales, forward, backward):
+        y_avg = (y_fwd + y_bwd) / 2
+        y_final = y_avg if y_prev is None else max(y_avg, y_prev + half_gap_prev + f["half_gap"])
+        f["y_label"] = y_final
+        y_prev = y_final
+        half_gap_prev = f["half_gap"]
+
+    # ── Conectores: rotulos desplazados de su punto real quedan trazables ──
+    for f in finales:
+        if abs(f["y_label"] - f["y"]) > 1e-6:
+            fig.add_trace(go.Scatter(
+                x=[f["x"], f["x"]], y=[f["y"], f["y_label"]],
+                mode="lines",
+                line=dict(color=color_map[f["unit"]], width=1, dash="dot"),
+                opacity=0.45,
+                cliponaxis=False, showlegend=False, hoverinfo="skip",
+            ))
+
+    fig.add_trace(go.Scatter(
+        x=[f["x"] for f in finales],
+        y=[f["y"] for f in finales],
+        mode="markers",
+        marker=dict(
+            size=7,
+            color=[color_map[f["unit"]] for f in finales],
+            line=dict(color="white", width=1.5),
+        ),
+        cliponaxis=False, showlegend=False, hoverinfo="skip",
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=[f["x"] for f in finales],
+        y=[f["y_label"] for f in finales],
+        mode="text",
+        text=[f"  {f['unit']}" for f in finales],
+        textposition="middle right",
+        textfont=dict(
+            size=[f["font_size"] for f in finales],
+            color=[color_map[f["unit"]] for f in finales],
+            family="DM Sans, Inter, sans-serif",
+        ),
+        cliponaxis=False, showlegend=False, hoverinfo="skip",
+    ))
+
+
+def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA, selected_units=None):
     """
     Construye la figura de curva acumulada con zonas de salud.
-    Devuelve (figura, resumen_de_zonas) o (None, DataFrame vacio).
+
+    `selected_units`: subconjunto de unidades a graficar (None = todas). El
+    color de cada unidad se asigna SIEMPRE sobre el universo completo de
+    unidades de `df_acum`, antes de aplicar el filtro, para que no cambie al
+    seleccionar/deseleccionar unidades (debe ser estable durante la sesion).
+
+    Devuelve (figura, resumen_de_zonas, unidades_totales, mapa_de_color).
+    `figura` es None solo si no se pudo construir ninguna curva; si el filtro
+    deja 0 unidades seleccionadas, se devuelve una figura vacia (no None) con
+    `resumen`/`unidades_totales`/`mapa_de_color` intactos, para que el
+    selector siga funcionando.
     """
     if df_acum is None or df_acum.empty:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
 
     band = build_reference_band(df_acum, component=component, k=k)
     if band is None:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
 
     grid_v, media_v, _lo_v, hi_v = band
 
@@ -934,20 +1230,23 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         .tolist()
     )
 
-    df_plot = (
+    df_plot_all = (
         df_acum[df_acum["curva"].isin(curvas_recientes)]
         .dropna(subset=["ranking_acumulado"])
         .copy()
     )
 
-    if df_plot.empty:
-        return None, pd.DataFrame()
+    if df_plot_all.empty:
+        return None, pd.DataFrame(), [], {}
 
     # ── Prefijos sinteticos para curvas que arrancan despues del origen ──
+    # Se aplican sobre TODAS las unidades (no solo las seleccionadas): el
+    # offset desplaza la curva real, y ese desplazamiento no debe depender
+    # de que unidades esten visibles en este render.
     umbral_h0 = grid_v[0] + 1e-9
-    prefijos = {}
+    prefijos_all = {}
 
-    for curva, g in df_plot.groupby("curva"):
+    for curva, g in df_plot_all.groupby("curva"):
         h0 = g["componentHours_filled"].min()
         if h0 <= umbral_h0:
             continue
@@ -959,22 +1258,42 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         xs = np.append(grid_v[sel], h0)
         ys = np.append(media_v[sel], offset)
 
-        prefijos[curva] = pd.DataFrame({
+        prefijos_all[curva] = pd.DataFrame({
             "Unit": g["Unit"].iloc[0],
             "componentHours_filled": xs,
             "ranking_acumulado": ys,
         })
 
         # Desplazar la curva real para que continue desde la media
-        df_plot.loc[df_plot["curva"] == curva, "ranking_acumulado"] += offset
+        df_plot_all.loc[df_plot_all["curva"] == curva, "ranking_acumulado"] += offset
 
-    units = sorted(df_plot["Unit"].unique())
-    color_map = {u: PALETTE[i % len(PALETTE)] for i, u in enumerate(units)}
+    units_all = sorted(df_plot_all["Unit"].unique())
+    color_map = {u: PALETTE[i % len(PALETTE)] for i, u in enumerate(units_all)}
+
+    resumen = classify_curves(df_plot_all, grid_v, media_v, hi_v)
+
+    if selected_units is None:
+        units = units_all
+    else:
+        selected_set = set(selected_units)
+        units = [u for u in units_all if u in selected_set]
+
+    if not units:
+        return (
+            _empty_curve_figure("Selecciona al menos una unidad para ver la curva."),
+            resumen, units_all, color_map,
+        )
+
+    df_plot = df_plot_all[df_plot_all["Unit"].isin(units)]
+    prefijos = {c: p for c, p in prefijos_all.items() if p["Unit"].iloc[0] in units}
 
     fig = go.Figure()
 
     # ── Zonas de salud (al fondo) ──
-    y_top = max(float(df_plot["ranking_acumulado"].max()), float(hi_v.max())) * 1.05
+    # y_top y el rango del eje X se calculan sobre TODAS las unidades, no solo
+    # las seleccionadas, para que el marco del grafico no se re-escale cada
+    # vez que el usuario filtra unidades (mismo criterio que color_map).
+    y_top = max(float(df_plot_all["ranking_acumulado"].max()), float(hi_v.max())) * 1.05
     y_bottom = np.zeros_like(grid_v)
     x_ida_vuelta = np.concatenate([grid_v, grid_v[::-1]])
 
@@ -983,21 +1302,21 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         y=np.concatenate([media_v, y_bottom[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Normal"],
         line=dict(width=0), hoverinfo="skip",
-        name="Zona normal", legendgroup="zonas",
+        name="Zona normal", legendgroup="zonas", showlegend=False,
     ))
     fig.add_trace(go.Scatter(
         x=x_ida_vuelta,
         y=np.concatenate([hi_v, media_v[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Alerta"],
         line=dict(width=0), hoverinfo="skip",
-        name=f"Zona de alerta (hasta media + {k}σ)", legendgroup="zonas",
+        name=f"Zona de alerta (hasta media + {k}σ)", legendgroup="zonas", showlegend=False,
     ))
     fig.add_trace(go.Scatter(
         x=x_ida_vuelta,
         y=np.concatenate([np.full_like(grid_v, y_top), hi_v[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Anormal"],
         line=dict(width=0), hoverinfo="skip",
-        name=f"Zona anormal (> media + {k}σ)", legendgroup="zonas",
+        name=f"Zona anormal (> media + {k}σ)", legendgroup="zonas", showlegend=False,
     ))
 
     # ── Prefijos sinteticos (punteados, mismo color, sin leyenda propia) ──
@@ -1008,7 +1327,8 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
             y=pref["ranking_acumulado"],
             mode="lines",
             line=dict(color=color_map.get(unit, "gray"), width=1.4, dash="dot"),
-            opacity=0.55,
+            opacity=PREFIX_BASE_OPACITY,
+            meta={"baseOpacity": PREFIX_BASE_OPACITY},
             hoverinfo="skip",
             showlegend=False,
             legendgroup=unit,
@@ -1024,7 +1344,8 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
             name=unit,
             legendgroup=unit,
             line=dict(color=color_map[unit], width=2.2),
-            opacity=0.85,
+            opacity=UNIT_BASE_OPACITY,
+            meta={"baseOpacity": UNIT_BASE_OPACITY},
             customdata=np.stack([
                 g_unit["ciclo"].to_numpy(),
                 g_unit["Fecha"].dt.strftime("%d %b %Y").to_numpy(),
@@ -1044,6 +1365,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         mode="lines",
         line=dict(color="#111827", width=2.4, dash="dash"),
         name="Media de flota",
+        legendgroup="referencia", legendgrouptitle_text="Líneas de referencia",
         hovertemplate="Horas: %{x:,.0f}<br>Media: %{y:,.0f}<extra></extra>",
     ))
 
@@ -1053,59 +1375,15 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         mode="lines",
         line=dict(color="rgba(200,60,40,0.7)", width=1.4, dash="dot"),
         name=f"Umbral media + {k}σ",
+        legendgroup="referencia",
         hovertemplate="Horas: %{x:,.0f}<br>Umbral: %{y:,.0f}<extra></extra>",
     ))
 
     # ── Etiqueta permanente al final de cada curva (con anti-solape) ──
-    finales = []
-    for unit in units:
-        g_unit = df_plot[df_plot["Unit"] == unit].sort_values("componentHours_filled")
-        if g_unit.empty:
-            continue
-        finales.append({
-            "unit": unit,
-            "x": float(g_unit["componentHours_filled"].iloc[-1]),
-            "y": float(g_unit["ranking_acumulado"].iloc[-1]),
-        })
-
-    if finales:
-        # Separacion vertical minima entre rotulos
-        y_rango = float(df_plot["ranking_acumulado"].max()) or 1.0
-        gap = y_rango * LABEL_MIN_GAP
-
-        finales.sort(key=lambda d: d["y"])
-        y_prev = -np.inf
-        for f in finales:
-            f["y_label"] = max(f["y"], y_prev + gap)
-            y_prev = f["y_label"]
-
-        # Puntos en su posicion real
-        fig.add_trace(go.Scatter(
-            x=[f["x"] for f in finales],
-            y=[f["y"] for f in finales],
-            mode="markers",
-            marker=dict(
-                size=7,
-                color=[color_map[f["unit"]] for f in finales],
-                line=dict(color="white", width=1.5),
-            ),
-            cliponaxis=False, showlegend=False, hoverinfo="skip",
-        ))
-
-        # Rotulos, desplazados verticalmente solo lo necesario
-        fig.add_trace(go.Scatter(
-            x=[f["x"] for f in finales],
-            y=[f["y_label"] for f in finales],
-            mode="text",
-            text=[f"  {f['unit']}" for f in finales],
-            textposition="middle right",
-            textfont=dict(
-                size=10,
-                color=[color_map[f["unit"]] for f in finales],
-                family="DM Sans, Inter, sans-serif",
-            ),
-            cliponaxis=False, showlegend=False, hoverinfo="skip",
-        ))
+    _add_end_of_line_labels(
+        fig, df_plot, units, color_map, y_col="ranking_acumulado",
+        zona_por_unit=_zona_map_from_resumen(resumen),
+    )
 
     # ── Entrada de leyenda para explicar los tramos punteados ──
     if prefijos:
@@ -1115,18 +1393,29 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
             name="Inicio asignado (media)",
         ))
 
+    x_axis_upper = _x_axis_upper_bound(df_plot)
+
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="DM Sans, Inter, sans-serif", size=11, color="#6C7280"),
         height=460,
-        margin=dict(l=64, r=56, t=16, b=52),
+        # r=100 (antes 56): sin el padding fijo que el eje X tenia antes
+        # (LABEL_X_PAD), los rotulos de fin de curva de las unidades con mas
+        # horas caen justo en el borde del area de grafico - necesitan mas
+        # margen para no pisar la leyenda.
+        margin=dict(l=64, r=100, t=16, b=52),
         hovermode="closest",
+        annotations=_zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper),
         legend=dict(
+            # Titulo global "Máquina": la banda de riesgo ya no vive en la
+            # leyenda (retirada a texto de fondo, ver _zone_annotations), asi
+            # que solo quedan las unidades y el grupo "Líneas de referencia"
+            # (con su propio legendgrouptitle_text) bajo este titulo.
             title=dict(text="Máquina", font=dict(size=11)),
             orientation="v",
             yanchor="top", y=1,
-            xanchor="left", x=1.01,
+            xanchor="left", x=1.05,
             font=dict(size=10),
             bgcolor="rgba(0,0,0,0)",
         ),
@@ -1135,7 +1424,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10),
             rangemode="tozero",
-            range=[0, float(df_plot["componentHours_filled"].max()) * LABEL_X_PAD],
+            range=[0, x_axis_upper],
         ),
         yaxis=dict(
             title=dict(text="Ranking acumulado", font=dict(size=11)),
@@ -1145,8 +1434,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA):
         ),
     )
 
-    resumen = classify_curves(df_plot, grid_v, media_v, hi_v)
-    return fig, resumen
+    return fig, resumen, units_all, color_map
 
 
 _ZONE_BADGE = {
@@ -1156,34 +1444,147 @@ _ZONE_BADGE = {
 }
 
 
-def _zone_summary_row(resumen):
-    """Chips con el conteo de unidades por zona final."""
-    if resumen.empty or "zona_final" not in resumen.columns:
-        return None
-
-    counts = resumen["zona_final"].value_counts()
-    chips = []
+def _curve_badge_row(resumen, active_badge=None):
+    """Badges de conteo por zona, ahora clickeables (filtran el selector de
+    unidades - ver predictive_callbacks.py). `active_badge` es la zona
+    actualmente activa como filtro ("Anormal"/"Alerta"/"Normal") o None.
+    """
+    counts = (
+        resumen["zona_final"].value_counts()
+        if not resumen.empty and "zona_final" in resumen.columns
+        else pd.Series(dtype="int64")
+    )
+    badges = []
     for zona in ("Anormal", "Alerta", "Normal"):
         n = int(counts.get(zona, 0))
         style = _ZONE_BADGE[zona]
-        chips.append(html.Div([
+        is_active = active_badge == zona
+        badges.append(html.Button([
             html.Span(str(n), style={
                 "fontSize": "15px", "fontWeight": "700", "marginRight": "6px",
             }),
             html.Span(zona, style={"fontSize": "11px"}),
-        ], style={
+        ], id={"type": "predictive-curve-badge", "status": zona}, n_clicks=0,
+           title=f"Filtrar por {zona}", style={
             "background": style["bg"],
             "color": style["text"],
             "padding": "5px 12px",
             "borderRadius": "99px",
             "display": "inline-flex",
             "alignItems": "baseline",
+            "border": f"2px solid {style['text']}" if is_active else "2px solid transparent",
+            "cursor": "pointer",
         }))
 
-    return html.Div(chips, style={
-        "display": "flex", "gap": "8px", "flexWrap": "wrap",
-        "marginBottom": "12px",
-    })
+    return badges
+
+
+def _curve_chip_row(units_all, color_map, selected_units=None):
+    """Fila de chips de color, uno por unidad - identificacion inequivoca de
+    color (misma paleta que las trazas del grafico) y disparador de hover
+    para el resaltado clientside (assets/predictive_curve_interactions.js,
+    delegado sobre `.predictive-curve-chip` / `data-unit`). Click alterna la
+    unidad dentro/fuera de la seleccion actual (ver predictive_callbacks.py).
+    """
+    selected = set(units_all) if selected_units is None else set(selected_units)
+    return [
+        html.Button(
+            unit,
+            id={"type": "predictive-curve-chip", "unit": unit},
+            n_clicks=0,
+            className="predictive-curve-chip",
+            **{"data-unit": unit},
+            style={
+                "background": color_map.get(unit, "#888"),
+                "color": "#fff",
+                "opacity": "1" if unit in selected else "0.3",
+                "border": "none", "borderRadius": "99px",
+                "padding": "2px 10px", "fontSize": "10px",
+                "fontWeight": "600", "cursor": "pointer",
+            },
+        )
+        for unit in units_all
+    ]
+
+
+_CHIP_GROUP_ORDER = ("Anormal", "Alerta", "Normal")
+
+
+def _curve_chip_groups(units_all, color_map, resumen, selected_units=None):
+    """Chips de unidad agrupados por `zona_final` (Anormal/Alerta/Normal),
+    cada grupo con su propio encabezado. Lee la clasificacion del mismo
+    `resumen` que alimenta los badges de conteo (_curve_badge_row), asi que
+    el agrupamiento queda automaticamente consistente con esos conteos y se
+    actualiza solo si `zona_final` cambia. Unidades sin clasificacion (sin
+    soporte suficiente en la banda de referencia) van en un grupo aparte al
+    final, para no perderlas silenciosamente.
+    """
+    zona_por_unit = _zona_map_from_resumen(resumen)
+
+    buckets = {zona: [] for zona in _CHIP_GROUP_ORDER}
+    sin_clasificar = []
+    for unit in units_all:
+        zona = zona_por_unit.get(unit)
+        (buckets[zona] if zona in buckets else sin_clasificar).append(unit)
+
+    groups = [(zona, buckets[zona]) for zona in _CHIP_GROUP_ORDER if buckets[zona]]
+    if sin_clasificar:
+        groups.append((None, sin_clasificar))
+
+    sections = []
+    for zona, unit_list in groups:
+        header_color = _ZONE_BADGE[zona]["text"] if zona else "#6C7280"
+        header_label = zona if zona else "Sin clasificar"
+        sections.append(html.Div([
+            html.Div(f"{header_label} · {len(unit_list)}", style={
+                "fontSize": "10px", "fontWeight": "700", "color": header_color,
+                "textTransform": "uppercase", "letterSpacing": "0.04em",
+                "marginBottom": "4px",
+            }),
+            html.Div(
+                _curve_chip_row(unit_list, color_map, selected_units),
+                style={"display": "flex", "flexWrap": "wrap", "gap": "4px"},
+            ),
+        ], style={"marginBottom": "8px"}))
+
+    return sections
+
+
+def _curve_controls(units_all, color_map, resumen, selected_units=None, active_badge=None):
+    """Panel de controles completo (badges + selector + chips) que acompana
+    al grafico de curva acumulada. Se monta una sola vez (render inicial);
+    las interacciones posteriores solo re-renderizan los Output especificos
+    de cada contenedor (ver predictive_callbacks.py), no este panel entero,
+    para no perder el foco del buscador del dropdown en cada click.
+    """
+    selected = list(units_all) if selected_units is None else list(selected_units)
+    return html.Div([
+        html.Div(
+            _curve_badge_row(resumen, active_badge),
+            id=CURVE_BADGES_ID,
+            style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "12px"},
+        ),
+        html.Div([
+            html.Div("Unidades visibles", style={
+                "fontSize": "11px", "fontWeight": "600", "color": "#6C7280",
+                "marginBottom": "4px", "textTransform": "uppercase", "letterSpacing": "0.04em",
+            }),
+            dcc.Dropdown(
+                id=CURVE_UNIT_SELECT_ID,
+                options=[{"label": u, "value": u} for u in units_all],
+                value=selected,
+                multi=True,
+                searchable=True,
+                placeholder="Buscar unidad...",
+                style={"minWidth": "260px"},
+            ),
+            html.Div(
+                _curve_chip_groups(units_all, color_map, resumen, selected),
+                id=CURVE_CHIPS_ID,
+                style={"marginTop": "8px"},
+            ),
+        ], style={"marginBottom": "12px"}),
+    ])
 
 
 def _empty_state(message):
@@ -1199,7 +1600,7 @@ def _empty_state(message):
     ], className="card", style={"marginTop": "16px", "marginBottom": "16px"})
 
 
-def render_accumulated_section(df, df_component_hours, component="motor"):
+def render_accumulated_section(df, df_component_hours, component="motor", client=None):
     """
     Tarjeta completa con la curva acumulada, lista para insertar en el overview.
 
@@ -1207,9 +1608,13 @@ def render_accumulated_section(df, df_component_hours, component="motor"):
         df: historico completo del componente (Unit, Fecha, ranking, ...)
         df_component_hours: parquet de horas de componente
         component: nombre del componente ("motor", "transmision", ...)
+        client: usado solo como parte de la clave de cache de
+            _get_legacy_curve_data, para que coincida con la que usa el
+            callback interactivo (predictive_callbacks.update_curve_display)
+            y no se recalcule la curva completa en cada seleccion.
     """
     try:
-        df_acum = build_accumulated_data(df, df_component_hours, component)
+        df_acum = _get_legacy_curve_data(client, component, df, df_component_hours)
     except Exception as exc:  # noqa: BLE001 - no romper el overview completo
         return _empty_state(f"No se pudo calcular la curva acumulada: {exc}")
 
@@ -1218,7 +1623,7 @@ def render_accumulated_section(df, df_component_hours, component="motor"):
             "No hay horas de componente cruzables con el ranking para este componente."
         )
 
-    fig, resumen = build_accumulated_figure(df_acum, component=component)
+    fig, resumen, units_all, color_map = build_accumulated_figure(df_acum, component=component)
 
     if fig is None:
         return _empty_state(
@@ -1244,8 +1649,13 @@ def render_accumulated_section(df, df_component_hours, component="motor"):
                 className="text-muted mb-3",
             ),
         ]),
-        _zone_summary_row(resumen),
+        _curve_controls(units_all, color_map, resumen),
+        dcc.Store(id="predictive-curve-units-store", data=units_all),
+        dcc.Store(id="predictive-curve-resumen-store", data=resumen.to_dict("list") if not resumen.empty else {"Unit": [], "zona_final": []}),
+        dcc.Store(id="predictive-curve-colormap-store", data=color_map),
+        dcc.Store(id="predictive-curve-badge-store", data=None),
         dcc.Graph(
+            id=CURVE_GRAPH_ID,
             figure=fig,
             config={"displayModeBar": False, "responsive": True},
         ),
@@ -1264,33 +1674,38 @@ def render_accumulated_section(df, df_component_hours, component="motor"):
 from src.data.predictive_v2 import CUMULATIVE_CURVE_COLUMNS  # noqa: E402
 
 
-def build_accumulated_figure_from_curve(df_curve, component="motor"):
+def build_accumulated_figure_from_curve(df_curve, component="motor", selected_units=None):
     """
     Build the cumulative-curve figure directly from the precomputed
     `cumulative_risk_curve` table. Zone boundaries come from the table's own
     per-point `banda_media`/`banda_umbral` (a single function of component
     hours, shared across curves), not from build_reference_band/K_SIGMA.
 
-    Returns (figure, resumen) or (None, empty DataFrame) - same contract as
-    build_accumulated_figure, so render_accumulated_section_from_curve can
-    reuse _zone_summary_row/_empty_state unchanged.
+    `selected_units`: subset of units to plot (None = all). Colors are
+    always assigned from the FULL unit universe before filtering, so they
+    stay stable across selection changes (same contract as
+    build_accumulated_figure).
+
+    Returns (figure, resumen, all_units, color_map). `figure` is None only
+    when no curve could be built at all; an empty selection instead returns
+    a blank (traceless) figure so the caller can keep the controls alive.
     """
     if df_curve is None or df_curve.empty:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
 
     missing = [c for c in CUMULATIVE_CURVE_COLUMNS if c not in df_curve.columns]
     if missing:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
 
     df = df_curve.loc[:, CUMULATIVE_CURVE_COLUMNS].copy()
     df = df.dropna(subset=["componentHours_filled", "ranking_acumulado_ajustado"])
     if df.empty:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
 
     # ── Curva vigente de cada unidad (la actual, una por unidad) ──
-    df_plot = df[df["es_vigente"] == True].copy()  # noqa: E712 - bool compare, column may be object dtype
-    if df_plot.empty:
-        return None, pd.DataFrame()
+    df_plot_all = df[df["es_vigente"] == True].copy()  # noqa: E712 - bool compare, column may be object dtype
+    if df_plot_all.empty:
+        return None, pd.DataFrame(), [], {}
 
     # ── Banda de referencia: puntos únicos (hora, media, umbral) ya
     # calculados upstream - una sola función de horas, compartida entre
@@ -1302,17 +1717,39 @@ def build_accumulated_figure_from_curve(df_curve, component="motor"):
         .sort_values("componentHours_filled")
     )
     if band_points.empty:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), [], {}
     grid_v = band_points["componentHours_filled"].to_numpy(dtype=float)
     media_v = band_points["banda_media"].to_numpy(dtype=float)
     hi_v = band_points["banda_umbral"].to_numpy(dtype=float)
 
-    units = sorted(df_plot["Unit"].unique())
-    color_map = {u: PALETTE[i % len(PALETTE)] for i, u in enumerate(units)}
+    units_all = sorted(df_plot_all["Unit"].unique())
+    color_map = {u: PALETTE[i % len(PALETTE)] for i, u in enumerate(units_all)}
+
+    resumen = (
+        df_plot_all.dropna(subset=["zona_final"])
+        .drop_duplicates(subset=["Unit"])
+        .loc[:, ["Unit", "zona_final"]]
+    )
+
+    if selected_units is None:
+        units = units_all
+    else:
+        selected_set = set(selected_units)
+        units = [u for u in units_all if u in selected_set]
+
+    if not units:
+        return (
+            _empty_curve_figure("Selecciona al menos una unidad para ver la curva."),
+            resumen, units_all, color_map,
+        )
+
+    df_plot = df_plot_all[df_plot_all["Unit"].isin(units)]
 
     fig = go.Figure()
 
-    y_top = max(float(df_plot["ranking_acumulado_ajustado"].max()), float(hi_v.max())) * 1.05
+    # y_top y el rango del eje X sobre TODAS las unidades - ver la misma nota
+    # en build_accumulated_figure.
+    y_top = max(float(df_plot_all["ranking_acumulado_ajustado"].max()), float(hi_v.max())) * 1.05
     y_bottom = np.zeros_like(grid_v)
     x_ida_vuelta = np.concatenate([grid_v, grid_v[::-1]])
 
@@ -1320,16 +1757,19 @@ def build_accumulated_figure_from_curve(df_curve, component="motor"):
         x=x_ida_vuelta, y=np.concatenate([media_v, y_bottom[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Normal"],
         line=dict(width=0), hoverinfo="skip", name="Zona normal", legendgroup="zonas",
+        showlegend=False,
     ))
     fig.add_trace(go.Scatter(
         x=x_ida_vuelta, y=np.concatenate([hi_v, media_v[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Alerta"],
         line=dict(width=0), hoverinfo="skip", name="Zona de alerta", legendgroup="zonas",
+        showlegend=False,
     ))
     fig.add_trace(go.Scatter(
         x=x_ida_vuelta, y=np.concatenate([np.full_like(grid_v, y_top), hi_v[::-1]]),
         fill="toself", fillcolor=ZONE_COLORS["Anormal"],
         line=dict(width=0), hoverinfo="skip", name="Zona anormal", legendgroup="zonas",
+        showlegend=False,
     ))
 
     for unit in units:
@@ -1337,36 +1777,53 @@ def build_accumulated_figure_from_curve(df_curve, component="motor"):
         fig.add_trace(go.Scatter(
             x=g_unit["componentHours_filled"], y=g_unit["ranking_acumulado_ajustado"],
             mode="lines", name=unit, legendgroup=unit,
-            line=dict(color=color_map[unit], width=2.2), opacity=0.85,
+            line=dict(color=color_map[unit], width=2.2), opacity=UNIT_BASE_OPACITY,
+            meta={"baseOpacity": UNIT_BASE_OPACITY},
             hovertemplate=(
                 f"<b>{unit}</b><br>Horas: %{{x:,.0f}}<br>"
                 "Ranking acum.: %{y:,.0f}<extra></extra>"
             ),
         ))
 
+    config = df_curve.attrs.get("config", {}) if hasattr(df_curve, "attrs") else {}
+    k_sigma = config.get("K_SIGMA")
+    umbral_name = f"Umbral media + {k_sigma}σ" if k_sigma else "Umbral de alerta"
+
     fig.add_trace(go.Scatter(
         x=grid_v, y=media_v, mode="lines",
         line=dict(color="#111827", width=2.4, dash="dash"), name="Media de flota",
+        legendgroup="referencia", legendgrouptitle_text="Líneas de referencia",
     ))
     fig.add_trace(go.Scatter(
         x=grid_v, y=hi_v, mode="lines",
-        line=dict(color="rgba(200,60,40,0.7)", width=1.4, dash="dot"), name="Umbral",
+        line=dict(color="rgba(200,60,40,0.7)", width=1.4, dash="dot"), name=umbral_name,
+        legendgroup="referencia",
     ))
+
+    # ── Etiqueta permanente al final de cada curva (con anti-solape) ──
+    _add_end_of_line_labels(
+        fig, df_plot, units, color_map, y_col="ranking_acumulado_ajustado",
+        zona_por_unit=_zona_map_from_resumen(resumen),
+    )
+
+    x_axis_upper = _x_axis_upper_bound(df_plot)
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="DM Sans, Inter, sans-serif", size=11, color="#6C7280"),
-        height=460, margin=dict(l=64, r=56, t=16, b=52), hovermode="closest",
+        height=460, margin=dict(l=64, r=100, t=16, b=52), hovermode="closest",
+        annotations=_zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper),
         legend=dict(
-            title=dict(text="Máquina", font=dict(size=11)), orientation="v",
-            yanchor="top", y=1, xanchor="left", x=1.01, font=dict(size=10),
+            title=dict(text="Máquina", font=dict(size=11)),
+            orientation="v",
+            yanchor="top", y=1, xanchor="left", x=1.05, font=dict(size=10),
             bgcolor="rgba(0,0,0,0)",
         ),
         xaxis=dict(
             title=dict(text="Horas de componente", font=dict(size=11)),
             showgrid=True, gridcolor="rgba(0,0,0,0.05)", zeroline=False,
             tickfont=dict(size=10), rangemode="tozero",
-            range=[0, float(df_plot["componentHours_filled"].max()) * LABEL_X_PAD],
+            range=[0, x_axis_upper],
         ),
         yaxis=dict(
             title=dict(text="Ranking acumulado", font=dict(size=11)),
@@ -1375,12 +1832,7 @@ def build_accumulated_figure_from_curve(df_curve, component="motor"):
         ),
     )
 
-    resumen = (
-        df_plot.dropna(subset=["zona_final"])
-        .drop_duplicates(subset=["Unit"])
-        .loc[:, ["Unit", "zona_final"]]
-    )
-    return fig, resumen
+    return fig, resumen, units_all, color_map
 
 
 def render_accumulated_section_from_curve(df_curve, component="motor"):
@@ -1394,7 +1846,7 @@ def render_accumulated_section_from_curve(df_curve, component="motor"):
     showing a dead end.
     """
     try:
-        fig, resumen = build_accumulated_figure_from_curve(df_curve, component=component)
+        fig, resumen, units_all, color_map = build_accumulated_figure_from_curve(df_curve, component=component)
     except Exception as exc:  # noqa: BLE001 - nunca romper el overview
         logger.warning(f"No se pudo construir la curva desde cumulative_risk_curve: {exc}")
         return None
@@ -1418,6 +1870,10 @@ def render_accumulated_section_from_curve(df_curve, component="motor"):
                 className="text-muted mb-3",
             ),
         ]),
-        _zone_summary_row(resumen),
-        dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True}),
+        _curve_controls(units_all, color_map, resumen),
+        dcc.Store(id="predictive-curve-units-store", data=units_all),
+        dcc.Store(id="predictive-curve-resumen-store", data=resumen.to_dict("list") if not resumen.empty else {"Unit": [], "zona_final": []}),
+        dcc.Store(id="predictive-curve-colormap-store", data=color_map),
+        dcc.Store(id="predictive-curve-badge-store", data=None),
+        dcc.Graph(id=CURVE_GRAPH_ID, figure=fig, config={"displayModeBar": False, "responsive": True}),
     ], className="card", style={"marginTop": "16px"})
