@@ -1607,6 +1607,39 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         return pd.DataFrame()
 
 
+def load_maintenance_unit_records_actions(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
+    """Load maintenance record intervals from ``query_2``.
+
+    ``first_event_ts`` and ``last_event_ts`` are the source-defined temporal
+    boundaries for a maintenance record.  Keeping this source separate from
+    the action extract lets consumers calculate time from the upstream
+    interval definition instead of inferring a duration from action counts.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+        if base_path is None:
+            logger.warning(f"No maintenance record data available for client: {client}")
+            return pd.DataFrame()
+
+    file_path = base_path / "query_2_unit_records_actions.parquet"
+    try:
+        logger.info(f"Loading maintenance record intervals from {file_path}")
+        df = pd.read_parquet(file_path)
+        for column in ("first_event_ts", "last_event_ts"):
+            if column in df.columns:
+                df[column] = pd.to_datetime(
+                    df[column], utc=True, format="mixed", errors="coerce"
+                )
+        logger.info("Loaded %s maintenance record intervals for %s", len(df), client)
+        return df
+    except FileNotFoundError:
+        logger.warning(f"Maintenance record file not found: {file_path}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Error loading maintenance record intervals: {e}")
+        return pd.DataFrame()
+
+
 def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
     """
     Load pre-calculated business KPIs from query_4_business_kpis.parquet.
@@ -1652,3 +1685,57 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
     except Exception as e:
         logger.error(f"Error loading business KPIs: {e}")
         return pd.DataFrame()
+
+
+def _load_maintenance_view(
+    client: str,
+    filename: str,
+    base_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Read one optional materialized maintenance view defensively.
+
+    Query 5 and query 6 are additive sources. A missing or unreadable view
+    must not make the activity-based Mantenciones page fail, so callers receive
+    an empty frame and the repository exposes the source state separately.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+    if base_path is None:
+        return pd.DataFrame()
+    file_path = base_path / filename
+    try:
+        logger.info("Loading maintenance view from %s", file_path)
+        return pd.read_parquet(file_path)
+    except FileNotFoundError:
+        logger.info("Optional maintenance view not found: %s", file_path)
+        return pd.DataFrame()
+    except Exception as exc:
+        logger.error("Error loading maintenance view %s: %s", file_path, exc)
+        return pd.DataFrame()
+
+
+def load_maintenance_reliability_monthly(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the monthly reliability view (query 5).
+
+    The source grain is one ``machine_id`` × ``year_month``. NaN reliability
+    metrics are intentionally preserved: they mean that the source did not
+    have enough observations for that machine-month.
+    """
+    return _load_maintenance_view(
+        client,
+        "query_5_reliability_monthly.parquet",
+        base_path=base_path,
+    )
+
+
+def load_maintenance_component_failure_ranking(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the accumulated component failure ranking (query 6)."""
+    return _load_maintenance_view(
+        client,
+        "query_6_component_failure_ranking.parquet",
+        base_path=base_path,
+    )

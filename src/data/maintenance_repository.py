@@ -5,6 +5,7 @@ Provides data access functions that can work in dummy or production mode.
 
 import json
 import math
+import re
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -15,7 +16,11 @@ from src.data.loaders import (
     _data_path,
     _get_mantentions_data_path,
     load_maintenance_actions_all_equipment,
+    load_maintenance_unit_records_actions,
     load_business_kpis,
+    load_maintenance_reliability_monthly,
+    load_maintenance_component_failure_ranking,
+    load_oil_classified,
     list_maintenance_weeks,
     load_maintenance_week,
 )
@@ -47,10 +52,6 @@ PARETO_SCOPE = {
     "metric": "unique_action_id_count",
 }
 
-# The action extract has no governed operating-hours or repair-duration
-# measurement.  These constants make the fallback proxy reproducible and
-# deliberately visible in the payload metadata/UI labels.
-ESTIMATED_HOURS_PER_ACTION = 1.5
 SCHEDULE_HOURS_PER_DAY = 24.0
 
 
@@ -63,14 +64,25 @@ def _empty_estimated_kpis() -> dict:
     }
 
 
-def _fleet_from_machine_code(value) -> str:
-    """Use the token before the first underscore as the fleet code."""
+def _normalize_unit_key(value) -> Optional[str]:
+    """Normalize maintenance/oil unit identifiers to a stable join key.
+
+    EMIN publishes ``BULL-022`` in maintenance and ``BULL_022`` in Oil. CDA
+    also has ``T_09``/``T_9`` variants across sources. The Tribología catalog
+    is therefore joined after normalizing separators and numeric zero padding.
+    """
     if pd.isna(value):
-        return "Sin flota"
-    code = str(value).strip()
+        return None
+    code = str(value).strip().upper().replace("-", "_")
     if not code:
-        return "Sin flota"
-    return code.split("_", 1)[0].strip() or "Sin flota"
+        return None
+    match = re.fullmatch(r"([^_]+)_(0*)(\d+)", code)
+    if match:
+        return f"{match.group(1)}_{int(match.group(3))}"
+    return code
+
+
+UNKNOWN_FLEET = "otros"
 
 
 def _estimated_kpi_meta(
@@ -80,7 +92,7 @@ def _estimated_kpi_meta(
     actions: int = 0,
     records: int = 0,
     reason: Optional[str] = None,
-    source_kind: str = "actions_monthly_proxy",
+    source_kind: str = "unavailable",
     source: Optional[list[str]] = None,
     source_columns: Optional[list[str]] = None,
     window_label: str = "mes seleccionado",
@@ -90,7 +102,7 @@ def _estimated_kpi_meta(
     scheduled_days: Optional[int] = None,
     downtime_formula: Optional[str] = None,
 ) -> dict:
-    """Describe the conservative estimated KPI contract and its coverage."""
+    """Describe the source-backed time KPI contract and its coverage."""
     calendar_days = 0
     if period:
         try:
@@ -99,13 +111,13 @@ def _estimated_kpi_meta(
             calendar_days = 0
     schedule_days = calendar_days if scheduled_days is None else scheduled_days
     scheduled_hours = equipment * schedule_days * SCHEDULE_HOURS_PER_DAY
-    source = source or ["query_3_actions_all_equipment.parquet"]
-    source_columns = source_columns or ["action_id", "record_id", "machine_code", "change_date"]
+    source = source or ["query_4_business_kpis.parquet"]
+    source_columns = source_columns or ["machine_code", "downtime_hours_70d", "reference_date"]
     meta = {
         "status": status,
-        "label": "ESTIMADO",
+        "label": "FUENTE",
         "source_kind": source_kind,
-        "confidence": "precalculated_proxy" if source_kind == "business_kpis_70d" else "proxy",
+        "confidence": "source_defined" if source_kind == "business_kpis_70d" else "unavailable",
         "source": source,
         "source_columns": source_columns,
         "period": period,
@@ -127,14 +139,12 @@ def _estimated_kpi_meta(
             "mttr_est_hours": "h",
         },
         "assumptions": [
-            f"{ESTIMATED_HOURS_PER_ACTION:g} h por acción única como fallback de indisponibilidad/tiempo de reparación.",
-            "Horas programadas proxy = equipos cubiertos × días de la ventana × 24 h.",
-            "Eventos proxy = reparaciones_70d o registros/acciones únicos; no son fallas confirmadas.",
-            "Horas operativas proxy = max(horas programadas proxy − downtime estimado, 0).",
-            "Los valores siguen rotulados ESTIMADO aunque provengan de KPIs precalculados.",
+            "Las horas fuera de servicio provienen de downtime_hours_70d definido por la fuente de negocio.",
+            "Horas programadas de referencia = equipos cubiertos × días de la ventana × 24 h.",
+            "Cuando la fuente de negocio no está disponible o no tiene desglose para los filtros, el KPI queda sin dato.",
         ],
         "formula": {
-            "downtime_est_hours": downtime_formula or f"unique_action_id_count × {ESTIMATED_HOURS_PER_ACTION:g}",
+            "downtime_est_hours": downtime_formula or "unavailable",
             "availability_est_pct": "max(scheduled_hours_proxy − downtime_est_hours, 0) / scheduled_hours_proxy × 100",
             "mtbf_est_hours": "operating_hours_proxy / event_count_proxy",
             "mttr_est_hours": "downtime_est_hours / event_count_proxy",
@@ -152,13 +162,13 @@ def _calculate_estimated_kpis(
     equipment_filter: Optional[List[str]] = None,
     filter_reason: Optional[str] = None,
 ) -> tuple[dict, dict]:
-    """Prefer the governed 70-day KPI extract; fall back to monthly actions."""
+    """Use source-defined 70-day hours or leave time KPIs unavailable."""
     if df.empty:
         return _empty_estimated_kpis(), _estimated_kpi_meta(period, reason="No hay acciones para el período/filtros.")
     equipment = int(df["machine_code"].nunique())
     actions = int(df["action_id"].dropna().astype(str).nunique())
     records = int(df["record_id"].dropna().astype(str).nunique())
-    required = {"machine_code", "downtime_hours_70d", "repairs_70d", "reference_date"}
+    required = {"machine_code", "downtime_hours_70d", "reference_date"}
     kpi = business_kpis.copy() if business_kpis is not None else pd.DataFrame()
     can_use_kpi = not kpi.empty and required.issubset(kpi.columns) and not filter_reason
     if can_use_kpi and equipment_filter is not None:
@@ -166,29 +176,16 @@ def _calculate_estimated_kpis(
         can_use_kpi = not kpi.empty
     if can_use_kpi:
         kpi["downtime_hours_70d"] = pd.to_numeric(kpi["downtime_hours_70d"], errors="coerce")
-        kpi["repairs_70d"] = pd.to_numeric(kpi["repairs_70d"], errors="coerce")
         kpi = kpi.dropna(subset=["downtime_hours_70d"])
         can_use_kpi = not kpi.empty
-    anomaly_reason = None
     if can_use_kpi:
-        downtime_probe = float(kpi["downtime_hours_70d"].sum())
-        scheduled_probe = int(kpi["machine_code"].nunique()) * 70 * SCHEDULE_HOURS_PER_DAY
-        repairs_values = kpi["repairs_70d"].fillna(0).tolist()
-        if (
-            not math.isfinite(downtime_probe)
-            or downtime_probe < 0
-            or downtime_probe > scheduled_probe
-            or any(not math.isfinite(float(value)) or float(value) < 0 for value in repairs_values)
-        ):
-            anomaly_reason = (
-                "query_4 rechazado por plausibilidad: downtime_hours_70d debe ser finito, no negativo "
-                "y no superar las horas calendario proxy de la misma ventana."
-            )
+        downtime_values = kpi["downtime_hours_70d"].tolist()
+        if any(not math.isfinite(float(value)) or float(value) < 0 for value in downtime_values):
             can_use_kpi = False
     if can_use_kpi:
         equipment = int(kpi["machine_code"].nunique())
         downtime = float(kpi["downtime_hours_70d"].sum())
-        repairs = float(kpi["repairs_70d"].fillna(0).sum())
+        repairs = float(pd.to_numeric(kpi.get("repairs_70d"), errors="coerce").fillna(0).sum()) if "repairs_70d" in kpi else 0.0
         event_count = int(repairs) if repairs > 0 else int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else 0
         if event_count <= 0:
             event_count = records
@@ -197,7 +194,7 @@ def _calculate_estimated_kpis(
         reference_start = (reference.min() - pd.Timedelta(days=69)).isoformat() if not reference.empty else None
         meta = _estimated_kpi_meta(
             period,
-            status="estimated",
+            status="source",
             equipment=equipment,
             actions=int(pd.to_numeric(kpi.get("total_actions_70d"), errors="coerce").fillna(0).sum()) if "total_actions_70d" in kpi else actions,
             records=records,
@@ -214,21 +211,24 @@ def _calculate_estimated_kpis(
     else:
         meta = _estimated_kpi_meta(
             period,
-            status="estimated",
+            status="unavailable",
             equipment=equipment,
             actions=actions,
             records=records,
-            reason=filter_reason or anomaly_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; se usa fallback mensual.",
+            reason=filter_reason or "query_4_business_kpis.parquet ausente, incompleto o sin valores utilizables; no se infieren horas desde el conteo de acciones.",
+            source_kind="unavailable",
+            source=["query_4_business_kpis.parquet"],
+            source_columns=["machine_code", "downtime_hours_70d", "reference_date"],
         )
         event_count = records
-        downtime = actions * ESTIMATED_HOURS_PER_ACTION
+        downtime = None
     scheduled_hours = float(meta["coverage"]["scheduled_hours_proxy"])
-    operating = max(scheduled_hours - downtime, 0.0)
+    operating = max(scheduled_hours - downtime, 0.0) if downtime is not None else None
     values = {
-        "availability_est_pct": round(operating / scheduled_hours * 100, 1) if scheduled_hours else None,
-        "downtime_est_hours": round(downtime, 1),
-        "mtbf_est_hours": round(operating / event_count, 1) if event_count else None,
-        "mttr_est_hours": round(downtime / event_count, 1) if event_count else None,
+        "availability_est_pct": round(operating / scheduled_hours * 100, 1) if operating is not None and scheduled_hours else None,
+        "downtime_est_hours": round(downtime, 1) if downtime is not None else None,
+        "mtbf_est_hours": round(operating / event_count, 1) if operating is not None and event_count else None,
+        "mttr_est_hours": round(downtime / event_count, 1) if downtime is not None and event_count else None,
     }
     return values, meta
 
@@ -249,7 +249,11 @@ class MaintenanceRepository:
         self._dummy_cache = None
         self._parquet_cache = None
         self._parquet_actions_cache = None
+        self._parquet_records_cache = None
         self._parquet_kpis_cache = None
+        self._parquet_reliability_cache = None
+        self._parquet_component_failures_cache = None
+        self._fleet_catalog_cache = None
 
     def _get_parquet_actions(self):
         """Load detailed actions only when a caller actually needs them."""
@@ -277,6 +281,47 @@ class MaintenanceRepository:
             )
             self._parquet_kpis_cache = load_business_kpis(client=self.client)
         return self._parquet_kpis_cache
+
+    def _get_parquet_records(self):
+        """Load source-defined record intervals used for time aggregation."""
+        if self._parquet_records_cache is None:
+            logger.info(
+                "Loading maintenance record intervals from parquet for client: %s",
+                self.client,
+            )
+            frame = load_maintenance_unit_records_actions(client=self.client)
+            for column in ("first_event_ts", "last_event_ts"):
+                if column in frame.columns:
+                    frame[column] = pd.to_datetime(
+                        frame[column], utc=True, format="mixed", errors="coerce"
+                    )
+            self._parquet_records_cache = frame
+        return self._parquet_records_cache
+
+    def _get_parquet_reliability(self):
+        """Load query 5 only once per repository instance."""
+        if self._parquet_reliability_cache is None:
+            logger.info(
+                "Loading monthly reliability view from parquet for client: %s",
+                self.client,
+            )
+            frame = load_maintenance_reliability_monthly(client=self.client)
+            if "year_month" in frame.columns:
+                frame["year_month"] = frame["year_month"].astype("string").str.strip()
+            self._parquet_reliability_cache = frame
+        return self._parquet_reliability_cache
+
+    def _get_parquet_component_failures(self):
+        """Load query 6 only once per repository instance."""
+        if self._parquet_component_failures_cache is None:
+            logger.info(
+                "Loading component failure ranking from parquet for client: %s",
+                self.client,
+            )
+            self._parquet_component_failures_cache = load_maintenance_component_failure_ranking(
+                client=self.client
+            )
+        return self._parquet_component_failures_cache
         
     def _get_dummy_data(self):
         """Get or generate dummy data."""
@@ -290,9 +335,60 @@ class MaintenanceRepository:
         if self._parquet_cache is None:
             self._parquet_cache = {
                 "actions": self._get_parquet_actions(),
+                "records": self._get_parquet_records(),
                 "kpis": self._get_parquet_kpis(),
+                "reliability": self._get_parquet_reliability(),
+                "component_failures": self._get_parquet_component_failures(),
             }
         return self._parquet_cache
+
+    def _fleet_catalog(self) -> dict[str, str]:
+        """Return the Tribología unit-to-fleet catalog for this client.
+
+        ``machineName`` is the governed fleet/type label in classified oil
+        data. A unit can have historical label drift, so the most frequent
+        non-empty label wins deterministically for each normalized unit key.
+        """
+        if self._fleet_catalog_cache is not None:
+            return self._fleet_catalog_cache
+        catalog: dict[str, str] = {}
+        try:
+            classified = load_oil_classified(self.client)
+        except Exception as exc:  # pragma: no cover - defensive source isolation
+            logger.warning("Could not load oil fleet catalog for %s: %s", self.client, exc)
+            classified = pd.DataFrame()
+        required = {"unitId", "machineName"}
+        if not classified.empty and required.issubset(classified.columns):
+            frame = classified[["unitId", "machineName"]].copy()
+            frame["__unit_key"] = frame["unitId"].map(_normalize_unit_key)
+            frame["__fleet"] = frame["machineName"].astype("string").str.strip()
+            frame = frame.dropna(subset=["__unit_key"])
+            frame = frame[frame["__fleet"].notna() & frame["__fleet"].ne("")]
+            if not frame.empty:
+                counts = (
+                    frame.groupby(["__unit_key", "__fleet"], as_index=False)
+                    .size()
+                    .sort_values(
+                        ["__unit_key", "size", "__fleet"],
+                        ascending=[True, False, True],
+                        kind="mergesort",
+                    )
+                    .drop_duplicates("__unit_key")
+                )
+                catalog = dict(zip(counts["__unit_key"], counts["__fleet"]))
+        self._fleet_catalog_cache = catalog
+        return catalog
+
+    def _fleet_for_machine_code(self, value) -> str:
+        """Resolve a unit strictly through Tribología's catalog.
+
+        Maintenance codes are normalized only to make the join robust to
+        separators and numeric zero padding. We deliberately do not infer a
+        fleet from a code prefix: an unmatched unit is exposed as the explicit
+        ``otros`` category so it remains visible and auditable.
+        """
+        key = _normalize_unit_key(value)
+        return self._fleet_catalog().get(key, UNKNOWN_FLEET)
 
     def _filtered_actions(
         self,
@@ -321,7 +417,7 @@ class MaintenanceRepository:
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
         if fleets:
-            df = df[df["machine_code"].map(_fleet_from_machine_code).isin(fleets)]
+            df = df[df["machine_code"].map(self._fleet_for_machine_code).isin(fleets)]
         if subsystems:
             df = df[df["action_subsystem_name"].isin(subsystems)]
         if date_start:
@@ -369,14 +465,14 @@ class MaintenanceRepository:
             raise NotImplementedError("Production mode not yet implemented")
 
     def get_available_fleets(self) -> List[str]:
-        """Return fleet prefixes derived from machine_code before the first underscore."""
+        """Return Tribología fleet labels plus ``otros`` for unmatched units."""
         if self.mode == "parquet":
             machines = self._get_parquet_data()["actions"].get("machine_code", pd.Series(dtype=str))
         elif self.mode == "dummy":
             machines = self._get_dummy_data()["machines"].get("machine_code", pd.Series(dtype=str))
         else:
             raise NotImplementedError("Production mode not yet implemented")
-        fleets = {_fleet_from_machine_code(value) for value in machines.unique()}
+        fleets = {self._fleet_for_machine_code(value) for value in machines.unique()}
         return sorted(fleets, key=lambda value: (value.casefold(), value))
 
     def get_available_equipment(
@@ -397,14 +493,14 @@ class MaintenanceRepository:
                 df_actions = df_actions[df_actions["action_system_name"].isin(systems)]
             if fleets:
                 df_actions = df_actions[
-                    df_actions["machine_code"].map(_fleet_from_machine_code).isin(fleets)
+                    df_actions["machine_code"].map(self._fleet_for_machine_code).isin(fleets)
                 ]
             return sorted(df_actions["machine_code"].dropna().unique().tolist())
         elif self.mode == "dummy":
             data = self._get_dummy_data()
             machines = data["machines"]["machine_code"].dropna()
             if fleets:
-                machines = machines[machines.map(_fleet_from_machine_code).isin(fleets)]
+                machines = machines[machines.map(self._fleet_for_machine_code).isin(fleets)]
             return sorted(machines.tolist())
         else:
             raise NotImplementedError("Production mode not yet implemented")
@@ -414,7 +510,11 @@ class MaintenanceRepository:
         self._dummy_cache = None
         self._parquet_cache = None
         self._parquet_actions_cache = None
+        self._parquet_records_cache = None
         self._parquet_kpis_cache = None
+        self._parquet_reliability_cache = None
+        self._parquet_component_failures_cache = None
+        self._fleet_catalog_cache = None
 
     def _actions_source_state(self) -> tuple[str, str | None]:
         """Classify the action source without turning failures into empty data."""
@@ -451,17 +551,42 @@ class MaintenanceRepository:
         raise NotImplementedError("Production mode not yet implemented")
 
     def get_available_months(self) -> List[str]:
-        """Return calendar months with valid action dates in YYYY-MM order."""
+        """Return months exposed by activity or the reliability view."""
         if self.mode != "parquet":
             if self.mode == "dummy":
                 df = self._get_dummy_data()["jobs"]
                 dates = pd.to_datetime(df.get("start_date"), errors="coerce")
                 return sorted(dates.dropna().dt.strftime("%Y-%m").unique().tolist())
             raise NotImplementedError("Production mode not yet implemented")
-        df = self._get_parquet_data()["actions"]
-        if df.empty or "change_date" not in df:
+        data = self._get_parquet_data()
+        months = set()
+        actions = data["actions"]
+        if not actions.empty and "change_date" in actions:
+            months.update(actions["change_date"].dropna().dt.strftime("%Y-%m").tolist())
+        reliability = data.get("reliability", pd.DataFrame())
+        if not reliability.empty and "source_system" in reliability.columns:
+            reliability = reliability[
+                reliability["source_system"].astype("string").str.upper().eq(self.client.upper())
+            ]
+        if not reliability.empty and "year_month" in reliability:
+            values = reliability["year_month"].astype("string").str.strip()
+            months.update(values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)].dropna().tolist())
+        return sorted(months)
+
+    def get_available_reliability_equipment(
+        self, period: Optional[str] = None
+    ) -> List[str]:
+        """Return machine codes present in query 5, optionally for one month."""
+        if self.mode != "parquet":
             return []
-        return sorted(df["change_date"].dropna().dt.strftime("%Y-%m").unique().tolist())
+        frame = self._get_parquet_data().get("reliability", pd.DataFrame())
+        if frame.empty or "machine_code" not in frame.columns:
+            return []
+        if "source_system" in frame.columns:
+            frame = frame[frame["source_system"].astype("string").str.upper().eq(self.client.upper())]
+        if period and "year_month" in frame.columns:
+            frame = frame[frame["year_month"].astype("string").eq(str(period))]
+        return sorted(frame["machine_code"].dropna().astype(str).unique().tolist())
 
     def get_available_weeks(self) -> List[str]:
         """Return weekly snapshot identifiers available for this client."""
@@ -500,6 +625,236 @@ class MaintenanceRepository:
         if frame.empty:
             return []
         return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
+
+    def _optional_view_state(
+        self, filename: str, frame: pd.DataFrame
+    ) -> tuple[str, Optional[str]]:
+        """Describe an optional query-5/query-6 source without masking errors."""
+        if not frame.empty:
+            return "ok", None
+        root = _get_mantentions_data_path(self.client)
+        if root is None or not (root / filename).exists():
+            return "missing", f"No existe {filename}."
+        try:
+            probe = pd.read_parquet(root / filename)
+        except Exception as exc:
+            return "error", f"No se pudo leer {filename}: {exc}"
+        if probe.empty:
+            return "empty", f"{filename} está vacío."
+        return "error", f"{filename} no entregó registros utilizables."
+
+    def get_reliability_payload(
+        self,
+        period: Optional[str] = None,
+        equipment: Optional[List[str]] = None,
+        detail_limit: int = 250,
+    ) -> dict:
+        """Build the JSON contract for query 5 and query 6.
+
+        Query 5 is monthly and query 6 is an accumulated ranking. Missing
+        metric values remain ``null`` so the UI can communicate insufficient
+        observations instead of manufacturing zeros.
+        """
+        empty = {"monthly": [], "components": []}
+        if self.mode != "parquet":
+            return {
+                "status": "empty",
+                "meta": {"source_system": self.client.upper(), "reason": "La fuente de confiabilidad solo está disponible en parquet."},
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+
+        data = self._get_parquet_data()
+        monthly = data.get("reliability", pd.DataFrame()).copy()
+        components = data.get("component_failures", pd.DataFrame()).copy()
+        monthly_state, monthly_error = self._optional_view_state(
+            "query_5_reliability_monthly.parquet", monthly
+        )
+        components_state, components_error = self._optional_view_state(
+            "query_6_component_failure_ranking.parquet", components
+        )
+        if "error" in {monthly_state, components_state}:
+            return {
+                "status": "error",
+                "meta": {
+                    "source_system": self.client.upper(),
+                    "source_status": {"query_5": monthly_state, "query_6": components_state},
+                    "errors": [value for value in (monthly_error, components_error) if value],
+                },
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+        monthly_required = {
+            "source_system", "machine_id", "machine_code", "year_month",
+            "n_failures", "mttr_hours", "total_downtime_hours",
+            "n_mtbf_intervals", "mtbf_hours", "mttf_hours", "low_confidence",
+        }
+        component_required = {
+            "source_system", "machine_id", "machine_code", "component_id",
+            "component_name", "n_failure_records", "n_failure_actions",
+        }
+        missing_monthly = sorted(monthly_required.difference(monthly.columns)) if not monthly.empty else []
+        missing_components = sorted(component_required.difference(components.columns)) if not components.empty else []
+        if missing_monthly or missing_components:
+            return {
+                "status": "error",
+                "meta": {
+                    "source_system": self.client.upper(),
+                    "source_status": {"query_5": monthly_state, "query_6": components_state},
+                    "missing_columns": {"query_5": missing_monthly, "query_6": missing_components},
+                    "errors": [value for value in (monthly_error, components_error) if value],
+                },
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+
+        source_system = self.client.upper()
+        if "source_system" in monthly.columns:
+            monthly = monthly[monthly["source_system"].astype("string").str.upper().eq(source_system)]
+        if "source_system" in components.columns:
+            components = components[components["source_system"].astype("string").str.upper().eq(source_system)]
+        available_months = []
+        if not monthly.empty:
+            values = monthly["year_month"].astype("string").str.strip()
+            monthly["year_month"] = values
+            available_months = sorted(values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)].dropna().unique().tolist())
+        selected = period or (available_months[-1] if available_months else None)
+        selected_equipment = [str(value) for value in (equipment or []) if value not in (None, "", "__all__")]
+        if selected:
+            monthly = monthly[monthly["year_month"].eq(str(selected))]
+        if selected_equipment:
+            monthly = monthly[monthly["machine_code"].astype(str).isin(selected_equipment)]
+            if not components.empty:
+                components = components[components["machine_code"].astype(str).isin(selected_equipment)]
+        monthly_columns = [
+            "source_system", "machine_id", "machine_code", "year_month",
+            "n_failures", "mttr_hours", "total_downtime_hours",
+            "n_mtbf_intervals", "mtbf_hours", "mttf_hours", "low_confidence",
+        ]
+        component_columns = [
+            "source_system", "machine_id", "machine_code", "component_id",
+            "component_name", "n_failure_records", "n_failure_actions",
+        ]
+        monthly = monthly[monthly_columns].sort_values(
+            ["year_month", "machine_code"], kind="mergesort"
+        ) if not monthly.empty else monthly
+        components = components[component_columns].sort_values(
+            ["n_failure_records", "n_failure_actions", "component_name", "machine_code"],
+            ascending=[False, False, True, True],
+            kind="mergesort",
+        ).head(detail_limit) if not components.empty else components
+        status = "ok" if not monthly.empty and not components.empty else (
+            "partial" if not monthly.empty or not components.empty else "empty"
+        )
+        return {
+            "status": status,
+            "meta": {
+                "source_system": source_system,
+                "available_months": available_months,
+                "period": selected,
+                "source_status": {"query_5": monthly_state, "query_6": components_state},
+                "source": ["query_5_reliability_monthly.parquet", "query_6_component_failure_ranking.parquet"],
+                "low_confidence_rows": int(monthly["low_confidence"].fillna(False).astype(bool).sum()) if not monthly.empty else 0,
+                "monthly_rows": int(len(monthly)),
+                "component_rows": int(len(components)),
+                "errors": [value for value in (monthly_error, components_error) if value],
+            },
+            "filters": {"period": selected, "equipment": selected_equipment},
+            "data": {
+                "monthly": self._json_records(monthly),
+                "components": self._json_records(components),
+            },
+        }
+
+    def _daily_out_of_service_hours(
+        self,
+        filtered_actions: pd.DataFrame,
+        start: pd.Timestamp,
+        end: pd.Timestamp,
+    ) -> tuple[pd.DataFrame, str]:
+        """Allocate source-defined record intervals to UTC calendar days.
+
+        The business KPI extract only exposes a rolling 70-day total.  The
+        daily series therefore uses the source record boundaries from query_2
+        and clips each interval to the selected month.  Overlapping intervals
+        are unioned per equipment/day before the fleet total is calculated. If query_2 is absent,
+        the same boundaries are derived from query_3 as a compatibility
+        fallback; no action-count-to-hours conversion is performed.
+        """
+        required = {"record_id", "machine_code", "first_event_ts", "last_event_ts"}
+        records = self._get_parquet_data().get("records", pd.DataFrame())
+        source_name = "query_2_unit_records_actions.parquet"
+        if not required.issubset(records.columns) or records.empty:
+            source_name = "query_3_actions_all_equipment.parquet (min/max event_ts por registro)"
+            if filtered_actions.empty:
+                return pd.DataFrame(columns=["date", "hours_out_of_service"]), source_name
+            records = (
+                filtered_actions.groupby(["record_id", "machine_code"], dropna=False)
+                .agg(first_event_ts=("event_ts", "min"), last_event_ts=("event_ts", "max"))
+                .reset_index()
+            )
+        else:
+            keys = filtered_actions[["record_id", "machine_code"]].drop_duplicates()
+            records = records.merge(keys, on=["record_id", "machine_code"], how="inner")
+            if records.empty and not filtered_actions.empty:
+                source_name = "query_3_actions_all_equipment.parquet (min/max event_ts por registro)"
+                records = (
+                    filtered_actions.groupby(["record_id", "machine_code"], dropna=False)
+                    .agg(first_event_ts=("event_ts", "min"), last_event_ts=("event_ts", "max"))
+                    .reset_index()
+                )
+
+        for column in ("first_event_ts", "last_event_ts"):
+            records[column] = pd.to_datetime(records[column], utc=True, format="mixed", errors="coerce")
+        records = records.dropna(subset=["first_event_ts", "last_event_ts"]).copy()
+        records = records[records["last_event_ts"] >= records["first_event_ts"]]
+        if records.empty:
+            return pd.DataFrame(columns=["date", "hours_out_of_service"]), source_name
+
+        interval_pieces = []
+        for record in records.itertuples(index=False):
+            interval_start = max(record.first_event_ts, start)
+            interval_end = min(record.last_event_ts, end)
+            if interval_end <= interval_start:
+                continue
+            day = interval_start.floor("D")
+            while day < interval_end:
+                day_end = day + pd.Timedelta(days=1)
+                effective_start = max(interval_start, day)
+                effective_end = min(interval_end, day_end)
+                if effective_end > effective_start:
+                    interval_pieces.append(
+                        {
+                            "machine_code": record.machine_code,
+                            "date": day.strftime("%Y-%m-%d"),
+                            "start": effective_start,
+                            "end": effective_end,
+                        }
+                    )
+                day = day_end
+
+        if not interval_pieces:
+            return pd.DataFrame(columns=["date", "hours_out_of_service"]), source_name
+        pieces = pd.DataFrame(interval_pieces)
+        union_rows = []
+        for (machine_code, date), group in pieces.groupby(["machine_code", "date"], dropna=False):
+            total_seconds = 0.0
+            current_start = None
+            current_end = None
+            for interval in group.sort_values(["start", "end"]).itertuples(index=False):
+                if current_start is None:
+                    current_start, current_end = interval.start, interval.end
+                elif interval.start <= current_end:
+                    current_end = max(current_end, interval.end)
+                else:
+                    total_seconds += (current_end - current_start).total_seconds()
+                    current_start, current_end = interval.start, interval.end
+            if current_start is not None:
+                total_seconds += (current_end - current_start).total_seconds()
+            union_rows.append({"date": date, "hours_out_of_service": total_seconds / 3600})
+        daily = pd.DataFrame(union_rows).groupby("date", as_index=False)["hours_out_of_service"].sum().sort_values("date")
+        daily["hours_out_of_service"] = daily["hours_out_of_service"].round(3)
+        return daily, source_name
 
     def _pareto_scope(self) -> dict:
         """Return this client's serializable scope for Summary Pareto charts."""
@@ -663,7 +1018,7 @@ class MaintenanceRepository:
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
         business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
-        filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; se usa el fallback mensual." if systems or subsystems else None
+        filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; las horas quedan no disponibles para este filtro." if systems or subsystems else None
         equipment_filter = equipment or None
         if fleets:
             fleet_equipment = set(self.get_available_equipment(fleets=fleets))
@@ -686,10 +1041,9 @@ class MaintenanceRepository:
             .rename(columns={"day": "date"})
             .sort_values("date")
         )
-        # No governed daily downtime duration exists in query_3. Keep the
-        # auditable action count and expose the documented 1.5 h/action proxy
-        # alongside the number of distinct equipment intervened per day.
-        daily["hours_estimated"] = daily["count"] * ESTIMATED_HOURS_PER_ACTION
+        daily_hours, daily_time_source = self._daily_out_of_service_hours(df, start, end)
+        daily = daily.merge(daily_hours, on="date", how="left")
+        daily["hours_out_of_service"] = daily["hours_out_of_service"].round(3)
 
         system_mix = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
@@ -817,6 +1171,12 @@ class MaintenanceRepository:
                 "detail_total": detail_total,
                 "pareto_scope": self._pareto_scope(),
                 "estimated_kpis": estimated_meta,
+                "time_measure": {
+                    "source": daily_time_source,
+                    "unit": "h-equipo",
+                    "formula": "sum(max(last_event_ts - first_event_ts, 0)) distribuido por día UTC",
+                    "scope": "equipos filtrados; el total de flota puede superar 24 h por día",
+                },
             },
             "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
             "kpis": kpis,
@@ -1203,14 +1563,22 @@ class MaintenanceRepository:
                     "ongoing", "duration_hours", "job_types"
                 ])
             
-            # Agrupar por machine_id (unit_id) y record_id
-            # Cada combinación representa un período de detención único
+            # Agrupar por machine_id (unit_id) y record_id.  The source
+            # interval table is authoritative for the temporal boundaries;
+            # action timestamps are only a compatibility fallback.
             grouped = df_valid.groupby(['machine_id', 'record_id', 'machine_code'], dropna=True)
+
+            interval_source = self._get_parquet_data().get("records", pd.DataFrame())
+            interval_map = {}
+            if {"record_id", "machine_code", "first_event_ts", "last_event_ts"}.issubset(interval_source.columns):
+                for interval in interval_source.itertuples(index=False):
+                    interval_map[(interval.record_id, interval.machine_code)] = (
+                        interval.first_event_ts,
+                        interval.last_event_ts,
+                    )
             
             records = []
             for (machine_id, record_id, machine_code), group in grouped:
-                # Usar event_ts como fecha y hora del evento (momento de la detención)
-                event_datetime = pd.to_datetime(group['event_ts'].iloc[0], utc=True)
                 n_actions = len(group)
                 
                 # Crear job_types como "accion-sistema" sin duplicados
@@ -1226,19 +1594,24 @@ class MaintenanceRepository:
                 
                 job_types = ", ".join(action_system_pairs) if len(action_system_pairs) > 0 else "Sin información"
                 
-                # Para duración, usamos el conteo de acciones como proxy
-                # Cada acción representa aproximadamente 1-2 horas de trabajo
-                # Esto es una estimación basada en la actividad registrada
-                estimated_duration = n_actions * 1.5  # 1.5 horas por acción en promedio
+                interval = interval_map.get((record_id, machine_code))
+                start_date, end_date = interval if interval else (
+                    pd.to_datetime(group['event_ts'].min(), utc=True, format="mixed"),
+                    pd.to_datetime(group['event_ts'].max(), utc=True, format="mixed"),
+                )
+                if pd.isna(start_date) or pd.isna(end_date) or end_date < start_date:
+                    duration_hours = None
+                else:
+                    duration_hours = round((end_date - start_date).total_seconds() / 3600, 3)
                 
                 records.append({
                     'machine_code': machine_code,
                     'machine_id': machine_id,
                     'record_id': record_id,
-                    'start_date': event_datetime,
-                    'end_date': event_datetime,  # Misma fecha para registros históricos
+                    'start_date': start_date,
+                    'end_date': end_date,
                     'ongoing': False,  # Datos históricos
-                    'duration_hours': estimated_duration,
+                    'duration_hours': duration_hours,
                     'job_types': job_types,
                     'n_actions': n_actions
                 })
@@ -1554,18 +1927,20 @@ class MaintenanceRepository:
                     logger.warning(f"No maintenance actions found for last available month ({latest_year}-{latest_month:02d})")
                     return pd.DataFrame(columns=["date", "downtime_hours"])
             
-            # Contar acciones por día como proxy de actividad de mantenimiento
-            daily_counts = df_month.groupby('date').size().reset_index(name='action_count')
-            
-            # Estimar horas de downtime: 
-            # - Cada acción representa ~1.5 horas de trabajo en promedio
-            # - Esto es un estimado basado en la actividad registrada
-            daily_counts['downtime_hours'] = daily_counts['action_count'] * 1.5
+            if date_start:
+                interval_start = pd.Timestamp(date_start)
+                interval_start = interval_start.tz_localize("UTC") if interval_start.tzinfo is None else interval_start.tz_convert("UTC")
+            else:
+                interval_start = df_month["change_date"].min().floor("D")
+            if date_end:
+                interval_end = pd.Timestamp(date_end)
+                interval_end = interval_end.tz_localize("UTC") if interval_end.tzinfo is None else interval_end.tz_convert("UTC")
+                interval_end += pd.Timedelta(days=1)
+            else:
+                interval_end = df_month["change_date"].max().floor("D") + pd.Timedelta(days=1)
 
-            logger.info(f"Data range: {len(daily_counts)} days from {daily_counts['date'].min()} to {daily_counts['date'].max()}")
-            logger.info(f"Total actions: {daily_counts['action_count'].sum()}, Total hours: {daily_counts['downtime_hours'].sum():.2f}")
-            
-            return daily_counts[['date', 'downtime_hours']].sort_values('date')
+            daily_hours, _ = self._daily_out_of_service_hours(df_month, interval_start, interval_end)
+            return daily_hours.rename(columns={"hours_out_of_service": "downtime_hours"})
         
         else:
             # TODO: Implement SQL query for production
