@@ -115,7 +115,7 @@ def test_summary_unit_filter_reconciles_all_payload_aggregates(monkeypatch):
     assert all(row["equipment_count"] == 1 for row in payload["data"]["daily"])
 
 
-def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monkeypatch):
+def test_fleet_filter_uses_catalog_and_groups_unmatched_units_as_otros(monkeypatch):
     frame = _actions().copy()
     extra_l = frame.loc[frame["action_id"] == "a4"].copy()
     extra_l["action_id"] = "a5"
@@ -143,20 +143,31 @@ def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monke
     )
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
     monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business_kpis.copy())
-    monkeypatch.setattr(repository_module, "load_oil_classified", lambda client: pd.DataFrame())
+    monkeypatch.setattr(
+        repository_module,
+        "load_oil_classified",
+        lambda client: pd.DataFrame(
+            [
+                {"unitId": "T_01", "machineName": "camion"},
+                {"unitId": "T_02", "machineName": "camion"},
+                {"unitId": "L_01", "machineName": "cargador frontal"},
+            ]
+        ),
+    )
     repo = MaintenanceRepository(mode="parquet", client="cda")
 
-    payload = repo.get_monthly_payload("2026-01", fleets=["T"])
+    payload = repo.get_monthly_payload("2026-01", fleets=["camion"])
 
-    assert repo.get_available_fleets() == ["L", "R", "Sin flota", "T"]
-    assert repo.get_available_equipment(fleets=["L"]) == ["L_01"]
-    assert payload["filters"]["fleets"] == ["T"]
+    assert repo.get_available_fleets() == ["camion", "cargador frontal", "otros"]
+    assert repo.get_available_equipment(fleets=["cargador frontal"]) == ["L_01"]
+    assert repo.get_available_equipment(fleets=["otros"]) == ["R_01"]
+    assert payload["filters"]["fleets"] == ["camion"]
     assert payload["kpis"]["actions"] == 4
     assert payload["kpis"]["downtime_est_hours"] == 30.0
     assert {row["equipment"] for row in payload["data"]["detail"]} == {"T_01", "T_02"}
 
-    unknown_fleet_payload = repo.get_monthly_payload("2026-01", fleets=["Sin flota"])
-    assert unknown_fleet_payload["kpis"]["actions"] == 1
+    unknown_fleet_payload = repo.get_monthly_payload("2026-01", fleets=["otros"])
+    assert unknown_fleet_payload["kpis"]["actions"] == 2
     assert unknown_fleet_payload["kpis"]["downtime_est_hours"] is None
     assert unknown_fleet_payload["meta"]["estimated_kpis"]["source_kind"] == "unavailable"
 

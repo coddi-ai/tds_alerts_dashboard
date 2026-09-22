@@ -7,7 +7,7 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 ## Vistas y fuentes
 
 - **Resumen**: selector mensual, filtro de flota/tipo de equipo según el catálogo
-  de Tribología (con fallback al código de unidad) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
+  de Tribología (los equipos sin coincidencia quedan en ``otros``) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; KPIs de tiempo respaldados por la fuente
   (disponibilidad, downtime, MTBF y MTTR); tendencia diaria de horas-equipo
@@ -45,8 +45,8 @@ de ``machineName`` es la flota/tipo de equipo visible (por ejemplo,
 ``BULL_022 → bulldozer``). Antes de unir ambas fuentes se normalizan mayúsculas,
 guion/guion bajo y ceros de unidad (``BULL-022`` = ``BULL_022`` y
 ``T_09`` = ``T_9``). Si una unidad de Mantenciones no existe en el catálogo,
-se conserva un fallback explícito al prefijo anterior al primer guion bajo; un
-valor vacío queda como ``Sin flota``. La unidad se filtra por ``machine_code``
+se clasifica en la categoría controlada ``otros``; no se infiere una flota desde
+el prefijo del código. La unidad se filtra por ``machine_code``
 y sus opciones se limitan a las flotas seleccionadas. Sin selección de
 flota/unidad se conserva todo el período.
 

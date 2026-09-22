@@ -80,14 +80,7 @@ def _normalize_unit_key(value) -> Optional[str]:
     return code
 
 
-def _fleet_from_machine_code(value) -> str:
-    """Fallback fleet label: token before the first underscore."""
-    if pd.isna(value):
-        return "Sin flota"
-    code = str(value).strip()
-    if not code:
-        return "Sin flota"
-    return code.replace("-", "_", 1).split("_", 1)[0].strip() or "Sin flota"
+UNKNOWN_FLEET = "otros"
 
 
 def _estimated_kpi_meta(
@@ -356,9 +349,15 @@ class MaintenanceRepository:
         return catalog
 
     def _fleet_for_machine_code(self, value) -> str:
-        """Resolve a unit to Tribología's fleet label, with a safe fallback."""
+        """Resolve a unit strictly through Tribología's catalog.
+
+        Maintenance codes are normalized only to make the join robust to
+        separators and numeric zero padding. We deliberately do not infer a
+        fleet from a code prefix: an unmatched unit is exposed as the explicit
+        ``otros`` category so it remains visible and auditable.
+        """
         key = _normalize_unit_key(value)
-        return self._fleet_catalog().get(key, _fleet_from_machine_code(value))
+        return self._fleet_catalog().get(key, UNKNOWN_FLEET)
 
     def _filtered_actions(
         self,
@@ -435,7 +434,7 @@ class MaintenanceRepository:
             raise NotImplementedError("Production mode not yet implemented")
 
     def get_available_fleets(self) -> List[str]:
-        """Return Tribología fleet labels, falling back to code prefixes."""
+        """Return Tribología fleet labels plus ``otros`` for unmatched units."""
         if self.mode == "parquet":
             machines = self._get_parquet_data()["actions"].get("machine_code", pd.Series(dtype=str))
         elif self.mode == "dummy":
