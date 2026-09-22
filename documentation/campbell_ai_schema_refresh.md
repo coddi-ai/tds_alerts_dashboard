@@ -22,11 +22,17 @@ generada vieja esta tapando el arreglo que commiteaste".
 
 ## El proceso
 
-Corre en la misma maquina/despliegue de la API como servicio `campbell-schema-refresh`. No hace
-deteccion de cambios: despierta en el horario configurado, regenera y respalda. Por defecto los
-lunes a las 08:00 en `America/Santiago`.
+Corre como un **hilo dentro del proceso de la API**, arrancado desde el hook de startup junto
+al janitor y al archivador de logs (`SchemaRefresher` en `refresh.py`). No es un contenedor
+aparte y no debe volver a serlo: una segunda imagen es una segunda cosa que construir,
+desplegar y mantener en sincronia, para un trabajo que despierta una vez por semana y corre un
+segundo. El compose tiene los dos servicios de siempre, `dashboard` y `campbell-api`.
+
+No hace deteccion de cambios: despierta en el horario configurado, regenera y publica. Por
+defecto los lunes a las 08:00 en `America/Santiago`.
 
 ```bash
+CAMPBELL_AI_SCHEMA_REFRESH_ENABLED=true
 CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY=monday
 CAMPBELL_AI_SCHEMA_REFRESH_TIME=08:00
 CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE=America/Santiago
@@ -42,13 +48,20 @@ Flujo:
 
 1. Lee los datos montados en `CAMPBELL_AI_SCHEMA_DATA_ROOT` (`/app/data` en Compose).
 2. Regenera el documento leyendo la cabecera real de cada dataset.
-3. Lo escribe atomicamente en `<data_root>/auxiliar/dataset_columns.json` — se escribe al lado
-   y se renombra encima, asi que la API, que lee ese mismo archivo desde otro contenedor, ve el
-   documento viejo o el nuevo, nunca la mitad de uno.
+3. Intenta escribirlo en `<data_root>/auxiliar/dataset_columns.json`, de forma atomica: se
+   escribe al lado y se renombra encima, asi que un lector ve el documento viejo o el nuevo,
+   nunca la mitad de uno.
 4. Lo publica en S3, en dos lugares distintos por razones distintas (ver mas abajo).
 
-**No toca la copia versionada.** El montaje de `./src` en ese servicio es de solo lectura
-justamente para que no pueda.
+**Si la raiz de datos es de solo lectura, publica igual.** Es el caso normal: `campbell-api`
+monta `./data:/app/data:ro`. La escritura local falla, se registra como INFO, el documento se
+arma en un temporal y desde ahi se publica — que es el paso que importa, porque el documento
+llega a cada despliegue por la sincronizacion de datos.
+
+**No toca la copia versionada.** El montaje de `./src` es de solo lectura.
+
+Su estado esta en `/diagnostics` bajo `schema.refresh`: si el hilo esta vivo, cuando despierta
+(`next_run`), cuando corrio por ultima vez y con que resultado.
 
 ## Las dos claves de S3
 
@@ -99,7 +112,7 @@ que sincronice la data recibe el esquema nuevo, sin esperar al lunes.
 Si prefieres que sea el despliegue quien regenere y publique, en vez del paso 3:
 
 ```bash
-docker compose run --rm campbell-schema-refresh python -m src.campbell_ai.schema.refresh --once
+docker compose exec campbell-api python -m src.campbell_ai.schema.refresh --once
 ```
 
 Sin el paso 3 ni ese comando, la copia generada — que es la que manda — sigue describiendo la

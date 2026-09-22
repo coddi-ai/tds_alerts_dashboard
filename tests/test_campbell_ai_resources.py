@@ -1732,6 +1732,76 @@ def test_a_partial_data_root_is_not_published_over_everybody(tmp_path):
     assert build_module.publishing_would_shrink(parcial, tmp_path / "no-existe.json") == []
 
 
+def test_the_weekly_refresh_runs_inside_the_api_process(monkeypatch):
+    """Donde vive el refresh semanal, que es lo que decide si el despliegue lo tiene.
+
+    Fue un contenedor aparte y eso no servia aca: una segunda imagen es una segunda cosa que
+    construir, desplegar y mantener en sincronia, para un trabajo que despierta una vez por
+    semana y corre un segundo. Vive como hilo en el proceso que sirve la API, igual que el
+    janitor y el archivador de logs, y se apaga cuando ese proceso se apaga.
+    """
+    from src.campbell_ai.diagnostics import schema_refresh_stats
+    from src.campbell_ai.schema import refresh as refresh_module
+
+    refresh_module.stop_schema_refresh()
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY", "wednesday")
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_REFRESH_TIME", "03:30")
+
+    refresher = refresh_module.start_schema_refresh()
+    try:
+        assert refresher is not None
+        # Arrancar dos veces no levanta dos hilos: el hook de arranque puede correr de nuevo.
+        assert refresh_module.start_schema_refresh() is refresher
+        estado = schema_refresh_stats()
+        assert estado["running"] is True
+        assert estado["weekday"] == 2 and estado["time"] == "03:30:00"
+        assert estado["next_run"], "sin proxima corrida no hay nada agendado"
+    finally:
+        refresh_module.stop_schema_refresh()
+
+    assert refresh_module.get_schema_refresher() is None
+    assert schema_refresh_stats()["running"] is False
+
+    # Y se puede apagar sin desplegar codigo, que es lo que permite desactivarlo si el
+    # esquema se regenera desde otra parte.
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_REFRESH_ENABLED", "false")
+    assert refresh_module.start_schema_refresh() is None
+
+
+def test_a_read_only_data_root_still_publishes_the_schema(tmp_path, monkeypatch):
+    """El caso que aparece al mover el refresh adentro de la API: `/app/data` es solo lectura.
+
+    Publicar es el paso que importa — el documento llega a cada despliegue por la
+    sincronizacion de datos — asi que una raiz que no se puede escribir tiene que degradar a
+    publicar igual, no a no hacer nada. Si esto fallara, mover el refresh al proceso de la API
+    lo habria dejado sin efecto.
+    """
+    from src.campbell_ai.schema import refresh as refresh_module
+
+    destino = tmp_path / "solo-lectura" / "dataset_columns.json"
+
+    def negar_escritura(document, schema_file=None):
+        if schema_file == destino:
+            raise PermissionError("Read-only file system")
+        # El respaldo temporal si se escribe, que es de donde se publica.
+        schema_file.parent.mkdir(parents=True, exist_ok=True)
+        schema_file.write_text('{"clients": {"cda": {}}}', encoding="utf-8")
+
+    publicado: list = []
+    monkeypatch.setattr(refresh_module, "write_document", negar_escritura)
+    monkeypatch.setattr(refresh_module, "build", lambda root: {"clients": {"cda": {}}})
+    monkeypatch.setattr(
+        refresh_module,
+        "backup_to_s3",
+        lambda archivo, **kw: publicado.append(Path(archivo)) or ["una/clave.json"],
+    )
+
+    assert refresh_module.refresh_once(tmp_path, output=destino) is True
+    assert publicado, "una raiz de solo lectura dejo el refresh sin publicar"
+    assert publicado[0] != destino, "se publico desde el destino que no se pudo escribir"
+    assert publicado[0].exists()
+
+
 def test_the_declared_schema_still_matches_the_data_on_disk():
     """The check that would catch the ETL renaming a column.
 

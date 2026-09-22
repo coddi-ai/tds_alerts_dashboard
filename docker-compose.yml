@@ -62,7 +62,23 @@ services:
       - BUCKET_NAME=${BUCKET_NAME:-}
       - ACCESS_KEY=${ACCESS_KEY:-}
       - SECRET_KEY=${SECRET_KEY:-}
+      # Regeneracion semanal del esquema declarado. Corre como un hilo dentro de ESTE
+      # proceso, no como un contenedor aparte: duerme hasta su ventana, corre un segundo y
+      # publica en el bucket. Por defecto, lunes 08:00 en Chile.
+      - CAMPBELL_AI_SCHEMA_REFRESH_ENABLED=${CAMPBELL_AI_SCHEMA_REFRESH_ENABLED:-true}
+      - CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY=${CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY:-monday}
+      - CAMPBELL_AI_SCHEMA_REFRESH_TIME=${CAMPBELL_AI_SCHEMA_REFRESH_TIME:-08:00}
+      - CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE=${CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE:-America/Santiago}
+      - CAMPBELL_AI_SCHEMA_BACKUP_S3=${CAMPBELL_AI_SCHEMA_BACKUP_S3:-true}
+      # Donde vive la data del dashboard en el bucket. El documento se publica ahi porque la
+      # descarga preserva estructura: esa clave aterriza en `data/auxiliar/` de cada
+      # despliegue, que es la copia que el servicio prefiere.
+      - CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX=${CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX:-MultiTechnique Alerts/auxiliar}
+      # Copias fechadas, fuera del prefijo de la data para que la sincronizacion no las espeje.
+      - CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX=${CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX:-campbellAI/schema/dataset_columns}
     volumes:
+      # Solo lectura, como estaba. El refresh escribe la copia generada si puede, y si no
+      # publica igual en S3: el documento llega a cada despliegue por la sincronizacion.
       - ./data:/app/data:ro
       # Read-write: holds the feedback log and the local backup mirror.
       - ./logs:/app/logs
@@ -76,43 +92,4 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    restart: unless-stopped
-
-  campbell-schema-refresh:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: campbell-ai-schema-refresh
-    command: ["python", "-m", "src.campbell_ai.schema.refresh"]
-    env_file:
-      - .env
-    environment:
-      # Runs in the same deployment as the API and reads the same mounted data.
-      # Defaults to Monday 08:00 in Chile; override these without changing code.
-      - CAMPBELL_AI_SCHEMA_DATA_ROOT=/app/data
-      - CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY=${CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY:-monday}
-      - CAMPBELL_AI_SCHEMA_REFRESH_TIME=${CAMPBELL_AI_SCHEMA_REFRESH_TIME:-08:00}
-      - CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE=${CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE:-America/Santiago}
-      - CAMPBELL_AI_SCHEMA_REFRESH_RUN_ON_START=${CAMPBELL_AI_SCHEMA_REFRESH_RUN_ON_START:-false}
-      - CAMPBELL_AI_SCHEMA_BACKUP_S3=${CAMPBELL_AI_SCHEMA_BACKUP_S3:-true}
-      # Donde vive la data del dashboard en el bucket. El documento se publica ahi porque la
-      # descarga preserva estructura: esta clave aterriza en `data/auxiliar/` de cada
-      # despliegue, que es la copia que el servicio prefiere.
-      - CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX=${CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX:-MultiTechnique Alerts/auxiliar}
-      # Copias fechadas, fuera del prefijo de la data para que la sincronizacion no las espeje.
-      - CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX=${CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX:-campbellAI/schema/dataset_columns}
-      - CAMPBELL_AI_SCHEMA_BACKUP_AWS_REGION=${CAMPBELL_AI_SCHEMA_BACKUP_AWS_REGION:-us-east-1}
-      - BUCKET_NAME=${BUCKET_NAME:-}
-      - ACCESS_KEY=${ACCESS_KEY:-}
-      - SECRET_KEY=${SECRET_KEY:-}
-    volumes:
-      # Read-write by design: this process owns the generated schema file, and that file
-      # lives with the data it describes — `/app/data/auxiliar/dataset_columns.json`, beside
-      # `manifest.json`. The API mounts this same directory read-only and prefers that copy
-      # over the one committed in the image.
-      - ./data:/app/data
-      # Read-only on purpose. The copy under `src/campbell_ai/schema/` is versioned: it is the
-      # reviewed record of how the schema changes between releases, and is the fallback when
-      # the generated one is missing. A scheduled process must never rewrite it.
-      - ./src:/app/src:ro
     restart: unless-stopped
