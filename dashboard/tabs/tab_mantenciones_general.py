@@ -357,7 +357,7 @@ def layout_mantenciones_general():
             dbc.Row(
                 [
                     dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=4),
-                    dbc.Col([html.Label("Flota", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder="Todas las flotas"), html.Small("Prefijo del código de unidad", className="text-muted")], md=4),
+                    dbc.Col([html.Label("Flota / tipo de equipo", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder="Todas las flotas"), html.Small("Catálogo de Tribología; fallback al código de unidad", className="text-muted")], md=4),
                     dbc.Col([html.Label("Unidad", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": "Todas", "value": "__all__"}], value="__all__", placeholder="Todas")], md=4),
                     # The weekly selector remains mounted for its disabled tab's
                     # callback contract, but is intentionally not exposed while

@@ -5,6 +5,7 @@ Provides data access functions that can work in dummy or production mode.
 
 import json
 import math
+import re
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, List
@@ -16,6 +17,7 @@ from src.data.loaders import (
     _get_mantentions_data_path,
     load_maintenance_actions_all_equipment,
     load_business_kpis,
+    load_oil_classified,
     list_maintenance_weeks,
     load_maintenance_week,
 )
@@ -63,14 +65,32 @@ def _empty_estimated_kpis() -> dict:
     }
 
 
+def _normalize_unit_key(value) -> Optional[str]:
+    """Normalize maintenance/oil unit identifiers to a stable join key.
+
+    EMIN publishes ``BULL-022`` in maintenance and ``BULL_022`` in Oil. CDA
+    also has ``T_09``/``T_9`` variants across sources. The Tribología catalog
+    is therefore joined after normalizing separators and numeric zero padding.
+    """
+    if pd.isna(value):
+        return None
+    code = str(value).strip().upper().replace("-", "_")
+    if not code:
+        return None
+    match = re.fullmatch(r"([^_]+)_(0*)(\d+)", code)
+    if match:
+        return f"{match.group(1)}_{int(match.group(3))}"
+    return code
+
+
 def _fleet_from_machine_code(value) -> str:
-    """Use the token before the first underscore as the fleet code."""
+    """Fallback fleet label: token before the first underscore."""
     if pd.isna(value):
         return "Sin flota"
     code = str(value).strip()
     if not code:
         return "Sin flota"
-    return code.split("_", 1)[0].strip() or "Sin flota"
+    return code.replace("-", "_", 1).split("_", 1)[0].strip() or "Sin flota"
 
 
 def _estimated_kpi_meta(
@@ -250,6 +270,7 @@ class MaintenanceRepository:
         self._parquet_cache = None
         self._parquet_actions_cache = None
         self._parquet_kpis_cache = None
+        self._fleet_catalog_cache = None
 
     def _get_parquet_actions(self):
         """Load detailed actions only when a caller actually needs them."""
@@ -294,6 +315,48 @@ class MaintenanceRepository:
             }
         return self._parquet_cache
 
+    def _fleet_catalog(self) -> dict[str, str]:
+        """Return the Tribología unit-to-fleet catalog for this client.
+
+        ``machineName`` is the governed fleet/type label in classified oil
+        data. A unit can have historical label drift, so the most frequent
+        non-empty label wins deterministically for each normalized unit key.
+        """
+        if self._fleet_catalog_cache is not None:
+            return self._fleet_catalog_cache
+        catalog: dict[str, str] = {}
+        try:
+            classified = load_oil_classified(self.client)
+        except Exception as exc:  # pragma: no cover - defensive source isolation
+            logger.warning("Could not load oil fleet catalog for %s: %s", self.client, exc)
+            classified = pd.DataFrame()
+        required = {"unitId", "machineName"}
+        if not classified.empty and required.issubset(classified.columns):
+            frame = classified[["unitId", "machineName"]].copy()
+            frame["__unit_key"] = frame["unitId"].map(_normalize_unit_key)
+            frame["__fleet"] = frame["machineName"].astype("string").str.strip()
+            frame = frame.dropna(subset=["__unit_key"])
+            frame = frame[frame["__fleet"].notna() & frame["__fleet"].ne("")]
+            if not frame.empty:
+                counts = (
+                    frame.groupby(["__unit_key", "__fleet"], as_index=False)
+                    .size()
+                    .sort_values(
+                        ["__unit_key", "size", "__fleet"],
+                        ascending=[True, False, True],
+                        kind="mergesort",
+                    )
+                    .drop_duplicates("__unit_key")
+                )
+                catalog = dict(zip(counts["__unit_key"], counts["__fleet"]))
+        self._fleet_catalog_cache = catalog
+        return catalog
+
+    def _fleet_for_machine_code(self, value) -> str:
+        """Resolve a unit to Tribología's fleet label, with a safe fallback."""
+        key = _normalize_unit_key(value)
+        return self._fleet_catalog().get(key, _fleet_from_machine_code(value))
+
     def _filtered_actions(
         self,
         systems: Optional[List[str]] = None,
@@ -321,7 +384,7 @@ class MaintenanceRepository:
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
         if fleets:
-            df = df[df["machine_code"].map(_fleet_from_machine_code).isin(fleets)]
+            df = df[df["machine_code"].map(self._fleet_for_machine_code).isin(fleets)]
         if subsystems:
             df = df[df["action_subsystem_name"].isin(subsystems)]
         if date_start:
@@ -369,14 +432,14 @@ class MaintenanceRepository:
             raise NotImplementedError("Production mode not yet implemented")
 
     def get_available_fleets(self) -> List[str]:
-        """Return fleet prefixes derived from machine_code before the first underscore."""
+        """Return Tribología fleet labels, falling back to code prefixes."""
         if self.mode == "parquet":
             machines = self._get_parquet_data()["actions"].get("machine_code", pd.Series(dtype=str))
         elif self.mode == "dummy":
             machines = self._get_dummy_data()["machines"].get("machine_code", pd.Series(dtype=str))
         else:
             raise NotImplementedError("Production mode not yet implemented")
-        fleets = {_fleet_from_machine_code(value) for value in machines.unique()}
+        fleets = {self._fleet_for_machine_code(value) for value in machines.unique()}
         return sorted(fleets, key=lambda value: (value.casefold(), value))
 
     def get_available_equipment(
@@ -397,14 +460,14 @@ class MaintenanceRepository:
                 df_actions = df_actions[df_actions["action_system_name"].isin(systems)]
             if fleets:
                 df_actions = df_actions[
-                    df_actions["machine_code"].map(_fleet_from_machine_code).isin(fleets)
+                    df_actions["machine_code"].map(self._fleet_for_machine_code).isin(fleets)
                 ]
             return sorted(df_actions["machine_code"].dropna().unique().tolist())
         elif self.mode == "dummy":
             data = self._get_dummy_data()
             machines = data["machines"]["machine_code"].dropna()
             if fleets:
-                machines = machines[machines.map(_fleet_from_machine_code).isin(fleets)]
+                machines = machines[machines.map(self._fleet_for_machine_code).isin(fleets)]
             return sorted(machines.tolist())
         else:
             raise NotImplementedError("Production mode not yet implemented")

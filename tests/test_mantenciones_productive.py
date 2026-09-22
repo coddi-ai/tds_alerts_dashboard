@@ -130,6 +130,7 @@ def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monke
     )
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
     monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business_kpis.copy())
+    monkeypatch.setattr(repository_module, "load_oil_classified", lambda client: pd.DataFrame())
     repo = MaintenanceRepository(mode="parquet", client="cda")
 
     payload = repo.get_monthly_payload("2026-01", fleets=["T"])
@@ -145,6 +146,32 @@ def test_fleet_filter_uses_machine_code_prefix_and_filters_monthly_payload(monke
     assert unknown_fleet_payload["kpis"]["actions"] == 1
     assert unknown_fleet_payload["kpis"]["downtime_est_hours"] == 1.5
     assert unknown_fleet_payload["meta"]["estimated_kpis"]["source_kind"] == "actions_monthly_proxy"
+
+
+def test_fleet_filter_uses_tribologia_catalog_for_emin(monkeypatch):
+    frame = _actions().copy()
+    frame["machine_code"] = ["BULL-022", "BULL-022", "BULL-024", "BULL-031"]
+    oil_catalog = pd.DataFrame(
+        [
+            {"unitId": "BULL_022", "machineName": "bulldozer"},
+            {"unitId": "BULL_024", "machineName": "bulldozer"},
+            {"unitId": "BULL_031", "machineName": "bulldozer"},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_oil_classified", lambda client: oil_catalog.copy())
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+
+    assert repository_module._normalize_unit_key("BULL-022") == "BULL_22"
+    assert repository_module._normalize_unit_key("T_09") == "T_9"
+    assert repo.get_available_fleets() == ["bulldozer"]
+    assert repo.get_available_equipment(fleets=["bulldozer"]) == ["BULL-022", "BULL-024", "BULL-031"]
+
+    payload = repo.get_monthly_payload("2026-01", fleets=["bulldozer"])
+    assert payload["filters"]["fleets"] == ["bulldozer"]
+    assert payload["kpis"]["equipment"] == 3
+    assert payload["kpis"]["actions"] == 4
 
 
 def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
