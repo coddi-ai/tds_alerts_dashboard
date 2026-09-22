@@ -23,8 +23,10 @@ Covers:
 """
 
 import logging
+from collections import Counter
 import os
 import sys
+import types
 import tempfile
 import time
 from pathlib import Path
@@ -1492,6 +1494,9 @@ def test_validation_opens_no_files_when_the_schema_is_declared(dataset_root, mon
         "_LOADED",
         {"cda": {"alerts": {"format": "csv", "columns": declared}}},
     )
+    # La declaracion se fija a mano, asi que tambien hay que fijar la ventana de
+    # frescura: `_load` re-mira los candidatos en disco pasado un minuto y pisaria esto.
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
     monkeypatch.setattr(data_module, "declared_columns", schema_module.declared_columns)
     repo._probe_cache.clear()
 
@@ -1532,17 +1537,199 @@ def test_a_declared_schema_that_cannot_be_trusted_falls_back(dataset_root, monke
     }
     for etiqueta, contenido in casos.items():
         monkeypatch.setattr(schema_module, "_LOADED", contenido)
+        monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
         repo._probe_cache.clear()
         probe = repo._probe_frame(path, dataset_key="alerts", client="cda")
         assert probe["columns_from"] == "header", etiqueta
         assert probe["columns"] == real, etiqueta
 
-    # Y un archivo de declaracion ilegible no puede tumbar el arranque.
+    # Y sin ningun candidato legible el arranque no se cae: se vuelve a leer cabeceras.
+    # Los dos candidatos se apuntan a la nada, no solo el versionado: si aca quedara el real,
+    # este test pasaria o no segun si alguien corrio el refresh en su maquina.
     schema_module.reset()
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_DATA_ROOT", str(dataset_root / "sin-datos"))
     monkeypatch.setattr(schema_module, "SCHEMA_FILE", dataset_root / "no-existe.json")
     assert schema_module.declared_columns("cda", "alerts", ".csv") is None
     assert schema_module.describe()["loaded"] is False
+    assert schema_module.describe()["source"] == "none"
     schema_module.reset()
+
+
+def test_the_generated_declaration_wins_and_the_committed_one_is_the_fallback(
+    tmp_path, monkeypatch
+):
+    """La regla de precedencia entre las dos copias, y que perder una no cuesta correccion.
+
+    La copia generada dentro de la raiz de datos manda porque se regenera cada semana desde la
+    data real; la versionada en el repositorio es el registro revisable de como cambio el
+    esquema entre versiones, y el respaldo cuando la generada no esta. Perder la generada tiene
+    que degradar a la ultima declaracion revisada, no a leer todas las cabeceras otra vez.
+    """
+    import json as json_module
+
+    import src.campbell_ai.schema as schema_module
+
+    def escribir(path, columnas):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json_module.dumps(
+                {"clients": {"cda": {"alerts": {"format": "csv", "columns": columnas}}}}
+            ),
+            encoding="utf-8",
+        )
+
+    versionado = tmp_path / "repo" / "dataset_columns.json"
+    escribir(versionado, ["columna_del_repo"])
+    monkeypatch.setattr(schema_module, "SCHEMA_FILE", versionado)
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_DATA_ROOT", str(tmp_path / "data"))
+
+    # Sin copia generada: manda la versionada, que es justamente para lo que esta.
+    schema_module.reset()
+    assert schema_module.declared_columns("cda", "alerts", ".csv") == ["columna_del_repo"]
+    assert schema_module.describe()["source"] == "packaged"
+
+    # Con copia generada: manda esa.
+    escribir(schema_module.generated_schema_file(), ["columna_generada"])
+    schema_module.reset()
+    assert schema_module.declared_columns("cda", "alerts", ".csv") == ["columna_generada"]
+    assert schema_module.describe()["source"] == "generated"
+
+    # Una copia generada corrupta no puede dejar al servicio sin declaracion: cae a la
+    # versionada. Es el caso que decide si la precedencia es segura o solo conveniente.
+    schema_module.generated_schema_file().write_text("{no soy json", encoding="utf-8")
+    schema_module.reset()
+    assert schema_module.declared_columns("cda", "alerts", ".csv") == ["columna_del_repo"]
+    reporte = schema_module.describe()
+    assert reporte["source"] == "packaged"
+    # Y el fallo se reporta aunque el respaldo haya funcionado: el servicio anda, pero alguien
+    # tiene que arreglar la copia generada, y sin esto `/diagnostics` no distingue esto de
+    # "el refresh todavia no ha corrido nunca".
+    assert "generated" in (reporte["error"] or ""), reporte
+
+
+def test_the_declaration_notices_a_refresh_without_restarting(tmp_path, monkeypatch):
+    """Un refresh tiene que surtir efecto sin reiniciar la API, pero sin `stat` por consulta.
+
+    `declared_columns` se llama una vez por dataset dentro de `validate_client`, asi que mirar
+    el disco en cada llamada devolveria parte de los round trips que la declaracion existe para
+    quitar. Se re-mira por ventana de tiempo: dentro de la ventana no se toca el disco, pasada
+    la ventana un archivo nuevo se toma solo.
+    """
+    import json as json_module
+
+    import src.campbell_ai.schema as schema_module
+
+    generada = tmp_path / "data" / "auxiliar" / "dataset_columns.json"
+
+    def escribir(columnas):
+        generada.parent.mkdir(parents=True, exist_ok=True)
+        generada.write_text(
+            json_module.dumps(
+                {"clients": {"cda": {"alerts": {"format": "csv", "columns": columnas}}}}
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(schema_module, "SCHEMA_FILE", tmp_path / "no-existe.json")
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_DATA_ROOT", str(tmp_path / "data"))
+    escribir(["antes"])
+    schema_module.reset()
+    assert schema_module.declared_columns("cda", "alerts", ".csv") == ["antes"]
+
+    lecturas = {"n": 0}
+    real_stat = schema_module.Path.stat
+    monkeypatch.setattr(
+        schema_module.Path,
+        "stat",
+        lambda self, *a, **k: (lecturas.__setitem__("n", lecturas["n"] + 1), real_stat(self, *a, **k))[1],
+    )
+
+    # Dentro de la ventana: el archivo cambio y aun asi no se mira el disco.
+    escribir(["despues"])
+    # Contado desde aca: `escribir` hace `mkdir(exist_ok=True)`, que en 3.11 consulta el
+    # directorio con `stat`, y ese no es el gasto que este test mide.
+    lecturas["n"] = 0
+    for _ in range(20):
+        assert schema_module.declared_columns("cda", "alerts", ".csv") == ["antes"]
+    assert lecturas["n"] == 0, "una declaracion que hace stat por consulta no ahorra nada"
+
+    # Vencida la ventana, el refresh se toma solo.
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", 0.0)
+    assert schema_module.declared_columns("cda", "alerts", ".csv") == ["despues"]
+    schema_module.reset()
+
+
+def test_publishing_the_schema_lands_where_the_data_sync_will_find_it(tmp_path, monkeypatch):
+    """Las dos claves que se escriben, y por que una va dentro del prefijo de la data.
+
+    `S3Downloader.download_folder` preserva estructura, asi que una clave bajo
+    `MultiTechnique Alerts/auxiliar/` aterriza en `data/auxiliar/`, que es justo la copia que
+    el servicio prefiere. De ahi que la copia viva alli y no en un prefijo propio: el esquema
+    viaja con la data que describe, sin paso de arranque y sin ventana en que discrepen.
+
+    La copia fechada va fuera de ese prefijo a proposito: todo lo que este dentro se descarga
+    a la raiz de datos, y un `history/` espejado seria basura en `data/`.
+    """
+    from src.campbell_ai.schema import build as build_module
+
+    documento = tmp_path / "dataset_columns.json"
+    documento.write_text('{"clients": {"cda": {}}}', encoding="utf-8")
+
+    subidas: list[dict] = []
+
+    class _ClienteFalso:
+        def put_object(self, **kwargs):
+            subidas.append(kwargs)
+
+    fake_boto3 = types.SimpleNamespace(client=lambda *a, **k: _ClienteFalso())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setenv("BUCKET_NAME", "bucket-de-prueba")
+
+    claves = build_module.backup_to_s3(documento)
+    assert claves == [
+        "MultiTechnique Alerts/auxiliar/dataset_columns.json",
+        claves[1],
+    ]
+    assert claves[1].startswith("campbellAI/schema/dataset_columns/history/")
+    assert claves[1].endswith("/dataset_columns.json")
+    assert not claves[1].startswith("MultiTechnique"), (
+        "la copia fechada dentro del prefijo de la data se espejaria a data/ como basura"
+    )
+    assert all(item["Bucket"] == "bucket-de-prueba" for item in subidas)
+
+    # Sin bucket configurado no es un fallo: regenerar en local sirve por si solo, y quien no
+    # tiene las llaves del despliegue igual tiene que poder correr el comando.
+    monkeypatch.delenv("BUCKET_NAME")
+    assert build_module.backup_to_s3(documento) == []
+
+
+def test_a_partial_data_root_is_not_published_over_everybody(tmp_path):
+    """La guardia que separa "el esquema cambio" de "la data no habia sincronizado".
+
+    Publicar alcanza a todos los despliegues. Un documento construido sobre una raiz de datos
+    a medio llegar es perfectamente valido y retira en silencio los analisis de quien falte;
+    escribir en local nunca lo revelaria. Comparar contra el documento que se reemplaza lo
+    convierte en una negativa en vez de un despliegue.
+    """
+    from src.campbell_ai.schema import build as build_module
+
+    anterior = tmp_path / "dataset_columns.json"
+    anterior.write_text(
+        '{"clients": {"cda": {}, "enex": {}, "emin": {}}}', encoding="utf-8"
+    )
+
+    completo = {"clients": {"cda": {}, "enex": {}, "emin": {}}}
+    assert build_module.publishing_would_shrink(completo, anterior) == []
+
+    parcial = {"clients": {"cda": {}}}
+    assert build_module.publishing_would_shrink(parcial, anterior) == ["emin", "enex"]
+
+    # Un cliente nuevo no es un encogimiento: agregar no retira nada de nadie.
+    ampliado = {"clients": {"cda": {}, "enex": {}, "emin": {}, "capstone": {}}}
+    assert build_module.publishing_would_shrink(ampliado, anterior) == []
+
+    # Y sin documento anterior no hay con que comparar: publicar el primero no es regresion.
+    assert build_module.publishing_would_shrink(parcial, tmp_path / "no-existe.json") == []
 
 
 def test_the_declared_schema_still_matches_the_data_on_disk():
@@ -1655,19 +1842,17 @@ def test_the_vocabulary_index_survives_a_restart_and_a_corrupt_file(
     assert reads["n"] == 2
     assert index_module.index_stats()["entries"] == 0
 
-def test_a_declared_dataset_that_never_arrived_is_reported_absent_and_fails_on_read(
+def test_a_declared_dataset_that_never_arrived_is_trusted_until_it_is_read(
     dataset_root, monkeypatch
 ):
-    """A declared file that never synced is not an available analysis.
+    """Lo que cuesta confiar en la declaracion, escrito para que nadie lo redescubra.
 
-    The declaration answers "which columns", and that is still what spares the columns read.
-    It cannot answer "is the file there now": trusting it for presence meant a client whose
-    files had not arrived was still offered every analysis, and the suggestion buttons handed
-    the user questions that could not run. Presence is a cached `stat`, so this costs one
-    filesystem call per dataset rather than a read.
+    El JSON responde que datasets tiene un cliente y con que columnas, y se le cree: abrir una
+    sesion no mira el disco. Un archivo declarado que nunca sincronizo se anuncia igual.
 
-    Opening a session still does not fail - the capability is simply withdrawn - and reading
-    the file anyway still says which file was expected and where.
+    Lo que sostiene la decision es que el fallo llega cuando alguien usa la fuente, con un
+    error que nombra el archivo y donde se esperaba - no con un 500 opaco. Este test fija las
+    dos mitades del trato: se anuncia, y revienta de forma legible al leerlo.
     """
     import src.campbell_ai.data as data_module
     import src.campbell_ai.schema as schema_module
@@ -1689,22 +1874,23 @@ def test_a_declared_dataset_that_never_arrived_is_reported_absent_and_fails_on_r
             }
         },
     )
+    # La declaracion se fija a mano, asi que tambien hay que fijar la ventana de
+    # frescura: `_load` re-mira los candidatos en disco pasado un minuto y pisaria esto.
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
     repo._probe_cache.clear()
 
-    # La validacion comprueba la presencia: el dataset no cuenta como disponible.
+    # La validacion confia en la declaracion: el dataset se da por presente y valido.
     item = repo.validate_client("cda")["datasets"]["maintenance_actions"]
-    assert item["exists"] is False
-    assert item["valid"] is False
-    assert item["presence"] == "declared_but_unusable"
-    assert item["usability"] == "ausente"
-    # Las columnas siguen viniendo de la declaracion, sin abrir el archivo.
+    assert item["exists"] is True
+    assert item["presence"] == "declared"
+    # `valid` sigue saliendo de comparar las columnas declaradas contra las que el dataset
+    # exige - en memoria, sin tocar el archivo. Lo que ya no se comprueba es la presencia.
+    assert "missing_columns" in item
+    # Las columnas vienen de la declaracion, sin abrir el archivo.
     assert item["columns"] == ["machine_code", "action_type_name"]
 
-    # Y la capacidad que depende de el deja de anunciarse.
-    capacidades = repo.client_capabilities("cda")
-    assert "maintenance" not in {item["key"] for item in capacidades["available"]}
-
-    # Y al leerlo de verdad, falla con un mensaje que sirve para actuar.
+    # Y al leerlo de verdad, falla con un mensaje que sirve para actuar. Esta es la mitad del
+    # trato que sostiene la otra: se confia sin mirar, pero el fallo es legible.
     with pytest.raises(CampbellDataError) as fallo:
         repo.load("maintenance_actions", "cda")
     mensaje = str(fallo.value)
@@ -1732,3 +1918,56 @@ def test_capabilities_does_not_revalidate_when_the_caller_already_did(dataset_ro
     # Sin recibirla, la calcula: el parametro es una optimizacion, no un requisito.
     repo.client_capabilities("cda")
     assert llamadas["n"] == 1
+
+def test_opening_a_session_does_not_touch_the_filesystem(dataset_root, monkeypatch):
+    """A budget, because this regressed twice.
+
+    Validation is the phase the badge calls "Leyendo datos", and it runs on every session
+    opening. Twice now a change has put per-dataset filesystem work back into it - first the
+    row count, then a usability check - and both times the symptom in the deployment was the
+    same: the chat sat on "Leyendo datos" while the API stat-ed and opened files over network
+    storage, where each touch is a round trip.
+
+    So the contract is stated as a number rather than as prose: for a client whose datasets
+    are all declared, opening a session opens no files and performs at most two `stat` calls -
+    the service configuration and the data manifest, neither of them per dataset.
+
+    If this fails, the question is not "can the budget go up" but "what is this work doing on
+    the request path". The declaration exists precisely so that nothing here has to look.
+    """
+    import src.campbell_ai.data as data_module
+
+    repo = _repo(dataset_root)
+    paths = []
+    for spec in data_module.DATASETS:
+        try:
+            path = repo.dataset_path(spec.key, "cda")
+        except Exception:
+            continue
+        paths.append(path)
+
+    assert paths, "el fixture debe traer rutas"
+    repo.validate_client("cda")  # calienta rutas y sondeos
+
+    contador = Counter()
+    originales = {name: getattr(Path, name) for name in ("stat", "exists", "open", "is_file")}
+
+    def espia(nombre, funcion):
+        def envuelto(self, *args, **kwargs):
+            contador[nombre] += 1
+            return funcion(self, *args, **kwargs)
+        return envuelto
+
+    for nombre, funcion in originales.items():
+        monkeypatch.setattr(Path, nombre, espia(nombre, funcion))
+
+    repo.validate_client("cda")
+
+    assert contador["open"] == 0, f"abrir una sesion no debe abrir archivos: {dict(contador)}"
+    assert contador["is_file"] == 0, dict(contador)
+    assert contador["exists"] == 0, dict(contador)
+    assert contador["stat"] <= 2, (
+        f"presupuesto de dos stat por apertura de sesion - la configuracion de servicios y "
+        f"el manifest -, se hicieron {contador['stat']}: {dict(contador)}"
+    )
+

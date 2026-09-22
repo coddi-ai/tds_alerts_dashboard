@@ -464,6 +464,30 @@ def client_service_enabled(client: str, service_id: str) -> bool:
         return False
 
 
+def enabled_services(client: str) -> Optional[frozenset[str]]:
+    """Every service this client has switched on, in one lookup. ``None`` if unreadable.
+
+    `client_service_enabled` answers the same question for one service, but each call
+    re-checks the configuration file's mtime to pick up edits - so asking it once per
+    capability cost thirteen `stat` calls on every session opening, against a file that is the
+    same for all thirteen. Fetching the set once and testing membership in memory is the same
+    authorization with one filesystem touch.
+
+    ``None`` rather than an empty set when the configuration cannot be read, because the two
+    mean opposite things: "nothing is enabled" is an answer, "we do not know" must deny
+    without being mistaken for one.
+    """
+    try:
+        from config.client_services import get_enabled_services
+
+        return frozenset(get_enabled_services(normalize_client_id(client)))
+    except Exception:
+        logger.warning(
+            "Campbell AI no pudo leer los servicios habilitados de %s", client, exc_info=True
+        )
+        return None
+
+
 def predictive_module_allows(client: str) -> bool:
     """Honour the dashboard's Predictive module allowlist for the requested client.
 
@@ -517,121 +541,12 @@ DEFAULT_FRAME_CACHE_MB = 192
 #
 # Checking existence alone was not enough either. A zero-byte or truncated parquet exists, so
 # the capability was still announced and the tool then failed with
-# `ArrowInvalid: Parquet file size is 0 bytes`. "Present" and "usable" are different questions
-# and the second one is what a capability actually promises.
-#
-# So: reject anything that is not a regular non-empty file, then read its *header* (a parquet
-# footer, a CSV first line) - never the whole file, which is the read the earlier optimization
-# was right to avoid. The answer is memoized per file generation `(path, mtime, size)`, so it
-# is paid once per version and a replaced file invalidates itself. A short TTL on top bounds
-# how long a *deleted* file keeps its cached answer, since a missing file has no mtime to key
-# on. Registered with CACHES so a reclaim and `/diagnostics` can see and drop it.
-_PRESENCE_TTL_SECONDS = 30.0
-_PRESENCE_CACHE: dict[str, tuple[float, tuple, dict[str, Any]]] = {}
-_PRESENCE_LOCK = threading.Lock()
-_PRESENCE_MAX_ENTRIES = 256
-
-USABILITY_MISSING = "ausente"
-USABILITY_EMPTY = "vacio"
-USABILITY_UNREADABLE = "ilegible"
-USABILITY_OK = "utilizable"
-
-
-def clear_presence_cache() -> int:
-    """Forget cached usability answers. Returns how many were dropped."""
-    with _PRESENCE_LOCK:
-        dropped = len(_PRESENCE_CACHE)
-        _PRESENCE_CACHE.clear()
-    return dropped
-
-
-def presence_cache_stats() -> dict[str, Any]:
-    with _PRESENCE_LOCK:
-        return {"entries": len(_PRESENCE_CACHE), "ttl_seconds": _PRESENCE_TTL_SECONDS}
-
-
-def _read_header_columns(path: Path) -> list[str]:
-    """Column names from the file header, without materializing it. Set by the repository."""
-    from src.campbell_ai.data import DashboardDataRepository
-
-    return DashboardDataRepository.read_columns(path)
-
-
-def dataset_usability(path: Path) -> dict[str, Any]:
-    """Is this dataset present, non-empty and readable? Cached per file generation.
-
-    Returns ``{"usable", "state", "columns", "size_bytes", "checked_at"}``. ``columns`` is the
-    real header, so a caller can check required columns against the file rather than against
-    a declaration that may predate it.
-    """
-    key = str(path)
-    now = time.monotonic()
-    try:
-        stat = path.stat()
-        generation: tuple = (stat.st_mtime_ns, stat.st_size, stat.st_mode)
-    except OSError:
-        generation = ()
-
-    with _PRESENCE_LOCK:
-        cached = _PRESENCE_CACHE.get(key)
-        if cached is not None:
-            stored_at, stored_generation, answer = cached
-            fresh_enough = now - stored_at < _PRESENCE_TTL_SECONDS
-            # A live file is trusted for as long as its generation is unchanged; an absent one
-            # has no generation, so only the TTL bounds it.
-            if stored_generation == generation and (generation or fresh_enough):
-                return answer
-
-    answer: dict[str, Any] = {
-        "usable": False,
-        "state": USABILITY_MISSING,
-        "columns": [],
-        "size_bytes": None,
-        "checked_at": _iso_now(),
-    }
-    if generation:
-        try:
-            is_file = path.is_file()
-        except OSError:
-            is_file = False
-        answer["size_bytes"] = generation[1]
-        if not is_file:
-            answer["state"] = USABILITY_MISSING
-        elif generation[1] <= 0:
-            # Exists and is empty: every reader fails on it, so it is not a source.
-            answer["state"] = USABILITY_EMPTY
-        else:
-            try:
-                answer["columns"] = [
-                    str(column) for column in _read_header_columns(path)
-                ]
-                answer["usable"] = True
-                answer["state"] = USABILITY_OK
-            except Exception:
-                # Truncated, corrupt, or a format the reader cannot open. Reported as
-                # unusable rather than allowed to surface mid-answer.
-                logger.warning("Campbell AI no pudo leer la cabecera de %s", path.name)
-                answer["state"] = USABILITY_UNREADABLE
-
-    with _PRESENCE_LOCK:
-        if len(_PRESENCE_CACHE) >= _PRESENCE_MAX_ENTRIES:
-            _PRESENCE_CACHE.clear()
-        _PRESENCE_CACHE[key] = (now, generation, answer)
-    return answer
-
-
-def dataset_is_present(path: Path) -> bool:
-    """Kept for callers that only ask the narrower question."""
-    return bool(dataset_usability(path)["usable"])
-
-
 def _iso_now() -> str:
     from datetime import datetime, timezone as _timezone
 
     return datetime.now(_timezone.utc).isoformat(timespec="seconds")
 
 
-CACHES.register("campbell_ai.dataset_presence", clear_presence_cache, presence_cache_stats)
 
 
 # Probes are two small lists; the cap only exists so a long-lived process cannot
@@ -797,6 +712,8 @@ class DashboardDataRepository:
         # Resolved dataset paths, per (dataset, client). Bounded by the catalogue: eleven
         # datasets times the clients this process serves.
         self._path_cache: dict[tuple[str, str], Path] = {}
+        # Parsed manifest status, against the generation of the file it came from.
+        self._manifest_cache: Optional[tuple[tuple, dict[str, Any]]] = None
         self.timezone = timezone or DEFAULT_TIMEZONE
         # Both caches are injection points for tests that need isolation (or a tiny
         # budget to exercise eviction) without touching the process-wide ones.
@@ -860,12 +777,26 @@ class DashboardDataRepository:
         if cached is not None:
             return cached.copy(deep=False)
 
-        if path.suffix.lower() == ".csv":
-            frame = pd.read_csv(path, low_memory=False)
-        elif path.suffix.lower() == ".parquet":
-            frame = pd.read_parquet(path)
-        else:
-            raise CampbellDataError(f"Formato no soportado: {path.suffix}")
+        # Un fallo de lectura se traduce, no se deja escapar. Ahora que la validacion confia
+        # en la declaracion y no comprueba los archivos, esta es la unica vez que alguien mira
+        # de verdad - y un archivo truncado, vacio o corrupto lanza el error de la libreria
+        # (`ArrowInvalid: Parquet file size is 0 bytes`), que la API convierte en un 500 sin
+        # explicacion. Traducido, es un 503 que nombra el archivo y dice que revisar.
+        try:
+            if path.suffix.lower() == ".csv":
+                frame = pd.read_csv(path, low_memory=False)
+            elif path.suffix.lower() == ".parquet":
+                frame = pd.read_parquet(path)
+            else:
+                raise CampbellDataError(f"Formato no soportado: {path.suffix}")
+        except CampbellDataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo del lector es el mismo hecho
+            logger.warning("Campbell AI no pudo leer %s", path, exc_info=True)
+            raise CampbellDataError(
+                f"La fuente {path.name} existe pero no se pudo leer "
+                f"({type(exc).__name__}). Puede estar vacia, truncada o a medio sincronizar."
+            ) from exc
 
         # Retire the previous generation of this file before inserting the new one, so a
         # re-synced dataset does not keep its stale copy resident until LRU pressure
@@ -1043,30 +974,39 @@ class DashboardDataRepository:
         return missing
 
     def _manifest_status(self) -> dict[str, Any]:
-        """Whether the data manifest is present and parseable.
+        """Whether the data manifest is present and parseable, cached per file generation.
 
-        One filesystem touch, not three. It used to ask `exists()` twice for the same question
-        and then read - and this runs on every session opening, where the whole point of the
-        declared schema is that opening a session touches almost nothing. Reading and letting
-        the absence raise answers presence and validity in a single operation.
+        Read and parsed at most once per version of the file. It used to be read on every
+        session opening - one `open` plus a JSON parse - which is the same class of work the
+        declared schema removed for the datasets: the manifest changes when the data syncs,
+        not when somebody opens a chat. A `stat` is enough to notice that it moved.
         """
         manifest_path = self.data_root / "auxiliar" / "manifest.json"
+        try:
+            stat = manifest_path.stat()
+            generation: tuple = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            generation = ()
+
+        cached = self._manifest_cache
+        if cached is not None and cached[0] == generation:
+            return dict(cached[1])
+
         status: dict[str, Any] = {
             "path": str(manifest_path),
             "exists": False,
             "valid": False,
         }
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return status
-        except (OSError, json.JSONDecodeError):
-            # Present but unreadable or malformed: a different fact from absent, and the
-            # caller distinguishes them.
+        if generation:
             status["exists"] = True
-            return status
-        status["exists"] = True
-        status["valid"] = isinstance(payload, dict)
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                # Present but unreadable or malformed: a different fact from absent, and the
+                # caller distinguishes them.
+                payload = None
+            status["valid"] = isinstance(payload, dict)
+        self._manifest_cache = (generation, dict(status))
         return status
 
     def validate_client(self, client: str) -> dict[str, Any]:
@@ -1076,20 +1016,19 @@ class DashboardDataRepository:
         for spec in DATASETS:
             path = self.dataset_path(spec.key, normalized_client)
 
-            # The declaration supplies the columns; the file itself decides validity.
+            # La declaracion es la fuente de verdad: que datasets tiene este cliente y con
+            # que columnas. Si el JSON lo declara, se asume presente y no se toca el disco.
             #
-            # The history here matters, because this line has moved twice. Validation once
-            # read every file, including row counts - 93 filesystem operations and 67 MB of
-            # CSV to open a chat. That was replaced by trusting the declaration entirely,
-            # which fixed the latency and introduced a different fault: a client whose files
-            # had not synced still advertised every analysis, and the suggestion buttons
-            # handed the user questions that could not run.
+            # Esta linea se movio tres veces y la historia explica la eleccion. Primero la
+            # validacion leia cada archivo, conteo de filas incluido: 93 operaciones de disco
+            # y 67 MB de CSV para abrir un chat. Se reemplazo por confiar en la declaracion,
+            # lo que arreglo la latencia. El intento siguiente comprobaba usabilidad archivo
+            # por archivo para no anunciar analisis sobre data que no habia sincronizado, y
+            # eso devolvio el costo al camino de la sesion - 28 operaciones por apertura.
             #
-            # What stands now is the middle: no full reads, but a cached check of whether the
-            # file is a real non-empty file whose header opens (`dataset_usability`, memoized
-            # per `(path, mtime, size)`). One header read per file *version*, not per session.
-            # The declaration is still what spares re-deriving columns for the payload, and
-            # `verify_against_disk` still audits declaration against disk for `/diagnostics`.
+            # Queda lo primero, a sabiendas. Un archivo declarado que no llego no se detecta
+            # aca: aparece al leerlo, con el error explicito de `_read_frame`, y la auditoria
+            # de fondo lo reporta en `/diagnostics` sin bloquear a nadie.
             declared = declared_columns(normalized_client, spec.key, path.suffix)
             if declared is not None:
                 # The declaration answers "which columns are expected", never "is this file
@@ -1097,21 +1036,15 @@ class DashboardDataRepository:
                 # empty, header readable - and the required columns are then checked against
                 # that header, so a source whose schema changed under the declaration stops
                 # being advertised instead of failing mid-answer.
-                usability = dataset_usability(path)
-                columns_on_disk = usability.get("columns") or []
-                missing = self._validate_columns(
-                    columns_on_disk if usability["usable"] else declared, spec
-                )
-                if not missing and usability["usable"]:
+                missing = self._validate_columns(declared, spec)
+                if not missing:
                     available_count += 1
                 datasets[spec.key] = {
                     "label": spec.label,
                     "path": str(path),
-                    "exists": bool(usability["usable"]),
-                    "valid": bool(usability["usable"] and not missing),
+                    "exists": True,
+                    "valid": not missing,
                     "missing_columns": missing,
-                    "usability": usability["state"],
-                    "checked_at": usability.get("checked_at"),
                     # Unknown without touching the file, and deliberately not guessed. Both
                     # are informational; `describe_dataset` reads the real numbers on demand.
                     "rows": None,
@@ -1119,20 +1052,20 @@ class DashboardDataRepository:
                     "size_mb": None,
                     "columns": declared,
                     # Columns reported from the declaration; validity judged on the file.
-                    "presence": (
-                        "declared" if usability["usable"] else "declared_but_unusable"
-                    ),
+                    "presence": "declared",
                 }
                 continue
 
+            # No declarado para este cliente, asi que no hay nada en que confiar: se mira.
+            # Es el unico caso que toca disco, y solo alcanza a clientes con declaracion
+            # parcial. No se cachea el negativo: un dataset que empieza a llegar quedaria sin
+            # descubrirse hasta regenerar el JSON.
             item: dict[str, Any] = {
                 "label": spec.label,
                 "path": str(path),
                 "exists": path.exists(),
                 "valid": False,
                 "missing_columns": [],
-                # Not declared for this client, so presence was actually checked. A new client
-                # or a dataset added since the declaration was generated lands here.
                 "presence": "checked",
             }
             if item["exists"]:
@@ -2003,7 +1936,16 @@ class DashboardDataRepository:
         # capabilities microseconds later; recomputing here doubled the whole pass.
         validation = validation or self.validate_client(normalized)
         datasets = validation["datasets"]
-        predictive_allowed = predictive_module_allows(normalized)
+        # Fetched once for the whole pass: see `enabled_services`.
+        available_services = enabled_services(normalized)
+        # Derived from the same set instead of asking the configuration again. Falls back to
+        # the dedicated helper only when the set is unavailable, which is also where the
+        # older settings-based shape is still honoured.
+        predictive_allowed = (
+            any(service.startswith("predictive-") for service in available_services)
+            if available_services is not None
+            else predictive_module_allows(normalized)
+        )
 
         available: list[dict[str, Any]] = []
         unavailable: list[dict[str, Any]] = []
@@ -2029,7 +1971,11 @@ class DashboardDataRepository:
             blocked_services = [
                 service
                 for service in capability.requires_services
-                if not client_service_enabled(normalized, service)
+                # `available_services` is None when the configuration could not be read, and
+                # then every service is treated as blocked - denying is the safe direction:
+                # offering an analysis the company switched off is the failure being
+                # prevented, while the opposite only costs a suggestion.
+                if available_services is None or service not in available_services
             ]
             entry = {
                 "key": capability.key,
@@ -2063,16 +2009,14 @@ class DashboardDataRepository:
         # When the sources behind these capabilities were last looked at. Reported rather
         # than implied: a stored capability payload is a snapshot, and a reader has to be able
         # to tell how old it is instead of assuming it is current.
-        checked = [
-            entry.get("checked_at")
-            for entry in datasets.values()
-            if isinstance(entry, dict) and entry.get("checked_at")
-        ]
         return {
             "company_id": normalized,
             "available": available,
             "unavailable": unavailable,
-            "sources_checked_at": max(checked) if checked else None,
+            # Cuando se armo este payload, no cuando se miro cada archivo: la validacion ya
+            # no consulta el disco. Sigue respondiendo lo que el campo promete - que edad
+            # tiene esta instantanea - sin sugerir una verificacion que no ocurrio.
+            "sources_checked_at": _iso_now(),
             "techniques": {
                 "alertas": any(item["key"].startswith("alert") for item in available),
                 "aceite": any(item["key"].startswith("oil") for item in available),

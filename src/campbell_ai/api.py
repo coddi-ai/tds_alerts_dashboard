@@ -57,7 +57,7 @@ from src.campbell_ai.log_archive import (
 )
 from src.campbell_ai.logging_setup import configure_api_logging
 from src.campbell_ai.resources import reclaim
-from src.campbell_ai.schema import start_schema_verification
+from src.campbell_ai.schema import start_schema_verification, stop_schema_verification
 from src.campbell_ai import progress
 
 
@@ -221,6 +221,7 @@ async def stop_background_maintenance() -> None:
     if _JOB_PRUNER is not None:
         _JOB_PRUNER.cancel()
         _JOB_PRUNER = None
+    stop_schema_verification()
     reset_janitor()
     reset_log_archiver()
 
