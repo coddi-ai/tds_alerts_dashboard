@@ -481,6 +481,7 @@ class MaintenanceRepository:
         self._parquet_actions_cache = None
         self._parquet_records_cache = None
         self._parquet_kpis_cache = None
+        self._fleet_catalog_cache = None
 
     def _actions_source_state(self) -> tuple[str, str | None]:
         """Classify the action source without turning failures into empty data."""

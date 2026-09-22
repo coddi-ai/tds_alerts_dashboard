@@ -198,6 +198,21 @@ def test_fleet_filter_uses_tribologia_catalog_for_emin(monkeypatch):
     assert payload["kpis"]["actions"] == 4
 
 
+def test_refresh_invalidates_tribologia_fleet_catalog(monkeypatch):
+    catalogs = iter(
+        [
+            pd.DataFrame([{"unitId": "T_01", "machineName": "camion"}]),
+            pd.DataFrame([{"unitId": "T_01", "machineName": "excavadora"}]),
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_oil_classified", lambda client: next(catalogs).copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    assert repo._fleet_for_machine_code("T_01") == "camion"
+    repo.refresh()
+    assert repo._fleet_for_machine_code("T_01") == "excavadora"
+
+
 def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
     frame = _actions().copy()
     frame.loc[frame["action_id"] == "a3", ["machine_code", "action_system_name"]] = ["T_02", "Sistema de Motor"]
