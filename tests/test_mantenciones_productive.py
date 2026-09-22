@@ -7,7 +7,10 @@ import pytest
 
 from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 from src.data import maintenance_repository as repository_module
-from src.data.loaders import load_maintenance_actions_all_equipment, load_maintenance_unit_records_actions
+from src.data.loaders import (
+    load_maintenance_actions_all_equipment,
+    load_maintenance_unit_records_actions,
+)
 from src.data.maintenance_repository import MaintenanceRepository
 
 
@@ -42,6 +45,80 @@ def test_record_loader_normalizes_source_interval_timestamps(tmp_path):
     assert str(loaded["first_event_ts"].dtype).endswith(", UTC]")
     assert str(loaded["last_event_ts"].dtype).endswith(", UTC]")
     assert loaded["last_event_ts"].notna().all()
+
+
+def test_reliability_payload_preserves_missing_metrics_and_low_confidence(monkeypatch):
+    reliability = pd.DataFrame(
+        [
+            {
+                "source_system": "EMIN",
+                "machine_id": "m1",
+                "machine_code": "BULL-022",
+                "year_month": "2026-01",
+                "n_failures": 1,
+                "mttr_hours": 4.0,
+                "total_downtime_hours": 4.0,
+                "n_mtbf_intervals": 1,
+                "mtbf_hours": float("nan"),
+                "mttf_hours": float("nan"),
+                "low_confidence": True,
+            },
+            {
+                "source_system": "EMIN",
+                "machine_id": "m2",
+                "machine_code": "BULL-024",
+                "year_month": "2026-01",
+                "n_failures": 4,
+                "mttr_hours": 2.5,
+                "total_downtime_hours": 10.0,
+                "n_mtbf_intervals": 3,
+                "mtbf_hours": 20.0,
+                "mttf_hours": 17.5,
+                "low_confidence": False,
+            },
+        ]
+    )
+    components = pd.DataFrame(
+        [
+            {"source_system": "EMIN", "machine_id": "m2", "machine_code": "BULL-024", "component_id": "c2", "component_name": "Motor", "n_failure_records": 3, "n_failure_actions": 5},
+            {"source_system": "EMIN", "machine_id": "m1", "machine_code": "BULL-022", "component_id": "c1", "component_name": "Bomba", "n_failure_records": 1, "n_failure_actions": 2},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: _actions())
+    monkeypatch.setattr(repository_module, "load_maintenance_unit_records_actions", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: reliability.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_component_failure_ranking", lambda client: components.copy())
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+
+    payload = repo.get_reliability_payload("2026-01")
+
+    assert payload["status"] == "ok"
+    assert payload["meta"]["low_confidence_rows"] == 1
+    assert payload["data"]["monthly"][0]["mtbf_hours"] is None
+    assert payload["data"]["monthly"][0]["mttf_hours"] is None
+    assert payload["data"]["components"][0]["component_name"] == "Motor"
+    assert json.dumps(payload, allow_nan=False)
+
+
+def test_reliability_charts_mark_low_confidence_without_imputing_nan():
+    from dashboard.tabs.tab_mantenciones_general import (
+        create_reliability_mtbf_mttf_chart,
+        create_reliability_mttr_downtime_chart,
+    )
+
+    frame = pd.DataFrame(
+        [
+            {"year_month": "2026-01", "machine_code": "BULL-022", "mtbf_hours": None, "mttf_hours": None, "mttr_hours": 4.0, "total_downtime_hours": 4.0, "low_confidence": True},
+            {"year_month": "2026-02", "machine_code": "BULL-022", "mtbf_hours": 20.0, "mttf_hours": 17.0, "mttr_hours": 3.0, "total_downtime_hours": 3.0, "low_confidence": False},
+        ]
+    )
+    mtbf_mttf = create_reliability_mtbf_mttf_chart(frame)
+    mttr_downtime = create_reliability_mttr_downtime_chart(frame)
+
+    assert any(trace.marker.symbol == "diamond-open" for trace in mtbf_mttf.data if hasattr(trace, "marker")) or any(annotation.text == "⚠" for annotation in (mtbf_mttf.layout.annotations or []))
+    assert any(getattr(trace.marker, "symbol", None) == "diamond-open" for trace in mttr_downtime.data if hasattr(trace, "marker"))
+    assert all(value is not None for trace in mtbf_mttf.data for value in (trace.y or []) if value is not None)
 
 
 def test_monthly_payload_counts_actions_not_inferred_failures(monkeypatch):
@@ -472,6 +549,10 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-summary-fleet" in rendered
     assert "maintenance-summary-detail-table" in rendered
     assert rendered.index("Indicadores de Interés") < rendered.index("maintenance-summary-detail-table")
+    assert "maintenance-chart-reliability-mtbf-mttf" in rendered
+    assert "maintenance-chart-reliability-mttr-downtime" in rendered
+    assert "maintenance-reliability-components-table" in rendered
+    assert "maintenance-reliability-equipment" in rendered
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered

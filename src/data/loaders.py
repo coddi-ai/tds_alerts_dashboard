@@ -1685,3 +1685,57 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
     except Exception as e:
         logger.error(f"Error loading business KPIs: {e}")
         return pd.DataFrame()
+
+
+def _load_maintenance_view(
+    client: str,
+    filename: str,
+    base_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Read one optional materialized maintenance view defensively.
+
+    Query 5 and query 6 are additive sources. A missing or unreadable view
+    must not make the activity-based Mantenciones page fail, so callers receive
+    an empty frame and the repository exposes the source state separately.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+    if base_path is None:
+        return pd.DataFrame()
+    file_path = base_path / filename
+    try:
+        logger.info("Loading maintenance view from %s", file_path)
+        return pd.read_parquet(file_path)
+    except FileNotFoundError:
+        logger.info("Optional maintenance view not found: %s", file_path)
+        return pd.DataFrame()
+    except Exception as exc:
+        logger.error("Error loading maintenance view %s: %s", file_path, exc)
+        return pd.DataFrame()
+
+
+def load_maintenance_reliability_monthly(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the monthly reliability view (query 5).
+
+    The source grain is one ``machine_id`` × ``year_month``. NaN reliability
+    metrics are intentionally preserved: they mean that the source did not
+    have enough observations for that machine-month.
+    """
+    return _load_maintenance_view(
+        client,
+        "query_5_reliability_monthly.parquet",
+        base_path=base_path,
+    )
+
+
+def load_maintenance_component_failure_ranking(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the accumulated component failure ranking (query 6)."""
+    return _load_maintenance_view(
+        client,
+        "query_6_component_failure_ranking.parquet",
+        base_path=base_path,
+    )

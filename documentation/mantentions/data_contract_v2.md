@@ -2,11 +2,15 @@
 
 **Fecha:** 12 de Marzo 2026  
 **Versión:** 2.0  
-**Actualización:** Migración a `query_3_actions_all_equipment.parquet` y `query_4_business_kpis.parquet`
+**Actualización:** Migración a `query_3_actions_all_equipment.parquet`, `query_4_business_kpis.parquet` y vistas de confiabilidad `query_5`/`query_6`.
 
 ---
 
 ## 📊 Archivos Parquet Requeridos
+
+Las vistas de confiabilidad son fuentes adicionales. Su ausencia deja la
+sección de confiabilidad en estado explícito `empty`/`partial`; no invalida la
+actividad de Mantenciones.
 
 ### 1. `query_3_actions_all_equipment.parquet` - Acciones de Mantenimiento Detalladas
 
@@ -93,6 +97,25 @@
 | `repairs_70d` | int64 | Reparaciones en 70 días | `4`, `2` |
 | `maintenances_70d` | int64 | Mantenimientos en 70 días | `12`, `8` |
 | `reference_date` | datetime64[us] | Fecha de referencia del cálculo | `2026-01-22 10:10:00` |
+
+### 3. `query_5_reliability_monthly.parquet` - Confiabilidad mensual
+
+**Grano:** una fila por `machine_id × year_month`.
+
+Incluye `source_system`, `machine_id`, `machine_code`, `year_month`,
+`n_failures`, `mttr_hours`, `total_downtime_hours`, `n_mtbf_intervals`,
+`mtbf_hours`, `mttf_hours` y `low_confidence`. Los valores nulos de métricas
+son datos insuficientes para ese equipo-mes y no se convierten a cero. Una fila
+con `low_confidence=true` se conserva y se marca visualmente cuando
+`n_mtbf_intervals < 3`.
+
+### 4. `query_6_component_failure_ranking.parquet` - Ranking acumulado
+
+**Grano:** componente por equipo y fuente, acumulado histórico; no es una
+serie temporal. Incluye `source_system`, `machine_id`, `machine_code`,
+`component_id`, `component_name`, `n_failure_records` y
+`n_failure_actions`. La pestaña lo presenta como ranking filtrable por equipo,
+sin interpretarlo como una tasa mensual.
 
 **Valores Únicos:**
 - **machine_code:** 11 máquinas (`t09`, `t10`, `t11`, `t12`, `t14`, `t15`, `t16`, `t17`, `t18`, `t24`, + 1 más)
@@ -315,7 +338,9 @@ data/
         └── {client}/                          # ej: "cda"
             └── Maintance_Labeler_Views/
                 ├── query_3_actions_all_equipment.parquet  # 659 acciones
-                └── query_4_business_kpis.parquet          # 11 máquinas con KPIs
+                ├── query_4_business_kpis.parquet          # 11 máquinas con KPIs
+                ├── query_5_reliability_monthly.parquet    # confiabilidad por equipo-mes
+                └── query_6_component_failure_ranking.parquet # ranking histórico de fallas
 ```
 
 ### Estructura de Desarrollo (Fallback)

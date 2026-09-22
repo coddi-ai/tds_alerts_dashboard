@@ -55,6 +55,25 @@ su ventana de referencia y, cuando corresponde, la razón por la que no están
 disponibles para un filtro;
 estos detalles técnicos no se muestran en la cabecera ejecutiva.
 
+### Confiabilidad mensual y fallas por componente
+
+La sección **Confiabilidad mensual** usa el cliente activo del selector global
+como `source_system` (EMIN, CAPSTONE o CDA) y consume las vistas materializadas
+adicionales:
+
+- `query_5_reliability_monthly.parquet`: una fila por `machine_id × year_month`.
+  Alimenta las series de MTBF, MTTF, MTTR y `total_downtime_hours`; el filtro de
+  equipo usa `machine_code`.
+- `query_6_component_failure_ranking.parquet`: ranking histórico acumulado de
+  componentes asociados a fallas. No se interpreta como una serie mensual.
+
+Los valores nulos de MTBF, MTTF o MTTR se mantienen como ausencia de dato
+suficiente para ese equipo-mes. Las filas con `low_confidence=true` se marcan
+con una línea/leyenda visual de baja confianza y tooltip de advertencia; nunca
+se eliminan ni se imputan. Si una vista aún no está descargada, la sección
+queda en estado vacío o parcial explícito y el resto de la pestaña continúa
+operativo.
+
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
 Mantenciones usan glifos Unicode locales con etiquetas accesibles. Los textos,

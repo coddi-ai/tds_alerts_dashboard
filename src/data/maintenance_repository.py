@@ -18,6 +18,8 @@ from src.data.loaders import (
     load_maintenance_actions_all_equipment,
     load_maintenance_unit_records_actions,
     load_business_kpis,
+    load_maintenance_reliability_monthly,
+    load_maintenance_component_failure_ranking,
     load_oil_classified,
     list_maintenance_weeks,
     load_maintenance_week,
@@ -249,6 +251,8 @@ class MaintenanceRepository:
         self._parquet_actions_cache = None
         self._parquet_records_cache = None
         self._parquet_kpis_cache = None
+        self._parquet_reliability_cache = None
+        self._parquet_component_failures_cache = None
         self._fleet_catalog_cache = None
 
     def _get_parquet_actions(self):
@@ -293,6 +297,31 @@ class MaintenanceRepository:
                     )
             self._parquet_records_cache = frame
         return self._parquet_records_cache
+
+    def _get_parquet_reliability(self):
+        """Load query 5 only once per repository instance."""
+        if self._parquet_reliability_cache is None:
+            logger.info(
+                "Loading monthly reliability view from parquet for client: %s",
+                self.client,
+            )
+            frame = load_maintenance_reliability_monthly(client=self.client)
+            if "year_month" in frame.columns:
+                frame["year_month"] = frame["year_month"].astype("string").str.strip()
+            self._parquet_reliability_cache = frame
+        return self._parquet_reliability_cache
+
+    def _get_parquet_component_failures(self):
+        """Load query 6 only once per repository instance."""
+        if self._parquet_component_failures_cache is None:
+            logger.info(
+                "Loading component failure ranking from parquet for client: %s",
+                self.client,
+            )
+            self._parquet_component_failures_cache = load_maintenance_component_failure_ranking(
+                client=self.client
+            )
+        return self._parquet_component_failures_cache
         
     def _get_dummy_data(self):
         """Get or generate dummy data."""
@@ -308,6 +337,8 @@ class MaintenanceRepository:
                 "actions": self._get_parquet_actions(),
                 "records": self._get_parquet_records(),
                 "kpis": self._get_parquet_kpis(),
+                "reliability": self._get_parquet_reliability(),
+                "component_failures": self._get_parquet_component_failures(),
             }
         return self._parquet_cache
 
@@ -481,6 +512,8 @@ class MaintenanceRepository:
         self._parquet_actions_cache = None
         self._parquet_records_cache = None
         self._parquet_kpis_cache = None
+        self._parquet_reliability_cache = None
+        self._parquet_component_failures_cache = None
         self._fleet_catalog_cache = None
 
     def _actions_source_state(self) -> tuple[str, str | None]:
@@ -518,17 +551,42 @@ class MaintenanceRepository:
         raise NotImplementedError("Production mode not yet implemented")
 
     def get_available_months(self) -> List[str]:
-        """Return calendar months with valid action dates in YYYY-MM order."""
+        """Return months exposed by activity or the reliability view."""
         if self.mode != "parquet":
             if self.mode == "dummy":
                 df = self._get_dummy_data()["jobs"]
                 dates = pd.to_datetime(df.get("start_date"), errors="coerce")
                 return sorted(dates.dropna().dt.strftime("%Y-%m").unique().tolist())
             raise NotImplementedError("Production mode not yet implemented")
-        df = self._get_parquet_data()["actions"]
-        if df.empty or "change_date" not in df:
+        data = self._get_parquet_data()
+        months = set()
+        actions = data["actions"]
+        if not actions.empty and "change_date" in actions:
+            months.update(actions["change_date"].dropna().dt.strftime("%Y-%m").tolist())
+        reliability = data.get("reliability", pd.DataFrame())
+        if not reliability.empty and "source_system" in reliability.columns:
+            reliability = reliability[
+                reliability["source_system"].astype("string").str.upper().eq(self.client.upper())
+            ]
+        if not reliability.empty and "year_month" in reliability:
+            values = reliability["year_month"].astype("string").str.strip()
+            months.update(values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)].dropna().tolist())
+        return sorted(months)
+
+    def get_available_reliability_equipment(
+        self, period: Optional[str] = None
+    ) -> List[str]:
+        """Return machine codes present in query 5, optionally for one month."""
+        if self.mode != "parquet":
             return []
-        return sorted(df["change_date"].dropna().dt.strftime("%Y-%m").unique().tolist())
+        frame = self._get_parquet_data().get("reliability", pd.DataFrame())
+        if frame.empty or "machine_code" not in frame.columns:
+            return []
+        if "source_system" in frame.columns:
+            frame = frame[frame["source_system"].astype("string").str.upper().eq(self.client.upper())]
+        if period and "year_month" in frame.columns:
+            frame = frame[frame["year_month"].astype("string").eq(str(period))]
+        return sorted(frame["machine_code"].dropna().astype(str).unique().tolist())
 
     def get_available_weeks(self) -> List[str]:
         """Return weekly snapshot identifiers available for this client."""
@@ -567,6 +625,146 @@ class MaintenanceRepository:
         if frame.empty:
             return []
         return frame.astype(object).where(pd.notna(frame), None).to_dict("records")
+
+    def _optional_view_state(
+        self, filename: str, frame: pd.DataFrame
+    ) -> tuple[str, Optional[str]]:
+        """Describe an optional query-5/query-6 source without masking errors."""
+        if not frame.empty:
+            return "ok", None
+        root = _get_mantentions_data_path(self.client)
+        if root is None or not (root / filename).exists():
+            return "missing", f"No existe {filename}."
+        try:
+            probe = pd.read_parquet(root / filename)
+        except Exception as exc:
+            return "error", f"No se pudo leer {filename}: {exc}"
+        if probe.empty:
+            return "empty", f"{filename} está vacío."
+        return "error", f"{filename} no entregó registros utilizables."
+
+    def get_reliability_payload(
+        self,
+        period: Optional[str] = None,
+        equipment: Optional[List[str]] = None,
+        detail_limit: int = 250,
+    ) -> dict:
+        """Build the JSON contract for query 5 and query 6.
+
+        Query 5 is monthly and query 6 is an accumulated ranking. Missing
+        metric values remain ``null`` so the UI can communicate insufficient
+        observations instead of manufacturing zeros.
+        """
+        empty = {"monthly": [], "components": []}
+        if self.mode != "parquet":
+            return {
+                "status": "empty",
+                "meta": {"source_system": self.client.upper(), "reason": "La fuente de confiabilidad solo está disponible en parquet."},
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+
+        data = self._get_parquet_data()
+        monthly = data.get("reliability", pd.DataFrame()).copy()
+        components = data.get("component_failures", pd.DataFrame()).copy()
+        monthly_state, monthly_error = self._optional_view_state(
+            "query_5_reliability_monthly.parquet", monthly
+        )
+        components_state, components_error = self._optional_view_state(
+            "query_6_component_failure_ranking.parquet", components
+        )
+        if "error" in {monthly_state, components_state}:
+            return {
+                "status": "error",
+                "meta": {
+                    "source_system": self.client.upper(),
+                    "source_status": {"query_5": monthly_state, "query_6": components_state},
+                    "errors": [value for value in (monthly_error, components_error) if value],
+                },
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+        monthly_required = {
+            "source_system", "machine_id", "machine_code", "year_month",
+            "n_failures", "mttr_hours", "total_downtime_hours",
+            "n_mtbf_intervals", "mtbf_hours", "mttf_hours", "low_confidence",
+        }
+        component_required = {
+            "source_system", "machine_id", "machine_code", "component_id",
+            "component_name", "n_failure_records", "n_failure_actions",
+        }
+        missing_monthly = sorted(monthly_required.difference(monthly.columns)) if not monthly.empty else []
+        missing_components = sorted(component_required.difference(components.columns)) if not components.empty else []
+        if missing_monthly or missing_components:
+            return {
+                "status": "error",
+                "meta": {
+                    "source_system": self.client.upper(),
+                    "source_status": {"query_5": monthly_state, "query_6": components_state},
+                    "missing_columns": {"query_5": missing_monthly, "query_6": missing_components},
+                    "errors": [value for value in (monthly_error, components_error) if value],
+                },
+                "filters": {"period": period, "equipment": equipment or []},
+                "data": empty,
+            }
+
+        source_system = self.client.upper()
+        if "source_system" in monthly.columns:
+            monthly = monthly[monthly["source_system"].astype("string").str.upper().eq(source_system)]
+        if "source_system" in components.columns:
+            components = components[components["source_system"].astype("string").str.upper().eq(source_system)]
+        available_months = []
+        if not monthly.empty:
+            values = monthly["year_month"].astype("string").str.strip()
+            monthly["year_month"] = values
+            available_months = sorted(values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)].dropna().unique().tolist())
+        selected = period or (available_months[-1] if available_months else None)
+        selected_equipment = [str(value) for value in (equipment or []) if value not in (None, "", "__all__")]
+        if selected:
+            monthly = monthly[monthly["year_month"].eq(str(selected))]
+        if selected_equipment:
+            monthly = monthly[monthly["machine_code"].astype(str).isin(selected_equipment)]
+            if not components.empty:
+                components = components[components["machine_code"].astype(str).isin(selected_equipment)]
+        monthly_columns = [
+            "source_system", "machine_id", "machine_code", "year_month",
+            "n_failures", "mttr_hours", "total_downtime_hours",
+            "n_mtbf_intervals", "mtbf_hours", "mttf_hours", "low_confidence",
+        ]
+        component_columns = [
+            "source_system", "machine_id", "machine_code", "component_id",
+            "component_name", "n_failure_records", "n_failure_actions",
+        ]
+        monthly = monthly[monthly_columns].sort_values(
+            ["year_month", "machine_code"], kind="mergesort"
+        ) if not monthly.empty else monthly
+        components = components[component_columns].sort_values(
+            ["n_failure_records", "n_failure_actions", "component_name", "machine_code"],
+            ascending=[False, False, True, True],
+            kind="mergesort",
+        ).head(detail_limit) if not components.empty else components
+        status = "ok" if not monthly.empty and not components.empty else (
+            "partial" if not monthly.empty or not components.empty else "empty"
+        )
+        return {
+            "status": status,
+            "meta": {
+                "source_system": source_system,
+                "available_months": available_months,
+                "period": selected,
+                "source_status": {"query_5": monthly_state, "query_6": components_state},
+                "source": ["query_5_reliability_monthly.parquet", "query_6_component_failure_ranking.parquet"],
+                "low_confidence_rows": int(monthly["low_confidence"].fillna(False).astype(bool).sum()) if not monthly.empty else 0,
+                "monthly_rows": int(len(monthly)),
+                "component_rows": int(len(components)),
+                "errors": [value for value in (monthly_error, components_error) if value],
+            },
+            "filters": {"period": selected, "equipment": selected_equipment},
+            "data": {
+                "monthly": self._json_records(monthly),
+                "components": self._json_records(components),
+            },
+        }
 
     def _daily_out_of_service_hours(
         self,
