@@ -17,9 +17,6 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_empty_figure,
     create_equipment_activity_chart,
     create_equipment_pareto_chart,
-    create_component_failure_table,
-    create_reliability_mtbf_mttf_chart,
-    create_reliability_mttr_downtime_chart,
     create_system_activity_chart,
     create_week_summary_table,
     create_week_task_table,
@@ -45,7 +42,6 @@ def _empty_contract():
         "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
         "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
-        "reliability": {"status": "empty", "meta": {"source_system": None, "period": None}, "filters": {"period": None, "equipment": []}, "data": {"monthly": [], "components": []}},
     }
 
 
@@ -118,40 +114,6 @@ def _source_alert(meta: dict):
     )
 
 
-def _reliability_view_parts(payload: dict, selected_client: str | None = None):
-    """Return the five Dash values rendered by the reliability section."""
-    reliability = payload.get("reliability") or {}
-    meta = reliability.get("meta", {}) or {}
-    status = reliability.get("status", "empty")
-    source = str(meta.get("source_system") or selected_client or "").upper() or "—"
-    data = reliability.get("data", {}) or {}
-    monthly = pd.DataFrame(data.get("monthly", []))
-    components = data.get("components", []) or []
-    if status == "ok":
-        message = f"Query 5 y query 6 disponibles para {source}. Período: {meta.get('period') or '—'}."
-        low_count = meta.get("low_confidence_rows", 0)
-        if low_count:
-            message += f" {low_count} fila(s) están marcadas con confianza baja (menos de 3 intervalos MTBF)."
-        alert_class = "alert alert-info"
-    elif status == "partial":
-        message = "La vista de confiabilidad está parcialmente disponible; se muestra la fuente que sí entregó datos."
-        alert_class = "alert alert-warning"
-    elif status == "error":
-        errors = "; ".join(str(value) for value in (meta.get("errors") or []) if value)
-        message = f"No se pudo validar la vista de confiabilidad{': ' + errors if errors else '.'}"
-        alert_class = "alert alert-danger"
-    else:
-        message = "Las vistas nuevas de confiabilidad aún no están disponibles para esta fuente."
-        alert_class = "alert alert-warning"
-    return (
-        source,
-        html.Div(message, className=alert_class),
-        create_reliability_mtbf_mttf_chart(monthly),
-        create_reliability_mttr_downtime_chart(monthly),
-        create_component_failure_table(components),
-    )
-
-
 def register_mantenciones_general_callbacks(app):
     """Register all callbacks against the concrete Dash app instance."""
 
@@ -162,8 +124,6 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-month", "value"),
         Output("maintenance-summary-fleet", "options"),
         Output("maintenance-summary-fleet", "value"),
-        Output("maintenance-reliability-equipment", "options"),
-        Output("maintenance-reliability-equipment", "value"),
         Output("maintenance-week", "options"),
         Output("maintenance-week", "value"),
         Output("maintenance-week-equipment", "options"),
@@ -174,7 +134,7 @@ def register_mantenciones_general_callbacks(app):
     )
     def load_maintenance_metadata(client, n_clicks):
         if not client:
-            return {}, _source_alert({}), [], None, [], [], [], [], [], None, [], []
+            return {}, _source_alert({}), [], None, [], [], [], None, [], []
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
@@ -189,7 +149,6 @@ def register_mantenciones_general_callbacks(app):
                     "available_weeks": weeks,
                     "equipment": repo.get_available_equipment(),
                     "fleets": repo.get_available_fleets(),
-                    "reliability_equipment": repo.get_available_reliability_equipment(),
                     "systems": repo.get_available_systems(),
                     "subsystems": repo.get_available_subsystems(),
                 }
@@ -201,15 +160,13 @@ def register_mantenciones_general_callbacks(app):
                 months[-1] if months else None,
                 _options(meta["fleets"]),
                 [],
-                _options(meta["reliability_equipment"]),
-                [],
                 _options(weeks),
                 weeks[-1] if weeks else None,
                 _options(meta["equipment"]),
                 _options(meta["systems"]),
             )
         except Exception as exc:
-            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], [], [], [], [], None, [], []
+            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], [], [], None, [], []
 
 
     @app.callback(
@@ -267,11 +224,10 @@ def register_mantenciones_general_callbacks(app):
         Input("maintenance-activity-system", "value"),
         Input("maintenance-activity-subsystem", "value"),
         Input("maintenance-activity-equipment", "value"),
-        Input("maintenance-reliability-equipment", "value"),
         Input("btn-refresh-maintenance", "n_clicks"),
         prevent_initial_call=False,
     )
-    def load_monthly_payload(client, month, selected_fleets, summary_equipment, systems, subsystems, equipment, reliability_equipment, n_clicks):
+    def load_monthly_payload(client, month, selected_fleets, summary_equipment, systems, subsystems, equipment, n_clicks):
         if not client:
             return _empty_contract(), None
         try:
@@ -285,16 +241,6 @@ def register_mantenciones_general_callbacks(app):
                 equipment=selected_equipment,
                 subsystems=subsystems,
                 fleets=selected_fleets or None,
-            )
-            selected_reliability = [
-                value for value in (reliability_equipment or [])
-                if value not in (None, "", "__all__")
-            ]
-            if not selected_reliability and selected_equipment:
-                selected_reliability = selected_equipment
-            payload["reliability"] = repo.get_reliability_payload(
-                month,
-                equipment=selected_reliability or None,
             )
             return payload, datetime.now().isoformat()
         except Exception as exc:
@@ -328,11 +274,6 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-summary-detail-table", "children"),
         Output("maintenance-chart-pareto-title", "children"),
         Output("maintenance-chart-pareto-tren-fuerza-title", "children"),
-        Output("maintenance-reliability-source-label", "children"),
-        Output("maintenance-reliability-source-status", "children"),
-        Output("maintenance-chart-reliability-mtbf-mttf", "figure"),
-        Output("maintenance-chart-reliability-mttr-downtime", "figure"),
-        Output("maintenance-reliability-components-table", "children"),
         Input("maintenance-monthly-store", "data"),
     )
     def render_monthly_payload(payload):
@@ -344,18 +285,16 @@ def register_mantenciones_general_callbacks(app):
             message = payload.get("meta", {}).get("error", "Error desconocido")
             empty = create_empty_figure("Error al cargar datos")
             detail_message = html.P("No se pudo cargar el detalle.", className="text-danger")
-            reliability_parts = _reliability_view_parts(payload, meta.get("client"))
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"], *reliability_parts
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
         if status != "ok":
             empty = create_empty_figure("Sin datos para este período")
             message = "No hay acciones registradas para los filtros seleccionados."
             detail_message = html.P(message, className="text-muted text-center p-3")
-            reliability_parts = _reliability_view_parts(payload, meta.get("client"))
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"], *reliability_parts
+            kpis = payload.get("kpis", {}) or {}
+            return _format_estimated(kpis.get("availability_est_pct"), "%"), _format_estimated(kpis.get("downtime_est_hours"), "h"), _format_estimated(kpis.get("mtbf_est_hours"), "h"), _format_estimated(kpis.get("mttr_est_hours"), "h"), "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
-        reliability_parts = _reliability_view_parts(payload, meta.get("client"))
         banner = None
         if not meta.get("is_current_period"):
             banner = html.Div(
@@ -396,7 +335,6 @@ def register_mantenciones_general_callbacks(app):
             create_activity_table(data.get("detail", [])),
             presentation["equipment_title"],
             presentation["system_title"],
-            *reliability_parts,
         )
 
 

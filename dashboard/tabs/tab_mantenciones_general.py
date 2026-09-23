@@ -242,68 +242,10 @@ def layout_mantenciones_general():
                 [
                     dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
                     dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
-                    dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
-                    dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
+                    dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="query_5 · mes seleccionado"), md=3),
+                    dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="query_5 · mes seleccionado"), md=3),
                 ],
                 className="g-3 mb-4",
-            ),
-            html.Div(
-                [
-                    html.Div(
-                        [
-                            html.Span("Confiabilidad mensual", className="fw-semibold"),
-                            html.Span("Fuente: ", className="text-muted small ms-2"),
-                            html.Span(id="maintenance-reliability-source-label", className="text-muted small"),
-                        ],
-                        className="mb-2",
-                    ),
-                    html.Div(id="maintenance-reliability-source-status"),
-                    dbc.Row(
-                        [
-                            dbc.Col(
-                                [
-                                    html.Label("Equipo (machine_code)", className="small text-muted"),
-                                    dcc.Dropdown(
-                                        id="maintenance-reliability-equipment",
-                                        multi=True,
-                                        value=[],
-                                        options=[{"label": "Todos", "value": "__all__"}],
-                                        placeholder="Todos los equipos",
-                                    ),
-                                ],
-                                md=4,
-                            ),
-                        ],
-                        className="g-3 mb-3",
-                    ),
-                    dbc.Row(
-                        [
-                            dbc.Col(
-                                _card(
-                                    "MTBF y MTTF mensual por equipo",
-                                    dcc.Graph(id="maintenance-chart-reliability-mtbf-mttf", config={"displayModeBar": False}, style={"height": "360px"}),
-                                    "fa-arrows-rotate",
-                                ),
-                                md=6,
-                            ),
-                            dbc.Col(
-                                _card(
-                                    "MTTR y downtime mensual por equipo",
-                                    dcc.Graph(id="maintenance-chart-reliability-mttr-downtime", config={"displayModeBar": False}, style={"height": "360px"}),
-                                    "fa-hourglass-half",
-                                ),
-                                md=6,
-                            ),
-                        ],
-                        className="g-3 mb-3",
-                    ),
-                    _card(
-                        "Componentes más intervenidos en fallas",
-                        html.Div(id="maintenance-reliability-components-table"),
-                        "fa-screwdriver-wrench",
-                    ),
-                ],
-                className="border rounded bg-white shadow-sm p-3 mb-4",
             ),
             dbc.Row(
                 [

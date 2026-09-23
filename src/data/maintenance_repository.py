@@ -146,8 +146,8 @@ def _estimated_kpi_meta(
         "formula": {
             "downtime_est_hours": downtime_formula or "unavailable",
             "availability_est_pct": "max(scheduled_hours_proxy − downtime_est_hours, 0) / scheduled_hours_proxy × 100",
-            "mtbf_est_hours": "operating_hours_proxy / event_count_proxy",
-            "mttr_est_hours": "downtime_est_hours / event_count_proxy",
+            "mtbf_est_hours": "query_5_reliability_monthly: sum(mtbf_hours × n_mtbf_intervals) / sum(n_mtbf_intervals)",
+            "mttr_est_hours": "query_5_reliability_monthly: sum(total_downtime_hours) / sum(n_failures)",
         },
     }
     if reason:
@@ -766,6 +766,141 @@ class MaintenanceRepository:
             },
         }
 
+    def get_reliability_kpis(
+        self,
+        period: Optional[str] = None,
+        equipment: Optional[List[str]] = None,
+    ) -> dict:
+        """Return the monthly MTBF/MTTR cards from query 5.
+
+        Query 5 is already aggregated at ``machine_code × year_month``.  A
+        fleet-level card must therefore weight each machine-month by the
+        observations behind the metric instead of averaging machine averages:
+
+        * MTBF uses ``n_mtbf_intervals`` as its weight.
+        * MTTR uses ``n_failures`` and the source downtime total.
+
+        Missing values remain unavailable.  In particular, a machine-month
+        with zero/unknown intervals or failures never contributes a synthetic
+        zero to the card.
+        """
+        empty_values = {"mtbf_est_hours": None, "mttr_est_hours": None}
+        empty_meta = {
+            "source": "query_5_reliability_monthly.parquet",
+            "source_status": "empty",
+            "period": period,
+            "equipment": equipment or [],
+            "low_confidence_rows": 0,
+        }
+        if self.mode != "parquet":
+            empty_meta["reason"] = "La vista mensual de confiabilidad solo está disponible en parquet."
+            return {"status": "empty", "values": empty_values, "meta": empty_meta}
+
+        frame = self._get_parquet_data().get("reliability", pd.DataFrame()).copy()
+        required = {
+            "source_system", "machine_code", "year_month", "n_failures",
+            "mttr_hours", "total_downtime_hours", "n_mtbf_intervals", "mtbf_hours",
+        }
+        if frame.empty:
+            empty_meta["reason"] = "query_5_reliability_monthly.parquet no contiene filas."
+            return {"status": "empty", "values": empty_values, "meta": empty_meta}
+        missing = sorted(required.difference(frame.columns))
+        if missing:
+            empty_meta.update({"source_status": "error", "missing_columns": missing})
+            empty_meta["reason"] = "Faltan columnas requeridas en query_5_reliability_monthly.parquet."
+            return {"status": "error", "values": empty_values, "meta": empty_meta}
+
+        source_system = self.client.upper()
+        frame = frame[
+            frame["source_system"].astype("string").str.upper().eq(source_system)
+        ].copy()
+        frame["year_month"] = frame["year_month"].astype("string").str.strip()
+        available_months = sorted(
+            frame.loc[
+                frame["year_month"].str.fullmatch(r"\d{4}-\d{2}", na=False),
+                "year_month",
+            ].dropna().unique().tolist()
+        )
+        selected = period or (available_months[-1] if available_months else None)
+        if selected:
+            frame = frame[frame["year_month"].eq(str(selected))]
+        selected_equipment = [
+            str(value) for value in (equipment or [])
+            if value not in (None, "", "__all__")
+        ]
+        if selected_equipment:
+            frame = frame[frame["machine_code"].astype(str).isin(selected_equipment)]
+
+        meta = {
+            **empty_meta,
+            "source_status": "ok",
+            "source_system": source_system,
+            "period": selected,
+            "available_months": available_months,
+            "equipment": selected_equipment,
+        }
+        if frame.empty:
+            meta["reason"] = "No hay filas de query_5 para el período o filtros seleccionados."
+            return {"status": "empty", "values": empty_values, "meta": meta}
+
+        failures = pd.to_numeric(frame["n_failures"], errors="coerce")
+        intervals = pd.to_numeric(frame["n_mtbf_intervals"], errors="coerce")
+        mtbf = pd.to_numeric(frame["mtbf_hours"], errors="coerce")
+        mttr = pd.to_numeric(frame["mttr_hours"], errors="coerce")
+        downtime = pd.to_numeric(frame["total_downtime_hours"], errors="coerce")
+
+        valid_mtbf = intervals.gt(0) & intervals.notna() & mtbf.notna() & mtbf.map(math.isfinite)
+        mtbf_weight = intervals.where(valid_mtbf, 0.0)
+        mtbf_numerator = (mtbf.where(valid_mtbf, 0.0) * mtbf_weight).sum()
+        mtbf_denominator = mtbf_weight.sum()
+        mtbf_value = (
+            float(mtbf_numerator / mtbf_denominator)
+            if mtbf_denominator > 0 and math.isfinite(float(mtbf_numerator))
+            else None
+        )
+
+        # Prefer the source total downtime; when a legacy export omits it,
+        # reconstruct only from the source MTTR × failure count (never from
+        # action counts or an arbitrary proxy).
+        derived_downtime = downtime.where(downtime.notna() & downtime.map(math.isfinite))
+        derived_downtime = derived_downtime.where(
+            derived_downtime.notna(),
+            mttr.where(mttr.notna() & mttr.map(math.isfinite), 0.0) * failures.fillna(0.0),
+        )
+        valid_mttr = failures.gt(0) & failures.notna() & derived_downtime.notna()
+        mttr_weight = failures.where(valid_mttr, 0.0)
+        mttr_numerator = derived_downtime.where(valid_mttr, 0.0).sum()
+        mttr_denominator = mttr_weight.sum()
+        mttr_value = (
+            float(mttr_numerator / mttr_denominator)
+            if mttr_denominator > 0 and math.isfinite(float(mttr_numerator))
+            else None
+        )
+
+        values = {
+            "mtbf_est_hours": round(mtbf_value, 1) if mtbf_value is not None else None,
+            "mttr_est_hours": round(mttr_value, 1) if mttr_value is not None else None,
+        }
+        meta.update(
+            {
+                "rows": int(len(frame)),
+                "low_confidence_rows": int(
+                    frame.get("low_confidence", pd.Series(False, index=frame.index))
+                    .fillna(False)
+                    .astype(bool)
+                    .sum()
+                ),
+                "mtbf_intervals": int(mtbf_denominator),
+                "failures": int(mttr_denominator),
+            }
+        )
+        status = "ok" if mtbf_value is not None and mttr_value is not None else (
+            "partial" if mtbf_value is not None or mttr_value is not None else "empty"
+        )
+        if status == "empty":
+            meta["reason"] = "No hay intervalos MTBF o fallas suficientes para calcular las cards."
+        return {"status": status, "values": values, "meta": meta}
+
     def _daily_out_of_service_hours(
         self,
         filtered_actions: pd.DataFrame,
@@ -984,7 +1119,40 @@ class MaintenanceRepository:
         source_start = source_start.isoformat() if pd.notna(source_start) else None
         source_end = source_end.isoformat() if pd.notna(source_end) else None
 
+        equipment_filter = equipment or None
+        if fleets:
+            fleet_equipment = set(self.get_available_equipment(fleets=fleets))
+            if equipment:
+                fleet_equipment.intersection_update(equipment)
+            equipment_filter = sorted(fleet_equipment)
+
+        def _monthly_reliability_cards() -> dict:
+            if systems or subsystems:
+                return {
+                    "status": "empty",
+                    "values": {"mtbf_est_hours": None, "mttr_est_hours": None},
+                    "meta": {
+                        "source": "query_5_reliability_monthly.parquet",
+                        "source_status": "unavailable",
+                        "period": selected,
+                        "equipment": equipment_filter or [],
+                        "reason": "query_5 no tiene desglose por sistema/subsistema; las cards quedan sin dato para este filtro.",
+                    },
+                }
+            return self.get_reliability_kpis(selected, equipment=equipment_filter)
+
         if df.empty:
+            reliability_cards = _monthly_reliability_cards()
+            empty_kpis = {
+                "equipment": 0,
+                "actions": 0,
+                "records": 0,
+                "systems": 0,
+                "activity_days": 0,
+                "motor_share_pct": None,
+                **_empty_estimated_kpis(),
+                **reliability_cards["values"],
+            }
             return {
                 "status": "empty",
                 "meta": {
@@ -999,9 +1167,10 @@ class MaintenanceRepository:
                     "detail_total": 0,
                     "pareto_scope": self._pareto_scope(),
                     "estimated_kpis": _estimated_kpi_meta(selected, reason="No hay acciones para los filtros seleccionados."),
+                    "reliability_kpis": reliability_cards["meta"],
                 },
                 "filters": {"fleets": fleets or [], "systems": systems or [], "equipment": equipment or [], "subsystems": subsystems or []},
-                "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, **_empty_estimated_kpis()},
+                "kpis": empty_kpis,
                 "data": empty,
             }
 
@@ -1019,12 +1188,6 @@ class MaintenanceRepository:
         }
         business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
         filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; las horas quedan no disponibles para este filtro." if systems or subsystems else None
-        equipment_filter = equipment or None
-        if fleets:
-            fleet_equipment = set(self.get_available_equipment(fleets=fleets))
-            if equipment:
-                fleet_equipment.intersection_update(equipment)
-            equipment_filter = sorted(fleet_equipment)
         estimated_kpis, estimated_meta = _calculate_estimated_kpis(
             df,
             selected,
@@ -1033,6 +1196,9 @@ class MaintenanceRepository:
             filter_reason=filter_reason,
         )
         kpis.update(estimated_kpis)
+        reliability_cards = _monthly_reliability_cards()
+        kpis.update(reliability_cards["values"])
+        estimated_meta["reliability_source"] = reliability_cards["meta"]
 
         daily = (
             df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
@@ -1171,6 +1337,7 @@ class MaintenanceRepository:
                 "detail_total": detail_total,
                 "pareto_scope": self._pareto_scope(),
                 "estimated_kpis": estimated_meta,
+                "reliability_kpis": reliability_cards["meta"],
                 "time_measure": {
                     "source": daily_time_source,
                     "unit": "h-equipo",

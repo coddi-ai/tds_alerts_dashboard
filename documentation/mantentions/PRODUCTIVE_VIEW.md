@@ -55,24 +55,26 @@ su ventana de referencia y, cuando corresponde, la razón por la que no están
 disponibles para un filtro;
 estos detalles técnicos no se muestran en la cabecera ejecutiva.
 
-### Confiabilidad mensual y fallas por componente
+### Cards de MTBF y MTTR
 
-La sección **Confiabilidad mensual** usa el cliente activo del selector global
-como `source_system` (EMIN, CAPSTONE o CDA) y consume las vistas materializadas
-adicionales:
+La vista no expone una pestaña independiente de confiabilidad mensual. Las
+cards **MTBF** y **MTTR** del Resumen consumen directamente
+`query_5_reliability_monthly.parquet`, filtrado por el cliente, mes, flota y
+unidad seleccionados:
 
-- `query_5_reliability_monthly.parquet`: una fila por `machine_id × year_month`.
-  Alimenta las series de MTBF, MTTF, MTTR y `total_downtime_hours`; el filtro de
-  equipo usa `machine_code`.
-- `query_6_component_failure_ranking.parquet`: ranking histórico acumulado de
-  componentes asociados a fallas. No se interpreta como una serie mensual.
+- MTBF es el promedio ponderado de `mtbf_hours` por `n_mtbf_intervals`.
+- MTTR es `sum(total_downtime_hours) / sum(n_failures)`; si la vista omite el
+  total de downtime, solo se usa `mttr_hours × n_failures` como respaldo de la
+  misma fuente.
+- Los meses sin intervalos MTBF o fallas quedan como **sin dato**; no se
+  convierten en cero ni se interpolan. `low_confidence` se conserva en la
+  metadata del payload para auditoría.
 
-Los valores nulos de MTBF, MTTF o MTTR se mantienen como ausencia de dato
-suficiente para ese equipo-mes. Las filas con `low_confidence=true` se marcan
-con una línea/leyenda visual de baja confianza y tooltip de advertencia; nunca
-se eliminan ni se imputan. Si una vista aún no está descargada, la sección
-queda en estado vacío o parcial explícito y el resto de la pestaña continúa
-operativo.
+Disponibilidad y downtime siguen respaldados por `query_4_business_kpis` y
+mantienen su cobertura rolling de 70 días. Si se filtra por sistema o
+subsistema, MTBF y MTTR quedan sin dato porque query 5 no contiene ese
+desglose. `query_6_component_failure_ranking` continúa disponible como fuente
+de repositorio para futuras vistas, pero ya no se monta en el Resumen.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
@@ -128,20 +130,19 @@ partir del conteo de acciones.
 
 #### Metodología de los KPIs de tiempo
 
-Los cuatro valores priorizan `query_4_business_kpis.parquet` cuando están
-disponibles `downtime_hours_70d` y `reference_date`. En ese caso la cobertura
-es la **ventana móvil de 70 días** del KPI precalculado, aunque el selector de
-Resumen siga mostrando un mes; esa diferencia se declara en
-`meta.estimated_kpis.coverage` y en el banner. Si el extracto 70d está
-ausente/incompleto, o se filtra por sistema/subsistema (que query_4 no
-desglosa), el tiempo queda `null` con estado `unavailable`:
+Disponibilidad y downtime priorizan `query_4_business_kpis.parquet` cuando
+están disponibles `downtime_hours_70d` y `reference_date`. En ese caso la
+cobertura es la **ventana móvil de 70 días** del KPI precalculado, aunque el
+selector de Resumen siga mostrando un mes; esa diferencia se declara en
+`meta.estimated_kpis.coverage` y en el banner. MTBF y MTTR se obtienen en
+cambio desde `query_5_reliability_monthly.parquet`, según la agregación
+ponderada descrita arriba. Si cualquiera de las fuentes está ausente o
+incompleta, el valor correspondiente queda `null` con estado `unavailable`:
 
 - `downtime_est_hours = sum(downtime_hours_70d)`.
 - `scheduled_hours_proxy = equipos cubiertos × 70 días × 24 h`.
 - `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
   scheduled_hours_proxy × 100`.
-- `event_count` usa `repairs_70d`, luego `total_actions_70d` como denominador
-  operativo para MTTR/MTBF.
 - Los valores negativos o no finitos se consideran fuente inválida; no se
   reemplazan por cero ni por una estimación de acciones.
 

@@ -508,7 +508,7 @@ def test_weekly_parser_reports_invalid_json(monkeypatch):
     assert payload["tasks"][0]["system_name"] == "Motor"
 
 
-def test_layout_keeps_future_views_mounted_but_only_summary_visible():
+def test_layout_keeps_future_views_mounted_but_hides_monthly_reliability_section():
     layout = layout_mantenciones_general()
     tabs = next(component for component in layout.children if getattr(component, "id", None) == "maintenance-tabs")
     summary, activity, weekly = tabs.children
@@ -549,10 +549,12 @@ def test_layout_keeps_future_views_mounted_but_only_summary_visible():
     assert "maintenance-summary-fleet" in rendered
     assert "maintenance-summary-detail-table" in rendered
     assert rendered.index("Indicadores de Interés") < rendered.index("maintenance-summary-detail-table")
-    assert "maintenance-chart-reliability-mtbf-mttf" in rendered
-    assert "maintenance-chart-reliability-mttr-downtime" in rendered
-    assert "maintenance-reliability-components-table" in rendered
-    assert "maintenance-reliability-equipment" in rendered
+    assert "Confiabilidad mensual" not in rendered
+    assert "maintenance-chart-reliability-mtbf-mttf" not in rendered
+    assert "maintenance-chart-reliability-mttr-downtime" not in rendered
+    assert "maintenance-reliability-components-table" not in rendered
+    assert "maintenance-reliability-equipment" not in rendered
+    assert "query_5 · mes seleccionado" in rendered
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
@@ -760,7 +762,7 @@ def test_source_alert_exposes_estimated_source_window_and_fallback_reason():
     assert "Fallback" in rendered
 
 
-def test_estimated_kpis_prefer_business_70d_and_expose_window(monkeypatch):
+def test_business_kpis_keep_downtime_and_availability_but_not_mtbf_mttr(monkeypatch):
     frame = _actions()
     business = pd.DataFrame(
         [
@@ -776,13 +778,81 @@ def test_estimated_kpis_prefer_business_70d_and_expose_window(monkeypatch):
 
     assert payload["kpis"]["downtime_est_hours"] == 150.0
     assert payload["kpis"]["availability_est_pct"] == 95.5
-    assert payload["kpis"]["mtbf_est_hours"] == 214.0
-    assert payload["kpis"]["mttr_est_hours"] == 10.0
+    assert payload["kpis"]["mtbf_est_hours"] is None
+    assert payload["kpis"]["mttr_est_hours"] is None
     meta = payload["meta"]["estimated_kpis"]
     assert meta["source_kind"] == "business_kpis_70d"
     assert meta["coverage"]["window_label"] == "ventana móvil 70d"
     assert meta["coverage"]["calendar_days"] == 70
     assert meta["formula"]["downtime_est_hours"] == "sum(downtime_hours_70d)"
+
+
+def test_reliability_cards_use_query5_weighted_by_intervals_and_failures(monkeypatch):
+    frame = _actions()
+    reliability = pd.DataFrame(
+        [
+            {
+                "source_system": "CDA",
+                "machine_id": "m1",
+                "machine_code": "T_01",
+                "year_month": "2026-01",
+                "n_failures": 2,
+                "mttr_hours": 5.0,
+                "total_downtime_hours": 10.0,
+                "n_mtbf_intervals": 2,
+                "mtbf_hours": 100.0,
+                "mttf_hours": 90.0,
+                "low_confidence": True,
+            },
+            {
+                "source_system": "CDA",
+                "machine_id": "m2",
+                "machine_code": "T_02",
+                "year_month": "2026-01",
+                "n_failures": 1,
+                "mttr_hours": 2.0,
+                "total_downtime_hours": 2.0,
+                "n_mtbf_intervals": 1,
+                "mtbf_hours": 40.0,
+                "mttf_hours": 35.0,
+                "low_confidence": True,
+            },
+            {
+                "source_system": "CDA",
+                "machine_id": "m3",
+                "machine_code": "T_03",
+                "year_month": "2026-01",
+                "n_failures": 0,
+                "mttr_hours": float("nan"),
+                "total_downtime_hours": 0.0,
+                "n_mtbf_intervals": 0,
+                "mtbf_hours": float("nan"),
+                "mttf_hours": float("nan"),
+                "low_confidence": True,
+            },
+        ]
+    )
+    business = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "downtime_hours_70d": 1.0, "repairs_70d": 1, "total_actions_70d": 1, "reference_date": "2026-01-22T10:00:00Z"},
+            {"machine_code": "T_02", "downtime_hours_70d": 1.0, "repairs_70d": 1, "total_actions_70d": 1, "reference_date": "2026-01-22T10:00:00Z"},
+        ]
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: reliability.copy())
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+
+    payload = repo.get_monthly_payload("2026-01")
+
+    assert payload["kpis"]["mtbf_est_hours"] == 80.0
+    assert payload["kpis"]["mttr_est_hours"] == 4.0
+    assert payload["meta"]["reliability_kpis"]["source"] == "query_5_reliability_monthly.parquet"
+    assert payload["meta"]["reliability_kpis"]["low_confidence_rows"] == 3
+
+    filtered = repo.get_monthly_payload("2026-01", equipment=["T_01"])
+    assert filtered["kpis"]["mtbf_est_hours"] == 100.0
+    assert filtered["kpis"]["mttr_est_hours"] == 5.0
 
 
 def test_system_filter_does_not_infer_hours_from_action_proxy(monkeypatch):
