@@ -233,6 +233,82 @@ def _calculate_estimated_kpis(
     return values, meta
 
 
+def _calculate_monthly_time_kpis(
+    daily_hours: pd.DataFrame,
+    period: Optional[str],
+    equipment_count: int,
+    source_name: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[dict, dict]:
+    """Calculate monthly downtime and availability from unioned intervals.
+
+    ``daily_hours`` is produced by ``_daily_out_of_service_hours`` after
+    clipping each source interval to the selected month and unioning overlaps
+    per equipment/day.  The denominator is therefore the exact calendar
+    capacity of the selected equipment in that month.
+    """
+    empty = {"availability_est_pct": None, "downtime_est_hours": None}
+    calendar_days = int((end - start).total_seconds() / 86400)
+    scheduled_hours = float(max(equipment_count, 0) * calendar_days * 24)
+    meta = {
+        "status": "unavailable",
+        "label": "FUENTE",
+        "source_kind": "record_intervals",
+        "confidence": "source_defined",
+        "source": [source_name],
+        "source_columns": (
+            ["record_id", "machine_code", "first_event_ts", "last_event_ts"]
+            if "query_2" in source_name
+            else ["record_id", "machine_code", "event_ts"]
+        ),
+        "period": period,
+        "coverage": {
+            "window_label": "mes seleccionado",
+            "reference_start": start.isoformat(),
+            "reference_end": (end - pd.Timedelta(microseconds=1)).isoformat(),
+            "equipment": int(equipment_count),
+            "calendar_days": calendar_days,
+            "scheduled_hours": round(scheduled_hours, 3),
+        },
+        "unit": {"availability_est_pct": "%", "downtime_est_hours": "h-equipo"},
+        "formula": {
+            "downtime_est_hours": "sum(hours_out_of_service)",
+            "availability_est_pct": "(calendar_days × 24 × equipment − downtime_est_hours) / (calendar_days × 24 × equipment) × 100",
+        },
+        "assumptions": [
+            "Los intervalos se recortan al mes seleccionado.",
+            "Los solapes se unen por equipo y día antes de sumar.",
+            "No se infieren horas desde el conteo de acciones.",
+        ],
+    }
+    if daily_hours.empty or "hours_out_of_service" not in daily_hours.columns or scheduled_hours <= 0:
+        meta["reason"] = "No hay intervalos fuente utilizables para el mes y filtros seleccionados."
+        return empty, meta
+
+    hours = pd.to_numeric(daily_hours["hours_out_of_service"], errors="coerce")
+    hours = hours[hours.notna() & hours.map(math.isfinite) & hours.ge(0)]
+    if hours.empty:
+        meta["reason"] = "Los intervalos fuente no contienen horas finitas no negativas."
+        return empty, meta
+
+    downtime = float(hours.sum())
+    availability = (scheduled_hours - downtime) / scheduled_hours * 100
+    meta.update(
+        {
+            "status": "source",
+            "coverage": {
+                **meta["coverage"],
+                "days_with_intervals": int(daily_hours["date"].nunique()) if "date" in daily_hours else int(len(daily_hours)),
+            },
+        }
+    )
+    return {
+        "availability_est_pct": round(availability, 1),
+        "downtime_est_hours": round(downtime, 1),
+    }, meta
+
+
 class MaintenanceRepository:
     """Repository for maintenance data access."""
     
@@ -1186,20 +1262,6 @@ class MaintenanceRepository:
             "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
-        business_kpis = self._get_parquet_data().get("kpis", pd.DataFrame()) if self.mode == "parquet" else pd.DataFrame()
-        filter_reason = "Los KPIs 70d no tienen desglose por sistema/subsistema; las horas quedan no disponibles para este filtro." if systems or subsystems else None
-        estimated_kpis, estimated_meta = _calculate_estimated_kpis(
-            df,
-            selected,
-            business_kpis=business_kpis,
-            equipment_filter=equipment_filter,
-            filter_reason=filter_reason,
-        )
-        kpis.update(estimated_kpis)
-        reliability_cards = _monthly_reliability_cards()
-        kpis.update(reliability_cards["values"])
-        estimated_meta["reliability_source"] = reliability_cards["meta"]
-
         daily = (
             df.assign(day=df["change_date"].dt.strftime("%Y-%m-%d"))
             .groupby("day", as_index=False)
@@ -1208,8 +1270,25 @@ class MaintenanceRepository:
             .sort_values("date")
         )
         daily_hours, daily_time_source = self._daily_out_of_service_hours(df, start, end)
-        daily = daily.merge(daily_hours, on="date", how="left")
+        # Keep interval-only days as well as action days so the monthly card
+        # reconciles exactly with the daily hours series.
+        daily = daily.merge(daily_hours, on="date", how="outer")
+        daily["count"] = daily["count"].fillna(0).astype(int)
+        daily["equipment_count"] = daily["equipment_count"].fillna(0).astype(int)
         daily["hours_out_of_service"] = daily["hours_out_of_service"].round(3)
+        daily = daily.sort_values("date").reset_index(drop=True)
+        time_kpis, time_meta = _calculate_monthly_time_kpis(
+            daily_hours,
+            selected,
+            equipment_count=int(df["machine_code"].nunique()),
+            source_name=daily_time_source,
+            start=start,
+            end=end,
+        )
+        kpis.update(_empty_estimated_kpis())
+        kpis.update(time_kpis)
+        reliability_cards = _monthly_reliability_cards()
+        kpis.update(reliability_cards["values"])
 
         system_mix = (
             df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
@@ -1336,12 +1415,12 @@ class MaintenanceRepository:
                 "is_current_period": selected == datetime.now().strftime("%Y-%m"),
                 "detail_total": detail_total,
                 "pareto_scope": self._pareto_scope(),
-                "estimated_kpis": estimated_meta,
+                "estimated_kpis": time_meta,
                 "reliability_kpis": reliability_cards["meta"],
                 "time_measure": {
                     "source": daily_time_source,
                     "unit": "h-equipo",
-                    "formula": "sum(max(last_event_ts - first_event_ts, 0)) distribuido por día UTC",
+                    "formula": "sum(intervalos unidos por equipo/día tras recortar al mes; duración last_event_ts - first_event_ts)",
                     "scope": "equipos filtrados; el total de flota puede superar 24 h por día",
                 },
             },

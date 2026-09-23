@@ -240,8 +240,8 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-month-status", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
-                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
+                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="intervalos · mes seleccionado"), md=3),
+                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="horas-equipo · mes seleccionado"), md=3),
                     dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="query_5 · mes seleccionado"), md=3),
                     dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="query_5 · mes seleccionado"), md=3),
                 ],

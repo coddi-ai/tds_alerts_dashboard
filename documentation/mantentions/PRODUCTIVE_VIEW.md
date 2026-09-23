@@ -70,11 +70,16 @@ unidad seleccionados:
   convierten en cero ni se interpolan. `low_confidence` se conserva en la
   metadata del payload para auditoría.
 
-Disponibilidad y downtime siguen respaldados por `query_4_business_kpis` y
-mantienen su cobertura rolling de 70 días. Si se filtra por sistema o
-subsistema, MTBF y MTTR quedan sin dato porque query 5 no contiene ese
-desglose. `query_6_component_failure_ranking` continúa disponible como fuente
-de repositorio para futuras vistas, pero ya no se monta en el Resumen.
+Disponibilidad y downtime usan los mismos intervalos operacionales de la
+tendencia diaria: `query_2_unit_records_actions.parquet` (con fallback a
+`query_3`). Se recortan al mes evaluado y se unen los solapes por equipo y día,
+por lo que la card y el gráfico diario quedan reconciliados. Si no hay
+intervalos fuente utilizables, ambos valores quedan sin dato. `query_4` se
+conserva como fuente de referencia, pero ya no alimenta estas dos cards.
+Si se filtra por sistema o subsistema, MTBF y MTTR siguen quedando sin dato
+porque query 5 no contiene ese desglose. `query_6_component_failure_ranking`
+continúa disponible como fuente de repositorio para futuras vistas, pero ya no
+se monta en el Resumen.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
@@ -123,33 +128,30 @@ sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. En esta iteración se usan las horas definidas por el origen:
-`query_4` aporta el total móvil de 70 días y `query_2` aporta los límites
-temporales de cada registro para la tendencia diaria. No se infieren horas a
+imprevisto. En esta iteración las cards de tiempo usan los límites temporales
+de cada registro (`query_2`, con fallback a `query_3`) y no se infieren horas a
 partir del conteo de acciones.
 
 #### Metodología de los KPIs de tiempo
 
-Disponibilidad y downtime priorizan `query_4_business_kpis.parquet` cuando
-están disponibles `downtime_hours_70d` y `reference_date`. En ese caso la
-cobertura es la **ventana móvil de 70 días** del KPI precalculado, aunque el
-selector de Resumen siga mostrando un mes; esa diferencia se declara en
-`meta.estimated_kpis.coverage` y en el banner. MTBF y MTTR se obtienen en
-cambio desde `query_5_reliability_monthly.parquet`, según la agregación
-ponderada descrita arriba. Si cualquiera de las fuentes está ausente o
-incompleta, el valor correspondiente queda `null` con estado `unavailable`:
+Downtime y disponibilidad se calculan para el mes seleccionado a partir del
+contrato de intervalos:
 
-- `downtime_est_hours = sum(downtime_hours_70d)`.
-- `scheduled_hours_proxy = equipos cubiertos × 70 días × 24 h`.
-- `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
-  scheduled_hours_proxy × 100`.
-- Los valores negativos o no finitos se consideran fuente inválida; no se
-  reemplazan por cero ni por una estimación de acciones.
+- `downtime_est_hours = sum(hours_out_of_service)` después de recortar al mes
+  y unir solapes por equipo/día.
+- `calendar_hours = días_del_mes × 24 × equipos_cubiertos`.
+- `availability_est_pct = (calendar_hours − downtime_est_hours) /
+  calendar_hours × 100`.
+
+MTBF y MTTR se obtienen en cambio desde `query_5_reliability_monthly.parquet`,
+según la agregación ponderada descrita arriba. Si cualquiera de las fuentes
+está ausente o incompleta, el valor correspondiente queda `null` con estado
+`unavailable`; no se imputan ceros ni se convierten acciones en horas.
 
 Cada payload expone en `meta.estimated_kpis` la fuente, columnas, unidad,
 cobertura e hipótesis. Si faltan las columnas de tiempo se devuelve `null` y
 un estado `unavailable`, nunca cero. La aplicación respeta la definición de
-origen; no aplica un tope calendario ni convierte acciones a horas.
+intervalos y el calendario del mes seleccionado.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad

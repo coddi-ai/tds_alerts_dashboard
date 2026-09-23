@@ -8,9 +8,9 @@
 
 ## 📊 Archivos Parquet Requeridos
 
-Las vistas de confiabilidad son fuentes adicionales. Su ausencia deja la
-sección de confiabilidad en estado explícito `empty`/`partial`; no invalida la
-actividad de Mantenciones.
+Las vistas de confiabilidad son fuentes adicionales. `query_5` alimenta las
+cards MTBF/MTTR del Resumen; `query_6` queda disponible para futuras vistas.
+La sección visual independiente de confiabilidad fue retirada.
 
 ### 1. `query_3_actions_all_equipment.parquet` - Acciones de Mantenimiento Detalladas
 
@@ -164,19 +164,20 @@ else:
 
 ---
 
-### Downtime Total (70 días)
+### Downtime de referencia en query4 (70 días)
 
 **Fuente:** `query_4_business_kpis.parquet` → columna `downtime_hours_70d`
 
-**Cálculo:**
+**Cálculo del extracto de referencia:**
 ```python
-total_downtime = df_kpis['downtime_hours_70d'].sum()
+total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
 ```
 
 **Datos actuales:**
-- **Total de downtime:** 6,594.28 horas (suma de 11 máquinas)
-- **Máquina con mayor downtime:** t18 (3088.8 horas)
-- **Máquina con menor downtime:** t24 (0.08 horas)
+- Estos valores describen una ventana rolling de 70 días y no deben
+  interpretarse como el downtime mensual físico del dashboard.
+- La vista productiva calcula el downtime mensual desde los intervalos de
+  `query_2_unit_records_actions.parquet`, uniendo solapes por equipo y día.
 
 ---
 
@@ -265,9 +266,13 @@ sanos = total - df_kpis['has_ongoing_maintenance'].sum()
 detenidos = df_kpis['has_ongoing_maintenance'].sum()
 ```
 
-### 4. Horas Detenidas (70 días)
+### 4. Horas Detenidas de referencia (70 días)
 ```python
-total_downtime = df_kpis['downtime_hours_70d'].sum()
+total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
+
+> Este cálculo describe el extracto rolling de query4 y no es el KPI mensual
+> del Resumen productivo. El Resumen usa los intervalos de query2/query3,
+> recortados al mes y unidos por equipo/día.
 ```
 
 ---
@@ -288,7 +293,7 @@ total_downtime = df_kpis['downtime_hours_70d'].sum()
 | Método | Fuente Principal | Output |
 |--------|------------------|--------|
 | `get_status_counts()` | `query_4` KPIs | SANO/DETENIDO counts |
-| `get_downtime_mtd()` | `query_4` KPIs | Total downtime_hours_70d |
+| `get_downtime_mtd()` | `query_4` KPIs | Total rolling de referencia; no alimenta el Resumen actual |
 | `get_last_detentions()` | `query_3` Actions | Top 3 detenciones/máquina |
 | `get_jobs_last_week()` | `query_3` Actions | 100 trabajos recientes |
 | `get_downtime_by_day_mtd()` | `query_2` Records | Horas-equipo fuera de servicio por día |
@@ -297,7 +302,9 @@ total_downtime = df_kpis['downtime_hours_70d'].sum()
 
 ## 🔄 Ventana Temporal
 
-**Período de análisis:** 70 días (10 semanas)
+**Período de análisis legacy de query4:** 70 días (10 semanas). El Resumen
+productivo evalúa el mes seleccionado y usa `días_del_mes × 24 × equipos`
+como denominador de disponibilidad.
 
 **Justificación:**
 - Los datos actuales son de enero 2026
@@ -438,7 +445,7 @@ df_daily = repo.get_downtime_by_day_mtd()
 - ✅ Migración de `query_1`, `query_2`, `query_3` a `query_3_actions_all_equipment` y `query_4_business_kpis`
 - ✅ Uso de KPIs pre-calculados para mejor rendimiento
 - ✅ Simplificación de lógica de status usando `has_ongoing_maintenance`
-- ✅ Downtime total directo desde `downtime_hours_70d`
+- ✅ Downtime mensual desde intervalos `query_2`/`query_3`, con solapes unidos
 - ✅ Mantención de compatibilidad con estructura de dashboard existente
 
 ### v1.0 - Versión Original
