@@ -37,7 +37,8 @@ class ComponentAvailability:
     unit_status_summary: bool = False
     cumulative_risk_curve: bool = False
     signal_daily_status: bool = False
-    failure_mode_diagnosis: bool = False
+    mode_failure_analisis: bool = False
+    unit_failure_analisis: bool = False
     legacy_csv: Optional[Path] = None
 
 
@@ -63,8 +64,12 @@ def cumulative_risk_curve_base_path(client: str, component: str) -> Path:
     return _predictive_root(client) / component / "cumulative_risk_curve"
 
 
-def failure_mode_diagnosis_base_path(client: str, component: str) -> Path:
-    return _predictive_root(client) / component / "failure_mode_diagnosis"
+def mode_failure_analisis_base_path(client: str, component: str) -> Path:
+    return _predictive_root(client) / component / "mode_failure_analisis"
+
+
+def unit_failure_analisis_base_path(client: str, component: str) -> Path:
+    return _predictive_root(client) / component / "unit_failure_analisis"
 
 
 def signal_daily_status_base_path(client: str, component: str) -> Path:
@@ -96,7 +101,8 @@ def _discover_predictive_layout_cached(client: str, root_mtime_ns: int) -> dict:
                 signal_daily_status=_has_partitions(
                     _telemetry_root(client) / component / "signal_daily_status"
                 ),
-                failure_mode_diagnosis=_has_partitions(entry / "failure_mode_diagnosis"),
+                mode_failure_analisis=_has_partitions(entry / "mode_failure_analisis"),
+                unit_failure_analisis=_has_partitions(entry / "unit_failure_analisis"),
                 legacy_csv=candidate_csv if candidate_csv.is_file() else None,
             )
         elif entry.suffix == ".csv":
@@ -224,22 +230,23 @@ def load_unit_status_summary(client: str, component: str) -> pd.DataFrame:
     return read_latest_partition(unit_status_summary_base_path(client, component))
 
 
-def load_failure_mode_diagnosis(client: str, component: str) -> pd.DataFrame:
-    """`failure_mode_diagnosis` (Data Contract v2.1): one row per unit x flagged
-    mode, published upstream to replace `analisis_inteligente.parquet`. Same
-    run-snapshot pattern as `unit_status_summary` - only the latest partition
-    matters, and a unit with no flagged mode that week simply has no rows."""
-    return read_latest_partition(failure_mode_diagnosis_base_path(client, component))
+def load_mode_failure_analisis(client: str, component: str) -> pd.DataFrame:
+    """`mode_failure_analisis` (Data Contract v2.3, formerly `failure_mode_diagnosis`):
+    one row per unit x flagged mode, published upstream alongside
+    `unit_failure_analisis`. Same run-snapshot pattern as `unit_status_summary`
+    - only the latest partition matters, and a unit with no flagged mode that
+    week simply has no rows."""
+    return read_latest_partition(mode_failure_analisis_base_path(client, component))
 
 
-def get_unit_failure_mode_diagnosis(client: str, component: str, unit: str) -> pd.DataFrame:
-    """`failure_mode_diagnosis` rows for `unit`, ordered by `modos_ordenados`
+def get_unit_mode_failure_analisis(client: str, component: str, unit: str) -> pd.DataFrame:
+    """`mode_failure_analisis` rows for `unit`, ordered by `modos_ordenados`
     severity (highest first), same join pattern as the data contract's §3.
     Empty DataFrame if the table doesn't exist for this client/component or
-    the unit has no flagged mode this week - callers should fall back to the
-    legacy `analisis_inteligente.parquet` routing in that case.
+    the unit has no flagged mode this week - callers should fall back to
+    `unit_failure_analisis` routing in that case.
     """
-    df_diag = load_failure_mode_diagnosis(client, component)
+    df_diag = load_mode_failure_analisis(client, component)
     if df_diag.empty or "Unit" not in df_diag.columns:
         return pd.DataFrame()
     rows = df_diag[df_diag["Unit"] == unit].copy()
@@ -263,6 +270,19 @@ def get_unit_failure_mode_diagnosis(client: str, component: str, unit: str) -> p
         rows["_score"] = rows["failure_mode"].map(scores)
         rows = rows.sort_values("_score", ascending=False, na_position="last")
     return rows
+
+
+def load_unit_failure_analisis(client: str, component: str) -> pd.DataFrame:
+    """`unit_failure_analisis` (Data Contract v2.3, formerly the frozen
+    `analisis_inteligente.parquet`): one AI-written diagnosis per unit for its
+    worst mode, wide format, regenerated and published every run alongside
+    `mode_failure_analisis`. Same run-snapshot pattern as `unit_status_summary`
+    - only the latest partition matters. Empty DataFrame if this client/
+    component isn't on the new layout yet - callers should fall back to the
+    legacy flat `analisis_inteligente.parquet` (`src.data.loaders.load_analisis_inteligente`)
+    in that case.
+    """
+    return read_latest_partition(unit_failure_analisis_base_path(client, component))
 
 
 def load_signal_daily_status(client: str, component: str) -> pd.DataFrame:

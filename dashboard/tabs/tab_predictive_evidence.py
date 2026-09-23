@@ -555,14 +555,17 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     scatter_fig = create_fleet_scatter(latest, unit, STATUS_COLORS, 30.0)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
-    # AI analysis: `failure_mode_diagnosis` (Data Contract v2.1) is now the
-    # published contract - one row per unit x flagged mode, worst mode first
-    # via the modos_ordenados join (see predictive_v2.get_unit_failure_mode_diagnosis
-    # and documentation/predictive/predictive_data_contracts.md §3). Falls back to
-    # the frozen legacy `analisis_inteligente.parquet` (Change 7's routing, one
-    # row per unit) for clients/components not yet on the new table, then to
-    # the rule-based insight engine when neither has narrative content.
-    diag_rows = predictive_v2.get_unit_failure_mode_diagnosis(client, component, unit) if client else pd.DataFrame()
+    # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
+    # `failure_mode_diagnosis`) is the published contract - one row per unit x
+    # flagged mode, worst mode first via the modos_ordenados join (see
+    # predictive_v2.get_unit_mode_failure_analisis and
+    # documentation/predictive/predictive_data_contracts.md §3). Falls back to
+    # `unit_failure_analisis` (formerly `analisis_inteligente`, now live and
+    # partitioned rather than a frozen flat file) for units with no flagged
+    # mode this week, then to the deprecated flat `analisis_inteligente.parquet`
+    # for clients/components not yet on the new layout, then to the rule-based
+    # insight engine when none of those has narrative content.
+    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit) if client else pd.DataFrame()
     diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
 
     ai_section = None
@@ -590,7 +593,7 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
                 header_text = "Analisis Inteligente (basado en reglas)"
             ai_section = html.Div(
                 create_ai_analysis_panel(
-                    None,
+                    diag_row.get("diagnostico"),
                     diag_row.get("probable_cause"),
                     diag_row.get("recommended_actions"),
                     header_text=header_text,
@@ -598,7 +601,12 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
                 style={"marginBottom": "1.5rem"},
             )
     else:
-        ai_row = _get_unit_ai_analysis(load_analisis_inteligente(client), unit) if client else None
+        df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component) if client else pd.DataFrame()
+        if df_unit_analisis.empty:
+            # Not on the new layout yet for this client/component - last
+            # resort is the deprecated frozen snapshot.
+            df_unit_analisis = load_analisis_inteligente(client) if client else pd.DataFrame()
+        ai_row = _get_unit_ai_analysis(df_unit_analisis, unit) if client else None
         _narrative_cols = ("diagnostico", "causa_probable", "acciones")
         has_narrative = (
             ai_row is not None

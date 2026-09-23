@@ -210,7 +210,8 @@ def _backfill_from_s3(base_dir: Optional[Path] = None) -> bool:
     events_dir = _local_events_dir(base_dir)
     events_dir.mkdir(parents=True, exist_ok=True)
 
-    for key in keys:
+    for obj in keys:
+        key = obj["Key"]
         relative_key = key[len(S3_PREFIX):].lstrip("/")
         local_path = events_dir / relative_key
         if local_path.exists():

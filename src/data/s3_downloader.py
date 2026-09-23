@@ -54,27 +54,27 @@ class S3Downloader:
     def list_objects(self, prefix: str) -> list:
         """
         List all objects in S3 bucket with given prefix.
-        
+
         Args:
             prefix: S3 prefix (folder path)
-            
+
         Returns:
-            List of object keys
+            List of dicts with 'Key' and 'Size' for each object
         """
         try:
             objects = []
             paginator = self.s3_client.get_paginator('list_objects_v2')
-            
+
             for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
                 if 'Contents' in page:
                     for obj in page['Contents']:
                         # Skip folders (objects ending with /)
                         if not obj['Key'].endswith('/'):
-                            objects.append(obj['Key'])
-            
+                            objects.append({'Key': obj['Key'], 'Size': obj['Size']})
+
             logger.info(f"Found {len(objects)} objects with prefix '{prefix}'")
             return objects
-            
+
         except NoCredentialsError:
             logger.error("AWS credentials not found. Please configure your credentials.")
             raise
@@ -137,61 +137,97 @@ class S3Downloader:
             return False
     
     def download_folder(
-        self, 
-        s3_prefix: str, 
+        self,
+        s3_prefix: str,
         local_dir: Path,
         preserve_structure: bool = True
     ) -> dict:
         """
-        Download all files from an S3 folder to local directory.
-        
+        Sync all files from an S3 folder to local directory, based on file size.
+
+        Downloads new files, re-downloads files whose size differs from the
+        local copy, skips files whose size matches, and deletes local files
+        that no longer have a corresponding S3 object.
+
         Args:
             s3_prefix: S3 prefix (folder path)
             local_dir: Local directory path
             preserve_structure: If True, preserves the folder structure from S3
-            
+
         Returns:
-            Dictionary with download statistics
+            Dictionary with sync statistics
         """
-        logger.info(f"Starting download from s3://{self.bucket_name}/{s3_prefix}")
+        logger.info(f"Starting sync from s3://{self.bucket_name}/{s3_prefix}")
         logger.info(f"Destination: {local_dir}")
-        
-        # Get list of objects
+
+        # Get list of objects (with sizes)
         objects = self.list_objects(s3_prefix)
-        
+
         if not objects:
             logger.warning(f"No objects found with prefix '{s3_prefix}'")
-            return {"total": 0, "success": 0, "failed": 0}
-        
-        # Download each object
-        success_count = 0
+            return {"total": 0, "downloaded": 0, "skipped": 0, "deleted": 0, "failed": 0}
+
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        downloaded_count = 0
+        skipped_count = 0
         failed_count = 0
-        
-        for s3_key in tqdm(objects, desc="Downloading files"):
+        remote_local_paths = set()
+
+        for obj in tqdm(objects, desc="Syncing files"):
+            s3_key = obj['Key']
+            s3_size = obj['Size']
+
             if preserve_structure:
                 # Remove the S3 prefix but keep the nested folder structure
                 relative_path = s3_key.replace(s3_prefix, '', 1).lstrip('/')
             else:
                 # Flatten the structure (extract just the filename)
                 relative_path = os.path.basename(s3_key)
-            
+
             local_path = local_dir / relative_path
-            
-            if self.download_file(s3_key, local_path):
-                success_count += 1
+            remote_local_paths.add(local_path.resolve())
+
+            needs_download = True
+            if local_path.exists():
+                if local_path.stat().st_size == s3_size:
+                    needs_download = False
+
+            if needs_download:
+                if self.download_file(s3_key, local_path):
+                    downloaded_count += 1
+                else:
+                    failed_count += 1
             else:
-                failed_count += 1
-        
+                skipped_count += 1
+
+        # Delete local files that no longer exist in S3
+        deleted_count = 0
+        if local_dir.exists():
+            for local_file in local_dir.rglob('*'):
+                if local_file.is_file() and local_file.resolve() not in remote_local_paths:
+                    try:
+                        local_file.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Deleted stale local file: {local_file}")
+                    except OSError as e:
+                        logger.error(f"Failed to delete {local_file}: {e}")
+
         stats = {
             "total": len(objects),
-            "success": success_count,
+            "downloaded": downloaded_count,
+            "skipped": skipped_count,
+            "deleted": deleted_count,
             "failed": failed_count
         }
-        
-        logger.info(f"Download complete: {success_count}/{len(objects)} files successful")
+
+        logger.info(
+            f"Sync complete: {downloaded_count} downloaded, "
+            f"{skipped_count} skipped, {deleted_count} deleted"
+        )
         if failed_count > 0:
             logger.warning(f"{failed_count} files failed to download")
-        
+
         return stats
 
 
@@ -239,10 +275,12 @@ def main():
             preserve_structure=True
         )
         
-        print("Files in /app/data after download:", list(local_data_dir.iterdir()))
+        print("Files in /app/data after sync:", list(local_data_dir.iterdir()))
         logger.info("=" * 60)
-        logger.info(f"Total files: {stats['total']}")
-        logger.info(f"Successfully downloaded: {stats['success']}")
+        logger.info(f"Total files in S3: {stats['total']}")
+        logger.info(f"Downloaded: {stats['downloaded']}")
+        logger.info(f"Skipped (unchanged): {stats['skipped']}")
+        logger.info(f"Deleted (stale local files): {stats['deleted']}")
         logger.info(f"Failed: {stats['failed']}")
         logger.info("=" * 60)
         

@@ -618,9 +618,9 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
             try:
                 df_acum = build_accumulated_data(df, df_component_hours, component)
                 if not df_acum.empty:
-                    _fig, _resumen = build_accumulated_figure(df_acum, component=component)
+                    _fig, _resumen, _units_all, _color_map = build_accumulated_figure(df_acum, component=component)
                     if _fig is not None:
-                        accumulated = render_accumulated_section(df, df_component_hours, component)
+                        accumulated = render_accumulated_section(df, df_component_hours, component, client=client)
             except Exception as exc:  # noqa: BLE001 - la curva nunca rompe el overview
                 logger.warning(f"No se pudo construir la curva acumulada para {client}/{component}: {exc}")
                 accumulated = None
