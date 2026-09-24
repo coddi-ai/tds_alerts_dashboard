@@ -9,6 +9,7 @@
     "predictive-motor": {"display": true, "dummy": false},
     "predictive-transmision": {"display": true, "dummy": false},
     "agents-campbell-ai": {"display": true, "dummy": false},
+    "agents-troubleshooting": {"display": true, "dummy": false},
     "integration-validacion-avisos": {"display": true, "dummy": false},
     "integration-seguimiento-avisos": {"display": true, "dummy": false},
     "reporting-main": {"display": true, "dummy": false}
@@ -39,6 +40,7 @@
     "monitoring-mantenciones": {"display": true, "dummy": true},
     "predictive-motor": {"display": true, "dummy": false},
     "agents-campbell-ai": {"display": true, "dummy": false},
+    "agents-troubleshooting": {"display": true, "dummy": false},
     "integration-validacion-avisos": {"display": true, "dummy": false},
     "integration-seguimiento-avisos": {"display": true, "dummy": false}
   },
