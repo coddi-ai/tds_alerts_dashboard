@@ -31,7 +31,11 @@ def _repository(tmp_path) -> DashboardDataRepository:
         [
             {
                 "UnitId": "T_18",
-                "Timestamp": "2026-07-09T19:13:00",
+                # Relative: the chart path applies a 60-day default window, so an absolute
+                # date made the frame empty and the assertion failed by the calendar.
+                "Timestamp": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=10, hours=-19)
+                ).isoformat(),
                 "sistema": "Motor",
                 "subsistema": "Refrigeracion",
                 "componente": "MOTOR",
@@ -40,7 +44,9 @@ def _repository(tmp_path) -> DashboardDataRepository:
             },
             {
                 "UnitId": "T_9",
-                "Timestamp": "2026-07-01T10:00:00",
+                "Timestamp": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=18, hours=-10)
+                ).isoformat(),
                 "sistema": "Frenos",
                 "subsistema": "Freno Delantero Derecho",
                 "componente": "FRENOS",

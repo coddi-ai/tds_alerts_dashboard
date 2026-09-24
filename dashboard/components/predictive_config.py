@@ -16,289 +16,45 @@ IMPORTANTE (datos de dominio de Capstone):
   (un umbral equivocado es peor que uno ausente).
 """
 
+import re
+
+import pandas as pd
+
 from src.utils.logger import get_logger
+from src.charts.signals import SIGNAL_LABELS
 
 logger = get_logger(__name__)
 
 
 # =============================================================================
-# FAILURE_MODE_CONFIG  —  client -> component -> failure_mode
+# Shared catalog  -  defined in src/data/predictive_catalog.py
 # =============================================================================
+#
+# FAILURE_MODE_CONFIG, the label tables, FAILURE_MODE_METHODOLOGY and every accessor now live
+# in `src` so Campbell AI reads the same mapping this tab renders. They are re-exported here
+# unchanged: `from dashboard.components.predictive_config import ...` keeps working, and there
+# is only one definition to keep correct.
 
-FAILURE_MODE_CONFIG = {
-    "cda": {
-        "motor": {
-            "abrasive_wear_risk": {
-                "label": "Desgaste Abrasivo",
-                "oil_variables": ["Hierro", "Silicio", "Cromo"],
-                "telemetry_variables": [],
-                "description": "Desgaste por partículas abrasivas en el motor"
-            },
-            "combustion_risk": {
-                "label": "Combustión",
-                "oil_variables": ["Hollín", "Viscocidad"],
-                "telemetry_variables": ["LtExhTemp", "RtExhTemp", "DeltaExh"],
-                "description": "Problemas en el proceso de combustión"
-            },
-            "thermal_imbalance_risk": {
-                "label": "Δ T° Escape",
-                "oil_variables": [],
-                "telemetry_variables": ["LtExhTemp", "RtExhTemp", "DeltaExh"],
-                "description": "Desequilibrio en temperaturas de escape"
-            },
-            "oil_degradation_risk": {
-                "label": "Degradación de Aceite",
-                "oil_variables": ["Viscocidad", "Hollín"],
-                "telemetry_variables": [],
-                "description": "Deterioro de las propiedades del aceite"
-            },
-            "lubrication_failure_risk": {
-                "label": "Falla de Lubricación",
-                "oil_variables": ["Plomo", "Cobre"],
-                "telemetry_variables": ["EngOilPres"],
-                "description": "Problemas con el sistema de lubricación"
-            },
-            "bearing_wear_risk": {
-                "label": "Desgaste de Cojinetes",
-                "oil_variables": ["Plomo", "Cobre"],
-                "telemetry_variables": ["EngOilPres"],
-                "description": "Desgaste en los cojinetes del motor"
-            },
-            "blowby_risk": {
-                "label": "Blow-by",
-                "oil_variables": ["Hollín"],
-                "telemetry_variables": ["CnkcasePres"],
-                "description": "Fuga de gases de combustión al cárter"
-            }
-        },
-        "transmision": {
-            "clutch_pack_risk": {
-                "label": "Desgaste de Clutch Pack",
-                "oil_variables": ["Hierro", "Cobre", "Aluminio"],
-                "telemetry_variables": ["LckupSlip", "TrnSlip"],
-                "description": "Desgaste en los discos de embrague del paquete de clutch"
-            },
-            "thermal_degradation_risk": {
-                "label": "Degradación Térmica",
-                "oil_variables": ["Viscocidad", "Agua"],
-                "telemetry_variables": ["TCOutTemp", "TrnLubeTemp"],
-                "description": "Degradación del aceite por exceso de temperatura"
-            },
-            "planetary_gear_risk": {
-                "label": "Desgaste de Engranajes Planetarios",
-                "oil_variables": ["Hierro", "Silicio", "Cobre"],
-                "telemetry_variables": ["gear_mismatch", "TrnSlip"],
-                "description": "Desgaste en el tren de engranajes planetarios"
-            },
-            "bearing_risk": {
-                "label": "Desgaste de Rodamientos",
-                "oil_variables": ["Hierro", "Cobre", "Plomo", "Estaño"],
-                "telemetry_variables": ["TrnLubeTemp"],
-                "description": "Desgaste en rodamientos de la transmisión"
-            },
-            "contamination_risk": {
-                "label": "Contaminación",
-                "oil_variables": ["Silicio", "Agua", "Sodio", "Potasio"],
-                "telemetry_variables": [],
-                "description": "Ingreso de contaminantes externos al sistema"
-            },
-            "torque_converter_risk": {
-                "label": "Convertidor de Torque",
-                "oil_variables": ["Aluminio", "Cobre", "Hierro"],
-                "telemetry_variables": ["LckupSlip", "TCOutTemp"],
-                "description": "Deterioro del convertidor de torque"
-            },
-            "shift_quality_risk": {
-                "label": "Calidad de Cambio",
-                "oil_variables": ["Viscocidad", "Hierro"],
-                "telemetry_variables": ["TrnSlip", "gear_mismatch", "LckupSlip"],
-                "description": "Degradación en la calidad de los cambios de marcha"
-            }
-        },
-    },
-    "capstone": {
-        # Motor Cummins QSK60. Nombres de telemetría en snake_case / Celsius,
-        # correspondientes a la fuente nueva (migración ago-2026).
-        # Los modos combustion y coolant perdieron variables sin reemplazo —
-        # ver comentarios inline.
-        "motor": {
-            "abrasive_wear_risk": {
-                "label": "Desgaste Abrasivo",
-                "oil_variables": ["Silicio", "Hierro", "Aluminio"],
-                "telemetry_variables": [],
-                "description": "Ingreso de partículas contaminantes que generan desgaste acelerado en superficies metálicas internas"
-            },
-            "combustion_risk": {
-                "label": "Combustión / Inyectores",
-                "oil_variables": ["Hollín", "Combustible"],
-                # Perdidas sin reemplazo en la fuente nueva:
-                # 'Injector Metering (PSI)', 'Commanded Engine Fuel Rail Pressure (kPa)',
-                # 'Water In Fuel Indicator 1 (bit)' (modificador).
-                "telemetry_variables": [
-                    "egt_avg_c",
-                    "fuel_pump_intake_pressure_psi",
-                ],
-                "description": "Combustión ineficiente o incompleta por falla en inyectores o sistema Common Rail"
-            },
-            "thermal_imbalance_risk": {
-                "label": "Desbalance Térmico entre Bancos",
-                "oil_variables": [],
-                "telemetry_variables": [
-                    "DeltaExh",
-                    "egt_lb_c",
-                    "egt_rb_c",
-                    "imp_lb_psi",
-                    "imp_rb_psi",
-                    "imt_lbf_c",
-                    "imt_rbf_c",
-                ],
-                "description": "Diferencia térmica persistente entre los bancos del motor V16"
-            },
-            "turbocharger_risk": {
-                "label": "Falla de Turbocompresor",
-                "oil_variables": ["Aluminio", "Hierro", "Cromo"],
-                "telemetry_variables": [
-                    "turbo_speed_rpm",
-                    "imp_lb_psi",
-                    "imp_rb_psi",
-                    "imt_lbf_c",
-                    "imt_rbf_c",
-                    "egt_lb_c",
-                    "egt_rb_c",
-                ],
-                "description": "Falla en el sistema de turbocompresión en dos etapas, con pérdida de boost y eficiencia"
-            },
-            "oil_degradation_risk": {
-                "label": "Degradación de Aceite",
-                "oil_variables": ["Hollín", "Viscocidad", "Oxidación", "Combustible"],
-                "telemetry_variables": ["oil_temp_c"],
-                "description": "Pérdida progresiva de propiedades lubricantes por contaminación y estrés térmico"
-            },
-            "coolant_contamination_risk": {
-                "label": "Contaminación por Refrigerante",
-                "oil_variables": ["Sodio", "Potasio"],
-                # Perdida sin reemplazo: 'Engine coolant level (%)'.
-                # La interacción Na×nivel se sustituyó por Na×presión.
-                "telemetry_variables": [
-                    "coolant_temp_c",
-                    "coolant_pressure_psi",
-                ],
-                "description": "Ingreso de refrigerante al aceite por falla de empaquetaduras, O-rings de liner o fisuras"
-            },
-            "lubrication_failure_risk": {
-                "label": "Falla de Lubricación",
-                "oil_variables": ["Hierro", "Plomo", "Cobre"],
-                # Perdidos sin reemplazo (modificadores multiplicativos):
-                # 'Engine Emergency (Immediate) Shutdown Indication (bit)',
-                # 'Engine Controlled Shutdown Request (bit)'.
-                "telemetry_variables": [
-                    "rifle_oil_pressure_psi",
-                    "oil_diff_pressure_psi",
-                    "oil_temp_c",
-                ],
-                "description": "Lubricación insuficiente que genera contacto metal-metal y desgaste acelerado"
-            },
-            "bearing_wear_risk": {
-                "label": "Desgaste de Cojinetes",
-                "oil_variables": ["Plomo", "Cobre", "Hierro", "Estaño"],
-                "telemetry_variables": ["rifle_oil_pressure_psi"],
-                "description": "Desgaste progresivo de cojinetes de biela y bancada"
-            },
-            "blowby_risk": {
-                "label": "Blow-by / Desgaste de Anillos",
-                "oil_variables": ["Cromo", "Hierro", "Hollín"],
-                "telemetry_variables": [
-                    "crankcase_pressure_inh2o",
-                    "oil_level_pct",
-                ],
-                "description": "Desgaste de anillos y liner con fuga de gases de combustión al cárter"
-            },
-        },
-    },
-}
-
-
-# =============================================================================
-# TELEMETRY_LABELS  —  client -> {signal: label}
-# =============================================================================
-
-TELEMETRY_LABELS = {
-    "cda": {
-        "CnkcasePres": "Presión Cárter",
-        "DeltaExh": "Delta Escape",
-        "EngOilPres": "Presión Aceite Motor",
-        "LtExhTemp": "Temp. Escape Izq.",
-        "RtExhTemp": "Temp. Escape Der.",
-        "LckupSlip": "Deslizamiento Lock-up",
-        "TCOutTemp": "Temp. Salida Convertidor",
-        "TrnLubeTemp": "Temp. Aceite Transmisión",
-        "TrnSlip": "Deslizamiento Transmisión",
-        "gear_mismatch": "Desajuste de Marcha",
-    },
-    # Nombres QSK60 en snake_case (fuente nueva, temperaturas en Celsius).
-    # Se eliminaron 3 señales que no existen en la fuente nueva:
-    # Commanded Engine Fuel Rail Pressure, Engine coolant level, Injector Metering.
-    "capstone": {
-        "DeltaExh":                       "Delta Escape entre Bancos",
-        "coolant_pressure_psi":           "Presión Refrigerante",
-        "coolant_temp_c":                 "Temp. Refrigerante",
-        "crankcase_pressure_inh2o":       "Presión Cárter",
-        "egt_avg_c":                      "Temp. Escape Promedio",
-        "egt_lb_c":                       "Temp. Escape Banco Izq.",
-        "egt_rb_c":                       "Temp. Escape Banco Der.",
-        "fuel_pump_intake_pressure_psi":  "Presión Entrega Combustible",
-        "imp_lb_psi":                     "Presión Admisión Banco Izq.",
-        "imp_rb_psi":                     "Presión Admisión Banco Der.",
-        "imt_lbf_c":                      "Temp. Admisión Banco Izq.",
-        "imt_rbf_c":                      "Temp. Admisión Banco Der.",
-        "oil_diff_pressure_psi":          "Presión Diferencial Filtro Aceite",
-        "oil_level_pct":                  "Nivel Tanque Reserva",
-        "oil_temp_c":                     "Temp. Aceite Motor",
-        "rifle_oil_pressure_psi":         "Presión Aceite Galería",
-        "turbo_speed_rpm":                "Velocidad Turbocompresor",
-    },
-}
-
-
-# =============================================================================
-# OIL_LABELS  —  client -> {variable: label}
-# =============================================================================
-
-OIL_LABELS = {
-    "cda": {
-        "Hierro": "Hierro (ppm)",
-        "Silicio": "Silicio (ppm)",
-        "Plomo": "Plomo (ppm)",
-        "Cromo": "Cromo (ppm)",
-        "Cobre": "Cobre (ppm)",
-        "Sodio": "Sodio (ppm)",
-        "Hollín": "Hollín (%)",
-        "Viscocidad": "Viscosidad (cSt)",
-        "Estaño": "Estaño (ppm)",
-        "Aluminio": "Aluminio (ppm)",
-        "Agua": "Agua (%)",
-        "Potasio": "Potasio (ppm)",
-        "Boro": "Boro (ppm)",
-    },
-
-    # Ensayos de aceite QSK60 — cubren todas las variables referenciadas por
-    # los 9 modos de falla de Capstone.
-    "capstone": {
-        "Aluminio":    "Aluminio (ppm)",
-        "Cobre":       "Cobre (ppm)",
-        "Combustible": "Dilución Combustible (%)",
-        "Cromo":       "Cromo (ppm)",
-        "Estaño":      "Estaño (ppm)",
-        "Hierro":      "Hierro (ppm)",
-        "Hollín":      "Hollín (%)",
-        "Oxidación":   "Oxidación (Abs/cm)",
-        "Plomo":       "Plomo (ppm)",
-        "Potasio":     "Potasio (ppm)",
-        "Silicio":     "Silicio (ppm)",
-        "Sodio":       "Sodio (ppm)",
-        "Viscocidad":  "Viscosidad (cSt)",
-    },
-}
+from src.data.predictive_catalog import (  # noqa: F401  (re-exported)
+    FAILURE_MODE_CONFIG,
+    FAILURE_MODE_METHODOLOGY,
+    OIL_LABELS,
+    TELEMETRY_LABELS,
+    get_all_oil_variables,
+    get_available_components,
+    get_failure_mode_label,
+    get_failure_mode_methodology,
+    get_failure_mode_options,
+    get_failure_modes_dict,
+    get_failure_modes_for_component,
+    get_oil_variables_for_mode,
+    get_signals_catalog,
+    get_telemetry_signals_for_mode,
+    get_telemetry_variables_for_mode,
+    humanize_mode_key,
+    resolve_failure_mode_options,
+    resolve_failure_modes,
+)
 
 
 # =============================================================================
@@ -359,6 +115,81 @@ OIL_THRESHOLDS = {
 # every row, for both CDA and CAPSTONE.
 PREDICTIVE_STEWART_MACHINE = 'camion'
 
+# Predictivo component key -> oil component name(s) it should match, for
+# clients whose oil naming is more specific than Predictivo's coarse key.
+# e.g. Capstone's engine oil data is grouped under "motor diesel" rather than
+# the bare "motor" Predictivo uses, but "motor diesel" is the only oil
+# component "motor" should ever resolve to - never a traction motor, even
+# though "motor traccion ..." also starts with the same word. Shared by
+# load_real_oil_samples (real/non-forward-filled oil samples) and
+# load_predictive_oil_limits_four (Stewart Limits) below, so both lookups
+# agree on which oil component a Predictivo key maps to.
+_OIL_COMPONENT_ALIASES = {
+    "motor": {"motor", "motor diesel"},
+}
+
+
+def _normalize_unit_id(unit_id):
+    """T_09 -> T_9, same criterion used across the predictive module."""
+    if pd.isna(unit_id):
+        return unit_id
+    unit_str = str(unit_id)
+    match = re.match(r"^([A-Za-z]+)_(0+)(\d+)$", unit_str)
+    if match:
+        return f"{match.group(1)}_{match.group(3)}"
+    return unit_str
+
+
+def load_real_oil_samples(client: str, component: str, unit: str):
+    """
+    Load real (non-forward-filled) oil samples for a component/unit from the
+    oil technique's golden layer (data/oil/golden/{client}/classified.parquet).
+
+    Predictivo's component key ("motor", "transmision") is the grouped/coarse
+    granularity, so it's matched against componentNameNormalized (Oil Data
+    Contract v2.8: componentName is the fine-grained original name, e.g.
+    "mando final izquierdo"; componentNameNormalized is the grouped version,
+    e.g. "mando final" - the one that lines up with Predictivo's key). Falls
+    back to componentName only if a client's classified.parquet has no
+    componentNameNormalized column at all.
+
+    Also consults _OIL_COMPONENT_ALIASES so a Predictivo key can match a more
+    specific oil component name (e.g. "motor" -> "motor diesel"), without
+    pulling in unrelated components that merely start with the same word
+    (e.g. Capstone's traction motors).
+
+    Returns None when nothing matches, so callers can show an empty state
+    instead of a fabricated chart/table.
+    """
+    from src.data.loaders import load_oil_classified
+
+    try:
+        df_classified = load_oil_classified(client)
+    except Exception as exc:  # noqa: BLE001 - treat as no data on any load issue
+        logger.warning(f"No se pudo cargar classified.parquet para {client}: {exc}")
+        return None
+
+    if df_classified is None or df_classified.empty:
+        return None
+
+    comp_key = (component or "").strip().lower()
+    match_keys = _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key})
+    if "componentNameNormalized" in df_classified.columns:
+        name_col = "componentNameNormalized"
+    elif "componentName" in df_classified.columns:
+        name_col = "componentName"
+    else:
+        return None
+
+    comp_rows = df_classified[df_classified[name_col].astype(str).str.strip().str.lower().isin(match_keys)]
+    if comp_rows.empty or "unitId" not in comp_rows.columns:
+        return None
+
+    unit_norm = _normalize_unit_id(unit)
+    comp_rows = comp_rows[comp_rows["unitId"].apply(_normalize_unit_id) == unit_norm]
+
+    return comp_rows if not comp_rows.empty else None
+
 
 def load_predictive_oil_limits_four(client: str, component: str) -> dict:
     """
@@ -370,13 +201,15 @@ def load_predictive_oil_limits_four(client: str, component: str) -> dict:
     stewart_limits_four.parquet's `component` field 1:1 - e.g. CDA's Stewart
     component is literally 'motor' (an exact match), but CAPSTONE splits
     engine components into 'motor diesel'/'motor traccion derecho'/'motor
-    traccion izquierdo' (no unambiguous match to predictive's generic
-    'motor'). Rather than guess which Capstone sub-component to use - a wrong
-    limit is worse than an absent one, the same principle already applied to
-    OIL_THRESHOLDS["capstone"] above - this only resolves limits when
-    `component` matches a Stewart Limits component name EXACTLY for that
-    client; otherwise it returns {} (no limits shown for that combination),
-    never falling back to the legacy OIL_THRESHOLDS table above.
+    traccion izquierdo'. _OIL_COMPONENT_ALIASES resolves this the same way it
+    already does for real oil samples: 'motor' unambiguously maps to 'motor
+    diesel' for Capstone, never to a traction motor. For any component with
+    no alias entry, this only resolves limits when `component` matches a
+    Stewart Limits component name EXACTLY for that client; otherwise it
+    returns {} (no limits shown for that combination) rather than guessing -
+    a wrong limit is worse than an absent one, the same principle already
+    applied to OIL_THRESHOLDS["capstone"] above. Never falls back to the
+    legacy OIL_THRESHOLDS table above.
 
     Args:
         client: Client key, any case ('cda', 'CDA', 'capstone', ...).
@@ -394,159 +227,14 @@ def load_predictive_oil_limits_four(client: str, component: str) -> dict:
         return {}
 
     limits = load_stewart_limits_four(limits_file)
-    return limits.get(client.upper(), {}).get(PREDICTIVE_STEWART_MACHINE, {}).get(component, {})
+    component_limits = limits.get(client.upper(), {}).get(PREDICTIVE_STEWART_MACHINE, {})
 
-
-# =============================================================================
-# FAILURE_MODE_METHODOLOGY  —  client -> component -> {mode: descripción}
-# =============================================================================
-
-FAILURE_MODE_METHODOLOGY = {
-    "cda": {
-        "motor": {
-            "abrasive_wear_risk": (
-                "Se evalúa la concentración de partículas metálicas (Hierro, Cromo) "
-                "y contaminantes abrasivos (Silicio) en el aceite. Incrementos en "
-                "Hierro y Cromo sugieren desgaste interno de componentes, mientras "
-                "que Silicio elevado indica ingreso de contaminantes externos."
-            ),
-            "combustion_risk": (
-                "Se analiza la calidad de combustión a través del Hollín y la "
-                "Viscosidad del aceite, junto con las temperaturas de escape "
-                "(izquierda, derecha y diferencial). Hollín elevado con cambios "
-                "de viscosidad y temperaturas anómalas indican combustión deficiente."
-            ),
-            "thermal_imbalance_risk": (
-                "Se monitorea el diferencial entre las temperaturas de escape "
-                "izquierda y derecha. Un delta elevado o sostenido puede indicar "
-                "problemas en inyectores, válvulas, turbo o distribución de aire "
-                "entre cilindros."
-            ),
-            "oil_degradation_risk": (
-                "Se evalúa la condición del aceite a través de su Viscosidad y "
-                "contenido de Hollín. Cambios fuera de los rangos esperados indican "
-                "degradación acelerada, comprometiendo la capacidad de lubricación "
-                "y protección del motor."
-            ),
-            "lubrication_failure_risk": (
-                "Se correlacionan los metales de cojinetes (Plomo, Cobre) con la "
-                "Presión de Aceite del motor. Metales elevados combinados con "
-                "presión baja son indicadores de falla en el sistema de lubricación."
-            ),
-            "bearing_wear_risk": (
-                "Se monitorea Plomo y Cobre (materiales de cojinetes) junto con "
-                "la Presión de Aceite. Un incremento sostenido de estos metales "
-                "indica desgaste progresivo de los cojinetes del motor."
-            ),
-            "blowby_risk": (
-                "Se correlaciona la Presión del Cárter (CnkcasePres) con el "
-                "contenido de Hollín en el aceite. Presión de cárter elevada "
-                "acompañada de hollín alto indica fuga de gases de combustión "
-                "al cárter (blow-by)."
-            ),
-        },
-        "transmision": {
-            "clutch_pack_risk": (
-                "Se evalúa el desgaste de los discos de embrague mediante Hierro, "
-                "Cobre y Aluminio en el aceite, correlacionado con deslizamientos "
-                "de lock-up y transmisión. Metales elevados con deslizamiento "
-                "anormal indican desgaste del clutch pack."
-            ),
-            "thermal_degradation_risk": (
-                "Se monitorea la degradación del aceite por temperatura excesiva, "
-                "evaluando Viscosidad y Agua junto con temperaturas de salida del "
-                "convertidor y aceite de transmisión."
-            ),
-            "planetary_gear_risk": (
-                "Se analiza Hierro, Silicio y Cobre provenientes del desgaste de "
-                "engranajes, correlacionado con desajustes de marcha y "
-                "deslizamiento de transmisión."
-            ),
-            "bearing_risk": (
-                "Se monitorean Hierro, Cobre, Plomo y Estaño (materiales de "
-                "rodamientos) junto con la temperatura del aceite de transmisión. "
-                "Incrementos sostenidos sugieren desgaste progresivo de rodamientos."
-            ),
-            "contamination_risk": (
-                "Se evalúa el ingreso de contaminantes externos al sistema mediante "
-                "Silicio, Agua, Sodio y Potasio. Estos elementos no son generados "
-                "por desgaste interno y su presencia indica contaminación del "
-                "circuito hidráulico."
-            ),
-            "torque_converter_risk": (
-                "Se analiza el desgaste del convertidor de torque mediante "
-                "Aluminio, Cobre y Hierro, correlacionado con deslizamiento de "
-                "lock-up y temperatura de salida del convertidor."
-            ),
-            "shift_quality_risk": (
-                "Se evalúa la calidad de los cambios de marcha mediante Viscosidad "
-                "y Hierro en aceite, correlacionado con deslizamientos, desajustes "
-                "de marcha y lock-up."
-            ),
-        },
-    },
-
-    "capstone": {
-        # Metodología provisional para los modos de Capstone (motor QSK60).
-        # El texto describe la intención según las señales asignadas; conviene
-        # que lo revise un experto de dominio.
-        "motor": {
-            "abrasive_wear_risk": (
-                "Se evalúa la concentración de partículas metálicas (Hierro, "
-                "Aluminio) y contaminantes abrasivos (Silicio) en el aceite. "
-                "Incrementos sostenidos sugieren desgaste interno o ingreso de "
-                "contaminantes externos."
-            ),
-            "combustion_risk": (
-                "Se analiza el Hollín y la dilución por Combustible en aceite, "
-                "junto con la temperatura promedio de gases de escape y la presión "
-                "de entrega de combustible. Hollín elevado con escape caliente "
-                "indica combustión deficiente; dilución con presión de combustible "
-                "baja sugiere inyector con fuga. Nota: la fuente actual no expone "
-                "presión de dosificación de inyectores, riel comandado ni el "
-                "indicador de agua en combustible, por lo que la detección de "
-                "fallas de inyección se apoya mayoritariamente en análisis de aceite."
-            ),
-            "thermal_imbalance_risk": (
-                "Se monitorea el diferencial entre las temperaturas de escape de "
-                "los bancos izquierdo y derecho. Un delta sostenido puede indicar "
-                "problemas de inyección, turbo o distribución entre cilindros."
-            ),
-            "oil_degradation_risk": (
-                "Se evalúa la condición del aceite mediante Hollín y Oxidación, "
-                "correlacionado con la temperatura del aceite. Cambios fuera de "
-                "rango indican degradación acelerada del lubricante."
-            ),
-            "lubrication_failure_risk": (
-                "Se correlacionan los metales de cojinetes (Plomo, Cobre) con las "
-                "presiones del sistema de lubricación (rifle y diferencial de "
-                "aceite). Metales altos con presión baja indican falla de "
-                "lubricación."
-            ),
-            "bearing_wear_risk": (
-                "Se monitorea Plomo, Cobre y Estaño (materiales de cojinetes) "
-                "junto con la presión de aceite del rifle. Incrementos sostenidos "
-                "indican desgaste progresivo de cojinetes."
-            ),
-            "blowby_risk": (
-                "Se correlaciona la presión del cárter con el contenido de Hollín "
-                "y Cromo en el aceite, junto con el nivel del tanque de reserva. "
-                "Presión de cárter elevada con hollín alto indica fuga de gases de "
-                "combustión (blow-by); Cromo creciente confirma desgaste de anillos."
-            ),
-            "turbocharger_risk": (
-                "Se monitorea la velocidad del turbo y las presiones de admisión "
-                "por banco. Desviaciones sostenidas pueden indicar deterioro o "
-                "falla del turbocompresor."
-            ),
-            "coolant_contamination_risk": (
-                "Se evalúa Sodio y Potasio en aceite junto con la temperatura y "
-                "presión del refrigerante. Su presencia indica ingreso de "
-                "refrigerante al circuito de aceite."
-            ),
-        },
-    },
-}
+    comp_key = (component or "").strip().lower()
+    for candidate in _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key}):
+        resolved = component_limits.get(candidate, {})
+        if resolved:
+            return resolved
+    return {}
 
 
 # =============================================================================
@@ -554,92 +242,3 @@ FAILURE_MODE_METHODOLOGY = {
 # El fallback ante un cliente desconocido loguea y cae a "cda", nunca a un
 # componente de otro cliente por accidente.
 # =============================================================================
-
-def _resolve_client_config(config: dict, client: str) -> dict:
-    """
-    Devuelve la sub-config del cliente pedido dentro de `config` (uno de los
-    diccionarios anidados por cliente). Si el cliente no existe, loguea un
-    warning y cae a "cda".
-    """
-    client_key = (client or "cda").lower()
-    client_config = config.get(client_key)
-    if client_config is None:
-        logger.warning(
-            "Unknown client '%s' in predictive_config, falling back to 'cda'",
-            client,
-        )
-        client_config = config.get("cda", {})
-    return client_config
-
-
-def get_failure_modes_for_component(component: str, client: str = "cda") -> dict:
-    """Config completa de modos de falla de un componente para un cliente."""
-    client_config = _resolve_client_config(FAILURE_MODE_CONFIG, client)
-    component_key = (component or "").lower()
-    return client_config.get(component_key, {})
-
-
-def get_failure_mode_label(mode_key: str, component: str = "motor",
-                           client: str = "cda") -> str:
-    """Label legible de un modo de falla."""
-    component_modes = get_failure_modes_for_component(component, client)
-    return component_modes.get(mode_key, {}).get("label", mode_key)
-
-
-def get_oil_variables_for_mode(mode_key: str, component: str = "motor",
-                               client: str = "cda") -> list:
-    """Variables de aceite asociadas a un modo de falla."""
-    component_modes = get_failure_modes_for_component(component, client)
-    return component_modes.get(mode_key, {}).get("oil_variables", [])
-
-
-def get_telemetry_variables_for_mode(mode_key: str, component: str = "motor",
-                                     client: str = "cda") -> list:
-    """Variables de telemetría asociadas a un modo de falla."""
-    component_modes = get_failure_modes_for_component(component, client)
-    return component_modes.get(mode_key, {}).get("telemetry_variables", [])
-
-
-def get_telemetry_signals_for_mode(mode_key: str, component: str = "motor",
-                                   client: str = "cda") -> list:
-    """Alias de get_telemetry_variables_for_mode (compatibilidad)."""
-    return get_telemetry_variables_for_mode(mode_key, component, client)
-
-
-def get_failure_mode_methodology(mode_key: str, component: str = "motor",
-                                 client: str = "cda") -> str:
-    """Descripción de la metodología de análisis de un modo de falla."""
-    client_methodology = _resolve_client_config(FAILURE_MODE_METHODOLOGY, client)
-    component_key = (component or "").lower()
-    return client_methodology.get(component_key, {}).get(mode_key, "")
-
-
-def get_all_oil_variables(client: str = "cda") -> list:
-    """Todas las variables de aceite disponibles para un cliente."""
-    client_labels = _resolve_client_config(OIL_LABELS, client)
-    return list(client_labels.keys())
-
-
-def get_failure_mode_options(component: str = "motor",
-                             client: str = "cda") -> list:
-    """Opciones {label, value} para dropdown de modos de falla."""
-    component_modes = get_failure_modes_for_component(component, client)
-    return [
-        {"label": config["label"], "value": key}
-        for key, config in component_modes.items()
-    ]
-
-
-def get_available_components(client: str = "cda") -> list:
-    """Lista de componentes con configuración para un cliente."""
-    client_config = _resolve_client_config(FAILURE_MODE_CONFIG, client)
-    return list(client_config.keys())
-
-
-def get_failure_modes_dict(component: str = "motor",
-                           client: str = "cda") -> dict:
-    """Mapa {mode_key: label} para un componente/cliente."""
-    return {
-        k: v["label"]
-        for k, v in get_failure_modes_for_component(component, client).items()
-    }

@@ -2,100 +2,46 @@
 Predictive callbacks - handles internal tab switching and evidence interactivity.
 """
 
-import re
-
-from dash import html, dcc, Input, Output, State, no_update
+from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import pandas as pd
 from src.utils.logger import get_logger
 from config.settings import get_settings
-from src.data.loaders import get_latest_component_hours, load_oil_classified
+from src.data.loaders import get_latest_component_hours
 from dashboard.components.predictive_config import (
-    get_failure_modes_dict,
-    get_failure_mode_options,
+    resolve_failure_modes,
+    resolve_failure_mode_options,
+    load_real_oil_samples,
 )
 from dashboard.tabs.tab_predictive_overview import (
     _discover_components,
     _load_component_data as _load_overview_component,
     _render_component_overview,
     _failure_table,
+    attach_status,
+    WINDOW_SUFFIX,
+    _load_component_hours_if_available,
 )
 from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_component,
     render_initial_content,
     render_detailed_evidence,
 )
+from dashboard.components.accumulated_curve import (
+    build_accumulated_figure,
+    build_accumulated_figure_from_curve,
+    _get_legacy_curve_data,
+    _curve_badge_row,
+    _curve_chip_groups,
+)
+from src.data import predictive_v2
 
 logger = get_logger(__name__)
 
-# Predictivo component key -> oil componentNameNormalized values it should
-# match, for clients whose oil naming is more specific than Predictivo's
-# coarse key. Applies across all clients (not just the ones that currently
-# need it) - e.g. Capstone's engine oil samples are grouped under "motor
-# diesel" rather than the bare "motor" that CDA uses, but "motor" should
-# always resolve to the diesel engine, never to a traction motor.
-_OIL_COMPONENT_ALIASES = {
-    "motor": {"motor", "motor diesel"},
-}
-
-
-def _normalize_unit_id(unit_id):
-    """T_09 -> T_9, same criterion used across the predictive module."""
-    if pd.isna(unit_id):
-        return unit_id
-    unit_str = str(unit_id)
-    match = re.match(r"^([A-Za-z]+)_(0+)(\d+)$", unit_str)
-    if match:
-        return f"{match.group(1)}_{match.group(3)}"
-    return unit_str
-
-
-def _load_real_oil_samples(client, component, unit):
-    """
-    Load real (non-forward-filled) oil samples for a component/unit from the
-    oil technique's golden layer (data/oil/golden/{client}/classified.parquet).
-
-    Predictivo's component key ("motor", "transmision") is the grouped/coarse
-    granularity, so it's matched against componentNameNormalized (Oil Data
-    Contract v2.8: componentName is the fine-grained original name, e.g.
-    "mando final izquierdo"; componentNameNormalized is the grouped version,
-    e.g. "mando final" - the one that lines up with Predictivo's key). Falls
-    back to componentName only if a client's classified.parquet has no
-    componentNameNormalized column at all.
-
-    Also consults _OIL_COMPONENT_ALIASES so a Predictivo key can match a more
-    specific oil component name (e.g. "motor" -> "motor diesel"), without
-    pulling in unrelated components that merely start with the same word
-    (e.g. Capstone's traction motors).
-
-    Returns None when nothing matches, so the caller can show an empty state
-    instead of a fabricated chart.
-    """
-    try:
-        df_classified = load_oil_classified(client)
-    except Exception as exc:  # noqa: BLE001 - treat as no data on any load issue
-        logger.warning(f"No se pudo cargar classified.parquet para {client}: {exc}")
-        return None
-
-    if df_classified is None or df_classified.empty:
-        return None
-
-    comp_key = (component or "").strip().lower()
-    match_keys = _OIL_COMPONENT_ALIASES.get(comp_key, {comp_key})
-    if "componentNameNormalized" in df_classified.columns:
-        name_col = "componentNameNormalized"
-    elif "componentName" in df_classified.columns:
-        name_col = "componentName"
-    else:
-        return None
-
-    comp_rows = df_classified[df_classified[name_col].astype(str).str.strip().str.lower().isin(match_keys)]
-    if comp_rows.empty or "unitId" not in comp_rows.columns:
-        return None
-
-    unit_norm = _normalize_unit_id(unit)
-    comp_rows = comp_rows[comp_rows["unitId"].apply(_normalize_unit_id) == unit_norm]
-
-    return comp_rows if not comp_rows.empty else None
+# _load_real_oil_samples was moved to
+# dashboard.components.predictive_config.load_real_oil_samples so
+# tab_predictive_evidence.py's oil selector/table (which needs the same real,
+# non-forward-filled oil samples for components on the new parquet Data
+# Contract v2.0 format) can share it without a circular import.
 
 
 def register_callbacks(app):
@@ -137,7 +83,7 @@ def register_callbacks(app):
 
             df, df_latest = _load_evidence_component(filepath, component, client)
             units = sorted(df["Unit"].unique()) if df is not None else []
-            failure_mode_options = get_failure_mode_options(component, client)
+            failure_mode_options = resolve_failure_mode_options(component, client)
 
             return html.Div([
                 # Unit selector
@@ -202,51 +148,189 @@ def register_callbacks(app):
 
     @app.callback(
         Output("predictive-fm-table-container", "children"),
+        Output("predictive-fm-table-state", "data"),
         Input("predictive-fm-sort-selector", "value"),
+        Input({"type": "predictive-fm-col-header", "key": ALL}, "n_clicks"),
+        State("predictive-fm-table-state", "data"),
         State("predictive-ev-client-store", "data"),
         State("predictive-ev-component-store", "data"),
         prevent_initial_call=True,
     )
-    def sort_failure_mode_table(sort_col, client, component):
-        """Re-sort and re-render the failure mode table based on selected period."""
-        if not sort_col or not client or not component:
-            return no_update
+    def update_failure_mode_table(window, _header_clicks, state, client, component):
+        """Re-sort/re-render the failure mode table (REQ-PR-09/10).
+
+        The window dropdown ("Hoy"/"30 días"/"60 días"/"90 días") picks which
+        single ranking column is shown; changing it also re-sorts by that
+        column. Clicking a failure-mode column header instead sorts by that
+        mode's value at the current window, toggling ascending/descending on
+        repeated clicks of the same header.
+        """
+        if not window or not client or not component:
+            return no_update, no_update
 
         components = _discover_components(client)
         filepath = components.get(component)
         if not filepath:
-            return no_update
+            return no_update, no_update
 
         df, df_latest, _ = _load_overview_component(filepath, component, client)
         if df_latest is None or df_latest.empty:
-            return no_update
+            return no_update, no_update
 
-        failure_modes = get_failure_modes_dict(component, client)
-
-        # Classify status (same logic as _render_component_overview)
-        # Saludable: avg_ranking_30d < 30 AND max_fm_30d < 50
-        # Alerta: 30 <= avg_ranking_30d < 60 OR 50 <= max_fm_30d < 80
-        # Crítico: avg_ranking_30d >= 60 OR max_fm_30d >= 80
-        latest = df_latest.copy()
-        latest["status"] = "Saludable"
-        latest.loc[
-            (latest["avg_ranking_30d"] >= 30) | (latest["max_fm_30d"] >= 50),
-            "status",
-        ] = "Alerta"
-        latest.loc[
-            (latest["avg_ranking_30d"] >= 60) | (latest["max_fm_30d"] >= 80),
-            "status",
-        ] = "Crítica"
-
-        # Sort by selected column descending (use 30d version for failure modes)
+        failure_modes = resolve_failure_modes(component, client)
+        latest = attach_status(df_latest, client, component)
         fm_keys = list(failure_modes.keys())
-        actual_sort_col = f"{sort_col}_30d" if sort_col in fm_keys and f"{sort_col}_30d" in latest.columns else sort_col
-        if actual_sort_col in latest.columns:
-            sorted_df = latest.sort_values(actual_sort_col, ascending=False)
-        else:
-            sorted_df = latest.sort_values("avg_ranking_30d", ascending=False)
 
-        return _failure_table(sorted_df, sort_col, failure_modes)
+        state = dict(state or {})
+        triggered = ctx.triggered_id
+        if isinstance(triggered, dict) and triggered.get("type") == "predictive-fm-col-header":
+            key = triggered["key"]
+            if state.get("sort_by") == key:
+                state["ascending"] = not state.get("ascending", False)
+            else:
+                state["sort_by"] = key
+                state["ascending"] = False
+        else:
+            state["sort_by"] = window
+            state["ascending"] = False
+
+        sort_by = state.get("sort_by", window)
+        ascending = state.get("ascending", False)
+
+        if sort_by in fm_keys:
+            suffix = WINDOW_SUFFIX.get(window, "_30d")
+            actual_sort_col = f"{sort_by}{suffix}"
+        else:
+            actual_sort_col = sort_by
+
+        if actual_sort_col in latest.columns:
+            # "Unit" as a secondary key makes tie order deterministic across
+            # renders (W34-10) instead of an unstable-quicksort fallback,
+            # while still respecting the column-header ascending/descending
+            # toggle above.
+            sorted_df = latest.sort_values([actual_sort_col, "Unit"], ascending=[ascending, True])
+        else:
+            sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
+
+        return _failure_table(sorted_df, window, sort_by, ascending, failure_modes), state
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # OVERVIEW: Curva Acumulada — selector de unidades y badges de riesgo
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output("predictive-curve-unit-select", "value"),
+        Output("predictive-curve-badge-store", "data"),
+        Input({"type": "predictive-curve-chip", "unit": ALL}, "n_clicks"),
+        Input({"type": "predictive-curve-badge", "status": ALL}, "n_clicks"),
+        Input("predictive-curve-unit-select", "value"),
+        State("predictive-curve-badge-store", "data"),
+        State("predictive-curve-units-store", "data"),
+        State("predictive-curve-resumen-store", "data"),
+        prevent_initial_call=True,
+    )
+    def sync_curve_selection(_chip_clicks, _badge_clicks, dropdown_value, active_badge, units_all, resumen_data):
+        """Mantiene sincronizados el dropdown de unidades, los chips de color
+        y los badges de riesgo, sin tocar la fuente de datos - todo se
+        resuelve contra los Store llenados en el render inicial (units y
+        resumen no cambian con la seleccion).
+
+        El dropdown es a la vez Input y Output de este callback (un click en
+        un chip o badge lo actualiza), asi que cada cambio se re-dispara a si
+        mismo con ctx.triggered_id apuntando al propio dropdown. Para no
+        entrar en un ciclo que borre el badge activo que se acaba de fijar,
+        esa rama no limpia el filtro incondicionalmente: primero comprueba si
+        el valor actual del dropdown sigue siendo exactamente el conjunto que
+        implica el badge activo (eco de este mismo callback) - solo lo limpia
+        si el usuario lo diverge a mano.
+        """
+        units_all = units_all or []
+        resumen_data = resumen_data or {}
+        zona_por_unit = dict(zip(resumen_data.get("Unit", []), resumen_data.get("zona_final", [])))
+
+        triggered = ctx.triggered_id
+
+        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-chip":
+            unit = triggered["unit"]
+            current = list(dropdown_value or [])
+            if unit in current:
+                current.remove(unit)
+            else:
+                current.append(unit)
+            return current, None
+
+        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-badge":
+            status = triggered["status"]
+            if active_badge == status:
+                return units_all, None
+            return [u for u in units_all if zona_por_unit.get(u) == status], status
+
+        # El dropdown cambio (typeahead, quitar un tag, etc). Si no hay badge
+        # activo no hay nada que reconciliar; si lo hay, solo se limpia
+        # cuando la seleccion actual ya no coincide con lo que ese badge
+        # implicaba (ver docstring).
+        if active_badge is None:
+            return no_update, no_update
+        expected = sorted(u for u in units_all if zona_por_unit.get(u) == active_badge)
+        if sorted(dropdown_value or []) == expected:
+            return no_update, no_update
+        return no_update, None
+
+    @app.callback(
+        Output("predictive-curve-graph", "figure"),
+        Output("predictive-curve-chips", "children"),
+        Output("predictive-curve-badges", "children"),
+        Input("predictive-curve-unit-select", "value"),
+        Input("predictive-curve-badge-store", "data"),
+        State("predictive-ev-client-store", "data"),
+        State("predictive-ev-component-store", "data"),
+        State("predictive-curve-colormap-store", "data"),
+        prevent_initial_call=True,
+    )
+    def update_curve_display(selected_units, active_badge, client, component, color_map):
+        """Reconstruye el grafico + chips + badges cuando cambia la
+        seleccion de unidades o el filtro de badge activo. Reusa la misma
+        fuente (cumulative_risk_curve precomputada o el pipeline legacy
+        cacheado via _get_legacy_curve_data) que _render_component_overview,
+        para no divergir de que curva se muestra en el render inicial.
+        """
+        if not client or not component:
+            return no_update, no_update, no_update
+
+        selected_units = selected_units or []
+
+        components = _discover_components(client)
+        filepath = components.get(component)
+        if not filepath:
+            return no_update, no_update, no_update
+
+        df_curve = None
+        try:
+            df_curve = predictive_v2.read_cumulative_risk_curve(client, component)
+        except Exception as exc:  # noqa: BLE001 - la curva nunca rompe la UI
+            logger.warning(f"No se pudo leer cumulative_risk_curve para {client}/{component}: {exc}")
+
+        if df_curve is not None and not df_curve.empty:
+            fig, resumen, units_all, curve_color_map = build_accumulated_figure_from_curve(
+                df_curve, component=component, selected_units=selected_units,
+            )
+        else:
+            df, _df_latest, _prev = _load_overview_component(filepath, component, client)
+            df_component_hours = _load_component_hours_if_available(client)
+            if df is None or df.empty or df_component_hours is None or df_component_hours.empty:
+                return no_update, no_update, no_update
+            df_acum = _get_legacy_curve_data(client, component, df, df_component_hours)
+            fig, resumen, units_all, curve_color_map = build_accumulated_figure(
+                df_acum, component=component, selected_units=selected_units,
+            )
+
+        if fig is None:
+            return no_update, no_update, no_update
+
+        color_map = color_map or curve_color_map
+        chips = _curve_chip_groups(units_all, color_map, resumen, selected_units)
+        badges = _curve_badge_row(resumen, active_badge)
+        return fig, chips, badges
 
     # ══════════════════════════════════════════════════════════════════════════
     # EVIDENCE: Unit banner
@@ -272,24 +356,21 @@ def register_callbacks(app):
             if filepath:
                 _, df_latest = _load_evidence_component(filepath, component, client)
                 if df_latest is not None and not df_latest.empty:
-                    row = df_latest[df_latest["Unit"] == selected_unit]
+                    # Status via attach_status() (same source as Estado de
+                    # Flota, REQ-PR-04) so the banner never disagrees with the
+                    # priority cards for the same unit.
+                    latest_with_status = attach_status(df_latest, client, component)
+                    row = latest_with_status[latest_with_status["Unit"] == selected_unit]
                     if not row.empty:
                         row = row.iloc[0]
                         ranking_val = float(row.get("ranking", 0))
-                        avg_30d = float(row.get("avg_ranking_30d", ranking_val))
-                        max_fm = float(row.get("max_fm_30d", 0))
                         ranking_text = f"{ranking_val:.0f}/100"
-                        # Status: Crítico >= 60 OR max_fm >= 80
-                        #         Alerta >= 30 OR max_fm >= 50
-                        if avg_30d >= 60 or max_fm >= 80:
-                            status_text = "Crítica"
-                            status_color = "#e24b4a"
-                        elif avg_30d >= 30 or max_fm >= 50:
-                            status_text = "Alerta"
-                            status_color = "#ef9f27"
-                        else:
-                            status_text = "Saludable"
-                            status_color = "#1d9e75"
+                        status_text = row["status"]
+                        status_color = {
+                            "Anormal": "#e24b4a",
+                            "Alerta": "#ef9f27",
+                            "Normal": "#1d9e75",
+                        }.get(status_text, "#667eea")
 
         component_label = (component or "").title()
 
@@ -326,9 +407,10 @@ def register_callbacks(app):
                                     if not df_ev_unit.empty:
                                         last_ev_date = df_ev_unit["Fecha"].max()
 
+                            hours_component_name = settings.get_component_hours_name(client, component)
                             unit_hours = all_hours[
                                 (all_hours['_uid_norm'] == unit_norm) &
-                                (all_hours['componentName'] == component)
+                                (all_hours['componentName'] == hours_component_name)
                             ].copy()
 
                             if not unit_hours.empty and last_ev_date is not None:
@@ -465,7 +547,7 @@ def register_callbacks(app):
         if df is None or df_latest is None:
             return no_update
 
-        failure_modes = get_failure_modes_dict(component, client)
+        failure_modes = resolve_failure_modes(component, client)
         row = df_latest[df_latest["Unit"] == selected_unit]
         if row.empty:
             return list(failure_modes.keys())[0] if failure_modes else None
@@ -536,7 +618,7 @@ def register_callbacks(app):
         # row between samples, which is what produced the staircase. This is
         # now the sole source for this chart; if there are no matching real
         # samples we show an empty state instead of falling back to it.
-        df_oil_real = _load_real_oil_samples(client, component, selected_unit)
+        df_oil_real = load_real_oil_samples(client, component, selected_unit)
         if df_oil_real is None or not any(v in df_oil_real.columns for v in selected_vars):
             return html.P("No hay muestras de aceite reales disponibles para este componente.",
                          className="text-muted", style={"fontSize": "13px", "padding": "20px", "textAlign": "center"})

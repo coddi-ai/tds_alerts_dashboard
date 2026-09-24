@@ -62,7 +62,23 @@ services:
       - BUCKET_NAME=${BUCKET_NAME:-}
       - ACCESS_KEY=${ACCESS_KEY:-}
       - SECRET_KEY=${SECRET_KEY:-}
+      # Regeneracion semanal del esquema declarado. Corre como un hilo dentro de ESTE
+      # proceso, no como un contenedor aparte: duerme hasta su ventana, corre un segundo y
+      # publica en el bucket. Por defecto, lunes 08:00 en Chile.
+      - CAMPBELL_AI_SCHEMA_REFRESH_ENABLED=${CAMPBELL_AI_SCHEMA_REFRESH_ENABLED:-true}
+      - CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY=${CAMPBELL_AI_SCHEMA_REFRESH_WEEKDAY:-monday}
+      - CAMPBELL_AI_SCHEMA_REFRESH_TIME=${CAMPBELL_AI_SCHEMA_REFRESH_TIME:-08:00}
+      - CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE=${CAMPBELL_AI_SCHEMA_REFRESH_TIMEZONE:-America/Santiago}
+      - CAMPBELL_AI_SCHEMA_BACKUP_S3=${CAMPBELL_AI_SCHEMA_BACKUP_S3:-true}
+      # Donde vive la data del dashboard en el bucket. El documento se publica ahi porque la
+      # descarga preserva estructura: esa clave aterriza en `data/auxiliar/` de cada
+      # despliegue, que es la copia que el servicio prefiere.
+      - CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX=${CAMPBELL_AI_SCHEMA_DATA_S3_PREFIX:-MultiTechnique Alerts/auxiliar}
+      # Copias fechadas, fuera del prefijo de la data para que la sincronizacion no las espeje.
+      - CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX=${CAMPBELL_AI_SCHEMA_BACKUP_S3_PREFIX:-campbellAI/schema/dataset_columns}
     volumes:
+      # Solo lectura, como estaba. El refresh escribe la copia generada si puede, y si no
+      # publica igual en S3: el documento llega a cada despliegue por la sincronizacion.
       - ./data:/app/data:ro
       # Read-write: holds the feedback log and the local backup mirror.
       - ./logs:/app/logs
@@ -71,7 +87,7 @@ services:
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/campbell-ai/health"]
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8000/api/v1/campbell-ai/health"]
       interval: 10s
       timeout: 5s
       retries: 5

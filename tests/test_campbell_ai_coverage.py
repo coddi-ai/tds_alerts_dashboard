@@ -23,6 +23,7 @@ from src.campbell_ai.data import (
     DATASET_MAP,
     DashboardDataRepository,
 )
+from config.client_services import KNOWN_SERVICE_IDS
 from src.campbell_ai.errors import CampbellDataError
 
 
@@ -61,7 +62,87 @@ def _oil_only_client(tmp_path) -> DashboardDataRepository:
             }
         ]
     ).to_parquet(oil / "stewart_limits.parquet", index=False)
+    # The current calibration: what every four-limit consumer actually reads. The legacy
+    # three-threshold file above no longer enables the oil_limits capability on its own.
+    pd.DataFrame(
+        [
+            {
+                "client": "ENEX",
+                "machine": "camion",
+                "component": "motor",
+                "essay": "Hierro",
+                "oilHourRange": "LT_1000",
+                "GroupElement": "Desgaste",
+                "min_value": 0.0,
+                "LIC": None,
+                "LIM": None,
+                "LSM": 50.0,
+                "LSC": 60.0,
+                "sample_count": 12,
+                "calculation_date": "2026-08-05T11:15:17",
+            }
+        ]
+    ).to_parquet(oil / "stewart_limits_four.parquet", index=False)
     return DashboardDataRepository(tmp_path)
+
+
+def test_a_missing_source_is_reported_as_a_missing_source(tmp_path, monkeypatch):
+    """With the service enabled, an absent file is named as an absent file."""
+    import src.campbell_ai.data as data_module
+
+    repository = _oil_only_client(tmp_path)
+    (tmp_path / "oil" / "golden" / "enex" / "machine_status.parquet").unlink()
+    monkeypatch.setattr(data_module, "declared_columns", lambda *args, **kwargs: None)
+
+    reasons = {
+        item["key"]: item["reason"]
+        for item in repository.client_capabilities("enex")["unavailable"]
+    }
+
+    assert "Faltan fuentes" in reasons["oil_fleet"]
+    assert "servicio" not in reasons["oil_fleet"]
+
+
+def test_the_limits_capability_names_the_calibration_its_consumers_read():
+    """The four-limit analysis must depend on the four-limit file, not the legacy one.
+
+    It used to require `stewart_limits.parquet` while the radar, the chat and the dashboard
+    all read `stewart_limits_four.parquet`, so the capability could be advertised for a
+    client whose current calibration was absent.
+    """
+    capability = next(
+        item for item in ANALYSIS_CAPABILITIES if item.key == "oil_limits"
+    )
+
+    assert "oil_limits_four" in capability.requires
+    assert DATASET_MAP["oil_limits_four"].path_template.endswith(
+        "stewart_limits_four.parquet"
+    )
+    assert "describe_oil_limits" in capability.tools
+
+
+def test_a_client_without_the_four_limit_file_cannot_run_the_limits_analysis(
+    tmp_path, monkeypatch
+):
+    """Behaviour behind the requirement, on the path that looks at disk.
+
+    Capability resolution trusts the declared schema for a declared dataset, so this pins the
+    fallback path - an undeclared dataset, resolved by looking - where the file itself decides.
+    """
+    import src.campbell_ai.data as data_module
+
+    repository = _oil_only_client(tmp_path)
+    (tmp_path / "oil" / "golden" / "enex" / "stewart_limits_four.parquet").unlink()
+    monkeypatch.setattr(data_module, "declared_columns", lambda *args, **kwargs: None)
+
+    capabilities = repository.client_capabilities("enex")
+
+    available = {item["key"] for item in capabilities["available"]}
+    reasons = {item["key"]: item["reason"] for item in capabilities["unavailable"]}
+    assert "oil_limits" not in available
+    assert "Faltan fuentes" in reasons["oil_limits"]
+    # One missing calibration, not an unusable client: the rest of the oil analyses stand.
+    assert {"oil_fleet", "oil_components"} <= available
 
 
 def test_capabilities_state_what_is_possible_and_why_the_rest_is_not(tmp_path):
@@ -76,7 +157,10 @@ def test_capabilities_state_what_is_possible_and_why_the_rest_is_not(tmp_path):
     assert "telemetry_fleet" not in available
 
     reasons = {item["key"]: item["reason"] for item in capabilities["unavailable"]}
-    assert "Faltan fuentes" in reasons["alerts"]
+    # ENEX has Monitoreo > Alertas switched off, so the reason names the service rather than
+    # the file: having the data would not make the analysis permitted.
+    assert "servicio no esta habilitado" in reasons["alerts"]
+    assert "monitoring-alerts" in reasons["alerts"]
     # A blocked module is a different reason than a missing file.
     assert "módulo predictivo" in reasons["predictive_motor"]
 
@@ -112,10 +196,18 @@ def test_capability_keys_are_unique():
     assert len(keys) == len(set(keys))
 
 
-def test_a_client_with_no_data_reports_everything_unavailable(tmp_path):
+def test_an_undeclared_client_with_no_data_reports_everything_unavailable(tmp_path):
+    """The guarantee that survives assuming presence.
+
+    A declared dataset is taken as present without touching disk, so a *declared* client with
+    an empty data root now reports its declared coverage. What must still hold is the case
+    that has no declaration to lean on: an unknown client falls back to checking the
+    filesystem, finds nothing, and is offered nothing - rather than inheriting some other
+    client's catalogue.
+    """
     repository = DashboardDataRepository(tmp_path / "empty")
 
-    capabilities = repository.client_capabilities("cda")
+    capabilities = repository.client_capabilities("cliente_nuevo")
 
     assert capabilities["available"] == []
     assert len(capabilities["unavailable"]) == len(ANALYSIS_CAPABILITIES)
@@ -285,3 +377,147 @@ def test_sensor_chart_is_not_offered_to_a_client_without_the_detail_source(tmp_p
     }
     with pytest.raises(CampbellDataError):
         registry.render("enex", "alert_sensor_trend", {"unit_id": "T_1"})
+
+
+# -------------------- H05: capabilities honour services and effective presence
+
+
+def test_h05_a_disabled_service_withdraws_its_analyses(tmp_path, monkeypatch):
+    """Data on disk is not permission.
+
+    With Monitoreo > Aceite switched off for a company, its oil files are still there and the
+    declaration still lists them - and every oil analysis was still advertised, so the
+    suggestion buttons offered questions the company cannot open in the dashboard either.
+    """
+    import config.client_services as services
+
+    repository = _oil_only_client(tmp_path)
+    # La configuracion misma, no la funcion que la lee. `is_service_enabled` y
+    # `get_enabled_services` son dos entradas al mismo diccionario; parchear una sola dejaba
+    # este test sin proteger nada el dia que el codigo pasara a usar la otra, que es
+    # exactamente lo que ocurrio.
+    monkeypatch.setattr(services, "get_client_services_config", lambda: {})
+
+    capabilities = repository.client_capabilities("enex")
+
+    assert capabilities["available"] == []
+    reasons = {item["key"]: item["reason"] for item in capabilities["unavailable"]}
+    for key in ("oil_fleet", "oil_components", "oil_limits", "oil_lab_kpis"):
+        assert "servicio no esta habilitado" in reasons[key], key
+        assert "monitoring-oil" in reasons[key], key
+    # And no technique is claimed either.
+    assert capabilities["techniques"]["aceite"] is False
+
+
+def test_h05_only_the_disabled_service_is_withdrawn(tmp_path, monkeypatch):
+    """The gate is per service, not a switch that empties the catalogue."""
+    import config.client_services as services
+
+    repository = _oil_only_client(tmp_path)
+    # Un config donde solo `monitoring-oil` esta apagado, para comprobar que la puerta es por
+    # servicio y no un interruptor que vacia el catalogo. Se parchea la configuracion y no la
+    # funcion que la lee, por la misma razon que en los otros casos.
+    monkeypatch.setattr(
+        services,
+        "get_client_services_config",
+        lambda: {
+            "enex": {
+                service_id: {"display": service_id != "monitoring-oil", "dummy": False}
+                for service_id in services.KNOWN_SERVICE_IDS
+            }
+        },
+    )
+
+    available = {
+        item["key"] for item in repository.client_capabilities("enex")["available"]
+    }
+
+    assert not [key for key in available if key.startswith("oil")]
+
+
+def test_h05_an_unreadable_service_configuration_denies(tmp_path, monkeypatch):
+    """Failing closed: offering an analysis a company switched off is the defect."""
+    import config.client_services as services
+
+    repository = _oil_only_client(tmp_path)
+
+    def _explode():
+        raise RuntimeError("configuración ilegible")
+
+    # Igual que arriba: se rompe la lectura de la configuracion, sea quien sea el que la pida.
+    monkeypatch.setattr(services, "get_client_services_config", _explode)
+
+    assert repository.client_capabilities("enex")["available"] == []
+
+
+def test_a_data_root_that_is_not_there_advertises_nothing_for_an_undeclared_client(
+    tmp_path, monkeypatch
+):
+    """Lo que sobrevive de la comprobacion en disco.
+
+    Un cliente *declarado* se toma del JSON y se anuncia aunque la raiz de datos no exista -
+    esa es la decision de confiar en la declaracion. Un cliente que el JSON no conoce no tiene
+    en que apoyarse, asi que se mira el disco, no hay nada, y no se le ofrece nada.
+    """
+    import src.campbell_ai.data as data_module
+
+    missing_root = tmp_path / "no-existe"
+    repository = DashboardDataRepository(missing_root)
+    # Sin declaracion, que es lo que se quiere ejercitar: la puerta de datos y no la de
+    # servicios, que para un cliente desconocido se cierra antes y taparia el caso.
+    monkeypatch.setattr(data_module, "declared_columns", lambda *a, **k: None)
+
+    capabilities = repository.client_capabilities("enex")
+
+    assert capabilities["available"] == []
+    assert not missing_root.exists(), "la comprobación no debe crear el directorio"
+    reasons = {item["key"]: item["reason"] for item in capabilities["unavailable"]}
+    assert "Faltan fuentes" in reasons["oil_components"]
+
+
+
+
+def test_a_declared_source_that_is_broken_is_still_advertised_and_fails_on_read(tmp_path):
+    """La garantia que se cedio al volver a confiar en la declaracion, dicha explicitamente.
+
+    Antes, un archivo declarado pero vacio o corrupto retiraba sus capacidades en el momento
+    de abrir la sesion. Eso costaba comprobar cada dataset en cada apertura - 28 operaciones
+    de disco por sesion, sobre almacenamiento de red donde cada una es un viaje -, asi que se
+    decidio volver a confiar en el JSON.
+
+    Lo que queda en su lugar: la capacidad se sigue anunciando, y el fallo aparece al leer la
+    fuente, con un error que nombra el archivo. Este test fija ese comportamiento para que el
+    costo de la decision este escrito y no se descubra en produccion.
+    """
+    from src.campbell_ai.errors import CampbellDataError
+
+    repository = _oil_only_client(tmp_path)
+    (tmp_path / "oil" / "golden" / "enex" / "classified.parquet").write_bytes(b"")
+
+    available = {
+        item["key"] for item in repository.client_capabilities("enex")["available"]
+    }
+    assert "oil_components" in available, "se confia en la declaracion, no se comprueba"
+
+    # Y el fallo llega al usarla, no antes.
+    with pytest.raises(CampbellDataError):
+        repository.load("oil_classified", "enex")
+
+
+def test_a02_the_payload_says_when_the_sources_were_checked(tmp_path):
+    """A stored capability payload is a snapshot; its age has to be readable."""
+    import src.campbell_ai.data as data_module
+
+    repository = _oil_only_client(tmp_path)
+
+    capabilities = repository.client_capabilities("enex")
+
+    assert capabilities["sources_checked_at"]
+
+
+def test_h05_every_capability_declares_the_service_that_authorizes_it():
+    """A capability with no service would be permanently ungated."""
+    for capability in ANALYSIS_CAPABILITIES:
+        assert capability.requires_services, capability.key
+        for service in capability.requires_services:
+            assert service in KNOWN_SERVICE_IDS, (capability.key, service)

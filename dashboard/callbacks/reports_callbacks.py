@@ -11,11 +11,12 @@ import json
 import re
 from pathlib import Path
 from config.settings import get_settings
-from src.data.loaders import load_oil_classified
+from src.data.loaders import load_oil_classified, load_essays_mapping, _data_path
 from src.data.loaders import load_stewart_limits_four
 from dashboard.components.oil_charts import (
     get_essay_limits_four,
     build_oil_time_series_grid,
+    build_oil_radar_view,
     classify_four_limit_value,
     consolidate_limit_entries,
     limit_line_color,
@@ -189,9 +190,9 @@ def register_reports_callbacks(app):
     @app.callback(
         [Output('reports-familia-selector', 'options'),
          Output('reports-familia-selector', 'value')],
-        [Input('client-selector', 'value'),
+        [Input('client-selector', 'value', allow_optional=True),
          Input('navigation-state', 'data')],
-        [State('reports-familia-selector', 'value')]
+        [State('reports-familia-selector', 'value', allow_optional=True)]
     )
     def update_familia_options(client, nav_state, current_familia):
         """Update familia (machine type) options."""
@@ -236,10 +237,10 @@ def register_reports_callbacks(app):
     @app.callback(
         [Output('reports-equipo-selector', 'options'),
          Output('reports-equipo-selector', 'value')],
-        [Input('reports-familia-selector', 'value'),
-         Input('client-selector', 'value'),
+        [Input('reports-familia-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True),
          Input('navigation-state', 'data')],
-        [State('reports-equipo-selector', 'value')],
+        [State('reports-equipo-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_equipo_options(familia, client, nav_state, current_equipo):
@@ -287,11 +288,11 @@ def register_reports_callbacks(app):
         [Output('reports-component-selector', 'options'),
          Output('reports-component-selector', 'value'),
          Output('navigation-state', 'data', allow_duplicate=True)],  # Clear navigation state after use
-        [Input('reports-equipo-selector', 'value'),
-         Input('reports-familia-selector', 'value'),
-         Input('client-selector', 'value'),
-         Input('navigation-state', 'data')],
-        [State('reports-component-selector', 'value')],
+        [Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('reports-familia-selector', 'value', allow_optional=True)],
+        [State('client-selector', 'value', allow_optional=True),
+         State('navigation-state', 'data', allow_optional=True),
+         State('reports-component-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_component_options(equipo, familia, client, nav_state, current_component):
@@ -340,11 +341,11 @@ def register_reports_callbacks(app):
     @app.callback(
         [Output('reports-date-selector', 'options'),
          Output('reports-date-selector', 'value')],
-        [Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('reports-familia-selector', 'value'),
-         Input('client-selector', 'value')],
-        [State('reports-date-selector', 'value')],
+        [Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('reports-familia-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
+        [State('reports-date-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_date_options(component, equipo, familia, client, current_date):
@@ -415,11 +416,11 @@ def register_reports_callbacks(app):
          Output('reports-essays-selector', 'options'),
          Output('reports-essays-selector', 'value'),
          Output('reports-delta-summary', 'children')],
-        [Input('reports-date-selector', 'value'),
-         Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('reports-familia-selector', 'value'),
-         Input('client-selector', 'value')],
+        [Input('reports-date-selector', 'value', allow_optional=True),
+         Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('reports-familia-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_report_display(sample_date, component, equipo, familia, client):
@@ -509,10 +510,10 @@ def register_reports_callbacks(app):
     # Time series callback - Create subplot for each essay
     @app.callback(
         Output('reports-time-series-chart', 'figure'),
-        [Input('reports-essays-selector', 'value'),
-         Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('client-selector', 'value')],
+        [Input('reports-essays-selector', 'value', allow_optional=True),
+         Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_time_series(essays, component, equipo, client):
@@ -651,11 +652,11 @@ def register_reports_callbacks(app):
 
     @app.callback(
         Output('reports-time-series-grid', 'children'),
-        [Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('reports-date-range-picker', 'start_date'),
-         Input('reports-date-range-picker', 'end_date'),
-         Input('client-selector', 'value')],
+        [Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('reports-date-range-picker', 'start_date', allow_optional=True),
+         Input('reports-date-range-picker', 'end_date', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_time_series_grid(component, equipo, start_date, end_date, client):
@@ -712,13 +713,91 @@ def register_reports_callbacks(app):
             return html.P(f"Error: {str(e)}", className="text-danger")
 
     # ========================================
+    # Tendencia / Último Ensayo view toggle
+    # ========================================
+
+    @app.callback(
+        Output('reports-tendencia-view', 'style'),
+        Output('reports-ultimo-ensayo-view', 'style'),
+        Input('reports-oil-view-selector', 'value', allow_optional=True),
+        prevent_initial_call=True,
+    )
+    def toggle_report_oil_view(view):
+        """Switch between the Tendencia grid and the Último Ensayo radar without re-rendering either."""
+        if view == 'ultimo_ensayo':
+            return {'display': 'none'}, {'display': 'block'}
+        return {'display': 'block'}, {'display': 'none'}
+
+    # ========================================
+    # Último Ensayo radar view (selected sample)
+    # ========================================
+
+    @app.callback(
+        Output('reports-oil-radar-view', 'children'),
+        [Input('reports-date-selector', 'value', allow_optional=True),
+         Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('reports-familia-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
+        prevent_initial_call=True
+    )
+    def update_oil_radar_view(sample_date, component, equipo, familia, client):
+        """Build the grouped radar-chart + table view for the currently selected sample."""
+        if not all([sample_date, component, equipo, familia, client]):
+            return html.P("Seleccionar filtros para ver el último ensayo", className="text-muted")
+
+        settings = get_settings()
+        reports_file = settings.get_classified_reports_path(client)
+        limits_file = settings.get_stewart_limits_four_path(client)
+
+        if not reports_file.exists():
+            return html.P("No hay datos disponibles", className="text-muted")
+
+        try:
+            df = load_oil_classified(client)
+            limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
+
+            sample_date_only = pd.to_datetime(sample_date).strftime('%Y-%m-%d')
+            df['sampleDate_str'] = pd.to_datetime(df['sampleDate']).dt.strftime('%Y-%m-%d')
+
+            sample_df = df[(df['machineName'] == familia) &
+                          (df['unitId'] == equipo) &
+                          (df['componentName'] == component) &
+                          (df['sampleDate_str'] == sample_date_only)]
+
+            if sample_df.empty:
+                return html.P("No se encontró muestra", className="text-muted")
+
+            sample = sample_df.iloc[0]
+
+            essays_file = _data_path("oil", "essays_elements.xlsx")
+            if not essays_file.exists():
+                return html.P("Archivo essays_elements.xlsx no encontrado", className="text-muted")
+            essays_df = load_essays_mapping(essays_file)
+
+            component_normalized = sample.get('componentNameNormalized', component)
+            comp_limits = {}
+            if limits:
+                comp_limits = limits.get(client, {}).get(familia, {}).get(component_normalized, {})
+            if not comp_limits:
+                return html.P(f"Límites no disponibles para {familia}/{component_normalized}", className="text-muted")
+
+            oil_hour_range = sample.get('oilHourRange', 'UNKNOWN')
+
+            return html.Div(build_oil_radar_view(sample, comp_limits, oil_hour_range, essays_df))
+
+        except Exception as e:
+            logger.exception(f"Error in update_oil_radar_view: {e}")
+            return html.P(f"Error: {str(e)}", className="text-danger")
+
+    # ========================================
     # Comment History Table
     # ========================================
     @app.callback(
         Output('reports-comment-history-container', 'children'),
-        [Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('client-selector', 'value')],
+        [Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def update_comment_history(component, equipo, client):
@@ -806,9 +885,9 @@ def register_reports_callbacks(app):
     # ========================================
     @app.callback(
         Output('advanced-analytics-variables', 'options'),
-        [Input('reports-component-selector', 'value'),
-         Input('reports-equipo-selector', 'value'),
-         Input('client-selector', 'value')],
+        [Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True),
+         Input('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def populate_advanced_analytics_options(component, equipo, client):
@@ -844,11 +923,11 @@ def register_reports_callbacks(app):
         [Input('advanced-analytics-generate', 'n_clicks')],
         [State('advanced-analytics-variables', 'value'),
          State('advanced-analytics-show-limits', 'value'),
-         State('reports-component-selector', 'value'),
-         State('reports-equipo-selector', 'value'),
-         State('reports-date-range-picker', 'start_date'),
-         State('reports-date-range-picker', 'end_date'),
-         State('client-selector', 'value')],
+         State('reports-component-selector', 'value', allow_optional=True),
+         State('reports-equipo-selector', 'value', allow_optional=True),
+         State('reports-date-range-picker', 'start_date', allow_optional=True),
+         State('reports-date-range-picker', 'end_date', allow_optional=True),
+         State('client-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
     def generate_advanced_analytics(n_clicks, variables, show_limits_val,
@@ -1362,13 +1441,12 @@ def create_evidence_tables(sample, limits, df):
     from pathlib import Path
     
     # Load essays_elements to get GroupElement mapping
-    essays_file = Path("data/oil/essays_elements.xlsx")
+    essays_file = _data_path("oil", "essays_elements.xlsx")
     if not essays_file.exists():
         return html.P("essays_elements.xlsx not found", className="text-muted")
     
     try:
-        essays_df = pd.read_excel(essays_file)
-        essays_df = essays_df.dropna(subset=['ElementNameSpanish', 'GroupElement'])
+        essays_df = load_essays_mapping(essays_file)
         
         # Group essays by GroupElement
         group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()

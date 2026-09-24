@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +16,31 @@ import numpy as np
 import pandas as pd
 
 from src.campbell_ai.errors import CampbellDataError
+from src.campbell_ai.oil_limits import (
+    FOUR_LIMIT_ESSAY_STATES,
+    LIMIT_BASIS_AVERAGED,
+    LIMIT_BASIS_LABELS,
+    classify_four_limit,
+    four_limit_reference,
+)
+from src.campbell_ai.oil_entities import (
+    LEVEL_COMPONENT,
+    LEVEL_MACHINE,
+    SAMPLE_DATE_COLUMNS,
+    SAMPLE_ID_COLUMNS,
+    SCOPE_HISTORY,
+    SCOPE_LATEST,
+    SCOPE_LATEST_IN_PERIOD,
+    latest_sample_per_component,
+    resolve_catalog_key,
+    sample_scope_payload,
+)
 from src.campbell_ai.signals import state_series
+from src.data.lab_kpis import compute_lab_kpis, lab_kpis_by_unit
 from src.campbell_ai.identity import normalize_client_id
-from src.campbell_ai.resources import CACHES, FrameCache, budget_from_env
+from src.campbell_ai.resources import CACHES, MEGABYTE, FrameCache, budget_from_env
+from src.campbell_ai import index as vocabulary_index
+from src.campbell_ai.schema import declared_columns
 from src.campbell_ai.temporal import DEFAULT_TIMEZONE, current_temporal_context
 from src.charts.signals import signal_label
 
@@ -123,7 +146,13 @@ DATASETS: tuple[DatasetSpec, ...] = (
     DatasetSpec(
         "oil_limits",
         "oil/golden/{client}/stewart_limits.parquet",
-        "Limites de aceite",
+        "Limites de aceite (tres umbrales, formato legacy)",
+    ),
+    DatasetSpec(
+        "oil_limits_four",
+        "oil/golden/{client}/stewart_limits_four.parquet",
+        "Limites de aceite vigentes (LIC/LIM/LSM/LSC)",
+        (("client",), ("component",), ("essay",), ("LSM",), ("LSC",)),
     ),
     DatasetSpec(
         "telemetry_machine_status",
@@ -178,7 +207,8 @@ DATASET_TOOLS: dict[str, str] = {
     "alerts_detail": "query_alert_detail",
     "oil_machine_status": "query_oil_status",
     "oil_classified": "query_oil_components",
-    "oil_limits": "query_oil_components (limites de referencia)",
+    "oil_limits": "describe_oil_limits (formato legacy de tres umbrales)",
+    "oil_limits_four": "describe_oil_limits",
     "telemetry_machine_status": "query_telemetry_health",
     "telemetry_classified": "query_telemetry_components",
     "maintenance_actions": "query_maintenance",
@@ -230,6 +260,12 @@ DATASET_FILTERS: dict[str, tuple[FilterSpec, ...]] = {
         FilterSpec("component", ("componentNameNormalized", "componentName")),
         FilterSpec("status", ("report_status", "overall_status")),
     ),
+    "oil_limits_four": (
+        FilterSpec("component", ("component",)),
+        FilterSpec("essay", ("essay",)),
+        FilterSpec("machine", ("machine",)),
+        FilterSpec("oil_hour_range", ("oilHourRange",)),
+    ),
     "telemetry_machine_status": (
         FilterSpec("unit_id", ("unit_id", "unitId", "UnitId"), "unit"),
     ),
@@ -255,6 +291,8 @@ TOOL_DATASETS: dict[str, str] = {
     "query_maintenance_summary": "maintenance_summary",
     "query_oil_status": "oil_machine_status",
     "query_oil_components": "oil_classified",
+    "query_lab_kpis": "oil_classified",
+    "describe_oil_limits": "oil_classified",
     "query_telemetry_health": "telemetry_machine_status",
     "query_telemetry_components": "telemetry_classified",
     "query_predictive_risk": "predictive_motor",
@@ -269,6 +307,16 @@ class AnalysisCapability:
     tools: tuple[str, ...]
     requires: tuple[str, ...]
     requires_predictive_module: bool = False
+    # Dashboard service this analysis belongs to. Data being present is not permission: a
+    # company that has turned off Monitoreo > Aceite must not be offered oil analyses just
+    # because the parquet is on disk. Empty means the analysis is not gated by a service.
+    requires_services: tuple[str, ...] = ()
+    # Columns one analysis needs from a dataset that other analyses can use without them.
+    # `DatasetSpec.required_column_groups` cannot express this: it gates the whole source, so
+    # demanding `labDate` there would make the oil file invalid for every client whose lab
+    # does not record reception, and take component condition down with it. Each entry is
+    # (dataset key, alternative column names).
+    requires_columns: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 # Clients do not all carry the same techniques: EMIN has no telemetry, ENEX only
@@ -276,61 +324,88 @@ class AnalysisCapability:
 # learn its limits up front instead of discovering them through failures.
 ANALYSIS_CAPABILITIES: tuple[AnalysisCapability, ...] = (
     AnalysisCapability(
-        "alerts", "Alertas consolidadas", ("query_alerts",), ("alerts",)
+        "alerts", "Alertas consolidadas", ("query_alerts",), ("alerts",),
+        requires_services=("monitoring-alerts",),
     ),
     AnalysisCapability(
         "alert_detail",
         "Valor medido y umbral de la señal que disparó una alerta",
         ("query_alert_detail", "query_alert_signals"),
         ("alerts_detail",),
+        requires_services=("monitoring-alerts",),
     ),
     AnalysisCapability(
         "alert_sensor_trend",
         "Series de las senales de una alerta contra sus limites",
         ("render_dashboard_chart(alert_sensor_trend)",),
         ("alerts_detail",),
+        requires_services=("monitoring-alerts",),
     ),
     AnalysisCapability(
         "maintenance",
         "Acciones de mantenimiento",
         ("query_maintenance",),
         ("maintenance_actions",),
+        requires_services=("monitoring-mantenciones",),
     ),
     AnalysisCapability(
         "maintenance_summary",
         "Resumen semanal de mantenimiento",
         ("query_maintenance_summary",),
         ("maintenance_summary",),
+        requires_services=("monitoring-mantenciones",),
     ),
     AnalysisCapability(
         "oil_fleet",
         "Condición de la flota por análisis de aceite",
         ("query_oil_status",),
         ("oil_machine_status",),
+        requires_services=("monitoring-oil",),
     ),
     AnalysisCapability(
         "oil_components",
         "Condición por componente y ensayos fuera de límite",
         ("query_oil_components",),
         ("oil_classified",),
+        requires_services=("monitoring-oil",),
     ),
     AnalysisCapability(
         "oil_limits",
-        "Comparación de ensayos contra sus límites de referencia",
-        ("render_dashboard_chart(oil_essay_group_radar)",),
-        ("oil_classified", "oil_limits"),
+        "Comparación de ensayos contra sus límites de referencia vigentes",
+        ("describe_oil_limits", "render_dashboard_chart(oil_essay_group_radar)"),
+        # The four-limit file is the one every consumer actually reads; requiring only the
+        # legacy three-threshold file advertised this analysis for a client that could not
+        # run it and hid it for one that could.
+        ("oil_classified", "oil_limits_four"),
+        requires_services=("monitoring-oil",),
+    ),
+    AnalysisCapability(
+        "oil_lab_kpis",
+        "Tiempos de laboratorio: tránsito, laboratorio y diagnóstico",
+        ("query_lab_kpis",),
+        ("oil_classified",),
+        # Announced only where the two dates the KPI needs exist. `labDate` is deliberately
+        # not required: without it transit and lab time are unavailable and the diagnostic
+        # time still answers the question.
+        requires_columns=(
+            ("oil_classified", ("sampleDate",)),
+            ("oil_classified", ("reportDate",)),
+        ),
+        requires_services=("monitoring-oil",),
     ),
     AnalysisCapability(
         "telemetry_fleet",
         "Condición de la flota por telemetría",
         ("query_telemetry_health",),
         ("telemetry_machine_status",),
+        requires_services=("monitoring-telemetry",),
     ),
     AnalysisCapability(
         "telemetry_components",
         "Componentes y señales disparadoras por telemetría",
         ("query_telemetry_components",),
         ("telemetry_classified",),
+        requires_services=("monitoring-telemetry",),
     ),
     AnalysisCapability(
         "predictive_motor",
@@ -338,6 +413,7 @@ ANALYSIS_CAPABILITIES: tuple[AnalysisCapability, ...] = (
         ("query_predictive_risk(domain='motor')",),
         ("predictive_motor",),
         requires_predictive_module=True,
+        requires_services=("predictive-motor",),
     ),
     AnalysisCapability(
         "predictive_transmission",
@@ -345,6 +421,7 @@ ANALYSIS_CAPABILITIES: tuple[AnalysisCapability, ...] = (
         ("query_predictive_risk(domain='transmision')",),
         ("predictive_transmission",),
         requires_predictive_module=True,
+        requires_services=("predictive-transmision",),
     ),
 )
 
@@ -366,13 +443,67 @@ def predictive_band(value: float) -> str:
     return "Critico"
 
 
-def predictive_module_allows(client: str) -> bool:
-    """Honour the dashboard's Predictive module allowlist for the requested client."""
-    normalized = normalize_client_id(client)
+def client_service_enabled(client: str, service_id: str) -> bool:
+    """Is this dashboard service displayed for the client?
+
+    Delegates to `config.client_services`, the single authorization check the dashboard uses
+    for navigation and routes, so the assistant offers exactly what the company can open.
+
+    A configuration that cannot be read denies rather than allows: advertising an analysis the
+    company has switched off is the failure being prevented, while the opposite mistake only
+    costs a suggestion.
+    """
     try:
         from config.client_services import is_service_enabled
 
-        return bool(is_service_enabled(normalized, "predictive"))
+        return bool(is_service_enabled(normalize_client_id(client), service_id))
+    except Exception:
+        logger.warning(
+            "Campbell AI no pudo leer los servicios habilitados de %s", client, exc_info=True
+        )
+        return False
+
+
+def enabled_services(client: str) -> Optional[frozenset[str]]:
+    """Every service this client has switched on, in one lookup. ``None`` if unreadable.
+
+    `client_service_enabled` answers the same question for one service, but each call
+    re-checks the configuration file's mtime to pick up edits - so asking it once per
+    capability cost thirteen `stat` calls on every session opening, against a file that is the
+    same for all thirteen. Fetching the set once and testing membership in memory is the same
+    authorization with one filesystem touch.
+
+    ``None`` rather than an empty set when the configuration cannot be read, because the two
+    mean opposite things: "nothing is enabled" is an answer, "we do not know" must deny
+    without being mistaken for one.
+    """
+    try:
+        from config.client_services import get_enabled_services
+
+        return frozenset(get_enabled_services(normalize_client_id(client)))
+    except Exception:
+        logger.warning(
+            "Campbell AI no pudo leer los servicios habilitados de %s", client, exc_info=True
+        )
+        return None
+
+
+def predictive_module_allows(client: str) -> bool:
+    """Honour the dashboard's Predictive module allowlist for the requested client.
+
+    Predictive access is granted per component (service ids
+    'predictive-<component>'), so this returns True if the client has at
+    least one predictive component enabled - callers here care about the
+    module as a whole, not which specific component.
+    """
+    normalized = normalize_client_id(client)
+    try:
+        from config.client_services import get_enabled_services
+
+        return any(
+            service_id.startswith("predictive-")
+            for service_id in get_enabled_services(normalized)
+        )
     except Exception:
         # Older deployments carried this as a Settings field. Keep the fallback
         # tolerant so Campbell AI initialization does not fail if either config shape
@@ -400,6 +531,23 @@ def predictive_module_allows(client: str) -> bool:
 # reports `fill_pct`, `evictions` and `hits` for exactly this: many evictions with few
 # hits means the working set no longer fits and the budget should go up.
 DEFAULT_FRAME_CACHE_MB = 192
+
+# Whether a declared dataset is actually *usable* right now.
+#
+# `validate_client` trusts the declaration for *columns*, which is what made opening a chat
+# cheap. It also trusted it for existence, and that went too far: a client whose files had not
+# synced - or a deployment pointed at the wrong data root - still advertised every analysis,
+# and the suggestion buttons offered questions that could not run.
+#
+# Checking existence alone was not enough either. A zero-byte or truncated parquet exists, so
+# the capability was still announced and the tool then failed with
+def _iso_now() -> str:
+    from datetime import datetime, timezone as _timezone
+
+    return datetime.now(_timezone.utc).isoformat(timespec="seconds")
+
+
+
 
 # Probes are two small lists; the cap only exists so a long-lived process cannot
 # accumulate them without limit if the dataset registry ever grows or files are
@@ -561,6 +709,11 @@ class DashboardDataRepository:
         probe_cache: dict[tuple[str, int], dict[str, Any]] | None = None,
     ):
         self.data_root = Path(data_root).expanduser().resolve()
+        # Resolved dataset paths, per (dataset, client). Bounded by the catalogue: eleven
+        # datasets times the clients this process serves.
+        self._path_cache: dict[tuple[str, str], Path] = {}
+        # Parsed manifest status, against the generation of the file it came from.
+        self._manifest_cache: Optional[tuple[tuple, dict[str, Any]]] = None
         self.timezone = timezone or DEFAULT_TIMEZONE
         # Both caches are injection points for tests that need isolation (or a tiny
         # budget to exercise eviction) without touching the process-wide ones.
@@ -576,34 +729,74 @@ class DashboardDataRepository:
         return pd.Timestamp(self.temporal_context()["today"])
 
     def dataset_path(self, key: str, client: str) -> Path:
+        """Absolute, authorized path of one dataset for one client.
+
+        Memoized per (dataset, client), and that is not a micro-optimization: `.resolve()`
+        touches the filesystem on Linux - it walks the path resolving symlinks - so this was
+        eleven real round trips per validation pass, on top of the eleven the probe already
+        did. Measured inside the container, `validate_client` spent 22 of its 24 filesystem
+        operations here, producing a path that cannot change: the template is a constant and
+        `data_root` is resolved once in the constructor.
+
+        Discovered by running in Docker. On Windows `Path.resolve()` did not show up as a
+        filesystem call at all, so the local measurement said this was free. It is not, on the
+        platform that matters.
+
+        The traversal guard still runs on every distinct pair, before anything is cached.
+        """
         try:
             spec = DATASET_MAP[key]
         except KeyError as exc:
             raise CampbellDataError(f"Dataset no registrado: {key}") from exc
 
         normalized_client = normalize_client_id(client)
+        cached = self._path_cache.get((key, normalized_client))
+        if cached is not None:
+            return cached
+
         path = (self.data_root / spec.path_template.format(client=normalized_client)).resolve()
         try:
             path.relative_to(self.data_root)
         except ValueError as exc:
             raise CampbellDataError("Ruta de datos fuera del directorio autorizado") from exc
+        self._path_cache[(key, normalized_client)] = path
         return path
 
     def _read_frame(self, path: Path) -> pd.DataFrame:
         if not path.exists():
-            raise CampbellDataError(f"Fuente de datos no disponible: {path.name}")
+            # The primary signal that a declared dataset did not arrive, now that validation
+            # assumes presence. Worth being specific: this message is what an operator reads
+            # instead of "la sesion no abre".
+            raise CampbellDataError(
+                f"Fuente de datos no disponible: {path.name}. Se esperaba en {path.parent}; "
+                "si el dataset deberia existir, la sincronizacion de datos no lo trajo."
+            )
         mtime_ns = path.stat().st_mtime_ns
         cache_key = (str(path), mtime_ns)
         cached = self._frames.get(cache_key)
         if cached is not None:
             return cached.copy(deep=False)
 
-        if path.suffix.lower() == ".csv":
-            frame = pd.read_csv(path, low_memory=False)
-        elif path.suffix.lower() == ".parquet":
-            frame = pd.read_parquet(path)
-        else:
-            raise CampbellDataError(f"Formato no soportado: {path.suffix}")
+        # Un fallo de lectura se traduce, no se deja escapar. Ahora que la validacion confia
+        # en la declaracion y no comprueba los archivos, esta es la unica vez que alguien mira
+        # de verdad - y un archivo truncado, vacio o corrupto lanza el error de la libreria
+        # (`ArrowInvalid: Parquet file size is 0 bytes`), que la API convierte en un 500 sin
+        # explicacion. Traducido, es un 503 que nombra el archivo y dice que revisar.
+        try:
+            if path.suffix.lower() == ".csv":
+                frame = pd.read_csv(path, low_memory=False)
+            elif path.suffix.lower() == ".parquet":
+                frame = pd.read_parquet(path)
+            else:
+                raise CampbellDataError(f"Formato no soportado: {path.suffix}")
+        except CampbellDataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo del lector es el mismo hecho
+            logger.warning("Campbell AI no pudo leer %s", path, exc_info=True)
+            raise CampbellDataError(
+                f"La fuente {path.name} existe pero no se pudo leer "
+                f"({type(exc).__name__}). Puede estar vacia, truncada o a medio sincronizar."
+            ) from exc
 
         # Retire the previous generation of this file before inserting the new one, so a
         # re-synced dataset does not keep its stale copy resident until LRU pressure
@@ -635,31 +828,99 @@ class DashboardDataRepository:
         """
         return self._read_frame(self.dataset_path(key, client))
 
-    def _probe_frame(self, path: Path) -> dict[str, Any]:
-        """Read only columns and row count so validation never materializes a dataset."""
-        mtime_ns = path.stat().st_mtime_ns
+    @staticmethod
+    def read_columns(path: Path) -> list[str]:
+        """Column names of a dataset file, read from its header or footer.
+
+        The one place that knows how to get columns off disk. `_probe_frame` uses it when the
+        schema is not declared, and `schema.build` / `schema.verify_against_disk` use it to
+        generate and to check that declaration - so what is declared and what is verified can
+        never be produced by two different readers that disagree.
+        """
+        suffix = path.suffix.lower()
+        if suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            return [str(name) for name in pq.ParquetFile(path).schema_arrow.names]
+        if suffix == ".csv":
+            header = pd.read_csv(path, nrows=0, low_memory=False)
+            return [str(column) for column in header.columns]
+        raise CampbellDataError(f"Formato no soportado: {path.suffix}")
+
+    def _probe_frame(
+        self,
+        path: Path,
+        *,
+        count_rows: bool = False,
+        dataset_key: str = "",
+        client: str = "",
+    ) -> dict[str, Any]:
+        """Shape of a dataset without materializing it: columns, size, optionally row count.
+
+        ``count_rows`` is off by default, and that default is the fix for a real production
+        symptom. Counting rows in a CSV means reading every byte of it, and validation walks
+        the whole catalogue on every initialization: for CDA that is 11 files and 71 MB, of
+        which 67 MB are read *only* to fill a row count - three large CSVs whose totals nobody
+        needs at that moment. On local disk the walk costs ~1.7 s; on network storage whose
+        throughput has collapsed to its baseline it is the difference between a session that
+        opens at once and one that sits on "Leyendo datos" for over a minute.
+
+        Parquet keeps its count regardless: it comes from the file footer, so it is free.
+
+        The count is not lost, only deferred. `describe_datasets` still asks for it, and a
+        cached entry probed without rows is upgraded in place the first time somebody does -
+        so the expensive read happens when a caller actually wants the number, once per file
+        version, instead of on every session opening.
+        """
+        stat = path.stat()
+        mtime_ns = stat.st_mtime_ns
         cache_key = (str(path), mtime_ns)
         with _PROBE_LOCK:
             cached = self._probe_cache.get(cache_key)
-            if cached is not None:
+            if cached is not None and not (count_rows and cached.get("rows") is None):
                 return cached
         frame = self._frames.get(cache_key)
         if frame is not None:
+            # The whole frame is already resident, so the count costs nothing.
             probe = {
                 "columns": [str(column) for column in frame.columns],
                 "rows": int(len(frame)),
+                "size_bytes": stat.st_size,
+                "columns_from": "frame",
+            }
+        elif (
+            not count_rows
+            and dataset_key
+            and client
+            and (
+                declared := declared_columns(client, dataset_key, path.suffix)
+            )
+            is not None
+        ):
+            # Declared columns: the file is never opened, only `stat`-ed. This is the whole
+            # point of the frozen schema - on network storage an open is a round trip, and
+            # validation used to pay eleven of them per session opening to rediscover columns
+            # that do not change. See `src/campbell_ai/schema/__init__.py` for the two lines
+            # of defence that make trusting the declaration safe.
+            probe = {
+                "columns": declared,
+                "rows": None,
+                "size_bytes": stat.st_size,
+                "columns_from": "declared",
             }
         elif path.suffix.lower() == ".parquet":
             import pyarrow.parquet as pq
 
             metadata = pq.ParquetFile(path)
+            # From the footer, not from the data: cheap enough to always include.
             probe = {
                 "columns": [str(name) for name in metadata.schema_arrow.names],
                 "rows": int(metadata.metadata.num_rows),
+                "size_bytes": stat.st_size,
+                "columns_from": "footer",
             }
         elif path.suffix.lower() == ".csv":
-            header = pd.read_csv(path, nrows=0, low_memory=False)
-            columns = [str(column) for column in header.columns]
+            columns = self.read_columns(path)
             # Count rows by scanning bytes rather than parsing a column. `read_csv`
             # with `usecols=[0]` still tokenizes every field of every row to find the
             # boundaries and allocates the whole file as one block under
@@ -668,7 +929,9 @@ class DashboardDataRepository:
             # `count_csv_data_rows` for how quoted newlines stay correct.
             probe = {
                 "columns": columns,
-                "rows": count_csv_data_rows(path) if columns else 0,
+                "rows": (count_csv_data_rows(path) if columns else 0) if count_rows else None,
+                "size_bytes": stat.st_size,
+                "columns_from": "header",
             }
         else:
             raise CampbellDataError(f"Formato no soportado: {path.suffix}")
@@ -680,6 +943,11 @@ class DashboardDataRepository:
             # Oldest-first trim; insertion order is good enough for entries this small.
             while len(self._probe_cache) >= _MAX_PROBE_ENTRIES:
                 self._probe_cache.pop(next(iter(self._probe_cache)))
+            previous = self._probe_cache.get(cache_key)
+            if previous is not None and probe.get("rows") is None:
+                # A concurrent caller already paid for the count; keep it rather than
+                # replacing it with a probe that skipped it.
+                probe = {**probe, "rows": previous.get("rows")}
             self._probe_cache[cache_key] = probe
         return probe
 
@@ -706,19 +974,39 @@ class DashboardDataRepository:
         return missing
 
     def _manifest_status(self) -> dict[str, Any]:
+        """Whether the data manifest is present and parseable, cached per file generation.
+
+        Read and parsed at most once per version of the file. It used to be read on every
+        session opening - one `open` plus a JSON parse - which is the same class of work the
+        declared schema removed for the datasets: the manifest changes when the data syncs,
+        not when somebody opens a chat. A `stat` is enough to notice that it moved.
+        """
         manifest_path = self.data_root / "auxiliar" / "manifest.json"
+        try:
+            stat = manifest_path.stat()
+            generation: tuple = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            generation = ()
+
+        cached = self._manifest_cache
+        if cached is not None and cached[0] == generation:
+            return dict(cached[1])
+
         status: dict[str, Any] = {
             "path": str(manifest_path),
-            "exists": manifest_path.exists(),
+            "exists": False,
             "valid": False,
         }
-        if not manifest_path.exists():
-            return status
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if generation:
+            status["exists"] = True
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                # Present but unreadable or malformed: a different fact from absent, and the
+                # caller distinguishes them.
+                payload = None
             status["valid"] = isinstance(payload, dict)
-        except (OSError, json.JSONDecodeError):
-            status["valid"] = False
+        self._manifest_cache = (generation, dict(status))
         return status
 
     def validate_client(self, client: str) -> dict[str, Any]:
@@ -727,22 +1015,76 @@ class DashboardDataRepository:
         available_count = 0
         for spec in DATASETS:
             path = self.dataset_path(spec.key, normalized_client)
+
+            # La declaracion es la fuente de verdad: que datasets tiene este cliente y con
+            # que columnas. Si el JSON lo declara, se asume presente y no se toca el disco.
+            #
+            # Esta linea se movio tres veces y la historia explica la eleccion. Primero la
+            # validacion leia cada archivo, conteo de filas incluido: 93 operaciones de disco
+            # y 67 MB de CSV para abrir un chat. Se reemplazo por confiar en la declaracion,
+            # lo que arreglo la latencia. El intento siguiente comprobaba usabilidad archivo
+            # por archivo para no anunciar analisis sobre data que no habia sincronizado, y
+            # eso devolvio el costo al camino de la sesion - 28 operaciones por apertura.
+            #
+            # Queda lo primero, a sabiendas. Un archivo declarado que no llego no se detecta
+            # aca: aparece al leerlo, con el error explicito de `_read_frame`, y la auditoria
+            # de fondo lo reporta en `/diagnostics` sin bloquear a nadie.
+            declared = declared_columns(normalized_client, spec.key, path.suffix)
+            if declared is not None:
+                # The declaration answers "which columns are expected", never "is this file
+                # usable right now". Usability is judged against the file itself - present, not
+                # empty, header readable - and the required columns are then checked against
+                # that header, so a source whose schema changed under the declaration stops
+                # being advertised instead of failing mid-answer.
+                missing = self._validate_columns(declared, spec)
+                if not missing:
+                    available_count += 1
+                datasets[spec.key] = {
+                    "label": spec.label,
+                    "path": str(path),
+                    "exists": True,
+                    "valid": not missing,
+                    "missing_columns": missing,
+                    # Unknown without touching the file, and deliberately not guessed. Both
+                    # are informational; `describe_dataset` reads the real numbers on demand.
+                    "rows": None,
+                    "size_bytes": None,
+                    "size_mb": None,
+                    "columns": declared,
+                    # Columns reported from the declaration; validity judged on the file.
+                    "presence": "declared",
+                }
+                continue
+
+            # No declarado para este cliente, asi que no hay nada en que confiar: se mira.
+            # Es el unico caso que toca disco, y solo alcanza a clientes con declaracion
+            # parcial. No se cachea el negativo: un dataset que empieza a llegar quedaria sin
+            # descubrirse hasta regenerar el JSON.
             item: dict[str, Any] = {
                 "label": spec.label,
                 "path": str(path),
                 "exists": path.exists(),
                 "valid": False,
                 "missing_columns": [],
+                "presence": "checked",
             }
-            if path.exists():
+            if item["exists"]:
                 try:
-                    probe = self._probe_frame(path)
+                    # No row count here: validation only has to answer "is this source
+                    # present and does it carry the columns we need", and the count is what
+                    # makes the walk expensive. `size_mb` gives the same sense of volume for
+                    # free, from the same `stat` the probe already does.
+                    probe = self._probe_frame(
+                        path, dataset_key=spec.key, client=normalized_client
+                    )
                     missing = self._validate_columns(probe["columns"], spec)
                     item.update(
                         {
                             "valid": not missing,
                             "missing_columns": missing,
-                            "rows": probe["rows"],
+                            "rows": probe.get("rows"),
+                            "size_bytes": int(probe.get("size_bytes", 0)),
+                            "size_mb": round(probe.get("size_bytes", 0) / MEGABYTE, 2),
                             "columns": probe["columns"],
                         }
                     )
@@ -1059,7 +1401,11 @@ class DashboardDataRepository:
             compact[key] = {
                 "available": value["exists"],
                 "valid": value["valid"],
-                "rows": value.get("rows", 0),
+                # None means "not counted during validation", not "empty". The agent has
+                # `describe_datasets` when it needs the real number; size gives it the sense
+                # of volume without reading every byte of every file.
+                "rows": value.get("rows"),
+                "size_mb": value.get("size_mb"),
                 "read_with": DATASET_TOOLS.get(key, "sin herramienta directa"),
                 "columns": columns[:40],
                 "columns_truncated": len(columns) > 40,
@@ -1081,6 +1427,15 @@ class DashboardDataRepository:
         whether to degrade or to raise; a chart with no reference bands is a legitimate
         outcome for a client that has not been calibrated yet.
         """
+        thresholds, _report = self._four_limit_thresholds_with_resolution(
+            client, machine=machine, component=component
+        )
+        return thresholds
+
+    def _four_limit_thresholds_with_resolution(
+        self, client: str, *, machine: Any, component: Any
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """`four_limit_thresholds` plus how the machine and component names were matched."""
         normalized_client = normalize_client_id(client)
         path = (
             self.data_root / "oil" / "golden" / normalized_client / "stewart_limits_four.parquet"
@@ -1089,19 +1444,486 @@ class DashboardDataRepository:
             path.relative_to(self.data_root)
         except ValueError as exc:
             raise CampbellDataError("Ruta de datos fuera del directorio autorizado") from exc
+        absent = {"machine_match": "missing", "component_match": "missing"}
         if not path.exists():
-            return {}
+            return {}, absent
 
         limits = _load_four_limits(path)
         if not limits:
-            return {}
+            return {}, absent
         # The client key in this parquet is upper-case, unlike every other path in this
         # package. Looking it up with the normalized lower-case id silently returns {} and the
         # chart renders without a single reference ring.
         by_client = limits.get(normalized_client.upper()) or limits.get(normalized_client, {})
-        return by_client.get(str(machine), {}).get(str(component), {})
+        return self._resolve_four_limit_component(by_client, machine, component)
 
-    def client_capabilities(self, client: str) -> dict[str, Any]:
+    @staticmethod
+    def _resolve_four_limit_component(
+        by_client: dict[str, Any], machine: Any, component: Any
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Locate one component's bands, tolerating how its name is spelled.
+
+        The sample side groups components by a canonical identity (trimmed, case-folded), so
+        indexing the calibration with the raw stored text disagreed with it: a component
+        recorded as `"motor "` reported "no calibration" while `"motor"` found its bands.
+
+        Returns the bands and a resolution report, so an answer can say whether the match was
+        exact, recovered from a spelling difference, or genuinely absent - and never claim a
+        missing calibration when only the writing differed.
+        """
+        report: dict[str, Any] = {"machine_match": "missing", "component_match": "missing"}
+        machine_key, machine_status = resolve_catalog_key(by_client, machine)
+        report["machine_match"] = machine_status
+        if machine_key is None:
+            report["machines_available"] = sorted(by_client)[:25]
+            return {}, report
+        report["machine_resolved"] = machine_key
+
+        by_component = by_client.get(machine_key) or {}
+        component_key, component_status = resolve_catalog_key(by_component, component)
+        report["component_match"] = component_status
+        if component_key is None:
+            report["components_available"] = sorted(by_component)[:25]
+            return {}, report
+        report["component_resolved"] = component_key
+        return by_component.get(component_key) or {}, report
+
+    # Operating-state prefixes differ per client ("Operacional Alto", "OPERACIONAL_CON_CARGA"),
+    # so a telemetry variable's exceedance columns are matched by suffix instead of by an
+    # enumerated list of states.
+    _TELEMETRY_RATE_SUFFIXES = ("_critic_rate", "_alert_rate")
+
+    @staticmethod
+    def _isoformat_or_none(value: Any) -> str | None:
+        """ISO date for a cell that may be a timestamp, text, or missing."""
+        if value is None:
+            return None
+        parsed = pd.to_datetime(value, errors="coerce")
+        return None if pd.isna(parsed) else pd.Timestamp(parsed).isoformat()
+
+    def _explain_predictive_risk(
+        self,
+        row: "pd.Series",
+        *,
+        mode_key: str,
+        score: float,
+        client: str,
+        component: str,
+    ) -> dict[str, Any]:
+        """A named risk, the variables its model considers, and the readings on that row.
+
+        Three things kept apart on purpose, because conflating them is how a prediction turns
+        into an invented diagnosis:
+
+        - ``model_variables``: what the documented catalog says this mode *considers*. An
+          association, per client and per component - CDA's oil degradation reads viscosity
+          and soot, while iron belongs to abrasive wear.
+        - ``observations``: values the source actually carries for those variables on this
+          row. Absent readings are simply absent; nothing is filled in.
+        - ``contribution_available``: the model publishes no per-variable contribution, so no
+          attribution or causality may be stated. Always False today, and stated rather than
+          left to be inferred.
+        """
+        from src.data.predictive_catalog import (
+            get_failure_mode_label,
+            get_failure_mode_methodology,
+            get_oil_variables_for_mode,
+            get_telemetry_variables_for_mode,
+        )
+
+        normalized_client = normalize_client_id(client)
+        # `top_risks` strips the `_risk` suffix the source columns carry, while the catalog is
+        # keyed with it. Resolve both spellings rather than depending on which side is passed.
+        catalog_key = mode_key if mode_key.endswith("_risk") else f"{mode_key}_risk"
+        oil_variables = list(
+            get_oil_variables_for_mode(catalog_key, component, normalized_client)
+        )
+        telemetry_variables = list(
+            get_telemetry_variables_for_mode(catalog_key, component, normalized_client)
+        )
+        label = get_failure_mode_label(catalog_key, component, normalized_client)
+        if label == catalog_key:
+            label = get_failure_mode_label(mode_key, component, normalized_client)
+        methodology = get_failure_mode_methodology(
+            catalog_key, component, normalized_client
+        )
+
+        observations: list[dict[str, Any]] = []
+        for variable in oil_variables:
+            if variable not in row.index or pd.isna(row.get(variable)):
+                continue
+            entry: dict[str, Any] = {
+                "variable": variable,
+                "variable_label": signal_label(variable) or variable,
+                "technique": "aceite",
+                "value": self._scalar(row.get(variable)),
+                # The sample the reading comes from, which is not the model's evaluation
+                # date. Coerced here because this source stores it as text.
+                "observed_at": self._isoformat_or_none(row.get("sampleDate")),
+            }
+            for derived, key in (("_ratio", "evolution_ratio"), ("_slope", "trend_slope")):
+                column = f"{variable}{derived}"
+                if column in row.index and pd.notna(row.get(column)):
+                    entry[key] = self._scalar(row.get(column))
+            observations.append(entry)
+
+        for variable in telemetry_variables:
+            # Telemetry arrives as time-above-limit rates per operating state, not as a
+            # reading. Reported as a rate and named as one; calling it a measured value would
+            # be a different claim.
+            best: dict[str, Any] | None = None
+            for column in row.index:
+                name = str(column)
+                for suffix in self._TELEMETRY_RATE_SUFFIXES:
+                    if not name.endswith(f"{variable}{suffix}"):
+                        continue
+                    value = row.get(column)
+                    if pd.isna(value):
+                        continue
+                    numeric = float(value)
+                    if best is None or numeric > float(best["rate"]):
+                        best = {
+                            "variable": variable,
+                            "variable_label": signal_label(variable) or variable,
+                            "technique": "telemetria",
+                            "rate": round(numeric, 4),
+                            "rate_kind": suffix.strip("_"),
+                            "operating_state": name[: -len(f"{variable}{suffix}")].strip("_ "),
+                            "rate_meaning": (
+                                "Proporcion del tiempo sobre el limite en ese estado de "
+                                "maquina; no es una lectura instantanea."
+                            ),
+                        }
+            if best is not None:
+                observations.append(best)
+
+        explanation: dict[str, Any] = {
+            "risk": mode_key,
+            "risk_label": label,
+            "score": round(float(score), 1),
+            "model_variables": {
+                "aceite": oil_variables,
+                "telemetria": telemetry_variables,
+            },
+            "model_variables_meaning": (
+                "Variables que este modo de falla considera segun el catalogo documentado "
+                "para este cliente y componente. Es una asociacion, no una contribucion "
+                "medida ni una causa."
+            ),
+            "observations": observations,
+            "contribution_available": False,
+            "contribution_note": (
+                "El modelo no publica la contribucion de cada variable al puntaje. No "
+                "atribuyas el riesgo a una variable ni afirmes causalidad."
+            ),
+        }
+        if methodology:
+            explanation["methodology"] = methodology
+        if not oil_variables and not telemetry_variables:
+            explanation["detail"] = (
+                f"No hay catalogo de variables para {mode_key!r} en este cliente y "
+                "componente. Nombra el riesgo y di que no se dispone de sus variables "
+                "documentadas; no las supongas."
+            )
+        elif not observations:
+            explanation["detail"] = (
+                "El catalogo declara las variables de este modo, pero esta consulta no trae "
+                "sus lecturas. Explica que variables considera el modelo y di que no se "
+                "dispone de sus valores aqui."
+            )
+        return explanation
+
+    def query_lab_kpis(
+        self,
+        client: str,
+        start_date: str = "",
+        end_date: str = "",
+        unit_id: str = "",
+        limit: int = 15,
+    ) -> str:
+        """Laboratory turnaround times, computed by the same code as Monitoring > Oil > Laboratorio.
+
+        Delegates to `src.data.lab_kpis`, which the dashboard tab also calls, so the totals,
+        denominators and averages reported here are the ones a user sees on that screen
+        rather than a second implementation of the same formulas.
+
+        The period filters on `reportDate` and defaults to six months up to the newest report
+        present; it is always stated in the answer. Aggregate KPIs need a period - this is not
+        the latest-sample rule that applies to a component's condition.
+        """
+        frame = self.load("oil_classified", client)
+        unit_col = self._resolve_column(frame, ("unitId", "unit_id", "UnitId"))
+        if unit_id:
+            if not unit_col:
+                raise CampbellDataError("La fuente de aceite no permite filtrar por equipo")
+            frame = self._filter_unit(frame, unit_col, unit_id)
+
+        threshold = None
+        try:
+            from config.settings import get_settings
+
+            threshold = get_settings().get_lab_compliance_threshold_days(
+                normalize_client_id(client)
+            )
+        except Exception:
+            # A configured reference threshold is informational; its absence must not stop
+            # the KPI from being reported.
+            logger.debug("Umbral de laboratorio no disponible para %s", client)
+
+        payload = compute_lab_kpis(
+            frame, start_date=start_date, end_date=end_date, threshold_days=threshold
+        )
+        payload["dashboard_reference"] = "Monitoreo > Aceite > Laboratorio"
+        if unit_id:
+            payload["unit_id"] = unit_id
+        elif payload.get("metrics_available"):
+            by_unit = lab_kpis_by_unit(
+                frame, start_date=start_date, end_date=end_date, top=self._clamp(limit, 1, 30)
+            )
+            if not by_unit.empty:
+                payload["slowest_units"] = {
+                    str(unit): round(float(value), 1) for unit, value in by_unit.items()
+                }
+                payload["slowest_units_metric"] = (
+                    "transit_time"
+                    if payload.get("reporting_mode") == "transito_y_laboratorio"
+                    else "diagnostic_time"
+                )
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def describe_oil_limits(
+        self,
+        client: str,
+        unit_id: str,
+        component: str = "",
+        essay: str = "",
+        limit: int = 20,
+    ) -> str:
+        """Which reference each essay of a sample was compared against, and how it was obtained.
+
+        Answers the question behind C06 - "what exactly is this value being compared to" -
+        with the calibration actually in service rather than the one a path in the code
+        suggests: the file's own `calculation_date` travels as its version, and each band says
+        whether it is calibrated for this sample's oil-hour range, calibrated for all ranges,
+        or an average across ranges (an approximation, labelled as such).
+
+        No filesystem path is returned. The user gets the client, machine family, component,
+        oil-hour range, version and thresholds; the path is an internal detail.
+        """
+        samples = self.load("oil_classified", client)
+        unit_col = self._resolve_column(samples, ("unitId", "unit_id", "UnitId"))
+        component_col = self._resolve_column(samples, ("componentName", "component"))
+        normalized_col = self._resolve_column(samples, ("componentNameNormalized",))
+        date_col = self._resolve_column(samples, SAMPLE_DATE_COLUMNS)
+        sample_id_col = self._resolve_column(samples, SAMPLE_ID_COLUMNS)
+
+        if not str(unit_id or "").strip():
+            raise CampbellDataError(
+                'describe_oil_limits requiere unit_id (por ejemplo unit_id="T_15")'
+            )
+        scoped = self._filter_unit(samples, unit_col, unit_id)
+        if component and (normalized_col or component_col):
+            scoped = self._filter_contains(
+                scoped, normalized_col or component_col, component
+            )
+        if scoped.empty:
+            return json.dumps(
+                {
+                    "unit_id": unit_id,
+                    "component": component or None,
+                    "limits_available": False,
+                    "detail": (
+                        "Sin muestras de aceite para ese equipo y componente, asi que no hay "
+                        "una referencia aplicable que describir."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        # Same deterministic pick as every other oil path: newest sample, undated rows never
+        # winning, ties broken by sample id.
+        selected = latest_sample_per_component(
+            scoped,
+            unit_col=unit_col,
+            component_col=normalized_col or component_col,
+            date_col=date_col,
+            sample_id_col=sample_id_col,
+        )
+        # One component per answer: the bands are per component and mixing two of them in one
+        # table is how a reference gets attributed to the wrong position.
+        if len(selected) > 1:
+            available = list(
+                self._distribution(selected, normalized_col or component_col, top=25)
+            )
+            return json.dumps(
+                {
+                    "unit_id": unit_id,
+                    "limits_available": False,
+                    "components_found": available,
+                    "detail": (
+                        "Ese equipo tiene varios componentes con muestra. Los limites son por "
+                        "componente: repite la consulta indicando uno de components_found."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
+        row = selected.iloc[0]
+        machine = str(row.get("machineName") or "")
+        resolved_component = str(
+            row.get(normalized_col) if normalized_col else row.get(component_col) or ""
+        )
+        hour_range = str(row.get("oilHourRange") or "UNKNOWN")
+        component_limits, resolution = self._four_limit_thresholds_with_resolution(
+            client, machine=machine, component=resolved_component
+        )
+        payload: dict[str, Any] = {
+            "unit_id": self._scalar(row.get(unit_col)) if unit_col else unit_id,
+            "sample_number": self._scalar(row.get(sample_id_col)) if sample_id_col else None,
+            "sample_date": (
+                row[date_col].isoformat()
+                if date_col and pd.notna(row.get(date_col))
+                else None
+            ),
+            "machine_family": machine or None,
+            "component": resolved_component or None,
+            "oil_hour_range": hour_range,
+            "reference_scope": "current_calibration",
+            "historical_calibration_verified": False,
+            "calibration_note": (
+                "Estas bandas proceden de la calibracion vigente consultada ahora. "
+                "No se ha verificado que esa version fuera la aplicada al emitir el informe "
+                "historico de la muestra. Su fecha de extraccion no fecha la calibracion."
+            ),
+            "limit_contract": (
+                "Cuatro limites: LIC (inferior condenatorio), LIM (inferior marginal), "
+                "LSM (superior marginal), LSC (superior condenatorio). Un limite inferior "
+                "ausente es ausente, nunca cero."
+            ),
+            "classification_states": list(FOUR_LIMIT_ESSAY_STATES),
+            "limit_source_recorded_in_sample": self._scalar(row.get("limit_source")),
+            "limit_source_inferior_recorded_in_sample": self._scalar(
+                row.get("limit_source_inferior")
+            ),
+        }
+        payload["component_resolution"] = resolution
+        if "canonical_duplicate" in (
+            resolution.get("machine_match"),
+            resolution.get("component_match"),
+        ):
+            # Resolved, but the source lists the same identity twice. Worth saying: it is a
+            # data defect even when both copies happen to carry the same bands.
+            payload["source_warning"] = (
+                "La fuente de limites lista esa familia o componente mas de una vez, con "
+                "escrituras distintas y el mismo contenido. Se uso esa calibracion, pero "
+                "conviene corregir la fuente."
+            )
+        if not component_limits:
+            payload["limits_available"] = False
+            if "ambiguous" in (
+                resolution.get("machine_match"),
+                resolution.get("component_match"),
+            ):
+                payload["detail"] = (
+                    "La fuente de limites tiene mas de una entrada que solo difiere en "
+                    "espacios o mayusculas para esa familia o componente, asi que elegir una "
+                    "seria adivinar. Informalo como un problema de la fuente, no como falta "
+                    "de calibracion."
+                )
+            else:
+                payload["detail"] = (
+                    "No hay limites calibrados para esa familia de maquina y componente en la "
+                    "fuente vigente. Informalo como falta de calibracion: sin referencia no se "
+                    "puede afirmar que un ensayo este dentro o fuera de limite."
+                )
+            return json.dumps(payload, ensure_ascii=False, default=str)
+
+        requested = str(essay or "").strip()
+        essays = sorted(component_limits)
+        if requested:
+            essays = [
+                name for name in essays if requested.casefold() in str(name).casefold()
+            ]
+            if not essays:
+                payload["limits_available"] = False
+                payload["available_essays"] = sorted(component_limits)[:40]
+                payload["detail"] = (
+                    f"El ensayo {requested!r} no tiene limites para ese componente. Revisa "
+                    "available_essays."
+                )
+                return json.dumps(payload, ensure_ascii=False, default=str)
+
+        references: list[dict[str, Any]] = []
+        versions: set[str] = set()
+        approximated = 0
+        for name in essays[: self._clamp(limit, 1, 40)]:
+            thresholds, basis, provenance = four_limit_reference(
+                component_limits, name, hour_range
+            )
+            entry: dict[str, Any] = {
+                "essay": str(name),
+                "basis": basis,
+                "basis_detail": LIMIT_BASIS_LABELS.get(basis, ""),
+            }
+            measured = row.get(name)
+            if measured is not None and pd.notna(measured):
+                entry["measured_value"] = self._scalar(measured)
+            if thresholds is None:
+                entry["limits"] = None
+                references.append(entry)
+                continue
+            for key in ("LIC", "LIM", "LSM", "LSC"):
+                value = thresholds.get(key)
+                entry[key] = None if value is None else float(value)
+            entry["element_group"] = thresholds.get("GroupElement")
+            entry["sample_count"] = self._scalar(thresholds.get("sample_count"))
+            # Provenance travels for every basis, so an approximated band can be traced back
+            # to the ranges and calibration versions it was derived from. An averaged band has
+            # no `calculation_date` of its own: reporting one would invent it.
+            entry["source_ranges"] = provenance.get("source_ranges") or []
+            entry_versions = provenance.get("versions") or []
+            if entry_versions:
+                versions.update(entry_versions)
+                if len(entry_versions) == 1:
+                    entry["limit_version"] = entry_versions[0]
+                else:
+                    entry["limit_versions"] = entry_versions
+                    entry["mixed_versions"] = True
+            if provenance.get("averaged_from"):
+                entry["averaged_from"] = provenance["averaged_from"]
+            if basis == LIMIT_BASIS_AVERAGED:
+                approximated += 1
+            if (
+                entry.get("measured_value") is not None
+                and entry.get("LSM") is not None
+                and entry.get("LSC") is not None
+            ):
+                entry["classification"] = classify_four_limit(
+                    float(entry["measured_value"]),
+                    entry.get("LIC"),
+                    entry.get("LIM"),
+                    float(entry["LSM"]),
+                    float(entry["LSC"]),
+                )
+            references.append(entry)
+
+        payload["limits_available"] = True
+        payload["references"] = references
+        payload["essays_with_approximated_reference"] = approximated
+        payload["limit_versions"] = sorted(versions)
+        payload["note"] = (
+            "basis dice como se obtuvo cada banda. promedio_entre_rangos es una "
+            "APROXIMACION: dilo cuando la uses, y source_ranges/averaged_from indican de que "
+            "rangos salio. Una banda promediada no tiene fecha de calculo propia; si "
+            "mixed_versions es true, se derivo de mas de una version de la calibracion y no "
+            "debes citar una sola fecha. La clasificacion de ensayo tiene cinco estados "
+            "propios y no se mezcla con el estado del componente, el del equipo ni con la "
+            "banda de riesgo predictivo."
+        )
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def client_capabilities(
+        self, client: str, validation: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Which analyses are possible for this client, and why the rest are not.
 
         Data coverage differs per company, so an agent that assumes CDA's catalogue
@@ -1110,9 +1932,20 @@ class DashboardDataRepository:
         instead of a mid-answer failure.
         """
         normalized = normalize_client_id(client)
-        validation = self.validate_client(normalized)
+        # Reused when the caller already has it. `initialize` validates and then asks for
+        # capabilities microseconds later; recomputing here doubled the whole pass.
+        validation = validation or self.validate_client(normalized)
         datasets = validation["datasets"]
-        predictive_allowed = predictive_module_allows(normalized)
+        # Fetched once for the whole pass: see `enabled_services`.
+        available_services = enabled_services(normalized)
+        # Derived from the same set instead of asking the configuration again. Falls back to
+        # the dedicated helper only when the set is unavailable, which is also where the
+        # older settings-based shape is still honoured.
+        predictive_allowed = (
+            any(service.startswith("predictive-") for service in available_services)
+            if available_services is not None
+            else predictive_module_allows(normalized)
+        )
 
         available: list[dict[str, Any]] = []
         unavailable: list[dict[str, Any]] = []
@@ -1122,9 +1955,28 @@ class DashboardDataRepository:
                 for key in capability.requires
                 if not datasets.get(key, {}).get("valid")
             ]
+            for dataset_key, alternatives in capability.requires_columns:
+                entry_columns = datasets.get(dataset_key, {}).get("columns") or []
+                if self._resolve_name([str(column) for column in entry_columns], alternatives):
+                    continue
+                missing.append(
+                    f"{DATASET_MAP[dataset_key].label} sin columna "
+                    f"{' | '.join(alternatives)}"
+                )
             blocked_module = (
                 capability.requires_predictive_module and not predictive_allowed
             )
+            # Data on disk is not authorization. A company that has this section turned off
+            # must not be offered its analyses, and the suggestion buttons read this list.
+            blocked_services = [
+                service
+                for service in capability.requires_services
+                # `available_services` is None when the configuration could not be read, and
+                # then every service is treated as blocked - denying is the safe direction:
+                # offering an analysis the company switched off is the failure being
+                # prevented, while the opposite only costs a suggestion.
+                if available_services is None or service not in available_services
+            ]
             entry = {
                 "key": capability.key,
                 "label": capability.label,
@@ -1137,6 +1989,16 @@ class DashboardDataRepository:
                         "reason": "El módulo predictivo no está habilitado para este cliente",
                     }
                 )
+            elif blocked_services:
+                unavailable.append(
+                    {
+                        **entry,
+                        "reason": (
+                            "El servicio no esta habilitado para esta empresa: "
+                            f"{', '.join(blocked_services)}"
+                        ),
+                    }
+                )
             elif missing:
                 unavailable.append(
                     {**entry, "reason": f"Faltan fuentes: {', '.join(missing)}"}
@@ -1144,10 +2006,17 @@ class DashboardDataRepository:
             else:
                 available.append(entry)
 
+        # When the sources behind these capabilities were last looked at. Reported rather
+        # than implied: a stored capability payload is a snapshot, and a reader has to be able
+        # to tell how old it is instead of assuming it is current.
         return {
             "company_id": normalized,
             "available": available,
             "unavailable": unavailable,
+            # Cuando se armo este payload, no cuando se miro cada archivo: la validacion ya
+            # no consulta el disco. Sigue respondiendo lo que el campo promete - que edad
+            # tiene esta instantanea - sin sugerir una verificacion que no ocurrio.
+            "sources_checked_at": _iso_now(),
             "techniques": {
                 "alertas": any(item["key"].startswith("alert") for item in available),
                 "aceite": any(item["key"].startswith("oil") for item in available),
@@ -1205,7 +2074,8 @@ class DashboardDataRepository:
                 described[key] = entry
                 continue
             try:
-                probe = self._probe_frame(path)
+                # Here the count is the point: the agent is asking how much data exists.
+                probe = self._probe_frame(path, count_rows=True)
                 entry["rows"] = probe["rows"]
                 entry["columns"] = probe["columns"][:60]
                 entry["columns_truncated"] = len(probe["columns"]) > 60
@@ -1231,10 +2101,20 @@ class DashboardDataRepository:
         )
 
     def _filter_vocabulary(self, key: str, client: str) -> dict[str, Any]:
-        """Allowed values for each filter parameter of one dataset."""
+        """Allowed values for each filter parameter of one dataset.
+
+        Served from the persisted index when it was derived from this exact file version, which
+        is what removes a full frame read from a schema query - up to 17,6 MB for
+        `alerts_detail`. A fingerprint that does not match reads the frame and rewrites the
+        entry: the index never answers for a file it has not seen.
+        """
         specs = DATASET_FILTERS.get(key, ())
         if not specs:
             return {}
+        path = self.dataset_path(key, client)
+        indexed = vocabulary_index.lookup(client, key, path)
+        if indexed is not None:
+            return indexed
         frame = self.load(key, client)
         vocabulary: dict[str, Any] = {}
         for spec in specs:
@@ -1248,6 +2128,7 @@ class DashboardDataRepository:
                 entry["values"] = values
                 entry["values_truncated"] = len(values) >= 25
             vocabulary[spec.parameter] = entry
+        vocabulary_index.store(client, key, path, vocabulary)
         return vocabulary
 
     def query_alerts(
@@ -1547,6 +2428,13 @@ class DashboardDataRepository:
         return json.dumps(payload, ensure_ascii=False, default=str)
 
     def query_oil_status(self, client: str, unit_id: str = "", limit: int = 20) -> str:
+        """Machine-level oil aggregate: one row per unit, never one sample.
+
+        `overall_status` here is computed upstream by weighting the unit's components, so it
+        is not the result of any single sample and must not be presented as one. When the
+        source publishes `component_details`, the contributing components and their weights
+        travel with the row; nothing is recomputed or re-weighted here.
+        """
         frame = self.load("oil_machine_status", client)
         unit_col = self._resolve_column(frame, ("unit_id", "unitId", "UnitId"))
         if unit_id and unit_col:
@@ -1565,18 +2453,41 @@ class DashboardDataRepository:
             self._resolve_column(frame, ("components_anormal",)),
             self._resolve_column(frame, ("machine_ai_recommendation",)),
         ]
+        resolved_limit = self._clamp(limit, 1, 50)
         payload: dict[str, Any] = {
             "total_units": int(len(frame)),
+            "level": LEVEL_MACHINE,
+            "aggregation": (
+                "Estado agregado de equipo, calculado aguas arriba ponderando sus "
+                "componentes. No es una muestra ni el estado de un componente."
+            ),
             "by_status": self._distribution(frame, status_col, top=12),
             "records": self._records(
-                frame, [value for value in columns if value], self._clamp(limit, 1, 50)
+                frame, [value for value in columns if value], resolved_limit
             ),
             "note": (
-                "Una fila por equipo con su muestra de aceite mas reciente. Para el detalle "
-                "por componente y los ensayos fuera de limite usa query_oil_components."
+                "Una fila por equipo con su ESTADO AGREGADO de aceite. latest_sample_date es "
+                "la fecha de la muestra mas reciente que alimenta ese agregado, no un "
+                "resultado de muestra. Para la condicion de un componente o los ensayos "
+                "fuera de limite usa query_oil_components; no atribuyas este agregado a un "
+                "componente en particular."
             ),
         }
         date_col = self._resolve_column(frame, ("latest_sample_date",))
+        payload["scope_detail"] = sample_scope_payload(
+            frame, scope="machine_aggregate", level=LEVEL_MACHINE, date_col=date_col
+        )
+        details_col = self._resolve_column(frame, ("component_details",))
+        if details_col:
+            # Only what the source published: which components were weighed into the
+            # aggregate and with what weight. An explanation may attribute the machine status
+            # to these and to nothing else.
+            contributors = frame[details_col].head(resolved_limit).tolist()
+            for record, raw in zip(payload["records"], contributors):
+                record.pop(details_col, None)
+                summarized = self._contributing_components(raw)
+                if summarized:
+                    record["contributing_components"] = summarized
         if date_col and not frame.empty:
             sample_dates = pd.to_datetime(frame[date_col], errors="coerce").dropna()
             if not sample_dates.empty:
@@ -1585,6 +2496,49 @@ class DashboardDataRepository:
                     "newest": sample_dates.max().isoformat(),
                 }
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _contributing_components(raw: Any, top: int = 8) -> list[dict[str, Any]] | None:
+        """Components the upstream aggregate weighed, with their published weight.
+
+        Reproduced, never recomputed: the weights belong to the process that writes
+        `machine_status.parquet`. Rows without a usable structure are dropped rather than
+        guessed at, so an explanation cannot attribute the machine status to a component the
+        source did not name.
+        """
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return None
+        items = raw
+        if isinstance(items, str):
+            try:
+                items = json.loads(items)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(items, np.ndarray):
+            items = items.tolist()
+        if not isinstance(items, (list, tuple)):
+            return None
+        summarized: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            entry = {
+                key: item.get(key)
+                for key in ("component", "status", "severity_score", "weight", "sample_date")
+                if item.get(key) is not None
+            }
+            if entry:
+                summarized.append(entry)
+        if not summarized:
+            return None
+        # Heaviest contributors first; ties keep source order so the list is reproducible.
+        summarized.sort(
+            key=lambda entry: (
+                -float(entry.get("weight") or 0.0),
+                -float(entry.get("severity_score") or 0.0),
+            )
+        )
+        return summarized[:top]
 
     def query_telemetry_health(
         self,
@@ -1750,26 +2704,50 @@ class DashboardDataRepository:
         status: str = "",
         latest_only: bool = True,
         limit: int = 25,
+        start_date: str = "",
+        end_date: str = "",
     ) -> str:
-        """Component-level oil condition with breached essays and severity."""
+        """Component-level oil condition with breached essays and severity.
+
+        `latest_only` is the *current condition* scope: one sample per (unit, component),
+        the newest one, with no implicit date window - a component sampled eight months ago
+        still has a current condition, and windowing it away answered "no data" for a
+        component that simply is not sampled often.
+
+        A `start_date`/`end_date` pair is honoured in both scopes and they mean different
+        things: with `latest_only` it is "the newest sample *within* that period", without it
+        "every sample *of* that period". The resolved scope travels in the payload so the
+        answer can state which one it used.
+        """
         frame = self.load("oil_classified", client)
         unit_col = self._resolve_column(frame, ("unitId", "unit_id", "UnitId"))
         component_col = self._resolve_column(frame, ("componentName", "component"))
         normalized_col = self._resolve_column(frame, ("componentNameNormalized",))
         status_col = self._resolve_column(frame, ("report_status", "overall_status"))
-        date_col = self._resolve_column(frame, ("sampleDate", "reportDate"))
+        date_col = self._resolve_column(frame, SAMPLE_DATE_COLUMNS)
+        sample_id_col = self._resolve_column(frame, SAMPLE_ID_COLUMNS)
 
         if date_col:
             frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
-        if latest_only and unit_col and component_col and date_col:
-            frame = (
-                frame.sort_values(date_col, ascending=True)
-                .groupby([unit_col, component_col], dropna=False)
-                .tail(1)
-                .copy()
+        period: dict[str, Any] = {}
+        if (start_date or end_date) and date_col:
+            frame, _, period = self.filter_date_window(
+                frame, date_col, start_date=start_date, end_date=end_date
+            )
+        # Ordered on purpose: the newest sample is chosen *before* condition, severity or
+        # anomaly are filtered. Filtering first would let an old abnormal sample outrank the
+        # recent normal one that actually describes the component today.
+        if latest_only:
+            frame = latest_sample_per_component(
+                frame,
+                unit_col=unit_col,
+                component_col=normalized_col or component_col,
+                date_col=date_col,
+                sample_id_col=sample_id_col,
             )
         if unit_id and unit_col:
             frame = self._filter_unit(frame, unit_col, unit_id)
+        selected_rows = int(len(frame))
         for value, column in (
             (component, normalized_col or component_col),
             (status, status_col),
@@ -1784,6 +2762,9 @@ class DashboardDataRepository:
             ).sort_values(["__severity", date_col] if date_col else ["__severity"])
         columns = [
             unit_col,
+            # The sample id makes the answer auditable: it is the key a user can look up in
+            # the lab report, and it is what tells two same-day samples apart.
+            sample_id_col,
             component_col,
             normalized_col,
             status_col,
@@ -1791,23 +2772,42 @@ class DashboardDataRepository:
             self._resolve_column(frame, ("severity_score",)),
             self._resolve_column(frame, ("breached_essays",)),
             self._resolve_column(frame, ("anomalyType",)),
+            self._resolve_column(frame, ("oilHourRange",)),
+            # Which calibration the classification compared against, so a reference can be
+            # traced instead of assumed. See `describe_oil_limit_sources`.
+            self._resolve_column(frame, ("limit_source",)),
+            self._resolve_column(frame, ("limit_source_inferior",)),
             self._resolve_column(frame, ("daysSincePrevious",)),
             self._resolve_column(frame, ("ai_recommendation",)),
         ]
+        # Three scopes, named identically here and in the charts: the current condition, the
+        # newest sample inside a requested period, and the history of that period.
+        if latest_only:
+            scope = SCOPE_LATEST_IN_PERIOD if period else SCOPE_LATEST
+        else:
+            scope = SCOPE_HISTORY
         payload: dict[str, Any] = {
             "total_rows": int(len(frame)),
-            "scope": "muestra mas reciente por equipo y componente" if latest_only else "historico",
+            "scope": scope,
+            "scope_detail": sample_scope_payload(
+                frame, scope=scope, level=LEVEL_COMPONENT, date_col=date_col
+            ),
             "by_status": self._distribution(frame, status_col, top=12),
             "by_component": self._distribution(frame, normalized_col or component_col, top=15),
             "records": self._records(
                 frame, [value for value in columns if value], self._clamp(limit, 1, 60)
             ),
             "note": (
-                "breached_essays lista los ensayos fuera de limite de esa muestra, con su "
-                "valor y umbral; classifies indica si pesa en la clasificacion del estado. "
+                "Una fila es una muestra de un componente, no el estado del equipo: para el "
+                "agregado de la maquina usa query_oil_status y no atribuyas su resultado a "
+                "esta muestra. breached_essays lista los ensayos fuera de limite de esa "
+                "muestra, con su valor y umbral; classifies indica si pesa en la "
+                "clasificacion del estado. limit_source nombra la calibracion aplicada. "
                 "ai_recommendation es una recomendacion automatica, no trabajo ejecutado."
             ),
         }
+        if period:
+            payload["requested_period"] = period
         essays_col = self._resolve_column(frame, ("breached_essays",))
         if essays_col:
             source = frame[essays_col].head(self._clamp(limit, 1, 60)).tolist()
@@ -1820,7 +2820,64 @@ class DashboardDataRepository:
                     "oldest": valid.min().isoformat(),
                     "newest": valid.max().isoformat(),
                 }
+        if frame.empty:
+            # "No sample matched" and "this component has no data" read the same in an empty
+            # records list, and the difference is what the user asked about. Naming what the
+            # scope did contain lets the answer say which one happened.
+            payload["filter_hints"] = self._oil_component_hints(
+                client,
+                unit_id=unit_id,
+                component=component,
+                status=status,
+                selected_rows=selected_rows,
+            )
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def _oil_component_hints(
+        self,
+        client: str,
+        *,
+        unit_id: str,
+        component: str,
+        status: str,
+        selected_rows: int,
+    ) -> dict[str, Any]:
+        """What the requested scope did contain, so an empty result can be explained."""
+        available = self.load("oil_classified", client)
+        unit_col = self._resolve_column(available, ("unitId", "unit_id", "UnitId"))
+        component_col = self._resolve_column(
+            available, ("componentNameNormalized", "componentName")
+        )
+        status_col = self._resolve_column(available, ("report_status", "overall_status"))
+        if unit_id and unit_col:
+            available = self._filter_unit(available, unit_col, unit_id)
+        hints: dict[str, Any] = {
+            "rows_before_component_and_status_filters": selected_rows,
+            "available_components": list(self._distribution(available, component_col, top=25)),
+            "available_statuses": list(self._distribution(available, status_col, top=12)),
+        }
+        if unit_id and available.empty:
+            hints["detail"] = (
+                f"El equipo {unit_id} no tiene muestras de aceite en la fuente. Informalo "
+                "como falta de datos, no como condicion normal."
+            )
+        elif component:
+            hints["detail"] = (
+                f"Ningun componente coincide con {component!r} en ese alcance. Revisa "
+                "available_components: el nombre puede diferir o ese componente puede no "
+                "tener muestras. Sin datos no equivale a condicion normal."
+            )
+        elif status:
+            hints["detail"] = (
+                f"Ninguna muestra del alcance quedo en estado {status!r}. Eso significa que "
+                "no hay componentes en esa condicion, no que falten datos."
+            )
+        else:
+            hints["detail"] = (
+                "El alcance solicitado no contiene muestras. Informa falta de datos y no la "
+                "sustituyas por otra fuente."
+            )
+        return hints
 
     def query_alert_detail(
         self,
@@ -2629,6 +3686,16 @@ class DashboardDataRepository:
                     "band": predictive_band(score),
                     "oil_hour_range": self._scalar(row.get("oilHourRange")),
                     "top_risks": top_risks,
+                    # What each leading risk actually means, with the variables the model
+                    # documents for it and whatever readings the same row carries. Named
+                    # risks with no explanation were the whole of C03.
+                    "risk_explanations": [
+                        self._explain_predictive_risk(
+                            row, mode_key=name, score=value, client=client,
+                            component=resolved_domain,
+                        )
+                        for name, value in list(top_risks.items())[:3]
+                    ],
                 }
             )
 
@@ -2650,7 +3717,15 @@ class DashboardDataRepository:
                 "records": rows,
                 "note": (
                     "Salida de un modelo predictivo, no una alerta confirmada ni una medicion "
-                    "directa. Requiere validacion en terreno antes de intervenir."
+                    "directa. Requiere validacion en terreno antes de intervenir. "
+                    "ranking es un ORDEN DE PRIORIDAD, no una probabilidad de falla: no lo "
+                    "conviertas en porcentaje. En risk_explanations, model_variables son las "
+                    "variables que el modo considera (asociacion documentada por cliente y "
+                    "componente), observations son lecturas reales de la fuente, y la "
+                    "contribucion de cada variable NO esta publicada: no afirmes que una "
+                    "variable causa el riesgo. Para comparar una lectura de aceite contra su "
+                    "limite usa describe_oil_limits; sin esa referencia no digas que un valor "
+                    "esta alto."
                 ),
             },
             ensure_ascii=False,

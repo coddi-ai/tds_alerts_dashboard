@@ -6,20 +6,19 @@ Supports multi-component model: auto-discovers component CSVs (motor, transmisio
 from dash import html, dcc
 import pandas as pd
 import re
-import os
 from pathlib import Path
-from config.settings import get_settings
 from src.utils.logger import get_logger
 from dashboard.components.predictive_config import (
-    get_failure_mode_options,
-    get_failure_modes_dict,
     get_failure_modes_for_component,
     get_failure_mode_methodology,
     get_oil_variables_for_mode,
     get_telemetry_signals_for_mode,
+    resolve_failure_modes,
+    humanize_mode_key,
     OIL_LABELS,
     TELEMETRY_LABELS,
     load_predictive_oil_limits_four,
+    load_real_oil_samples,
 )
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_charts import (
@@ -27,11 +26,19 @@ from dashboard.components.predictive_charts import (
     create_comparative_bars,
     create_oil_timeseries_90d,
     create_telemetry_signal_chart,
+    create_telemetry_signal_chart_from_long,
 )
 from dashboard.components.predictive_tables import create_oil_variables_table
 from dashboard.components.oil_charts import get_essay_limits_four, classify_four_limit_value
 from dashboard.components.ai_analysis_panel import create_ai_analysis_panel
 from src.data.loaders import load_analisis_inteligente
+from src.data import predictive_v2
+from dashboard.tabs.tab_predictive_overview import (
+    attach_status,
+    _discover_components,
+    _load_component_data as _load_cached_component_data,
+)
+from src.charts.signals import SIGNAL_LABELS
 
 logger = get_logger(__name__)
 
@@ -50,75 +57,30 @@ def _resolve_client_dicts(client, component):
     """
     ckey = (client or "cda").lower()
     oil_labels = OIL_LABELS.get(ckey, OIL_LABELS["cda"])
-    telem_labels = TELEMETRY_LABELS.get(ckey, TELEMETRY_LABELS["cda"])
+    # Quality-review follow-up: TELEMETRY_LABELS is a curated per-client dict
+    # (only the codes someone has explicitly reviewed for this client), not
+    # the full catalogue. Layering it over SIGNAL_LABELS means a signal that
+    # is genuinely new to this client's TELEMETRY_LABELS entry but already
+    # catalogued in signals.py still shows its real label here instead of
+    # the raw code — the per-client dict keeps final say (it wins on
+    # overlapping keys), this is only a fallback for what it hasn't been
+    # given a chance to override yet.
+    telem_labels = {**SIGNAL_LABELS, **TELEMETRY_LABELS.get(ckey, TELEMETRY_LABELS["cda"])}
     oil_limits_four = load_predictive_oil_limits_four(ckey, component)
     return oil_labels, telem_labels, oil_limits_four
 
 
-# ── Data Loading (Multi-Component) ────────────────────────────────────────────
-
-def _discover_components(client: str) -> dict:
-    """Auto-discover available component CSV files for a client."""
-    settings = get_settings()
-    data_dir = Path(settings.data_root) / "predictive" / "golden" / client
-
-    if not data_dir.exists():
-        return {}
-
-    components = {}
-    for fname in sorted(os.listdir(data_dir)):
-        if fname.endswith(".csv"):
-            component_name = fname.replace(".csv", "")
-            components[component_name] = data_dir / fname
-
-    return components
-
-
 def _load_component_data(filepath: Path, component: str, client: str = "cda"):
-    """Load predictive data for a single component."""
-    if not filepath.exists():
-        logger.warning(f"Predictive data not found: {filepath}")
+    """Use the same cached/derived frame as Predictive > Resumen.
+
+    The evidence page historically duplicated the full CSV parse and rolling
+    calculations.  The presentation helpers only filter/read these frames, so
+    they share the immutable cached result with Resumen.
+    """
+    result = _load_cached_component_data(filepath, component, client)
+    if result[0] is None:
         return None, None
-
-    df = pd.read_csv(filepath)
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
-
-    # Get failure mode keys for this component
-    failure_modes = get_failure_modes_dict(component, client)
-    fm_keys = list(failure_modes.keys())
-
-    # Compute rolling averages (concat at once to avoid fragmentation)
-    df_sorted = df.sort_values(["Unit", "Fecha"]).copy()
-    rolling_cols = {
-        "ranking_30d": df_sorted.groupby("Unit")["ranking"].transform(
-            lambda x: x.rolling(30, min_periods=1).mean()
-        ),
-        "ranking_90d": df_sorted.groupby("Unit")["ranking"].transform(
-            lambda x: x.rolling(90, min_periods=1).mean()
-        ),
-    }
-    # Also compute 30d rolling for each failure mode (for status classification)
-    for fm in fm_keys:
-        if fm in df_sorted.columns:
-            rolling_cols[f"{fm}_30d"] = df_sorted.groupby("Unit")[fm].transform(
-                lambda x: x.rolling(30, min_periods=1).mean()
-            )
-    df_sorted = pd.concat([df_sorted, pd.DataFrame(rolling_cols, index=df_sorted.index)], axis=1)
-
-    # Latest snapshot
-    df_latest = df_sorted.sort_values("Fecha").groupby("Unit").last().reset_index()
-
-    # Compute max failure mode 30d average per unit
-    fm_30d_cols = [f"{fm}_30d" for fm in fm_keys if f"{fm}_30d" in df_latest.columns]
-    max_fm_30d = df_latest[fm_30d_cols].max(axis=1) if fm_30d_cols else 0.0
-
-    df_latest = df_latest.assign(
-        avg_ranking_30d=df_latest["ranking_30d"],
-        ranking_acum_90d=df_latest["ranking_90d"],
-        max_fm_30d=max_fm_30d,
-    )
-
-    return df_sorted, df_latest
+    return result[0], result[1]
 
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -339,9 +301,14 @@ def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="mo
     """Generate complete insight data for a failure mode and unit."""
     oil_labels, telem_labels, oil_limits_four = _resolve_client_dicts(client, component)
     modes = get_failure_modes_for_component(component, client)
-    mode_config = modes.get(failure_mode, {})
+    mode_config = modes.get(failure_mode)
     if not mode_config:
-        return None
+        # Mode present in this client's data but not yet mapped in
+        # FAILURE_MODE_CONFIG (e.g. CDA's turbocharger_risk/
+        # coolant_contamination_risk once its data carries them) - show a
+        # humanized label with no fabricated variable mapping, rather than
+        # hiding the panel entirely.
+        mode_config = {"label": humanize_mode_key(failure_mode), "oil_variables": [], "telemetry_variables": []}
 
     label = mode_config["label"]
     oil_vars = mode_config.get("oil_variables", [])
@@ -543,21 +510,14 @@ def _build_insight_panel(insight):
 
 def render_initial_content(unit, df, df_latest, component="motor", client=None):
     """Render KPIs and fleet comparison for a unit."""
-    failure_modes = get_failure_modes_dict(component, client)
+    failure_modes = resolve_failure_modes(component, client)
 
-    latest = df_latest.copy()
-    # Status classification (fixed thresholds)
-    latest["status"] = "Saludable"
-    latest.loc[
-        (latest["avg_ranking_30d"] >= 30) | (latest["max_fm_30d"] >= 50),
-        "status",
-    ] = "Alerta"
-    latest.loc[
-        (latest["avg_ranking_30d"] >= 60) | (latest["max_fm_30d"] >= 80),
-        "status",
-    ] = "Crítica"
+    # Status - unit_status_summary when it exists for this client/component,
+    # else analisis_inteligente.parquet (Change 4) - so the fleet scatter
+    # never disagrees with the priority cards for the same unit.
+    latest = attach_status(df_latest, client, component)
 
-    STATUS_COLORS = {"Crítica": "#e24b4a", "Alerta": "#ef9f27", "Saludable": "#1d9e75"}
+    STATUS_COLORS = {"Anormal": "#e24b4a", "Alerta": "#ef9f27", "Normal": "#1d9e75"}
 
     if not unit or unit not in df["Unit"].values:
         return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
@@ -575,64 +535,18 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
 
     # KPIs
     ranking_val = float(row["ranking"])
-    ranking_90d_val = float(row.get("ranking_acum_90d", 0))
+    ranking_30d_val = float(row.get("avg_ranking_30d", 0))
 
     df_unit = df[df["Unit"] == unit].sort_values("Fecha")
     last_evidence_date = df_unit["Fecha"].max() if not df_unit.empty else None
     last_date_str = last_evidence_date.strftime("%d %b %Y") if last_evidence_date is not None else "—"
 
-    # ── Load component horómetro at last evidence date ──
-    horometro_value = "—"
-    horometro_sub = "horas acumuladas del componente"
-    if client and last_evidence_date is not None:
-        try:
-            from config.settings import get_settings as _get_settings
-            from src.data.loaders import load_component_hours
-            import re as _re
-            _settings = _get_settings()
-            allowed = [c.upper() for c in _settings.component_hours_allowed_clients]
-            if client.upper() in allowed:
-                comp_hours_file = _settings.get_component_hours_path(client.lower())
-                if comp_hours_file.exists():
-                    all_hours = load_component_hours(comp_hours_file)
-                    if not all_hours.empty:
-                        # Normalize unit IDs for matching (T_09 vs T_9)
-                        def _normalize_unit(uid):
-                            m = _re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
-                            return f"{m.group(1)}{m.group(2)}" if m else str(uid)
-
-                        unit_norm = _normalize_unit(unit)
-                        all_hours['_unitId_norm'] = all_hours['unitId'].apply(_normalize_unit)
-
-                        # Filter by normalized unit and component
-                        unit_comp_hours = all_hours[
-                            (all_hours['_unitId_norm'] == unit_norm) &
-                            (all_hours['componentName'] == component)
-                        ].copy()
-
-                        if not unit_comp_hours.empty:
-                            # Find reading closest to last evidence date
-                            unit_comp_hours['date_diff'] = abs(
-                                unit_comp_hours['sampleDate'] - last_evidence_date
-                            )
-                            closest = unit_comp_hours.sort_values('date_diff').iloc[0]
-                            hrs = closest['componentHours_cleaned']
-                            date_val = closest['sampleDate']
-                            if pd.notna(hrs):
-                                horometro_value = f"{hrs:,.0f}"
-                            if pd.notna(date_val):
-                                horometro_sub = f"al {pd.to_datetime(date_val).strftime('%d %b %Y')}"
-                        else:
-                            logger.info(f"No component hours found for unit={unit} (norm={unit_norm}), component={component}")
-        except Exception as e:
-            logger.warning(f"Could not load component hours for KPI: {e}")
-
-    component_label = (component or "").title()
-
+    # Horómetro is shown once in the persistent unit banner above this
+    # subview (dashboard/callbacks/predictive_callbacks.py's
+    # update_unit_banner) — not repeated here as a KPI.
     kpis = [
         _kpi_card("Ranking actual", f"{ranking_val:.0f}", _ranking_color(ranking_val), "escala 0-100"),
-        _kpi_card("Riesgo acum. 90d", f"{ranking_90d_val:.1f}", _ranking_color(ranking_90d_val), "índice histórico"),
-        _kpi_card(f"Horas del {component_label}", horometro_value, "#0891B2", horometro_sub),
+        _kpi_card("Riesgo acum. 30d", f"{ranking_30d_val:.1f}", _ranking_color(ranking_30d_val), "índice histórico"),
         _kpi_card("Modo dominante", dominant_label, "#7C3AED", f"Score: {fm_scores[dominant_mode]:.1f}"),
         _kpi_card("Última evidencia", last_date_str, "#6B7280", "fecha más reciente"),
     ]
@@ -641,21 +555,86 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     scatter_fig = create_fleet_scatter(latest, unit, STATUS_COLORS, 30.0)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
-    # AI analysis (analisis_inteligente.parquet) for the selected unit.
-    # Always render the three sections rather than hiding the panel when a
-    # unit has no row yet - the pipeline team is expected to backfill
-    # placeholder diagnostico/causa_probable/acciones for units without one
-    # (e.g. healthy units), so the "No disponible" fallback below is meant
-    # to be a rare/transitional case, not the steady-state UI.
-    ai_row = _get_unit_ai_analysis(load_analisis_inteligente(client), unit) if client else None
-    ai_section = html.Div(
-        create_ai_analysis_panel(
-            ai_row.get("diagnostico") if ai_row is not None else None,
-            ai_row.get("causa_probable") if ai_row is not None else None,
-            ai_row.get("acciones") if ai_row is not None else None,
-        ),
-        style={"marginBottom": "1.5rem"},
-    )
+    # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
+    # `failure_mode_diagnosis`) is the published contract - one row per unit x
+    # flagged mode, worst mode first via the modos_ordenados join (see
+    # predictive_v2.get_unit_mode_failure_analisis and
+    # documentation/predictive/predictive_data_contracts.md §3). Falls back to
+    # `unit_failure_analisis` (formerly `analisis_inteligente`, now live and
+    # partitioned rather than a frozen flat file) for units with no flagged
+    # mode this week, then to the deprecated flat `analisis_inteligente.parquet`
+    # for clients/components not yet on the new layout, then to the rule-based
+    # insight engine when none of those has narrative content.
+    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit) if client else pd.DataFrame()
+    diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
+
+    ai_section = None
+    if diag_row is not None:
+        analysis_status = str(diag_row.get("analysis_status", "")).strip().lower()
+        if analysis_status == "error":
+            # Never surface raw exception text to the user - documented
+            # incident: a BadRequestError string once ended up rendered in a
+            # unit's report. Show a generic interface message instead of
+            # trusting probable_cause/recommended_actions' contents.
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    None,
+                    "El analisis para este modo no pudo generarse esta semana.",
+                    None,
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
+        else:
+            header_text = "Analisis Inteligente"
+            if analysis_status == "fallback_rules":
+                # Model was unavailable upstream and this came from fixed
+                # rules instead - flag it visually so it doesn't read as more
+                # precise than it is.
+                header_text = "Analisis Inteligente (basado en reglas)"
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    diag_row.get("diagnostico"),
+                    diag_row.get("probable_cause"),
+                    diag_row.get("recommended_actions"),
+                    header_text=header_text,
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
+    else:
+        df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component) if client else pd.DataFrame()
+        if df_unit_analisis.empty:
+            # Not on the new layout yet for this client/component - last
+            # resort is the deprecated frozen snapshot.
+            df_unit_analisis = load_analisis_inteligente(client) if client else pd.DataFrame()
+        ai_row = _get_unit_ai_analysis(df_unit_analisis, unit) if client else None
+        _narrative_cols = ("diagnostico", "causa_probable", "acciones")
+        has_narrative = (
+            ai_row is not None
+            and all(col in ai_row.index for col in _narrative_cols)
+            and str(ai_row.get("analisis_fuente", "")).strip().lower() != "omitida"
+            and any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _narrative_cols)
+        )
+        if has_narrative:
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    ai_row.get("diagnostico"),
+                    ai_row.get("causa_probable"),
+                    ai_row.get("acciones"),
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
+
+    if ai_section is None:
+        # No narrative diagnosis on file for this unit in either the current
+        # contract or the legacy table (source 1/2 both empty) - show the
+        # same Diagnostico/Causa probable/Acciones layout as source 1 rather
+        # than the rule-based insight panel, so the card's shape never
+        # changes across units; create_ai_analysis_panel already renders
+        # "No disponible" for each column when passed None.
+        ai_section = html.Div(
+            create_ai_analysis_panel(None, None, None),
+            style={"marginBottom": "1.5rem"},
+        )
 
     return html.Div([
         # KPIs
@@ -683,7 +662,7 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
                     html.Div([
                         html.Span([html.I(className="fas fa-dot-circle me-1"), "Posición en la flota"],
                                   className="card-subtitle fw-500"),
-                        html.Span("Ranking actual vs riesgo acumulado 90 días",
+                        html.Span("Ranking actual vs riesgo acumulado 30 días",
                                   style={"fontSize": "11px", "color": "var(--text-light)"}),
                     ], style={"marginBottom": "8px"}),
                     dcc.Graph(figure=scatter_fig, config={"displayModeBar": False}),
@@ -705,7 +684,7 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
 def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor", client="cda"):
     """Render oil and telemetry evidence for a unit and failure mode."""
     oil_labels, telem_labels, oil_limits_four = _resolve_client_dicts(client, component)
-    failure_modes = get_failure_modes_dict(component, client)
+    failure_modes = resolve_failure_modes(component, client)
 
     if not failure_mode or failure_mode not in failure_modes:
         return html.Div(html.P("Seleccione un modo de falla válido.", className="text-muted text-center", style={"padding": "40px"}))
@@ -725,20 +704,33 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
     oil_vars = get_oil_variables_for_mode(failure_mode, component, client)
     oil_subtitle = f"Variables asociadas a {selected_label}"
 
+    # df_unit is the risk-scores-derived wide frame shared with Predictivo >
+    # Resumen: components still on the legacy CSV format carry forward-filled
+    # oil essay columns directly in it, but components on the new parquet
+    # Data Contract v2.0 format (e.g. Capstone's "motor") never do - it only
+    # has failure-mode risk columns. Fall back to the oil technique's own
+    # golden layer (the same real-samples source the oil timeseries chart
+    # already uses) so the selector/table aren't silently empty for those.
+    df_oil = df_unit
+    if oil_vars and not any(v in df_oil.columns for v in oil_vars):
+        df_oil_real = load_real_oil_samples(client, component, unit)
+        if df_oil_real is not None and not df_oil_real.empty:
+            df_oil = df_oil_real
+
     # Build oil variable options for the selector (all associated vars, pre-selected)
-    oil_var_options = [{"label": oil_labels.get(v, v), "value": v} for v in oil_vars if v in df_unit.columns]
-    oil_var_defaults = [v for v in oil_vars if v in df_unit.columns]
+    oil_var_options = [{"label": oil_labels.get(v, v), "value": v} for v in oil_vars if v in df_oil.columns]
+    oil_var_defaults = [v for v in oil_vars if v in df_oil.columns]
 
     # Get oil range for threshold display
     oil_range_val = "LT_1000"
-    if oil_vars and not df_unit.empty:
-        df_sorted_oil = df_unit.sort_values(_oil_date_col(df_unit))
+    if oil_vars and not df_oil.empty:
+        df_sorted_oil = df_oil.sort_values(_oil_date_col(df_oil))
         last_sample = df_sorted_oil.iloc[-1]
         oil_range_val = last_sample.get("oilHourRange", "LT_1000")
 
     # Oil variables table (static, always shows all vars for the mode)
-    if oil_vars and not df_unit.empty:
-        oil_table = create_oil_variables_table(df_unit, oil_vars, oil_labels, oil_limits_four)
+    if oil_vars and not df_oil.empty:
+        oil_table = create_oil_variables_table(df_oil, oil_vars, oil_labels, oil_limits_four)
     else:
         oil_table = html.Div()
 
@@ -756,9 +748,30 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
         window_text = ""
 
     if telem_signals:
+        # Change 2: signal_daily_status (long format, row-filtered by
+        # signal_name) is preferred when it exists for this client/component;
+        # falls back to the legacy wide-column chart for components still on
+        # the CSV, whose telemetry rate columns never appear in the
+        # risk_scores-derived wide frame.
+        layout = predictive_v2.discover_predictive_layout(client) if client else {}
+        use_long_signal = bool(layout.get(component)) and layout[component].signal_daily_status
+        df_signal_unit = None
+        if use_long_signal:
+            df_signal_all = predictive_v2.load_signal_daily_status(client, component)
+            if not df_signal_all.empty and "Unit" in df_signal_all.columns:
+                df_signal_unit = df_signal_all[df_signal_all["Unit"] == unit]
+                if not df_signal_unit.empty:
+                    fecha_fin_sig = df_signal_unit["Fecha"].max()
+                    df_signal_unit = df_signal_unit[
+                        df_signal_unit["Fecha"] >= fecha_fin_sig - pd.Timedelta(days=90)
+                    ]
+
         charts = []
         for signal in telem_signals:
-            fig = create_telemetry_signal_chart(df_unit_90d, signal, telem_labels)
+            if df_signal_unit is not None and not df_signal_unit.empty:
+                fig = create_telemetry_signal_chart_from_long(df_signal_unit, signal, telem_labels)
+            else:
+                fig = create_telemetry_signal_chart(df_unit_90d, signal, telem_labels)
             if fig:
                 charts.append(html.Div([dcc.Graph(figure=fig, config={"displayModeBar": False})], style={"marginBottom": "20px"}))
         telem_charts = html.Div(charts) if charts else html.P(

@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Dict, List
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from src.data.catalog import dashboard_data_root
 
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.1.14"
+APP_VERSION = "2.1.23"
 
 
 class Settings(BaseSettings):
@@ -34,14 +35,8 @@ class Settings(BaseSettings):
     
     @property
     def data_root(self) -> Path:
-        """Get data root directory (multi-technique architecture)."""
-        # Check if running in Docker (data mounted at /app/data)
-        project_root = Path(__file__).parent.parent
-        docker_path = project_root / 'data'
-        if docker_path.exists():
-            return docker_path
-        # Local development
-        return Path("data")
+        """Get the same mounted data root used by all read-only loaders."""
+        return dashboard_data_root()
     
     # Dashboard
     secret_key: str = Field(default="dev-secret-key-change-in-production", description="Secret key for sessions")
@@ -73,15 +68,31 @@ class Settings(BaseSettings):
     report_threshold_anormal: int = Field(default=5, description="Report threshold for Anormal (>=)")
     
     # Clients
-    clients: List[str] = Field(default=["CDA", "EMIN", "ENEX", "CAPSTONE"], description="List of client names")
+    clients: List[str] = Field(default=["CDA", "EMIN", "ENEX", "CAPSTONE", "CENTINELA"], description="List of client names")
     
     # Module access control - clients allowed to access specific modules.
-    # Predictive module access is now centralized in config/client_services.json
-    # (service id 'predictive') - see config/client_services.py::is_service_enabled.
+    # Predictive module access is now centralized in config/client_services.json,
+    # one service id per component ('predictive-motor', 'predictive-transmision')
+    # - see config/client_services.py::is_service_enabled.
     component_hours_allowed_clients: List[str] = Field(
-        default=["CDA", "ENEX"],
+        default=["CDA", "ENEX", "CAPSTONE"],
         description="Clients with access to the Component Hours (Horómetro) module"
     )
+
+    # cleaned_component_hours.parquet's `componentName` is free text sourced
+    # per-client (CDA/ENEX already match the predictive module's lowercase
+    # Spanish component keys, e.g. "motor"). Capstone's source data instead
+    # uses "MOTOR DIESEL", so it needs an explicit key -> componentName
+    # mapping wherever the predictive component key is matched against this file.
+    component_hours_name_overrides: Dict[str, Dict[str, str]] = Field(
+        default_factory=lambda: {"CAPSTONE": {"motor": "MOTOR DIESEL"}},
+        description="Per-client override mapping predictive component keys to the componentName value used in cleaned_component_hours.parquet"
+    )
+
+    def get_component_hours_name(self, client: str, component: str) -> str:
+        """Resolve the componentName value in cleaned_component_hours.parquet for a predictive component key."""
+        overrides = self.component_hours_name_overrides.get(str(client or "").upper(), {})
+        return overrides.get(component, component)
 
     # Laboratory Compliance - per-client threshold (days) for the compliance window
     lab_compliance_default_threshold_days: float = Field(

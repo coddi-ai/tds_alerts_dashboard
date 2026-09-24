@@ -8,6 +8,8 @@ authorization and validation.
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -120,30 +122,70 @@ def _registry(tmp_path) -> DashboardChartRegistry:
     ).to_parquet(oil / "machine_status.parquet", index=False)
     alerts = tmp_path / "alerts" / "golden" / "cda"
     alerts.mkdir(parents=True)
+    # Relative to today: `alert_ranking` applies a 60-day default window, so absolute dates
+    # here made the fixture expire and the test fail by the calendar instead of by a change.
+    def _ago(days: int, hour: int) -> str:
+        stamp = pd.Timestamp.today().normalize() - pd.Timedelta(days=days)
+        return (stamp + pd.Timedelta(hours=hour)).isoformat()
+
     pd.DataFrame(
         [
-            {"UnitId": "T_9", "Timestamp": "2026-07-01T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_9", "Timestamp": "2026-07-02T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_9", "Timestamp": "2026-07-02T11:00:00", "sistema": "Motor"},
-            {"UnitId": "T_15", "Timestamp": "2026-07-03T10:00:00", "sistema": "Frenos"},
-            {"UnitId": "T_15", "Timestamp": "2026-07-03T11:00:00", "sistema": "Frenos"},
-            {"UnitId": "T_18", "Timestamp": "2026-07-04T10:00:00", "sistema": "Motor"},
-            {"UnitId": "T_20", "Timestamp": "2026-07-05T10:00:00", "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(20, 10), "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(19, 10), "sistema": "Motor"},
+            {"UnitId": "T_9", "Timestamp": _ago(19, 11), "sistema": "Motor"},
+            {"UnitId": "T_15", "Timestamp": _ago(18, 10), "sistema": "Frenos"},
+            {"UnitId": "T_15", "Timestamp": _ago(18, 11), "sistema": "Frenos"},
+            {"UnitId": "T_18", "Timestamp": _ago(17, 10), "sistema": "Motor"},
+            {"UnitId": "T_20", "Timestamp": _ago(16, 10), "sistema": "Motor"},
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
     return DashboardChartRegistry(DashboardDataRepository(tmp_path))
 
 
-def test_catalogue_only_offers_charts_whose_data_exists(tmp_path):
+def test_the_catalogue_is_limited_by_what_each_client_declares(tmp_path, monkeypatch):
+    """Coverage per client now comes from the declared schema, not from a disk walk.
+
+    Validation assumes a declared dataset is present, so the catalogue is filtered by what the
+    declaration says a client *has* - which is the structural fact it was always trying to
+    express. A client that genuinely lacks a technique still cannot be offered its charts.
+
+    The transient case - a declared file that failed to sync - is deliberately no longer caught
+    here: it surfaces as an exception when the chart is rendered. That is the trade this design
+    accepted in exchange for opening a session without touching the filesystem.
+    """
+    import src.campbell_ai.schema as schema_module
+
     registry = _registry(tmp_path)
 
-    available = {item["chart_id"] for item in registry.list_charts("cda")}
+    # Declared coverage differs per client, and the catalogue follows it.
+    monkeypatch.setattr(
+        schema_module,
+        "_LOADED",
+        {
+            "cda": {
+                "alerts": {"format": "csv", "columns": ["UnitId", "Timestamp"]},
+                "oil_machine_status": {"format": "parquet", "columns": ["unit_id", "overall_status"]},
+            },
+            "enex": {
+                "alerts": {"format": "csv", "columns": ["UnitId", "Timestamp"]},
+            },
+        },
+    )
+    # La declaracion se fija a mano, asi que tambien hay que fijar la ventana de
+    # frescura: `_load` re-mira los candidatos en disco pasado un minuto y pisaria esto.
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
+    cda = {item["chart_id"] for item in registry.list_charts("cda")}
+    enex = {item["chart_id"] for item in registry.list_charts("enex")}
 
-    assert "oil_fleet_status" in available
-    assert "alert_ranking" in available
-    # Telemetry and predictive files were never written for this client.
-    assert "telemetry_fleet_status" not in available
-    assert "predictive_motor_ranking" not in available
+    assert "oil_fleet_status" in cda, "cda declara la fuente de aceite"
+    assert "oil_fleet_status" not in enex, "enex no la declara y no se le puede ofrecer"
+    # Ninguno declara telemetria ni predictivo.
+    assert "telemetry_fleet_status" not in cda | enex
+    assert "predictive_motor_ranking" not in cda | enex
+
+    # Un cliente que la declaracion no conoce cae al camino que si mira el disco - y ahi no
+    # hay nada, asi que no se le ofrece nada.
+    assert registry.list_charts("cliente_nuevo") == []
 
 
 def test_registry_renders_a_named_chart_with_a_grounded_description(tmp_path):

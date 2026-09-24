@@ -27,6 +27,10 @@ from dashboard.campbell_ai.callbacks import (
 from dashboard.campbell_ai.layout import (
     ALERT_SUGGESTIONS,
     CAMPBELL_AI_VERSION,
+    SUGGESTED_QUESTIONS,
+    eligible_suggestions,
+    suggested_question_text,
+    suggested_questions_block,
     _feedback_controls,
     _initial_company_state,
     create_campbell_ai_layout,
@@ -45,20 +49,81 @@ def _walk(component):
         yield from _walk(children)
 
 
-def test_layout_has_alert_suggestions_without_removed_copy():
-    components = list(_walk(create_campbell_ai_layout()))
-    visible_text = " ".join(item for item in components if isinstance(item, str))
-    suggestion_buttons = [
-        item
-        for item in components
+def _suggestion_ids(nodes) -> list[str]:
+    return [
+        item.id["question_id"]
+        for item in _walk(nodes)
         if isinstance(getattr(item, "id", None), dict)
         and item.id.get("type") == "campbell-ai-suggested-question"
     ]
 
-    assert len(ALERT_SUGGESTIONS) == 4
-    assert len(suggestion_buttons) == 4
+
+def _capabilities(*keys: str) -> dict:
+    return {"available": [{"key": key, "label": key} for key in keys]}
+
+
+def test_layout_offers_no_suggestions_until_capabilities_are_known():
+    """Nothing is offered up front: eligibility depends on the client, not on the layout.
+
+    The four alert questions used to be rendered unconditionally, so a tribology-only client
+    was handed four buttons with no source behind any of them.
+    """
+    components = list(_walk(create_campbell_ai_layout()))
+    visible_text = " ".join(item for item in components if isinstance(item, str))
+    container = next(
+        item
+        for item in components
+        if getattr(item, "id", None) == "campbell-ai-suggestions"
+    )
+
+    assert _suggestion_ids(create_campbell_ai_layout()) == []
+    assert container.children == []
     assert "Diagnóstico y 5 porqués" not in visible_text
     assert "Reportes, PDF, descargas y archivos están deshabilitados" not in visible_text
+
+
+def test_suggestions_match_the_active_client_capabilities():
+    """AC15: an oil-only client is offered oil questions, never alert ones."""
+    oil_only = suggested_questions_block(
+        _capabilities("oil_fleet", "oil_components", "oil_limits", "oil_lab_kpis")
+    )
+    with_alerts = suggested_questions_block(_capabilities("alerts", "oil_fleet"))
+
+    oil_ids = _suggestion_ids(oil_only)
+    assert "oil-fleet-status" in oil_ids
+    assert "lab-turnaround" in oil_ids
+    # No alert question survives for a client with no alert source.
+    assert not [item for item in oil_ids if item.startswith("equipment-")]
+    assert "weekly-summary" not in oil_ids
+
+    alert_ids = _suggestion_ids(with_alerts)
+    assert "weekly-summary" in alert_ids
+    assert "oil-fleet-status" in alert_ids
+    # A capability that is absent takes its question with it.
+    assert "lab-turnaround" not in alert_ids
+
+
+def test_a_client_with_no_usable_capability_gets_an_explanation_not_a_fallback():
+    """AC16: the failure mode was offering generic alert questions as a fallback."""
+    block = suggested_questions_block(_capabilities())
+    text = " ".join(item for item in _walk(block) if isinstance(item, str))
+
+    assert _suggestion_ids(block) == []
+    assert "No hay preguntas sugeridas para esta empresa" in text
+
+
+def test_every_declared_suggestion_names_the_capability_that_answers_it():
+    for question in SUGGESTED_QUESTIONS:
+        assert question.requires, question.question_id
+        # And it is only eligible when that capability is available.
+        assert eligible_suggestions(_capabilities(*question.requires))
+        assert question not in eligible_suggestions(_capabilities())
+    # The legacy name still resolves, and still describes only the alert questions.
+    assert set(ALERT_SUGGESTIONS) == {
+        question.question_id
+        for question in SUGGESTED_QUESTIONS
+        if question.domain == "alertas"
+    }
 
 
 def test_textarea_and_callback_support_enter_to_send():
@@ -101,14 +166,26 @@ def test_enter_button_and_suggestions_resolve_to_an_outgoing_message():
     assert _resolve_outgoing_message("campbell-ai-send", "Pareto por equipo") == (
         "Pareto por equipo"
     )
-    assert _resolve_outgoing_message(
-        {
-            "type": "campbell-ai-suggested-question",
-            "question_id": "equipment-pareto",
-        },
-        "",
-    ) == ALERT_SUGGESTIONS["equipment-pareto"]
-    assert _resolve_outgoing_message("campbell-ai-clear", "No enviar") is None
+    # A suggestion resolves only while its capability holds for the active client, and only
+    # when a real click fired it (see the re-render cases below).
+    with_alerts = _capabilities("alerts")
+    pareto = {
+        "type": "campbell-ai-suggested-question",
+        "question_id": "equipment-pareto",
+    }
+    assert (
+        _resolve_outgoing_message(pareto, "", with_alerts, 1)
+        == ALERT_SUGGESTIONS["equipment-pareto"]
+    )
+    # The same button, for a client without alerts, is not sendable even if still on screen.
+    assert _resolve_outgoing_message(pareto, "", _capabilities("oil_fleet"), 1) is None
+    # No capabilities resolved yet: nothing is sent.
+    assert _resolve_outgoing_message(pareto, "", None, 1) is None
+    assert suggested_question_text("no-existe", with_alerts) is None
+    # The header button opens a new conversation; it never sends a message.
+    assert (
+        _resolve_outgoing_message("campbell-ai-new-conversation-main", "No enviar") is None
+    )
 
 
 def test_login_hydration_is_not_treated_as_a_login_attempt():
@@ -382,3 +459,50 @@ def test_pending_message_helpers_render_user_message_before_agent_response():
     assert _strip_pending_messages(history) == [
         {"role": "assistant", "message_id": "real-1"}
     ]
+
+
+def test_a_rebuilt_suggestion_button_is_not_treated_as_a_click():
+    """The reported loop: one predetermined question kept re-running by itself.
+
+    The suggestion buttons are rendered per client, so the pattern-matching `n_clicks` input
+    fires whenever that list is rebuilt, and a freshly mounted button reports 0 or None.
+    Reading only the triggered id made every rebuild look like a click on the *first* button
+    in the list - `weekly-summary` - which sent its question, which rebuilt the list, which
+    sent it again.
+    """
+    with_alerts = _capabilities("alerts")
+    first_button = {
+        "type": "campbell-ai-suggested-question",
+        "question_id": "weekly-summary",
+    }
+
+    # A rebuild, in the three shapes Dash reports it.
+    for rebuilt in (None, 0, ""):
+        assert (
+            _resolve_outgoing_message(first_button, "", with_alerts, rebuilt) is None
+        ), rebuilt
+
+    # A real click still works, first click included.
+    assert _resolve_outgoing_message(first_button, "", with_alerts, 1) == (
+        ALERT_SUGGESTIONS["weekly-summary"]
+    )
+    # And a later click, since `n_clicks` accumulates.
+    assert _resolve_outgoing_message(first_button, "", with_alerts, 7) == (
+        ALERT_SUGGESTIONS["weekly-summary"]
+    )
+
+
+def test_a_nonsense_click_count_is_not_a_click():
+    """Defensive: a malformed value must not send a question."""
+    from dashboard.campbell_ai.callbacks import _clicked
+
+    for value in (None, 0, "", "abc", [], {}):
+        assert _clicked(value) is False, value
+    for value in (1, 2, "3"):
+        assert _clicked(value) is True, value
+
+
+def test_typing_and_sending_do_not_depend_on_a_click_count():
+    """Enter and the send button are plain inputs; they must keep working as before."""
+    assert _resolve_outgoing_message("campbell-ai-input", "  Hola  ", None, None) == "Hola"
+    assert _resolve_outgoing_message("campbell-ai-send", "Hola", None, 0) == "Hola"

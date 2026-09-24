@@ -85,6 +85,10 @@ from dashboard.callbacks.access_control_callbacks import register_access_control
 # Import the reactive sidebar (re-renders nav when the selected client changes)
 from dashboard.callbacks.sidebar_callbacks import register_sidebar_callbacks
 
+# Troubleshooting agent tab (card callback + signed handoff route to the agent)
+from dashboard.callbacks.troubleshooting_callbacks import register_troubleshooting_callbacks
+from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
+
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
 from config.client_services import validate_startup_config
@@ -132,6 +136,9 @@ app.server.config.update(
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
 )
 
+# Explicit WSGI export for Gunicorn and other production servers.
+server = app.server
+
 # Import page modules so their dash.register_page() calls run (must happen
 # after the app is created since register_page() looks up the active app).
 import dashboard.pages.index
@@ -140,9 +147,11 @@ import dashboard.pages.overview_data_freshness
 import dashboard.pages.monitoring_alerts
 import dashboard.pages.monitoring_telemetry
 import dashboard.pages.monitoring_oil
+import dashboard.pages.monitoring_mantenciones
 import dashboard.pages.predictive_motor
 import dashboard.pages.predictive_transmision
 import dashboard.pages.agents_campbell_ai
+import dashboard.pages.agents_troubleshooting
 import dashboard.pages.integration_validacion_avisos
 import dashboard.pages.integration_seguimiento_avisos
 import dashboard.pages.reporting_main
@@ -204,6 +213,9 @@ register_campbell_ai_stream(app)
 register_admin_callbacks(app)
 register_access_control_callbacks(app)
 register_sidebar_callbacks(app)
+register_troubleshooting_callbacks(app)
+# Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.
+register_troubleshooting_handoff(app)
 
 
 @app.server.after_request
@@ -245,13 +257,13 @@ if __name__ == '__main__':
     host = os.getenv('DASHBOARD_HOST', '0.0.0.0')
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
     debug = os.getenv('DEBUG', 'False').lower() == 'true'
-    
-    # Check if data folder exists, sync from S3 if needed
-    data_folder = project_root / 'data'
-    logger.info(f"Checking data folder at: {data_folder}")
-    
-    if not data_folder.exists():
-        logger.warning("Data folder not found. Attempting to sync from S3...")
+    sync_data = os.getenv('SYNC_DATA', 'True').lower() == 'true'
+
+    # Sync data folder from S3 on every startup (unless disabled via SYNC_DATA=False)
+    if sync_data:
+        data_folder = project_root / 'data'
+        logger.info(f"Syncing data folder at: {data_folder}")
+
         try:
             from src.data.s3_downloader import main as s3_sync
             logger.info("Starting S3 data synchronization...")
@@ -264,7 +276,7 @@ if __name__ == '__main__':
             logger.error(f"Error during S3 synchronization: {e}")
             logger.warning("Continuing without S3 sync. Some features may not work.")
     else:
-        logger.info("Data folder exists. Skipping S3 sync.")
+        logger.info("SYNC_DATA is disabled. Skipping S3 sync.")
     
     # Run server
     logger.info("Starting Multi-Technical-Alerts Dashboard...")
@@ -273,5 +285,9 @@ if __name__ == '__main__':
     app.run(
         host=host,
         port=port,
-        debug=debug
+        debug=debug,
+        threaded=True,
     )
+    
+    
+    

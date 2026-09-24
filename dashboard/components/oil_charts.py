@@ -20,6 +20,13 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
+
+# The four-limit contract lives in `src` and is read from here, never the other way round.
+from src.campbell_ai.oil_limits import (
+    classify_four_limit,
+    four_limit_for_essay,
+    four_limit_reference,
+)
 from dash import html, dcc
 
 
@@ -229,83 +236,46 @@ def limit_line_color(tiers) -> str:
 
 
 def get_essay_limits_four(comp_limits_four, essay, oil_hour_range):
+    """Four-limit (LIC/LIM/LSM/LSC) essay limits with oil-hour stratification fallback.
+
+    Delegates to `src.campbell_ai.oil_limits`, which now owns the single copy of this rule.
+    The two implementations had drifted apart in one place - this one returned a dict of
+    Nones when no bucket carried an LSM, where the shared one returns None - and a band with
+    no upper marginal limit cannot classify anything, so None is the honest answer.
+
+    The import direction is the safe one: `dashboard` may read `src`, never the reverse (the
+    API container mounts ./src but not ./dashboard, so an import the other way would serve
+    stale code).
     """
-    Get four-limit (LIC/LIM/LSM/LSC) essay limits with oil-hour stratification
-    fallback logic (data contract v2.8).
+    return four_limit_for_essay(comp_limits_four, essay, oil_hour_range)
 
-    Fallback hierarchy:
-    1. Try exact match: oilHourRange from sample
-    2. Try 'ALL'
-    3. Try averaging across all available oil hour ranges
-    4. Return None if essay not found
 
-    Args:
-        comp_limits_four: Nested dict {essay: {oilHourRange: {LIC, LIM, LSM, LSC, ...}}}
-        essay: Essay name
-        oil_hour_range: Oil hour range from sample ('LT_1000', 'GE_1000', 'UNKNOWN')
+def get_essay_limits_four_with_basis(comp_limits_four, essay, oil_hour_range):
+    """Same lookup, plus which mechanism produced the band and from which stored rows.
 
-    Returns:
-        Dict with LIC, LIM, LSM, LSC (LIC/LIM may be None) or None if not found.
+    Returns ``(thresholds, basis, provenance)``. For any view that shows a reference to a
+    user: an averaged band is an approximation, has to be labelled as one, and has to carry
+    the ranges and calibration versions it was derived from - it has no single
+    ``calculation_date`` of its own.
     """
-    if not comp_limits_four or essay not in comp_limits_four:
-        return None
-
-    essay_limits = comp_limits_four[essay]
-    if not essay_limits:
-        return None
-
-    if oil_hour_range in essay_limits:
-        return essay_limits[oil_hour_range]
-
-    if 'ALL' in essay_limits:
-        return essay_limits['ALL']
-
-    available_ranges = list(essay_limits.keys())
-    if not available_ranges:
-        return None
-
-    def _avg(field):
-        # Never treat a missing (null) lower limit as zero: average only over
-        # the buckets where this field is actually present.
-        values = [essay_limits[r][field] for r in available_ranges if essay_limits[r].get(field) is not None]
-        return sum(values) / len(values) if values else None
-
-    return {
-        'LIC': _avg('LIC'),
-        'LIM': _avg('LIM'),
-        'LSM': _avg('LSM'),
-        'LSC': _avg('LSC'),
-    }
+    return four_limit_reference(comp_limits_four, essay, oil_hour_range)
 
 
 def classify_four_limit_value(value: float, LIC, LIM, LSM: float, LSC: float) -> str:
-    """
-    Classify a value against the four-limit Stewart output (data contract v2.8).
+    """Classify a value against the four-limit Stewart output (data contract v2.8).
 
-    Boundary semantics (must match the main service exactly):
+    Boundary semantics, owned by `src.campbell_ai.oil_limits.classify_four_limit` so the chat
+    and the dashboard cannot disagree about the same sample:
         value < LIC            -> Inferior Condenatorio
         LIC <= value < LIM      -> Inferior Marginal
         LIM <= value <= LSM     -> Normal
         LSM < value <= LSC      -> Superior Marginal
         value > LSC             -> Superior Condenatorio
 
-    Lower-limit evaluation is only applied when BOTH LIC and LIM are available
-    (a null lower limit is never treated as a lower limit of zero). Otherwise:
-        value <= LSM            -> Normal
-        LSM < value <= LSC      -> Superior Marginal
-        value > LSC             -> Superior Condenatorio
+    Lower-limit evaluation is only applied when BOTH LIC and LIM are available (a null lower
+    limit is never treated as a lower limit of zero).
     """
-    has_lower = LIC is not None and LIM is not None
-    if has_lower:
-        if value < LIC:
-            return 'Inferior Condenatorio'
-        if value < LIM:
-            return 'Inferior Marginal'
-    if value <= LSM:
-        return 'Normal'
-    if value <= LSC:
-        return 'Superior Marginal'
-    return 'Superior Condenatorio'
+    return classify_four_limit(value, LIC, LIM, LSM, LSC)
 
 
 def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oil_hour_range: str):
@@ -334,10 +304,11 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
     # "Paquete de Aditivos" charts for this render. Split into two side-by-side
     # charts (same 2-column layout as the pairs above) so the lines stay readable.
     charts_to_render = list(TIME_SERIES_CHARTS)
-    essays_file = Path("data/oil/essays_elements.xlsx")
+    from src.data.loaders import _data_path
+    essays_file = _data_path("oil", "essays_elements.xlsx")
     if essays_file.exists():
-        essays_df = pd.read_excel(essays_file)
-        essays_df = essays_df.dropna(subset=['ElementNameSpanish', 'GroupElement'])
+        from src.data.loaders import load_essays_mapping
+        essays_df = load_essays_mapping(essays_file)
         aditivo_essays = essays_df[essays_df['GroupElement'] == 'Aditivo']['ElementNameSpanish'].tolist()
         if aditivo_essays:
             primary_aditivos = [e for e in ['Calcio', 'Zinc', 'Fósforo'] if e in aditivo_essays]
@@ -461,3 +432,270 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         return html.P("Sin datos de ensayos disponibles", className="text-muted")
 
     return dbc.Row(chart_elements)
+
+
+def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour_range: str, essays_df: pd.DataFrame):
+    """
+    Build the "Último Ensayo" grouped radar-chart + table view for a single
+    oil sample.
+
+    One polar radar chart (against normalized LIC/LIM/LSM/LSC rings) plus a
+    threshold table is rendered per essay group (Desgaste, Aditivos, then the
+    rest alphabetically). Shared by the Alerts > Detail > Oil Evidence
+    "Último Ensayo" tab (dashboard/callbacks/alerts_callbacks.py) and the
+    Monitoring > Oil > Details "Análisis de Series Temporales" "Último
+    Ensayo" tab (dashboard/callbacks/reports_callbacks.py), so both render
+    from the same grouping, normalization and status-classification logic.
+
+    Args:
+        oil_report: Single sample row (classified oil report schema).
+        comp_limits_four: Four-limit Stewart limits for this component, as
+            returned by load_stewart_limits_four(...)[client][machine][component].
+        oil_hour_range: oilHourRange of `oil_report`, for stratified limit lookup.
+        essays_df: Essays/elements mapping (GroupElement, ElementNameSpanish),
+            as returned by load_essays_mapping(...).
+
+    Returns:
+        List of dbc.Row (chart + table per essay group), or a single
+        placeholder element if there is nothing to plot.
+    """
+    from dash import dash_table
+
+    group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()
+
+    priority_groups = ['Desgaste', 'Aditivos']
+    ordered_groups = [g for g in priority_groups if g in group_mapping]
+    ordered_groups.extend(sorted(g for g in group_mapping if g not in priority_groups))
+
+    def get_essay_limits(essay_name):
+        return get_essay_limits_four(comp_limits_four, essay_name, oil_hour_range)
+
+    def _fmt_limit(v):
+        return round(v, 2) if v is not None else '—'
+
+    charts_and_tables = []
+
+    for group_name in ordered_groups:
+        essays = group_mapping[group_name]
+
+        valid_essays = [
+            e for e in essays
+            if e in oil_report.index and pd.notna(oil_report[e]) and get_essay_limits(e) is not None
+        ]
+        if not valid_essays:
+            continue
+
+        normalized_values = []
+        actual_values = []
+        table_data = []
+        group_has_lower = False
+
+        for essay in valid_essays:
+            value = float(oil_report[essay])
+            actual_values.append(value)
+
+            essay_limits = get_essay_limits(essay)
+            lic = essay_limits.get('LIC')
+            lim = essay_limits.get('LIM')
+            lsm = essay_limits.get('LSM', 0)
+            lsc = essay_limits.get('LSC', 0)
+            has_lower = lic is not None and lim is not None
+            group_has_lower = group_has_lower or has_lower
+
+            if has_lower:
+                if value < lic:
+                    norm_value = max((value / lic) * 20, 0.0) if lic else 0.0
+                elif value < lim:
+                    norm_value = 20 + (value - lic) / max(lim - lic, 1e-9) * 20
+                elif value <= lsm:
+                    norm_value = 40 + (value - lim) / max(lsm - lim, 1e-9) * 20
+                elif value <= lsc:
+                    norm_value = 60 + (value - lsm) / max(lsc - lsm, 1e-9) * 20
+                else:
+                    norm_value = min(80 + (value - lsc) / max(lsc, 1e-9) * 20, 100)
+            else:
+                if value <= lsm:
+                    norm_value = (value / lsm) * 60 if lsm else 0.0
+                elif value <= lsc:
+                    norm_value = 60 + (value - lsm) / max(lsc - lsm, 1e-9) * 20
+                else:
+                    norm_value = min(80 + (value - lsc) / max(lsc, 1e-9) * 20, 100)
+
+            normalized_values.append(min(max(norm_value, 0.0), 100))
+
+            status = classify_four_limit_value(value, lic, lim, lsm, lsc)
+            color = FOUR_LIMIT_STATUS_HEX_COLORS.get(status, '#28a745')
+
+            table_data.append({
+                'essay': essay,
+                'value': round(value, 2),
+                'status': status,
+                'lic': _fmt_limit(lic),
+                'lim': _fmt_limit(lim),
+                'lsm': _fmt_limit(lsm),
+                'lsc': _fmt_limit(lsc),
+                '_color': color
+            })
+
+        table_data.sort(key=lambda x: (FOUR_LIMIT_STATUS_ORDER.get(x['status'], 9), x['essay']))
+
+        fig = go.Figure()
+
+        if group_has_lower:
+            ring_specs = [
+                (80, 'LSC (Superior Condenatorio)', UPPER_LIMIT_COLOR),
+                (60, 'LSM (Superior Marginal)', 'orange'),
+                (40, 'LIM (Inferior Marginal)', LOWER_LIMIT_COLOR),
+                (20, 'LIC (Inferior Condenatorio)', LOWER_LIMIT_COLOR),
+            ]
+        else:
+            ring_specs = [
+                (80, 'LSC (Superior Condenatorio)', UPPER_LIMIT_COLOR),
+                (60, 'LSM (Superior Marginal)', 'orange'),
+            ]
+
+        for radius, ring_name, ring_color in ring_specs:
+            fig.add_trace(go.Scatterpolar(
+                r=[radius] * len(valid_essays),
+                theta=valid_essays,
+                name=ring_name,
+                line=dict(color=ring_color, dash='dash', width=2),
+                fill=None,
+                mode='lines'
+            ))
+
+        status_color = {
+            'Anormal': '#dc3545',
+            'Condenatorio': '#fd7e14',
+            'Critico': '#dc3545',
+            'Normal': '#28a745'
+        }.get(oil_report.get('report_status', 'Normal'), '#17a2b8')
+
+        fig.add_trace(go.Scatterpolar(
+            r=normalized_values,
+            theta=valid_essays,
+            name='Valores Actuales',
+            line=dict(color=status_color, width=3),
+            fill='toself',
+            fillcolor=status_color,
+            opacity=0.4,
+            hovertemplate='<b>%{theta}</b><br>Valor Real: %{customdata}<br>Normalizado: %{r:.1f}<extra></extra>',
+            customdata=actual_values
+        ))
+
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 100],
+                    tickvals=[0, 25, 50, 75, 100],
+                    ticktext=['0', '25', '50', '75', '100']
+                ),
+                angularaxis=dict(
+                    rotation=90,
+                    direction='clockwise'
+                )
+            ),
+            title=dict(
+                text=f"{group_name}",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=14, weight='bold')
+            ),
+            showlegend=True,
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=-0.2,
+                xanchor='center',
+                x=0.5,
+                font=dict(size=10)
+            ),
+            height=400,
+            margin=dict(l=50, r=50, t=50, b=80)
+        )
+
+        group_table = dash_table.DataTable(
+            columns=[
+                {'name': 'Ensayo', 'id': 'essay'},
+                {'name': 'Valor', 'id': 'value', 'type': 'numeric'},
+                {'name': 'Estado', 'id': 'status'},
+                {'name': 'LIC', 'id': 'lic'},
+                {'name': 'LIM', 'id': 'lim'},
+                {'name': 'LSM', 'id': 'lsm'},
+                {'name': 'LSC', 'id': 'lsc'}
+            ],
+            data=table_data,
+            style_table={'overflowX': 'auto'},
+            style_cell={
+                'textAlign': 'left',
+                'padding': '8px',
+                'fontSize': '13px',
+                'fontFamily': 'Arial'
+            },
+            style_header={
+                'backgroundColor': '#2c3e50',
+                'color': 'white',
+                'fontWeight': 'bold',
+                'textAlign': 'center'
+            },
+            style_data_conditional=[
+                {
+                    'if': {'filter_query': '{status} = "Superior Condenatorio"'},
+                    'backgroundColor': '#f8d7da',
+                    'color': '#721c24',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'filter_query': '{status} = "Inferior Condenatorio"'},
+                    'backgroundColor': '#f8d7da',
+                    'color': '#721c24',
+                    'fontWeight': 'bold'
+                },
+                {
+                    'if': {'filter_query': '{status} = "Superior Marginal"'},
+                    'backgroundColor': '#fff8e1',
+                    'color': '#856404'
+                },
+                {
+                    'if': {'filter_query': '{status} = "Inferior Marginal"'},
+                    'backgroundColor': '#fff8e1',
+                    'color': '#856404'
+                },
+                {
+                    'if': {'filter_query': '{status} = "Normal"'},
+                    'backgroundColor': '#d4edda',
+                    'color': '#155724'
+                }
+            ]
+        )
+
+        charts_and_tables.append(
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardBody([
+                            dcc.Graph(
+                                figure=fig,
+                                config={'displayModeBar': False}
+                            )
+                        ])
+                    ], className="shadow-sm mb-3")
+                ], md=6),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H6(f"Detalle - {group_name}", className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            group_table
+                        ])
+                    ], className="shadow-sm mb-3")
+                ], md=6)
+            ], className="mb-4")
+        )
+
+    if not charts_and_tables:
+        return [html.P("Sin datos de ensayos disponibles para el último ensayo", className="text-muted")]
+
+    return charts_and_tables

@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from src.campbell_ai.chart_registry import CHART_DEFINITIONS
+from src.campbell_ai.data import DashboardDataRepository
 from src.charts import CHART_KINDS
 from src.campbell_ai.config import DEFAULT_INTERNAL_TOKEN, get_campbell_settings
 from src.campbell_ai.errors import (
@@ -56,6 +57,8 @@ from src.campbell_ai.log_archive import (
 )
 from src.campbell_ai.logging_setup import configure_api_logging
 from src.campbell_ai.resources import reclaim
+from src.campbell_ai.schema import start_schema_verification, stop_schema_verification
+from src.campbell_ai.schema.refresh import start_schema_refresh, stop_schema_refresh
 from src.campbell_ai import progress
 
 
@@ -155,6 +158,28 @@ async def start_background_maintenance() -> None:
     configure_api_logging()
     start_log_archiver()
     start_janitor()
+    # Checks the declared column schema against the data once, in a thread. Reading every
+    # header is the work the declaration avoids on the hot path; doing it once here is what
+    # makes a divergence with the ETL visible instead of silent.
+    #
+    # Built from the settings rather than taken from the service on purpose. Reaching for
+    # `service.repository` here forces the singleton service into existence during startup,
+    # before a consumer or a test has had the chance to inject its own - and a startup hook
+    # that decides which service the app serves is a hook doing something it was not asked to.
+    try:
+        start_schema_verification(
+            DashboardDataRepository(get_campbell_settings().data_root)
+        )
+    except Exception:  # pragma: no cover - a schema check must never block startup
+        logger.warning("No se pudo iniciar la verificacion del esquema", exc_info=True)
+    # The weekly regeneration of that same declaration, as a thread here rather than as its
+    # own container. It sleeps until its window, runs for about a second, and publishes to the
+    # bucket; a separate image for that would be a second thing to build, ship and keep in
+    # step with this one.
+    try:
+        start_schema_refresh()
+    except Exception:  # pragma: no cover - a scheduled job must never block startup
+        logger.warning("No se pudo iniciar el refresh del esquema", exc_info=True)
 
 
 # The periodic job-retention task, kept so shutdown can cancel it.
@@ -205,6 +230,8 @@ async def stop_background_maintenance() -> None:
     if _JOB_PRUNER is not None:
         _JOB_PRUNER.cancel()
         _JOB_PRUNER = None
+    stop_schema_verification()
+    stop_schema_refresh()
     reset_janitor()
     reset_log_archiver()
 

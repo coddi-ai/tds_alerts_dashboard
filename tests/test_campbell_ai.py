@@ -384,7 +384,11 @@ def test_text_filters_ignore_accents_and_hint_on_a_near_miss(tmp_path):
         [
             {
                 "UnitId": "T_18",
-                "Timestamp": "2026-07-09T19:13:00",
+                # Inside the 60-day window this asks for, whatever today is: an absolute
+                # date here expired and failed the test by the calendar.
+                "Timestamp": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=10)
+                ).isoformat(),
                 "sistema": "Motor",
                 "subsistema": "Refrigeracion",
                 "Trigger_Var": "EngCoolTemp",
@@ -415,14 +419,19 @@ def test_distributions_survive_list_valued_columns(tmp_path):
         [
             {
                 "machine_code": "T18",
-                "change_date": "2026-07-01",
+                # Relative for the same reason: the query applies a 60-day window.
+                "change_date": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=11)
+                ).isoformat(),
                 "action_type_name": "Reemplazo",
                 "action_system_name": "Sistema de Motor",
                 "component_names": ["Neumáticos", "Filtro"],
             },
             {
                 "machine_code": "T18",
-                "change_date": "2026-07-02",
+                "change_date": (
+                    pd.Timestamp.today().normalize() - pd.Timedelta(days=10)
+                ).isoformat(),
                 "action_type_name": "Inspección",
                 "action_system_name": "Sistema de Motor",
                 "component_names": ["Neumáticos"],
@@ -439,8 +448,12 @@ def test_distributions_survive_list_valued_columns(tmp_path):
     assert result["by_action_type"]["Reemplazo"] == 1
 
 
-def test_validation_reports_row_counts_without_materializing_datasets(tmp_path):
-    """Row counts must respect quoted newlines and skip a full parse."""
+def test_validation_reports_shape_without_counting_rows(tmp_path, monkeypatch):
+    """Validation answers "present, and with the right columns" - and nothing costlier.
+
+    It used to also report a row count, which for a CSV means reading every byte of it. That
+    was the expensive half of a walk performed on every session opening.
+    """
     target = tmp_path / "alerts" / "golden" / "cda"
     target.mkdir(parents=True)
     pd.DataFrame(
@@ -459,8 +472,29 @@ def test_validation_reports_row_counts_without_materializing_datasets(tmp_path):
 
     status = repository.validate_client("CDA")
 
-    assert status["datasets"]["alerts"]["rows"] == 1
+    alerts = status["datasets"]["alerts"]
+    assert alerts["valid"] is True
+    # Declared: the columns come from the JSON. The file is checked for usability - a stat
+    # plus a header read, memoized per file version - but never materialized, so neither the
+    # row count nor the size is reported here. Both are informational and deliberately left as
+    # None rather than guessed; `describe_dataset` reads the real numbers when the agent asks.
+    # "declared" cuando el pase de fondo ya juzgo el archivo, "declared_unverified" cuando
+    # todavia no. Lo que este test fija es que las columnas salieron de la declaracion y que
+    # abrir la sesion no toco el archivo, no cual de los dos veredictos alcanzo a llegar.
+    assert alerts["presence"] == "declared"
+    assert alerts["rows"] is None
+    assert alerts["size_bytes"] is None
     assert frames.stats()["entries"] == 0, "validation must not materialize a frame"
+
+    # And the path that does look: with the declaration off, presence is checked and the size
+    # is real. This is the escape hatch, so it has to actually change behaviour.
+    monkeypatch.setenv("CAMPBELL_AI_FROZEN_SCHEMA", "false")
+    repository._probe_cache.clear()
+    checked = repository.validate_client("CDA")["datasets"]["alerts"]
+    assert checked["presence"] == "checked"
+    assert checked["exists"] is True
+    assert checked["size_bytes"] > 0
+    assert checked["rows"] is None, "validar sigue sin contar filas"
 
 
 def test_visualization_uses_dashboard_data_without_creating_files(tmp_path):
@@ -875,15 +909,21 @@ def test_phase_is_readable_while_the_initialization_is_still_running(
 
 
 def test_progress_entry_is_cleared_when_initialization_fails(tmp_path, monkeypatch):
-    """A failed call must not leave a phase that never ends."""
+    """A failed call must not leave a phase that never ends.
+
+    The failure is an unauthorized company rather than missing data: validation now assumes a
+    declared dataset is present, so an empty data root no longer raises - by design. What is
+    under test is the `finally` that clears the progress entry, and it must hold for whichever
+    phase throws.
+    """
     monkeypatch.setattr(
         "src.campbell_ai.identity.get_user",
         lambda username: {"role": "client", "clients": ["CDA"]},
     )
     progress.reset()
-    service = CampbellAIService(_settings(tmp_path))  # sin datos: validate falla
+    service = CampbellAIService(_settings(tmp_path))
 
-    with pytest.raises(CampbellDataError):
-        asyncio.run(service.initialize("user", "CDA"))
+    with pytest.raises(CampbellAuthorizationError):
+        asyncio.run(service.initialize("user", "EMIN"))
 
-    assert progress.snapshot(progress.progress_key("user", "CDA"))["active"] is False
+    assert progress.snapshot(progress.progress_key("user", "EMIN"))["active"] is False

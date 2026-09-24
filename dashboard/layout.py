@@ -16,6 +16,7 @@ from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
 from dashboard.auth import current_dashboard_user_data, is_admin
 from dashboard.services_registry import SERVICE_SECTIONS, SERVICE_LABELS, nav_path as _nav_path
+from dashboard.troubleshooting_handoff import troubleshooting_agent_configured
 
 
 # Component icon map for predictive nav sections
@@ -386,12 +387,19 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
         # (e.g. an OpenAI outage) without editing client_services.yaml.
         if service_id == "agents-campbell-ai" and not _campbell_ai_enabled():
             return False
+        # Troubleshooting links out to another deployment: without a usable
+        # agent URL (TROUBLESHOOTING_AGENT_URL set empty) the tab is pulled.
+        if service_id == "agents-troubleshooting" and not troubleshooting_agent_configured():
+            return False
         return is_service_enabled(selected_client, service_id)
 
-    user_has_predictive_access = _enabled('predictive')
-
-    # Use statically-known component list for navigation (data availability checked at runtime)
-    predictive_nav_components = list(PREDICTIVE_COMPONENT_ICONS.keys()) if user_has_predictive_access else []
+    # Each predictive component is its own service id (predictive-<component>),
+    # so a client can be granted some components but not others. Statically-known
+    # component list for navigation (data availability checked at runtime).
+    predictive_nav_components = [
+        comp for comp in PREDICTIVE_COMPONENT_ICONS
+        if _enabled(f'predictive-{comp}')
+    ]
 
     # Build navigation from the central services registry, keeping only the
     # services enabled for the selected client - a disabled service is
@@ -416,7 +424,7 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
                 'subsections': subsections,
             })
 
-        if section_def['section'] == 'monitoring' and user_has_predictive_access:
+        if section_def['section'] == 'monitoring' and predictive_nav_components:
             navigation_items.append({
                 'section': 'predictive',
                 'label': 'Predictivo',

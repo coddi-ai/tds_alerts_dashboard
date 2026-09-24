@@ -1,0 +1,8 @@
+{
+  "_comment": "Integracion Multi-Technical Alerts Dashboard <-> agente de troubleshooting. Archivo IDENTICO en tds_alerts_dashboard/config/ y tds_faillure_code_agent/config/. Una variable de entorno del mismo nombre en mayusculas tiene precedencia. Ver PLAN_INTEGRACION_DASHBOARD.md.",
+  "contract_version": 1,
+  "troubleshooting_sso_secret": "m72i81bVEQW3kLFt-rzQ3gZxwr6ccs8NoK9X6pzPDcbgWQk22MotWOnv-PA7KRE1",
+  "sso_max_age_seconds": 120,
+  "troubleshooting_agent_url": "https://poc.tds.coddi.ai/agent-lab/",
+  "dashboard_url": "https://poc.tds.coddi.ai/alerts-dashboard/agents/troubleshooting"
+}
