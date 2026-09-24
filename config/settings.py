@@ -13,7 +13,7 @@ from src.data.catalog import dashboard_data_root
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.1.23"
+APP_VERSION = "2.1.24"
 
 
 class Settings(BaseSettings):
