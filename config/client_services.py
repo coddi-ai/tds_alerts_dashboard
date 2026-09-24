@@ -63,6 +63,7 @@ KNOWN_SERVICE_IDS: List[str] = [
     "predictive-motor",
     "predictive-transmision",
     "agents-campbell-ai",
+    "agents-troubleshooting",
     "integration-validacion-avisos",
     "integration-seguimiento-avisos",
     "reporting-main",

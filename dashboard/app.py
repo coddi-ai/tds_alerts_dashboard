@@ -85,6 +85,10 @@ from dashboard.callbacks.access_control_callbacks import register_access_control
 # Import the reactive sidebar (re-renders nav when the selected client changes)
 from dashboard.callbacks.sidebar_callbacks import register_sidebar_callbacks
 
+# Troubleshooting agent tab (card callback + signed handoff route to the agent)
+from dashboard.callbacks.troubleshooting_callbacks import register_troubleshooting_callbacks
+from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
+
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
 from config.client_services import validate_startup_config
@@ -147,6 +151,7 @@ import dashboard.pages.monitoring_mantenciones
 import dashboard.pages.predictive_motor
 import dashboard.pages.predictive_transmision
 import dashboard.pages.agents_campbell_ai
+import dashboard.pages.agents_troubleshooting
 import dashboard.pages.integration_validacion_avisos
 import dashboard.pages.integration_seguimiento_avisos
 import dashboard.pages.reporting_main
@@ -208,6 +213,9 @@ register_campbell_ai_stream(app)
 register_admin_callbacks(app)
 register_access_control_callbacks(app)
 register_sidebar_callbacks(app)
+register_troubleshooting_callbacks(app)
+# Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.
+register_troubleshooting_handoff(app)
 
 
 @app.server.after_request
