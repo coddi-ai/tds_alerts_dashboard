@@ -19,12 +19,21 @@ from dashboard.tabs.tab_predictive_overview import (
     _failure_table,
     attach_status,
     WINDOW_SUFFIX,
+    _load_component_hours_if_available,
 )
 from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_component,
     render_initial_content,
     render_detailed_evidence,
 )
+from dashboard.components.accumulated_curve import (
+    build_accumulated_figure,
+    build_accumulated_figure_from_curve,
+    _get_legacy_curve_data,
+    _curve_badge_row,
+    _curve_chip_groups,
+)
+from src.data import predictive_v2
 
 logger = get_logger(__name__)
 
@@ -206,6 +215,124 @@ def register_callbacks(app):
         return _failure_table(sorted_df, window, sort_by, ascending, failure_modes), state
 
     # ══════════════════════════════════════════════════════════════════════════
+    # OVERVIEW: Curva Acumulada — selector de unidades y badges de riesgo
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output("predictive-curve-unit-select", "value"),
+        Output("predictive-curve-badge-store", "data"),
+        Input({"type": "predictive-curve-chip", "unit": ALL}, "n_clicks"),
+        Input({"type": "predictive-curve-badge", "status": ALL}, "n_clicks"),
+        Input("predictive-curve-unit-select", "value"),
+        State("predictive-curve-badge-store", "data"),
+        State("predictive-curve-units-store", "data"),
+        State("predictive-curve-resumen-store", "data"),
+        prevent_initial_call=True,
+    )
+    def sync_curve_selection(_chip_clicks, _badge_clicks, dropdown_value, active_badge, units_all, resumen_data):
+        """Mantiene sincronizados el dropdown de unidades, los chips de color
+        y los badges de riesgo, sin tocar la fuente de datos - todo se
+        resuelve contra los Store llenados en el render inicial (units y
+        resumen no cambian con la seleccion).
+
+        El dropdown es a la vez Input y Output de este callback (un click en
+        un chip o badge lo actualiza), asi que cada cambio se re-dispara a si
+        mismo con ctx.triggered_id apuntando al propio dropdown. Para no
+        entrar en un ciclo que borre el badge activo que se acaba de fijar,
+        esa rama no limpia el filtro incondicionalmente: primero comprueba si
+        el valor actual del dropdown sigue siendo exactamente el conjunto que
+        implica el badge activo (eco de este mismo callback) - solo lo limpia
+        si el usuario lo diverge a mano.
+        """
+        units_all = units_all or []
+        resumen_data = resumen_data or {}
+        zona_por_unit = dict(zip(resumen_data.get("Unit", []), resumen_data.get("zona_final", [])))
+
+        triggered = ctx.triggered_id
+
+        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-chip":
+            unit = triggered["unit"]
+            current = list(dropdown_value or [])
+            if unit in current:
+                current.remove(unit)
+            else:
+                current.append(unit)
+            return current, None
+
+        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-badge":
+            status = triggered["status"]
+            if active_badge == status:
+                return units_all, None
+            return [u for u in units_all if zona_por_unit.get(u) == status], status
+
+        # El dropdown cambio (typeahead, quitar un tag, etc). Si no hay badge
+        # activo no hay nada que reconciliar; si lo hay, solo se limpia
+        # cuando la seleccion actual ya no coincide con lo que ese badge
+        # implicaba (ver docstring).
+        if active_badge is None:
+            return no_update, no_update
+        expected = sorted(u for u in units_all if zona_por_unit.get(u) == active_badge)
+        if sorted(dropdown_value or []) == expected:
+            return no_update, no_update
+        return no_update, None
+
+    @app.callback(
+        Output("predictive-curve-graph", "figure"),
+        Output("predictive-curve-chips", "children"),
+        Output("predictive-curve-badges", "children"),
+        Input("predictive-curve-unit-select", "value"),
+        Input("predictive-curve-badge-store", "data"),
+        State("predictive-ev-client-store", "data"),
+        State("predictive-ev-component-store", "data"),
+        State("predictive-curve-colormap-store", "data"),
+        prevent_initial_call=True,
+    )
+    def update_curve_display(selected_units, active_badge, client, component, color_map):
+        """Reconstruye el grafico + chips + badges cuando cambia la
+        seleccion de unidades o el filtro de badge activo. Reusa la misma
+        fuente (cumulative_risk_curve precomputada o el pipeline legacy
+        cacheado via _get_legacy_curve_data) que _render_component_overview,
+        para no divergir de que curva se muestra en el render inicial.
+        """
+        if not client or not component:
+            return no_update, no_update, no_update
+
+        selected_units = selected_units or []
+
+        components = _discover_components(client)
+        filepath = components.get(component)
+        if not filepath:
+            return no_update, no_update, no_update
+
+        df_curve = None
+        try:
+            df_curve = predictive_v2.read_cumulative_risk_curve(client, component)
+        except Exception as exc:  # noqa: BLE001 - la curva nunca rompe la UI
+            logger.warning(f"No se pudo leer cumulative_risk_curve para {client}/{component}: {exc}")
+
+        if df_curve is not None and not df_curve.empty:
+            fig, resumen, units_all, curve_color_map = build_accumulated_figure_from_curve(
+                df_curve, component=component, selected_units=selected_units,
+            )
+        else:
+            df, _df_latest, _prev = _load_overview_component(filepath, component, client)
+            df_component_hours = _load_component_hours_if_available(client)
+            if df is None or df.empty or df_component_hours is None or df_component_hours.empty:
+                return no_update, no_update, no_update
+            df_acum = _get_legacy_curve_data(client, component, df, df_component_hours)
+            fig, resumen, units_all, curve_color_map = build_accumulated_figure(
+                df_acum, component=component, selected_units=selected_units,
+            )
+
+        if fig is None:
+            return no_update, no_update, no_update
+
+        color_map = color_map or curve_color_map
+        chips = _curve_chip_groups(units_all, color_map, resumen, selected_units)
+        badges = _curve_badge_row(resumen, active_badge)
+        return fig, chips, badges
+
+    # ══════════════════════════════════════════════════════════════════════════
     # EVIDENCE: Unit banner
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -229,9 +356,9 @@ def register_callbacks(app):
             if filepath:
                 _, df_latest = _load_evidence_component(filepath, component, client)
                 if df_latest is not None and not df_latest.empty:
-                    # Status from analisis_inteligente.parquet's `estado` (same
-                    # source as Estado de Flota, REQ-PR-04) so the banner never
-                    # disagrees with the priority cards for the same unit.
+                    # Status via attach_status() (same source as Estado de
+                    # Flota, REQ-PR-04) so the banner never disagrees with the
+                    # priority cards for the same unit.
                     latest_with_status = attach_status(df_latest, client, component)
                     row = latest_with_status[latest_with_status["Unit"] == selected_unit]
                     if not row.empty:

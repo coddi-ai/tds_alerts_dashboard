@@ -555,37 +555,84 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     scatter_fig = create_fleet_scatter(latest, unit, STATUS_COLORS, 30.0)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
-    # AI analysis (Change 7): analisis_inteligente.parquet is an
-    # undocumented-upstream table standing in for the not-yet-shipped
-    # `failure_mode_diagnosis` table (see
-    # documentation/predictive/predictive_data_contracts.md §3/§9) - this is
-    # a known temporary routing, to be re-pointed once that table ships in
-    # the documented partitioned pattern (Change 1's readers apply then).
-    # `analisis_fuente == "omitida"` rows (LLM step skipped for low-risk
-    # units) and any missing/malformed row fall back to the existing
-    # rule-based insight engine instead of an empty AI section, anchored on
-    # the unit's dominant failure mode.
-    ai_row = _get_unit_ai_analysis(load_analisis_inteligente(client), unit) if client else None
-    _narrative_cols = ("diagnostico", "causa_probable", "acciones")
-    has_narrative = (
-        ai_row is not None
-        and all(col in ai_row.index for col in _narrative_cols)
-        and str(ai_row.get("analisis_fuente", "")).strip().lower() != "omitida"
-        and any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _narrative_cols)
-    )
-    if has_narrative:
-        ai_section = html.Div(
-            create_ai_analysis_panel(
-                ai_row.get("diagnostico"),
-                ai_row.get("causa_probable"),
-                ai_row.get("acciones"),
-            ),
-            style={"marginBottom": "1.5rem"},
-        )
+    # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
+    # `failure_mode_diagnosis`) is the published contract - one row per unit x
+    # flagged mode, worst mode first via the modos_ordenados join (see
+    # predictive_v2.get_unit_mode_failure_analisis and
+    # documentation/predictive/predictive_data_contracts.md §3). Falls back to
+    # `unit_failure_analisis` (formerly `analisis_inteligente`, now live and
+    # partitioned rather than a frozen flat file) for units with no flagged
+    # mode this week, then to the deprecated flat `analisis_inteligente.parquet`
+    # for clients/components not yet on the new layout, then to the rule-based
+    # insight engine when none of those has narrative content.
+    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit) if client else pd.DataFrame()
+    diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
+
+    ai_section = None
+    if diag_row is not None:
+        analysis_status = str(diag_row.get("analysis_status", "")).strip().lower()
+        if analysis_status == "error":
+            # Never surface raw exception text to the user - documented
+            # incident: a BadRequestError string once ended up rendered in a
+            # unit's report. Show a generic interface message instead of
+            # trusting probable_cause/recommended_actions' contents.
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    None,
+                    "El analisis para este modo no pudo generarse esta semana.",
+                    None,
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
+        else:
+            header_text = "Analisis Inteligente"
+            if analysis_status == "fallback_rules":
+                # Model was unavailable upstream and this came from fixed
+                # rules instead - flag it visually so it doesn't read as more
+                # precise than it is.
+                header_text = "Analisis Inteligente (basado en reglas)"
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    diag_row.get("diagnostico"),
+                    diag_row.get("probable_cause"),
+                    diag_row.get("recommended_actions"),
+                    header_text=header_text,
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
     else:
-        fallback_insight = _generate_insight_data(unit, df_unit, df_latest, dominant_mode, component, client)
+        df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component) if client else pd.DataFrame()
+        if df_unit_analisis.empty:
+            # Not on the new layout yet for this client/component - last
+            # resort is the deprecated frozen snapshot.
+            df_unit_analisis = load_analisis_inteligente(client) if client else pd.DataFrame()
+        ai_row = _get_unit_ai_analysis(df_unit_analisis, unit) if client else None
+        _narrative_cols = ("diagnostico", "causa_probable", "acciones")
+        has_narrative = (
+            ai_row is not None
+            and all(col in ai_row.index for col in _narrative_cols)
+            and str(ai_row.get("analisis_fuente", "")).strip().lower() != "omitida"
+            and any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _narrative_cols)
+        )
+        if has_narrative:
+            ai_section = html.Div(
+                create_ai_analysis_panel(
+                    ai_row.get("diagnostico"),
+                    ai_row.get("causa_probable"),
+                    ai_row.get("acciones"),
+                ),
+                style={"marginBottom": "1.5rem"},
+            )
+
+    if ai_section is None:
+        # No narrative diagnosis on file for this unit in either the current
+        # contract or the legacy table (source 1/2 both empty) - show the
+        # same Diagnostico/Causa probable/Acciones layout as source 1 rather
+        # than the rule-based insight panel, so the card's shape never
+        # changes across units; create_ai_analysis_panel already renders
+        # "No disponible" for each column when passed None.
         ai_section = html.Div(
-            _build_insight_panel(fallback_insight),
+            create_ai_analysis_panel(None, None, None),
             style={"marginBottom": "1.5rem"},
         )
 

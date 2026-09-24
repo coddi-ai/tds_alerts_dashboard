@@ -257,13 +257,13 @@ if __name__ == '__main__':
     host = os.getenv('DASHBOARD_HOST', '0.0.0.0')
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
     debug = os.getenv('DEBUG', 'False').lower() == 'true'
-    
-    # Check if data folder exists, sync from S3 if needed
-    data_folder = project_root / 'data'
-    logger.info(f"Checking data folder at: {data_folder}")
-    
-    if not data_folder.exists():
-        logger.warning("Data folder not found. Attempting to sync from S3...")
+    sync_data = os.getenv('SYNC_DATA', 'True').lower() == 'true'
+
+    # Sync data folder from S3 on every startup (unless disabled via SYNC_DATA=False)
+    if sync_data:
+        data_folder = project_root / 'data'
+        logger.info(f"Syncing data folder at: {data_folder}")
+
         try:
             from src.data.s3_downloader import main as s3_sync
             logger.info("Starting S3 data synchronization...")
@@ -276,7 +276,7 @@ if __name__ == '__main__':
             logger.error(f"Error during S3 synchronization: {e}")
             logger.warning("Continuing without S3 sync. Some features may not work.")
     else:
-        logger.info("Data folder exists. Skipping S3 sync.")
+        logger.info("SYNC_DATA is disabled. Skipping S3 sync.")
     
     # Run server
     logger.info("Starting Multi-Technical-Alerts Dashboard...")
@@ -288,3 +288,6 @@ if __name__ == '__main__':
         debug=debug,
         threaded=True,
     )
+    
+    
+    

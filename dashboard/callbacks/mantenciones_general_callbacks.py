@@ -1,304 +1,377 @@
-"""
-Callbacks for Mantenciones General tab.
-Handles data loading, KPI updates, and visualizations.
-"""
+"""Callbacks for the productive Mantenciones page."""
 
-from dash import callback, Output, Input, State, html
-from dash.exceptions import PreventUpdate
-import json
+from __future__ import annotations
+
 from datetime import datetime
-import logging
 
-from src.data.maintenance_repository import get_repository
+import pandas as pd
+from dash import Input, Output, State, ctx, html
+from dash.exceptions import MissingCallbackContextException, PreventUpdate
+
 from dashboard.tabs.tab_mantenciones_general import (
-    create_status_donut_chart,
-    create_downtime_trend_chart,
-    create_system_pareto_chart,
-    create_detentions_table,
-    create_jobs_table,
-    create_empty_figure
+    create_activity_matrix,
+    create_activity_table,
+    create_daily_activity_chart,
+    create_daily_equipment_chart,
+    create_daily_intervention_hours_chart,
+    create_empty_figure,
+    create_equipment_activity_chart,
+    create_equipment_pareto_chart,
+    create_system_activity_chart,
+    create_week_summary_table,
+    create_week_task_table,
 )
+from src.data.maintenance_repository import PARETO_SCOPE, get_repository
 
-logger = logging.getLogger(__name__)
+
+def _options(values):
+    return [{"label": value, "value": value} for value in values]
+
+
+def _equipment_options(values):
+    return [{"label": "Todas", "value": "__all__"}] + [
+        {"label": value, "value": value} for value in values if value != "__all__"
+    ]
+
+
+def _empty_contract():
+    pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
+    return {
+        "status": "empty",
+        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "FUENTE", "reason": "Sin fuente cargada."}},
+        "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
+        "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
+    }
+
+
+def _pareto_presentation(client, meta=None):
+    """Select client-specific Pareto labels and all-system chart semantics."""
+    client_name = str(client or (meta or {}).get("client") or "").strip().upper()
+    scope_mode = ((meta or {}).get("pareto_scope") or {}).get("mode")
+    if client_name in {"EMIN", "CAPSTONE"} or scope_mode == "all_systems":
+        return {
+            "all_systems": True,
+            "equipment_title": "Pareto de actividad de mantenimiento · todos los sistemas por equipo",
+            "system_title": "Pareto de actividad de mantenimiento · todos los sistemas por sistema",
+            "system_label": "todos los sistemas",
+        }
+    return {
+        "all_systems": False,
+        "equipment_title": "Pareto de actividad de mantenimiento · Motor por equipo",
+        "system_title": "Pareto de actividad de mantenimiento · Tren de Fuerza por equipo",
+        "system_label": "Motor",
+    }
+
+
+def _refresh_requested() -> bool:
+    """Return whether the current invocation came from the refresh button."""
+    try:
+        return ctx.triggered_id == "btn-refresh-maintenance"
+    except MissingCallbackContextException:
+        return False
+
+
+def _format_estimated(value, suffix: str) -> str:
+    """Format source-backed KPIs without inventing a zero for missing values."""
+    if not isinstance(value, (int, float)):
+        return "—"
+    if suffix == "%":
+        return f"{value:.1f}%"
+    return f"{value:,.1f} h"
+
+
+def _source_alert(meta: dict):
+    end = meta.get("source_end")
+    if not end:
+        return html.Div([html.I(className="fas fa-database me-2"), "No hay datos de mantenciones disponibles para este cliente."], className="alert alert-warning")
+    date_label = str(end)[:10]
+    estimated = meta.get("estimated_kpis", {})
+    coverage = estimated.get("coverage", {})
+    coverage_label = coverage.get("window_label")
+    source_files = estimated.get("source") or []
+    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
+    source_label = "KPIs de fuente" if estimated.get("source_kind") == "business_kpis_70d" else "Horas/KPIs no disponibles"
+    estimated_note = f"{source_label} · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
+    reference_start = coverage.get("reference_start")
+    reference_end = coverage.get("reference_end")
+    if reference_start and reference_end:
+        estimated_note += f" Referencia: {str(reference_start)[:10]} a {str(reference_end)[:10]}."
+    reason = estimated.get("reason")
+    if reason:
+        estimated_note += f" Fallback: {reason}"
+    return html.Div(
+        [
+            html.I(className="fas fa-database me-2"),
+            html.Span("Cobertura de fuente: ", className="fw-bold"),
+            html.Span(f"{str(meta.get('source_start') or '')[:10]} a {date_label}. "),
+            html.Span("El último período disponible se muestra por defecto; la fuente puede estar histórica.", className="text-muted"),
+            html.Br(),
+            html.Span(estimated_note, className="text-muted small"),
+        ],
+        className="alert alert-info",
+        style={"overflowWrap": "anywhere"},
+    )
 
 
 def register_mantenciones_general_callbacks(app):
-    """
-    Register all callbacks for Mantenciones General tab.
-    
-    Args:
-        app: Dash application instance
-    """
-    
-    @callback(
-        Output("filter-system", "options"),
-        [Input("client-selector", "value")]
-    )
-    def update_system_filter_options(client):
-        """Populate the System filter with every system present in the client's data."""
-        if not client:
-            raise PreventUpdate
+    """Register all callbacks against the concrete Dash app instance."""
 
+    @app.callback(
+        Output("maintenance-metadata-store", "data"),
+        Output("maintenance-source-alert", "children"),
+        Output("maintenance-month", "options"),
+        Output("maintenance-month", "value"),
+        Output("maintenance-summary-fleet", "options"),
+        Output("maintenance-summary-fleet", "value"),
+        Output("maintenance-week", "options"),
+        Output("maintenance-week", "value"),
+        Output("maintenance-week-equipment", "options"),
+        Output("maintenance-activity-system", "options"),
+        Input("client-selector", "value"),
+        Input("btn-refresh-maintenance", "n_clicks"),
+        prevent_initial_call=False,
+    )
+    def load_maintenance_metadata(client, n_clicks):
+        if not client:
+            return {}, _source_alert({}), [], None, [], [], [], None, [], []
         try:
             repo = get_repository(mode="parquet", client=client)
-            systems = repo.get_available_systems()
-            return [{"label": s, "value": s} for s in systems]
-        except Exception as e:
-            logger.error(f"Error loading system filter options: {e}")
-            return []
+            if _refresh_requested():
+                repo.refresh()
+            months = repo.get_available_months()
+            weeks = repo.get_available_weeks()
+            latest_payload = repo.get_monthly_payload(months[-1] if months else None)
+            meta = latest_payload.get("meta", {})
+            meta.update(
+                {
+                    "available_months": months,
+                    "available_weeks": weeks,
+                    "equipment": repo.get_available_equipment(),
+                    "fleets": repo.get_available_fleets(),
+                    "systems": repo.get_available_systems(),
+                    "subsystems": repo.get_available_subsystems(),
+                }
+            )
+            return (
+                meta,
+                _source_alert(meta),
+                _options(months),
+                months[-1] if months else None,
+                _options(meta["fleets"]),
+                [],
+                _options(weeks),
+                weeks[-1] if weeks else None,
+                _options(meta["equipment"]),
+                _options(meta["systems"]),
+            )
+        except Exception as exc:
+            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], [], [], None, [], []
 
-    @callback(
-        [
-            Output("filter-equipment", "options"),
-            Output("filter-equipment", "value"),
-        ],
-        [
-            Input("filter-system", "value"),
-            Input("client-selector", "value"),
-        ],
-        [State("filter-equipment", "value")]
+
+    @app.callback(
+        Output("maintenance-summary-equipment", "options"),
+        Output("maintenance-summary-equipment", "value"),
+        Input("maintenance-summary-fleet", "value"),
+        Input("client-selector", "value"),
+        State("maintenance-summary-equipment", "value"),
     )
-    def update_equipment_filter_options(selected_systems, client, current_equipment):
-        """
-        Populate the Equipment filter, cascading on the System selection: with
-        systems selected, only machines with at least one action on those
-        systems are offered. Any previously-selected machine that falls out
-        of the new option set is dropped instead of left as a stale value.
-        """
+    def update_summary_equipment_options(selected_fleets, client, current_equipment):
+        if not client:
+            return _equipment_options([]), "__all__"
+        repo = get_repository(mode="parquet", client=client)
+        equipment = repo.get_available_equipment(fleets=selected_fleets or None)
+        try:
+            if ctx.triggered_id == "client-selector":
+                current_equipment = "__all__"
+        except MissingCallbackContextException:
+            pass
+        if current_equipment not in (None, "", "__all__") and current_equipment not in equipment:
+            current_equipment = "__all__"
+        return _equipment_options(equipment), current_equipment or "__all__"
+
+
+    @app.callback(
+        Output("maintenance-activity-equipment", "options"),
+        Output("maintenance-activity-equipment", "value"),
+        Output("maintenance-activity-subsystem", "options"),
+        Output("maintenance-activity-subsystem", "value"),
+        Input("maintenance-activity-system", "value"),
+        Input("client-selector", "value"),
+        State("maintenance-activity-equipment", "value"),
+        State("maintenance-activity-subsystem", "value"),
+    )
+    def update_activity_cascades(selected_systems, client, current_equipment, current_subsystems):
         if not client:
             raise PreventUpdate
+        repo = get_repository(mode="parquet", client=client)
+        equipment = repo.get_available_equipment(selected_systems or None)
+        subsystems = repo.get_available_subsystems(selected_systems or None, current_equipment or None)
+        equipment_set = set(equipment)
+        subsystem_set = set(subsystems)
+        equipment_value = [value for value in (current_equipment or []) if value in equipment_set] or None
+        subsystem_value = [value for value in (current_subsystems or []) if value in subsystem_set] or None
+        return _options(equipment), equipment_value, _options(subsystems), subsystem_value
 
-        try:
-            repo = get_repository(mode="parquet", client=client)
-            equipment = repo.get_available_equipment(systems=selected_systems or None)
-        except Exception as e:
-            logger.error(f"Error loading equipment filter options: {e}")
-            return [], None
 
-        options = [{"label": code, "value": code} for code in equipment]
-        valid_values = set(equipment)
-        new_value = [v for v in (current_equipment or []) if v in valid_values] or None
-        return options, new_value
-
-    @callback(
-        [
-            Output("store-general-data", "data"),
-            Output("store-general-timestamp", "data"),
-            Output("store-general-loaded", "data"),
-        ],
-        [
-            Input("btn-refresh-general", "n_clicks"),
-            Input("store-general-loaded", "data"),
-            Input("client-selector", "value"),
-            Input("filter-date-range", "start_date"),
-            Input("filter-date-range", "end_date"),
-            Input("filter-system", "value"),
-            Input("filter-equipment", "value"),
-        ],
-        prevent_initial_call=False
+    @app.callback(
+        Output("maintenance-monthly-store", "data"),
+        Output("maintenance-load-timestamp", "data"),
+        Input("client-selector", "value"),
+        Input("maintenance-month", "value"),
+        Input("maintenance-summary-fleet", "value"),
+        Input("maintenance-summary-equipment", "value"),
+        Input("maintenance-activity-system", "value"),
+        Input("maintenance-activity-subsystem", "value"),
+        Input("maintenance-activity-equipment", "value"),
+        Input("btn-refresh-maintenance", "n_clicks"),
+        prevent_initial_call=False,
     )
-    def load_general_data(n_clicks, loaded, client, date_start, date_end, systems, equipment):
-        """
-        Load all data for the general view.
-        Triggered by refresh button, initial page load, or any filter change.
-        """
+    def load_monthly_payload(client, month, selected_fleets, summary_equipment, systems, subsystems, equipment, n_clicks):
         if not client:
-            raise PreventUpdate
-
+            return _empty_contract(), None
         try:
-            logger.info(
-                f"Loading mantenciones general data for client: {client}... "
-                f"(n_clicks={n_clicks}, loaded={loaded}, systems={systems}, equipment={equipment}, "
-                f"date_start={date_start}, date_end={date_end})"
-            )
-
-            # Get repository (using parquet mode for real data) - MUST pass client parameter
             repo = get_repository(mode="parquet", client=client)
-
-            # Get period info
-            period_info = repo.get_data_period_info()
-
-            # Load all datasets. Status KPIs are real-time (not historical),
-            # so they respond to System/Equipment but deliberately not to the
-            # date-range filter - see MaintenanceRepository.get_status_counts.
-            df_status = repo.get_status_counts(systems=systems, equipment=equipment)
-            df_downtime_mtd = repo.get_downtime_mtd(
-                systems=systems, equipment=equipment, date_start=date_start, date_end=date_end
+            if _refresh_requested():
+                repo.refresh()
+            selected_equipment = None if summary_equipment in (None, "", "__all__") else [summary_equipment]
+            payload = repo.get_monthly_payload(
+                month,
+                systems=systems,
+                equipment=selected_equipment,
+                subsystems=subsystems,
+                fleets=selected_fleets or None,
             )
-            df_last_detentions = repo.get_last_detentions(
-                n_per_machine=1, systems=systems, equipment=equipment,
-                date_start=date_start, date_end=date_end
-            )  # Solo el último periodo por equipo
-            df_jobs_last_week = repo.get_jobs_last_week(
-                systems=systems, equipment=equipment, date_start=date_start, date_end=date_end
-            )
-            df_downtime_by_day = repo.get_downtime_by_day_mtd(
-                systems=systems, equipment=equipment, date_start=date_start, date_end=date_end
-            )
-            df_by_system = repo.get_maintenance_by_system(
-                systems=systems, equipment=equipment, date_start=date_start, date_end=date_end
-            )
+            return payload, datetime.now().isoformat()
+        except Exception as exc:
+            return {
+                **_empty_contract(),
+                "status": "error",
+                "meta": {"client": str(client).upper(), "period": month, "period_label": month or "Sin datos", "error": str(exc)},
+            }, None
 
-            # Convert to JSON-serializable format
-            data = {
-                "status": df_status.to_dict("records"),
-                "downtime_mtd": df_downtime_mtd.to_dict("records"),
-                "last_detentions": df_last_detentions.to_dict("records"),
-                "jobs_last_week": df_jobs_last_week.to_dict("records"),
-                "downtime_by_day": df_downtime_by_day.to_dict("records"),
-                "by_system": df_by_system.to_dict("records"),
-                "period_info": period_info,  # Información del período
-            }
-            
-            timestamp = datetime.now().isoformat()
-            
-            logger.info("Data loaded successfully")
-            return data, timestamp, True
-            
-        except Exception as e:
-            logger.error(f"Error loading mantenciones general data: {e}", exc_info=True)
-            return {}, None, False
-    
-    @callback(
-        [
-            Output("kpi-equipos-totales", "children"),
-            Output("kpi-equipos-sanos", "children"),
-            Output("kpi-equipos-detenidos", "children"),
-            Output("kpi-horas-detenidas-mtd", "children"),
-            Output("kpi-horas-detenidas-label", "children"),
-        ],
-        [Input("store-general-data", "data")]
-    )
-    def update_kpis(data):
-        """Update KPI cards with loaded data and period info."""
-        if not data or not data.get("status"):
-            return "0", "0", "0", "0", "Horas Detenidas"
-        
-        try:
-            # Parse status counts
-            status_data = data["status"]
-            sanos = next((item["n_machines"] for item in status_data if item["machine_status"] == "SANO"), 0)
-            detenidos = next((item["n_machines"] for item in status_data if item["machine_status"] == "DETENIDO"), 0)
-            total = sanos + detenidos
-            
-            # Parse downtime MTD
-            downtime_mtd = data.get("downtime_mtd", [{}])[0].get("total_downtime_hours_mtd", 0)
-            downtime_str = f"{downtime_mtd:.1f}"
-            
-            # Get period label
-            period_info = data.get("period_info", {})
-            period_label = period_info.get("period_label", "Período")
-            kpi_label = f"Horas Detenidas - {period_label}"
-            
-            return str(total), str(sanos), str(detenidos), downtime_str, kpi_label
-            
-        except Exception as e:
-            logger.error(f"Error updating KPIs: {e}")
-            return "Error", "Error", "Error", "Error", "Horas Detenidas"
-    
-    @callback(
-        Output("chart-status-distribution", "figure"),
-        [Input("store-general-data", "data")]
-    )
-    def update_status_chart(data):
-        """Update status distribution donut chart."""
-        if not data or not data.get("status"):
-            return create_empty_figure("No hay datos de estado disponibles")
-        
-        try:
-            import pandas as pd
-            df_status = pd.DataFrame(data["status"])
-            return create_status_donut_chart(df_status)
-        except Exception as e:
-            logger.error(f"Error updating status chart: {e}")
-            return create_empty_figure("Error al cargar gráfico")
-    
-    @callback(
-        Output("chart-downtime-trend", "figure"),
-        [Input("store-general-data", "data")]
-    )
-    def update_downtime_trend(data):
-        """Update downtime trend line chart with period info."""
-        if not data or not data.get("downtime_by_day"):
-            return create_empty_figure("No hay datos de tendencia disponibles")
-        
-        try:
-            import pandas as pd
-            df_trend = pd.DataFrame(data["downtime_by_day"])
-            
-            # Get period label if available
-            period_label = data.get("period_info", {}).get("period_label", "Período")
-            
-            return create_downtime_trend_chart(df_trend, period_label)
-        except Exception as e:
-            logger.error(f"Error updating downtime trend: {e}")
-            return create_empty_figure("Error al cargar gráfico")
-    
-    @callback(
-        Output("chart-system-pareto", "figure"),
-        [Input("store-general-data", "data")]
-    )
-    def update_system_pareto_chart(data):
-        """Update maintenance-by-system Pareto chart."""
-        if not data or not data.get("by_system"):
-            return create_empty_figure("No hay datos de sistemas disponibles")
 
-        try:
-            import pandas as pd
-            df_by_system = pd.DataFrame(data["by_system"])
-            return create_system_pareto_chart(df_by_system)
-        except Exception as e:
-            logger.error(f"Error updating system pareto chart: {e}")
-            return create_empty_figure("Error al cargar gráfico")
+    @app.callback(
+        Output("maintenance-kpi-availability-est", "children"),
+        Output("maintenance-kpi-downtime-est", "children"),
+        Output("maintenance-kpi-mtbf-est", "children"),
+        Output("maintenance-kpi-mttr-est", "children"),
+        Output("maintenance-kpi-equipment", "children"),
+        Output("maintenance-kpi-actions", "children"),
+        Output("maintenance-kpi-records", "children"),
+        Output("maintenance-kpi-systems", "children"),
+        Output("maintenance-kpi-days", "children"),
+        Output("maintenance-kpi-motor-share", "children"),
+        Output("maintenance-month-status", "children"),
+        Output("maintenance-chart-daily", "figure"),
+        Output("maintenance-chart-daily-equipment", "figure"),
+        Output("maintenance-chart-pareto", "figure"),
+        Output("maintenance-chart-pareto-tren-fuerza", "figure"),
+        Output("maintenance-chart-system-mix", "figure"),
+        Output("maintenance-chart-equipment", "figure"),
+        Output("maintenance-chart-matrix", "figure"),
+        Output("maintenance-activity-table", "children"),
+        Output("maintenance-summary-detail-table", "children"),
+        Output("maintenance-chart-pareto-title", "children"),
+        Output("maintenance-chart-pareto-tren-fuerza-title", "children"),
+        Input("maintenance-monthly-store", "data"),
+    )
+    def render_monthly_payload(payload):
+        payload = payload or _empty_contract()
+        status = payload.get("status")
+        meta = payload.get("meta", {}) or {}
+        presentation = _pareto_presentation(meta.get("client"), meta)
+        if status == "error":
+            message = payload.get("meta", {}).get("error", "Error desconocido")
+            empty = create_empty_figure("Error al cargar datos")
+            detail_message = html.P("No se pudo cargar el detalle.", className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
+        if status != "ok":
+            empty = create_empty_figure("Sin datos para este período")
+            message = "No hay acciones registradas para los filtros seleccionados."
+            detail_message = html.P(message, className="text-muted text-center p-3")
+            kpis = payload.get("kpis", {}) or {}
+            return _format_estimated(kpis.get("availability_est_pct"), "%"), _format_estimated(kpis.get("downtime_est_hours"), "h"), _format_estimated(kpis.get("mtbf_est_hours"), "h"), _format_estimated(kpis.get("mttr_est_hours"), "h"), "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
 
-    @callback(
-        Output("table-last-detentions", "children"),
-        [Input("store-general-data", "data")]
+        kpis = payload.get("kpis", {})
+        data = payload.get("data", {})
+        banner = None
+        if not meta.get("is_current_period"):
+            banner = html.Div(
+                f"Período histórico seleccionado: {meta.get('period_label', 'N/A')}. Último dato de fuente: {str(meta.get('source_end', ''))[:10]}.",
+                className="alert alert-warning",
+            )
+        motor_share = kpis.get("motor_share_pct")
+        motor_share_label = f"{motor_share:.1f}%" if isinstance(motor_share, (int, float)) else "—"
+        return (
+            _format_estimated(kpis.get("availability_est_pct"), "%"),
+            _format_estimated(kpis.get("downtime_est_hours"), "h"),
+            _format_estimated(kpis.get("mtbf_est_hours"), "h"),
+            _format_estimated(kpis.get("mttr_est_hours"), "h"),
+            str(kpis.get("equipment", "—")),
+            str(kpis.get("actions", "—")),
+            str(kpis.get("records", "—")),
+            str(kpis.get("systems", "—")),
+            str(kpis.get("activity_days", "—")),
+            motor_share_label,
+            banner,
+            create_daily_intervention_hours_chart(pd.DataFrame(data.get("daily", []))),
+            create_daily_equipment_chart(pd.DataFrame(data.get("daily", []))),
+            create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", [])), system_label=presentation["system_label"]),
+            create_equipment_pareto_chart(
+                pd.DataFrame(data.get("system_pareto", []) if presentation["all_systems"] else data.get("train_force_pareto", [])),
+                system_label=presentation["system_label"] if presentation["all_systems"] else "Tren de Fuerza",
+            ),
+            create_system_activity_chart(
+                pd.DataFrame(data.get("system_mix", [])),
+                include_all_systems=presentation["all_systems"],
+            ),
+            create_equipment_activity_chart(
+                pd.DataFrame(data.get("equipment_system_mix") or data.get("equipment", [])),
+                include_all_systems=presentation["all_systems"],
+            ),
+            create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
+            create_activity_table(data.get("detail", [])),
+            create_activity_table(data.get("detail", [])),
+            presentation["equipment_title"],
+            presentation["system_title"],
+        )
+
+
+    @app.callback(
+        Output("maintenance-weekly-store", "data"),
+        Input("client-selector", "value"),
+        Input("maintenance-week", "value"),
+        Input("maintenance-week-equipment", "value"),
+        Input("btn-refresh-maintenance", "n_clicks"),
+        prevent_initial_call=False,
     )
-    def update_detentions_table(data):
-        """Update last detentions table."""
-        if not data or not data.get("last_detentions"):
-            return html.P("No hay datos de detenciones disponibles", 
-                         className="text-muted text-center p-3")
-        
+    def load_weekly_payload(client, week, equipment, n_clicks):
+        if not client:
+            return {"status": "empty", "meta": {}, "summary": [], "tasks": []}
         try:
-            import pandas as pd
-            df_detentions = pd.DataFrame(data["last_detentions"])
-            return create_detentions_table(df_detentions)
-        except Exception as e:
-            logger.error(f"Error updating detentions table: {e}")
-            return html.P("Error al cargar tabla", className="text-danger text-center p-3")
-    
-    @callback(
-        Output("table-jobs-last-week", "children"),
-        [Input("store-general-data", "data")]
+            repo = get_repository(mode="parquet", client=client)
+            if _refresh_requested():
+                repo.refresh()
+            return repo.get_weekly_evidence(week, equipment=equipment)
+        except Exception as exc:
+            return {"status": "error", "meta": {"error": str(exc)}, "summary": [], "tasks": []}
+
+
+    @app.callback(
+        Output("maintenance-week-status", "children"),
+        Output("maintenance-week-summary-table", "children"),
+        Output("maintenance-week-task-table", "children"),
+        Input("maintenance-weekly-store", "data"),
     )
-    def update_jobs_table(data):
-        """Update jobs last week table."""
-        if not data or not data.get("jobs_last_week"):
-            return html.P("No hay trabajos registrados en la última semana", 
-                         className="text-muted text-center p-3")
-        
-        try:
-            import pandas as pd
-            df_jobs = pd.DataFrame(data["jobs_last_week"])
-            return create_jobs_table(df_jobs)
-        except Exception as e:
-            logger.error(f"Error updating jobs table: {e}")
-            return html.P("Error al cargar tabla", className="text-danger text-center p-3")
-    
-    @callback(
-        Output("text-last-update", "children"),
-        [Input("store-general-timestamp", "data")]
-    )
-    def update_timestamp(timestamp):
-        """Update last update timestamp."""
-        if not timestamp:
-            return "N/A"
-        
-        try:
-            dt = datetime.fromisoformat(timestamp)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as e:
-            logger.error(f"Error formatting timestamp: {e}")
-            return "Error"
+    def render_weekly_payload(payload):
+        payload = payload or {"status": "empty", "meta": {}, "summary": [], "tasks": []}
+        status = payload.get("status")
+        if status == "error":
+            msg = payload.get("meta", {}).get("error", "Error desconocido")
+            return html.Div(f"Error al cargar evidencia semanal: {msg}", className="alert alert-danger"), create_week_summary_table([]), create_week_task_table([])
+        if status == "empty":
+            return html.Div("No hay evidencia semanal disponible.", className="alert alert-warning"), create_week_summary_table([]), create_week_task_table([])
+        invalid = payload.get("meta", {}).get("invalid_rows", 0)
+        alert = html.Div(f"Se omitieron {invalid} filas con tareas no interpretables.", className="alert alert-warning") if invalid else None
+        return alert, create_week_summary_table(payload.get("summary", [])), create_week_task_table(payload.get("tasks", []))
