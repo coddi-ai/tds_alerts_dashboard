@@ -240,10 +240,10 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-month-status", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success", scope_label="intervalos · mes seleccionado"), md=3),
-                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger", scope_label="horas-equipo · mes seleccionado"), md=3),
-                    dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info", scope_label="query_5 · mes seleccionado"), md=3),
-                    dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning", scope_label="query_5 · mes seleccionado"), md=3),
+                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
+                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
+                    dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
+                    dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
                 ],
                 className="g-3 mb-4",
             ),
@@ -345,7 +345,7 @@ def layout_mantenciones_general():
                 [
                     dbc.Col(
                         [
-                            html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), "Mantenciones"]),
+                            html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), "Informe de confiabilidad"]),
                             html.P("Resumen ejecutivo · horas fuera de servicio y actividad de mantenimiento", className="text-muted mb-0"),
                         ],
                         md=7,
@@ -379,7 +379,7 @@ def layout_mantenciones_general():
                 id="maintenance-tabs",
                 value="summary",
                 children=[
-                    dcc.Tab(label="Resumen", value="summary", children=summary_tab, className="pt-3"),
+                    dcc.Tab(label="Informe de confiabilidad", value="summary", children=summary_tab, className="pt-3"),
                     # Keep the future views mounted for callback/layout
                     # compatibility, but do not expose them in the product
                     # shell until their next UX iteration is approved.
@@ -476,7 +476,7 @@ def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
         template="plotly_white",
         xaxis_title="Fecha operacional",
         yaxis_title="Equipos intervenidos",
-        yaxis={"rangemode": "tozero", "dtick": 1},
+        yaxis={"rangemode": "tozero", "tick0": 0, "dtick": 5},
         margin={"l": 55, "r": 25, "t": 25, "b": 48},
         showlegend=False,
     )
@@ -518,9 +518,8 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
             x=df[dimension],
             y=df["cumulative_pct"],
             name="% acumulado",
-            mode="lines+markers",
+            mode="lines",
             line={"color": PARETO_LINE_COLOR, "width": 2},
-            marker={"color": PARETO_LINE_COLOR},
             hovertemplate="<b>%{x}</b><br>Acumulado: %{y:.1f}%<extra></extra>",
         ),
         secondary_y=True,

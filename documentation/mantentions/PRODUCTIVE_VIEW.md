@@ -1,4 +1,4 @@
-# Vista productiva de Mantenciones
+# Informe de confiabilidad · vista productiva de Mantenciones
 
 La ruta protegida `/monitoring/mantenciones` se controla con
 `monitoring-mantenciones` en `config/client_services.json`. Actualmente está
@@ -6,7 +6,7 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
-- **Resumen**: selector mensual, filtro de flota/tipo de equipo según el catálogo
+- **Informe de confiabilidad**: selector mensual, filtro de flota/tipo de equipo según el catálogo
   de Tribología (los equipos sin coincidencia quedan en ``otros``) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; KPIs de tiempo respaldados por la fuente
@@ -21,7 +21,7 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
   tareas agrupadas por día y sistema.
 
-En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
+En el shell productivo actual solo se muestra **Informe de confiabilidad**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
@@ -30,7 +30,7 @@ mensual, el filtro de flota y el selector ejecutivo de unidad. El selector seman
 montado dentro del contrato de Evidencia semanal, pero no se muestra en la
 cabecera ejecutiva.
 
-La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
+La jerarquía ejecutiva de **Informe de confiabilidad** sigue la lectura de los reportes de
 referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
 separadas de horas-equipo fuera de servicio y equipos intervenidos, mix por sistema y
 ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
