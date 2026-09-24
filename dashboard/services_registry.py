@@ -58,7 +58,7 @@ SERVICE_LABELS = {
     "monitoring-alerts": "Alertas",
     "monitoring-telemetry": "Telemetría",
     "monitoring-oil": "Aceite",
-    "monitoring-mantenciones": "Mantenciones",
+    "monitoring-mantenciones": "Informe de confiabilidad",
     "predictive-motor": "Predictivo - Motor",
     "predictive-transmision": "Predictivo - Transmisión",
     "agents-campbell-ai": "Campbell AI",

@@ -544,6 +544,10 @@ def test_layout_keeps_future_views_mounted_but_hides_monthly_reliability_section
     assert rendered.index("maintenance-chart-system-mix") < rendered.index("maintenance-chart-pareto")
     assert rendered.index("maintenance-chart-pareto") < rendered.index("maintenance-kpi-equipment")
     assert "Resumen ejecutivo" in rendered
+    assert "Informe de confiabilidad" in rendered
+    assert "query_5 · mes seleccionado" not in rendered
+    assert "intervalos · mes seleccionado" not in rendered
+    assert "horas-equipo · mes seleccionado" not in rendered
     assert "maintenance-chart-system-mix" in rendered
     assert "maintenance-chart-pareto-tren-fuerza" in rendered
     assert "maintenance-chart-daily-equipment" in rendered
@@ -556,7 +560,6 @@ def test_layout_keeps_future_views_mounted_but_hides_monthly_reliability_section
     assert "maintenance-chart-reliability-mttr-downtime" not in rendered
     assert "maintenance-reliability-components-table" not in rendered
     assert "maintenance-reliability-equipment" not in rendered
-    assert "query_5 · mes seleccionado" in rendered
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "Indicadores de Interés" in rendered
@@ -665,8 +668,25 @@ def test_maintenance_bar_charts_use_vertical_orientation_and_descending_rank():
     assert pareto.data[0].orientation == "v"
     assert list(pareto.data[0].x) == ["T_01", "T_02"]
     assert list(pareto.data[1].y) == pytest.approx([77.77777777777777, 100.0])
+    assert pareto.data[1].mode == "lines"
     assert daily.data[0].orientation == "v"
     assert list(daily.data[0].x) == ["2026-01-01", "2026-01-02"]
+
+
+def test_daily_equipment_chart_uses_five_unit_y_ticks():
+    from dashboard.tabs.tab_mantenciones_general import create_daily_equipment_chart
+
+    figure = create_daily_equipment_chart(
+        pd.DataFrame(
+            [
+                {"date": "2026-01-01", "equipment_count": 3},
+                {"date": "2026-01-02", "equipment_count": 11},
+            ]
+        )
+    )
+
+    assert figure.layout.yaxis.dtick == 5
+    assert figure.layout.yaxis.tick0 == 0
 
 
 def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
