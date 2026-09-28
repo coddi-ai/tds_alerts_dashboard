@@ -10,6 +10,11 @@ from src.data import maintenance_repository as repository_module
 from src.data.loaders import (
     load_maintenance_actions_all_equipment,
     load_maintenance_unit_records_actions,
+    load_business_kpis,
+    load_maintenance_intervention_hours_daily,
+    load_maintenance_intervention_hours_monthly,
+    load_maintenance_fleet_intervention_daily,
+    load_maintenance_equipment_status,
 )
 from src.data.maintenance_repository import MaintenanceRepository
 
@@ -45,6 +50,170 @@ def test_record_loader_normalizes_source_interval_timestamps(tmp_path):
     assert str(loaded["first_event_ts"].dtype).endswith(", UTC]")
     assert str(loaded["last_event_ts"].dtype).endswith(", UTC]")
     assert loaded["last_event_ts"].notna().all()
+
+
+def test_new_calendar_view_loaders_preserve_local_calendar_clock(tmp_path):
+    pd.DataFrame(
+        [
+            {
+                "machine_code": "T_01",
+                "year_month": "2026-01",
+                "intervention_hours": 4.0,
+                "calendar_hours_month": 744.0,
+                "reference_date": "2026-01-31 23:59:00",
+            }
+        ]
+    ).to_parquet(tmp_path / "query_4_business_kpis.parquet", index=False)
+    pd.DataFrame(
+        [
+            {
+                "machine_code": "T_01",
+                "day": "2026-01-02",
+                "intervention_hours": 4.0,
+                "n_records_touching_day": 1,
+            }
+        ]
+    ).to_parquet(tmp_path / "query_7_intervention_hours_daily.parquet", index=False)
+    pd.DataFrame(
+        [
+            {
+                "machine_code": "T_01",
+                "year_month": "2026-01",
+                "intervention_hours": 4.0,
+                "calendar_hours_month": 744.0,
+            }
+        ]
+    ).to_parquet(tmp_path / "query_8_intervention_hours_monthly.parquet", index=False)
+    pd.DataFrame(
+        [
+            {
+                "day": "2026-01-02",
+                "intervention_hours": 4.0,
+                "n_machines_intervened": 1,
+            }
+        ]
+    ).to_parquet(tmp_path / "query_9_fleet_intervention_daily.parquet", index=False)
+    pd.DataFrame(
+        [
+            {
+                "machine_code": "T_01",
+                "equipment_status": "OPERATIVO",
+                "has_open_intervention": False,
+                "reference_date": "2026-01-02 12:00:00",
+            }
+        ]
+    ).to_parquet(tmp_path / "query_10_equipment_status.parquet", index=False)
+
+    daily = load_maintenance_intervention_hours_daily("cda", base_path=tmp_path)
+    business = load_business_kpis("cda", base_path=tmp_path)
+    monthly = load_maintenance_intervention_hours_monthly("cda", base_path=tmp_path)
+    fleet = load_maintenance_fleet_intervention_daily("cda", base_path=tmp_path)
+    status = load_maintenance_equipment_status("cda", base_path=tmp_path)
+
+    assert str(daily["day"].dtype) == "datetime64[ns]"
+    assert str(fleet["day"].dtype) == "datetime64[ns]"
+    assert str(status["reference_date"].dtype) == "datetime64[ns]"
+    assert str(business["reference_date"].dtype) == "datetime64[ns]"
+    assert business.loc[0, "intervention_hours"] == 4.0
+    assert monthly.loc[0, "year_month"] == "2026-01"
+
+
+def _canonical_view_frames():
+    actions = _actions()
+    actions["change_date"] = pd.to_datetime(actions["change_date"], utc=True)
+    actions["event_ts"] = pd.to_datetime(actions["event_ts"], utc=True)
+    monthly = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "year_month": "2026-01", "intervention_hours": 10.0, "calendar_hours_month": 744.0, "n_days_with_intervention": 2},
+            {"machine_code": "T_02", "year_month": "2026-01", "intervention_hours": 20.0, "calendar_hours_month": 744.0, "n_days_with_intervention": 1},
+        ]
+    )
+    daily = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "day": "2026-01-01", "intervention_hours": 10.0},
+            {"machine_code": "T_02", "day": "2026-01-01", "intervention_hours": 20.0},
+        ]
+    )
+    fleet = pd.DataFrame(
+        [
+            {"day": "2026-01-01", "n_machines_intervened": 2, "intervention_hours": 30.0},
+            {"day": "2026-01-02", "n_machines_intervened": 0, "intervention_hours": 0.0},
+        ]
+    )
+    status = pd.DataFrame(
+        [
+            {"machine_code": "T_01", "equipment_status": "DETENIDO", "has_open_intervention": True},
+            {"machine_code": "T_02", "equipment_status": "OPERATIVO", "has_open_intervention": False},
+        ]
+    )
+    return actions, monthly, daily, fleet, status
+
+
+def test_monthly_payload_uses_canonical_monthly_and_fleet_views(monkeypatch):
+    actions, monthly, daily, fleet, status = _canonical_view_frames()
+    business = monthly.copy()
+    business["downtime_hours_70d"] = 9999.0
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: actions.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_unit_records_actions", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_component_failure_ranking", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_monthly", lambda client: monthly.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_daily", lambda client: daily.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_fleet_intervention_daily", lambda client: fleet.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_equipment_status", lambda client: status.copy())
+
+    repo = MaintenanceRepository(mode="parquet", client="cda")
+    payload = repo.get_monthly_payload("2026-01")
+
+    assert payload["status"] == "ok"
+    assert payload["kpis"]["downtime_est_hours"] == 30.0
+    assert payload["kpis"]["availability_est_pct"] == 98.0
+    assert payload["data"]["daily"][:2] == [
+        {"date": "2026-01-01", "count": 0, "equipment_count": 2, "hours_out_of_service": 30.0},
+        {"date": "2026-01-02", "count": 1, "equipment_count": 0, "hours_out_of_service": 0.0},
+    ]
+    assert payload["meta"]["estimated_kpis"]["source"] == ["query_4_business_kpis.parquet"]
+    assert payload["meta"]["time_measure"]["source"] == "query_9_fleet_intervention_daily.parquet"
+    assert payload["kpis"]["downtime_est_hours"] != 9999.0
+
+
+def test_equipment_filter_uses_query7_instead_of_fleet_total(monkeypatch):
+    actions, monthly, daily, fleet, status = _canonical_view_frames()
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: actions.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_unit_records_actions", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_component_failure_ranking", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_monthly", lambda client: monthly.loc[monthly.machine_code.eq("T_01")].copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_daily", lambda client: daily.loc[daily.machine_code.eq("T_01")].copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_fleet_intervention_daily", lambda client: fleet.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_equipment_status", lambda client: status.copy())
+
+    payload = MaintenanceRepository(mode="parquet", client="cda").get_monthly_payload(
+        "2026-01", equipment=["T_01"]
+    )
+
+    assert payload["kpis"]["downtime_est_hours"] == 10.0
+    assert payload["data"]["daily"][0]["equipment_count"] == 1
+    assert payload["meta"]["time_measure"]["source"] == "query_7_intervention_hours_daily.parquet"
+
+
+def test_status_counts_use_query10_equipment_status(monkeypatch):
+    _, _, _, _, status = _canonical_view_frames()
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: _actions())
+    monkeypatch.setattr(repository_module, "load_maintenance_unit_records_actions", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_component_failure_ranking", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_monthly", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_daily", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_fleet_intervention_daily", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_equipment_status", lambda client: status.copy())
+
+    result = MaintenanceRepository(mode="parquet", client="cda").get_status_counts()
+    counts = dict(zip(result["machine_status"], result["n_machines"]))
+    assert counts == {"DETENIDO": 1, "SANO": 1}
 
 
 def test_reliability_payload_preserves_missing_metrics_and_low_confidence(monkeypatch):

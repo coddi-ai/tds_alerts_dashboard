@@ -6,6 +6,20 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
+La pestaña consume las vistas materializadas nuevas del pipeline de
+Mantenciones. `query_3_actions_all_equipment` sigue aportando el detalle de
+actividad; las horas ya no se reconstruyen desde acciones ni desde jobs.
+
+| Necesidad del informe | Fuente principal |
+| --- | --- |
+| KPIs mensuales por equipo | `query_4_business_kpis.parquet` |
+| Horas intervenidas por equipo-mes | `query_8_intervention_hours_monthly.parquet` |
+| Horas intervenidas por equipo-día | `query_7_intervention_hours_daily.parquet` |
+| Horas y equipos intervenidos por día de flota | `query_9_fleet_intervention_daily.parquet` |
+| Estado puntual del equipo | `query_10_equipment_status.parquet` |
+| MTBF / MTTR | `query_5_reliability_monthly.parquet` |
+| Ranking de componentes en fallas | `query_6_component_failure_ranking.parquet` |
+
 - **Informe de confiabilidad**: selector mensual, filtro de flota/tipo de equipo según el catálogo
   de Tribología (los equipos sin coincidencia quedan en ``otros``) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
@@ -70,12 +84,16 @@ unidad seleccionados:
   convierten en cero ni se interpolan. `low_confidence` se conserva en la
   metadata del payload para auditoría.
 
-Disponibilidad y downtime usan los mismos intervalos operacionales de la
-tendencia diaria: `query_2_unit_records_actions.parquet` (con fallback a
-`query_3`). Se recortan al mes evaluado y se unen los solapes por equipo y día,
-por lo que la card y el gráfico diario quedan reconciliados. Si no hay
-intervalos fuente utilizables, ambos valores quedan sin dato. `query_4` se
-conserva como fuente de referencia, pero ya no alimenta estas dos cards.
+Disponibilidad y downtime usan `query_8_intervention_hours_monthly.parquet`.
+La vista ya entrega la unión deduplicada de intervalos, el reparto por día y
+el denominador de horas calendario. Para la tendencia diaria, la flota usa
+`query_9_fleet_intervention_daily.parquet`; cuando se selecciona una unidad o
+una flota, la serie se agrega desde `query_7_intervention_hours_daily.parquet`.
+Las cuatro vistas comparten el mismo núcleo de cálculo, por lo que no se
+reconstruyen horas desde acciones ni desde jobs. `query_4` queda como respaldo
+de las horas mensuales cuando `query_8` no está disponible, siempre que
+contenga las columnas del contrato nuevo; las columnas históricas `*_70d` no
+se usan.
 Si se filtra por sistema o subsistema, MTBF y MTTR siguen quedando sin dato
 porque query 5 no contiene ese desglose. `query_6_component_failure_ranking`
 continúa disponible como fuente de repositorio para futuras vistas, pero ya no
@@ -109,14 +127,13 @@ indicadores del Resumen:
   `action_system_name` coincide con `Motor`, `Sistema Motor` o `Sistema de
   Motor`.
 
-La tendencia diaria calcula horas-equipo fuera de servicio a partir de
-`first_event_ts` y `last_event_ts` de `query_2_unit_records_actions.parquet`,
-distribuyendo cada intervalo por día UTC y recortándolo al mes seleccionado.
-Los intervalos superpuestos se unen por equipo y día antes de sumar la flota.
-Si `query_2` no está disponible, se usa el mínimo/máximo `event_ts` por
-`record_id` de `query_3` como compatibilidad. El total de una flota puede
-superar 24 h en un día porque suma horas de varios equipos; con un equipo
-seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
+La tendencia diaria lee `intervention_hours` y el conteo de equipos de
+`query_9` para la flota completa. Con una unidad o flota seleccionada, agrupa
+`query_7` por fecha y cuenta equipos distintos. Las vistas ya reparten cada
+record por límites de día calendario y unen solapes; no se interpretan los
+sufijos de offset de los timestamps de detalle como zonas horarias. El total
+de una flota puede superar 24 h en un día porque suma horas de varios equipos;
+con un equipo seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
 sistema y no expone series o leyenda por unidad; el ranking
 de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
 misma métrica de acciones únicas. Los
@@ -128,18 +145,16 @@ sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. En esta iteración las cards de tiempo usan los límites temporales
-de cada registro (`query_2`, con fallback a `query_3`) y no se infieren horas a
-partir del conteo de acciones.
+imprevisto. En esta iteración las cards de tiempo usan las horas canónicas de
+`query_8` y no se infieren horas a partir del conteo de acciones.
 
 #### Metodología de los KPIs de tiempo
 
-Downtime y disponibilidad se calculan para el mes seleccionado a partir del
-contrato de intervalos:
+Downtime y disponibilidad se leen para el mes seleccionado desde el contrato
+mensual de horas:
 
-- `downtime_est_hours = sum(hours_out_of_service)` después de recortar al mes
-  y unir solapes por equipo/día.
-- `calendar_hours = días_del_mes × 24 × equipos_cubiertos`.
+- `downtime_est_hours = sum(intervention_hours)`.
+- `calendar_hours = sum(calendar_hours_month)` de los equipos cubiertos.
 - `availability_est_pct = (calendar_hours − downtime_est_hours) /
   calendar_hours × 100`.
 
@@ -151,7 +166,8 @@ está ausente o incompleta, el valor correspondiente queda `null` con estado
 Cada payload expone en `meta.estimated_kpis` la fuente, columnas, unidad,
 cobertura e hipótesis. Si faltan las columnas de tiempo se devuelve `null` y
 un estado `unavailable`, nunca cero. La aplicación respeta la definición de
-intervalos y el calendario del mes seleccionado.
+intervalos y el calendario del mes seleccionado. La pestaña no mezcla el
+conteo de equipos intervenidos de `query_9` con el total de horas-equipo.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad

@@ -1,16 +1,24 @@
-# Data Contract V2 - Vista de Mantenciones General
+# Data Contract - Vista de Mantenciones General
 
-**Fecha:** 12 de Marzo 2026  
-**Versión:** 2.0  
-**Actualización:** Migración a `query_3_actions_all_equipment.parquet`, `query_4_business_kpis.parquet` y vistas de confiabilidad `query_5`/`query_6`.
+**Fecha:** 28 de Septiembre 2026
+**Versión:** 3.0
+**Actualización:** Migración a las vistas de horas `query_7`, `query_8` y
+`query_9`, KPIs mensuales en `query_4` y estado puntual en `query_10`.
 
 ---
 
 ## 📊 Archivos Parquet Requeridos
 
-Las vistas de confiabilidad son fuentes adicionales. `query_5` alimenta las
-cards MTBF/MTTR del Resumen; `query_6` queda disponible para futuras vistas.
-La sección visual independiente de confiabilidad fue retirada.
+La pestaña usa `query_3` para actividad y detalle, `query_4`/`query_8` para
+KPIs mensuales, `query_7`/`query_9` para la tendencia diaria, `query_5` para
+MTBF/MTTR y `query_10` para el estado puntual del equipo. `query_6` queda
+disponible para análisis de componentes. Las columnas históricas `*_70d` no
+son una fuente válida para el informe nuevo.
+
+Las vistas de horas son canónicas: unen intervalos solapados, parten cada
+record por día calendario y exponen horas calendario como denominador. Sus
+timestamps de calendario no llevan zona horaria; no deben parsearse con
+`utc=True`.
 
 ### 1. `query_3_actions_all_equipment.parquet` - Acciones de Mantenimiento Detalladas
 
@@ -69,36 +77,61 @@ La sección visual independiente de confiabilidad fue retirada.
 
 ---
 
-### 2. `query_4_business_kpis.parquet` - KPIs de Negocio Pre-calculados
+### 2. `query_4_business_kpis.parquet` - KPIs mensuales de negocio
 
-**Propósito:** Métricas de negocio pre-calculadas para cada equipo, optimizando el rendimiento del dashboard.
+**Grano:** una fila por `machine_id × year_month`.
 
-**Dimensiones:** 11 filas × 18 columnas (una fila por máquina)
+Incluye las horas de `query_8` y los agregados de actividad del mes. Las
+columnas principales para el dashboard son:
 
-**Columnas:**
+| Columna | Descripción |
+|---|---|
+| `machine_id`, `machine_code` | Equipo |
+| `year_month` | Mes calendario `YYYY-MM` |
+| `intervention_hours` | Horas intervenidas deduplicadas |
+| `downtime_hours` | Alias de `intervention_hours` para consumidores antiguos |
+| `intervention_hours_raw` | Horas sin unir solapes, para auditoría |
+| `dedup_hours_saved` | Diferencia entre horas brutas y deduplicadas |
+| `calendar_hours_month` | Horas calendario del equipo en el mes |
+| `pct_month_intervened` | Porcentaje del mes intervenido |
+| `n_days_with_intervention`, `n_saturated_days` | Conteos diarios derivados |
+| `n_actions`, `n_jobs`, `n_records_with_actions` | Volumen de actividad |
+| `n_failure_records` | Records clasificados como fallas |
+| `n_inspections`, `n_replacements`, `n_repairs`, `n_maintenances` | Acciones por tipo |
+| `action_types`, `top_3_components` | Listas de actividad del mes |
 
-| Columna | Tipo | Descripción | Ejemplo |
-|---------|------|-------------|---------|
-| `machine_code` | string | Código de la máquina | `"t10"` |
-| `machine_id` | string (UUID) | ID único de la máquina | `"9a0d66e4-9c4c-4e89-8b26-251e419d6e1a"` |
-| `equipment_status` | string | Estado del equipo | `"OPERATIVO"`, `"DETENIDO"` |
-| `has_ongoing_maintenance` | boolean | Tiene mantenimiento en curso | `True`, `False`, `<NA>` |
-| `last_ongoing_date` | object (datetime) | Fecha del último mantenimiento ongoing | `None`, `"2026-01-15"` |
-| `days_since_last_maintenance` | Int32 | Días desde último mantenimiento | `19`, `21`, `<NA>` |
-| `last_action_date` | datetime64[us] | Fecha de última acción | `2026-01-02 22:30:00` |
-| `total_actions_70d` | int64 | Total de acciones en 70 días | `24`, `19`, `15` |
-| `ongoing_actions_70d` | int64 | Acciones ongoing en 70 días | `0` |
-| `downtime_hours_70d` | float64 | **Horas de detención en 70 días** | `3088.8`, `1820.2` |
-| `maintenance_frequency_per_day` | float64 | Frecuencia diaria de mantenimiento | `0.343`, `0.271` |
-| `action_types_70d` | object (array) | Tipos de acciones en 70 días | Lista de tipos |
-| `top_3_components` | object (array) | Top 3 componentes mantenidos | Lista de componentes |
-| `inspections_70d` | int64 | Inspecciones en 70 días | `5`, `3` |
-| `replacements_70d` | int64 | Reemplazos en 70 días | `8`, `6` |
-| `repairs_70d` | int64 | Reparaciones en 70 días | `4`, `2` |
-| `maintenances_70d` | int64 | Mantenimientos en 70 días | `12`, `8` |
-| `reference_date` | datetime64[us] | Fecha de referencia del cálculo | `2026-01-22 10:10:00` |
+Los campos con sufijo `*_70d` pertenecen al contrato anterior y no deben
+usarse para calcular horas, disponibilidad o estado.
 
-### 3. `query_5_reliability_monthly.parquet` - Confiabilidad mensual
+### 3. `query_7_intervention_hours_daily.parquet` - Horas por equipo-día
+
+**Grano:** una fila por equipo y día con horas mayores que cero. La métrica
+canónica es `intervention_hours`; `intervention_hours_raw` y
+`dedup_hours_saved` sirven para auditoría. Incluye `day`, conteos de records,
+`calendar_hours_day`, `pct_day_intervened`, `is_saturated_day` y
+`touched_by_long_record`.
+
+### 4. `query_8_intervention_hours_monthly.parquet` - Horas por equipo-mes
+
+**Grano:** una fila por equipo y mes entre el primer y último mes con
+actividad. Los meses intermedios aparecen con cero. Incluye las mismas
+métricas de `query_7` agregadas al mes y añade
+`calendar_hours_month`, `n_days_with_intervention` y `n_saturated_days`.
+
+### 5. `query_9_fleet_intervention_daily.parquet` - Flota día a día
+
+**Grano:** una fila por día del rango observado, incluidos días sin actividad.
+`n_machines_intervened` y `intervention_hours` son métricas independientes.
+También incluye `n_machines_fleet`, `calendar_hours_fleet`,
+`pct_fleet_unavailable_calendar` y `avg_hours_per_intervened_machine`.
+
+### 6. `query_10_equipment_status.parquet` - Estado puntual por equipo
+
+**Grano:** una fila por equipo a `reference_date`. Incluye
+`equipment_status`, `has_open_intervention`, fechas de última actividad y
+conteos históricos. No se deriva desde el campo `ongoing` de la base.
+
+### 7. `query_5_reliability_monthly.parquet` - Confiabilidad mensual
 
 **Grano:** una fila por `machine_id × year_month`.
 
@@ -109,7 +142,7 @@ son datos insuficientes para ese equipo-mes y no se convierten a cero. Una fila
 con `low_confidence=true` se conserva y se marca visualmente cuando
 `n_mtbf_intervals < 3`.
 
-### 4. `query_6_component_failure_ranking.parquet` - Ranking acumulado
+### 8. `query_6_component_failure_ranking.parquet` - Ranking acumulado
 
 **Grano:** componente por equipo y fuente, acumulado histórico; no es una
 serie temporal. Incluye `source_system`, `machine_id`, `machine_code`,
@@ -117,29 +150,8 @@ serie temporal. Incluye `source_system`, `machine_id`, `machine_code`,
 `n_failure_actions`. La pestaña lo presenta como ranking filtrable por equipo,
 sin interpretarlo como una tasa mensual.
 
-**Valores Únicos:**
-- **machine_code:** 11 máquinas (`t09`, `t10`, `t11`, `t12`, `t14`, `t15`, `t16`, `t17`, `t18`, `t24`, + 1 más)
-- **equipment_status:** 1 valor único (`"OPERATIVO"`)
-- **has_ongoing_maintenance:** Todos `<NA>` en datos actuales
-- **days_since_last_maintenance:** 5 valores únicos (16-21 días, + `<NA>`)
-
-**Ejemplo de registro:**
-```python
-{
-    'machine_code': 't10',
-    'machine_id': '9a0d66e4-9c4c-4e89-8b26-251e419d6e1a',
-    'equipment_status': 'OPERATIVO',
-    'has_ongoing_maintenance': False,
-    'last_ongoing_date': None,
-    'days_since_last_maintenance': 19,
-    'last_action_date': '2026-01-02 22:30:00',
-    'total_actions_70d': 24,
-    'ongoing_actions_70d': 0,
-    'downtime_hours_70d': 3088.8,
-    'maintenance_frequency_per_day': 0.343,
-    'reference_date': '2026-01-22 10:10:00'
-}
-```
+`query_6` se consume como ranking histórico y no como una serie mensual de
+confiabilidad.
 
 ---
 
@@ -147,37 +159,37 @@ sin interpretarlo como una tasa mensual.
 
 ### Status de Equipos (SANO vs DETENIDO)
 
-**Fuente:** `query_4_business_kpis.parquet` → columna `has_ongoing_maintenance`
+**Fuente:** `query_10_equipment_status.parquet` → columnas `equipment_status` y
+`has_open_intervention`
 
 **Reglas:**
 ```python
-if has_ongoing_maintenance == True:
+if equipment_status == "DETENIDO" or has_open_intervention == True:
     status = "DETENIDO"
 else:
     status = "SANO"  # equipment_status == "OPERATIVO"
 ```
 
-**Estado Actual (según datos):**
-- Todos los equipos tienen `has_ongoing_maintenance = <NA>` (no aplica)
-- Todos los equipos tienen `equipment_status = "OPERATIVO"`
-- **Resultado:** Todos los equipos están **SANO**
+El estado actual se lee por equipo desde `query_10`; no se asume que todos
+los equipos estén operativos y no se usa el flag histórico `ongoing`.
 
 ---
 
-### Downtime de referencia en query4 (70 días)
+### Downtime mensual canónico
 
-**Fuente:** `query_4_business_kpis.parquet` → columna `downtime_hours_70d`
+**Fuente:** `query_8_intervention_hours_monthly.parquet` → columna
+`intervention_hours`
 
 **Cálculo del extracto de referencia:**
 ```python
-total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
+total_downtime_month = df_month['intervention_hours'].sum()
 ```
 
 **Datos actuales:**
-- Estos valores describen una ventana rolling de 70 días y no deben
-  interpretarse como el downtime mensual físico del dashboard.
-- La vista productiva calcula el downtime mensual desde los intervalos de
-  `query_2_unit_records_actions.parquet`, uniendo solapes por equipo y día.
+- `intervention_hours` es la unión deduplicada de records y representa el
+  total de horas-equipo del mes seleccionado.
+- `calendar_hours_month` es el denominador explícito; no se infieren horas
+  desde el conteo de acciones.
 
 ---
 
@@ -232,20 +244,19 @@ for (machine_id, record_id, machine_code), group in df_actions.groupby(['machine
 
 ### Horas fuera de servicio por día
 
-**Fuente primaria:** `query_2_unit_records_actions.parquet`, columnas
-`first_event_ts` y `last_event_ts`.
+**Fuente primaria:** `query_9_fleet_intervention_daily.parquet` para la flota
+completa y `query_7_intervention_hours_daily.parquet` cuando se filtra por
+unidad o flota.
 
-**Cálculo:** cada intervalo se recorta a la ventana seleccionada y se reparte
-por día UTC. La duración de un registro es:
+**Cálculo:** las vistas ya cortan cada record por día calendario y unen
+solapes. La métrica publicada es:
 ```python
-duration_hours = (last_event_ts - first_event_ts).total_seconds() / 3600
+hours_equipment = intervention_hours
 ```
 
-Si `query_2` no está disponible, se calcula el mínimo/máximo `event_ts` por
-`record_id` desde `query_3` como fallback técnico. No se convierten acciones a
-horas. El resultado es **horas-equipo**: una flota puede superar 24 h en un
-día porque suma varios equipos; un equipo individual no supera 24 h por día
-después de la distribución del intervalo.
+No se convierten acciones a horas. El resultado es **horas-equipo**: una
+flota puede superar 24 h en un día porque suma varios equipos; un equipo
+individual no supera 24 h por día después de la distribución del intervalo.
 
 ---
 
@@ -258,21 +269,20 @@ total = len(df_kpis)  # 11 máquinas
 
 ### 2. Equipos Sanos
 ```python
-sanos = total - df_kpis['has_ongoing_maintenance'].sum()
+sanos = (df_status['equipment_status'] == 'OPERATIVO').sum()
 ```
 
 ### 3. Equipos Detenidos
 ```python
-detenidos = df_kpis['has_ongoing_maintenance'].sum()
+detenidos = (df_status['equipment_status'] == 'DETENIDO').sum()
 ```
 
-### 4. Horas Detenidas de referencia (70 días)
+### 4. Horas intervenidas del mes
 ```python
-total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
+total_intervention_hours = df_month['intervention_hours'].sum()
 
-> Este cálculo describe el extracto rolling de query4 y no es el KPI mensual
-> del Resumen productivo. El Resumen usa los intervalos de query2/query3,
-> recortados al mes y unidos por equipo/día.
+> El Resumen usa las horas deduplicadas de query8 y no las columnas históricas
+> `*_70d`.
 ```
 
 ---
@@ -283,8 +293,12 @@ total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
 ```python
 {
     "actions": load_maintenance_actions_all_equipment(),  # acciones
-    "records": load_maintenance_unit_records_actions(),   # intervalos
-    "kpis": load_business_kpis()                          # KPIs 70d
+    "records": load_maintenance_unit_records_actions(),   # compatibilidad
+    "kpis": load_business_kpis(),                         # query4 mensual
+    "hours_daily": load_maintenance_intervention_hours_daily(),  # query7
+    "hours_monthly": load_maintenance_intervention_hours_monthly(),  # query8
+    "fleet_daily": load_maintenance_fleet_intervention_daily(),  # query9
+    "equipment_status": load_maintenance_equipment_status(),  # query10
 }
 ```
 
@@ -292,25 +306,25 @@ total_downtime_70d = df_kpis['downtime_hours_70d'].sum()
 
 | Método | Fuente Principal | Output |
 |--------|------------------|--------|
-| `get_status_counts()` | `query_4` KPIs | SANO/DETENIDO counts |
-| `get_downtime_mtd()` | `query_4` KPIs | Total rolling de referencia; no alimenta el Resumen actual |
+| `get_status_counts()` | `query_10` | SANO/DETENIDO counts |
+| `get_downtime_mtd()` | `query_8`/`query_9` | Horas-equipo del período |
 | `get_last_detentions()` | `query_3` Actions | Top 3 detenciones/máquina |
 | `get_jobs_last_week()` | `query_3` Actions | 100 trabajos recientes |
-| `get_downtime_by_day_mtd()` | `query_2` Records | Horas-equipo fuera de servicio por día |
+| `get_downtime_by_day_mtd()` | `query_7`/`query_9` | Horas-equipo fuera de servicio por día |
 
 ---
 
 ## 🔄 Ventana Temporal
 
-**Período de análisis legacy de query4:** 70 días (10 semanas). El Resumen
-productivo evalúa el mes seleccionado y usa `días_del_mes × 24 × equipos`
-como denominador de disponibilidad.
+El Resumen productivo evalúa el mes seleccionado. Usa
+`calendar_hours_month` como denominador y no aplica una ventana móvil de 70
+días.
 
 **Justificación:**
 - Los datos actuales son de enero 2026
 - Fecha actual: marzo 2026
-- 70 días permite capturar actividad histórica reciente
-- Alineado con los KPIs pre-calculados (`*_70d`)
+- Las vistas nuevas permiten reconciliar horas por equipo-día, equipo-mes y
+  flota-día.
 
 ---
 
@@ -326,7 +340,8 @@ como denominador de disponibilidad.
 
 2. **Manejo de valores NaN:**
    - `machine_code` puede tener NaN → filtrado en agregaciones
-   - `has_ongoing_maintenance` puede ser `<NA>` → tratado como False
+   - `has_open_intervention` puede ser nulo → el estado se resuelve con
+     `equipment_status`
 
 3. **Agrupaciones robustas:**
    - Uso de `.dropna()` en operaciones críticas
@@ -344,10 +359,14 @@ data/
     └── golden/
         └── {client}/                          # ej: "cda"
             └── Maintance_Labeler_Views/
-                ├── query_3_actions_all_equipment.parquet  # 659 acciones
-                ├── query_4_business_kpis.parquet          # 11 máquinas con KPIs
-                ├── query_5_reliability_monthly.parquet    # confiabilidad por equipo-mes
-                └── query_6_component_failure_ranking.parquet # ranking histórico de fallas
+                ├── query_3_actions_all_equipment.parquet
+                ├── query_4_business_kpis.parquet          # KPIs por equipo-mes
+                ├── query_5_reliability_monthly.parquet    # MTBF / MTTR
+                ├── query_6_component_failure_ranking.parquet
+                ├── query_7_intervention_hours_daily.parquet
+                ├── query_8_intervention_hours_monthly.parquet
+                ├── query_9_fleet_intervention_daily.parquet
+                └── query_10_equipment_status.parquet
 ```
 
 ### Estructura de Desarrollo (Fallback)
@@ -373,7 +392,11 @@ proyecto_root/
 ```python
 from src.data.loaders import (
     load_maintenance_actions_all_equipment,
-    load_business_kpis
+    load_business_kpis,
+    load_maintenance_intervention_hours_daily,
+    load_maintenance_intervention_hours_monthly,
+    load_maintenance_fleet_intervention_daily,
+    load_maintenance_equipment_status,
 )
 
 # Cargar acciones de mantenimiento
@@ -387,6 +410,11 @@ df_actions = load_maintenance_actions_all_equipment(client="otro_cliente")
 # Cargar KPIs de negocio
 df_kpis = load_business_kpis()
 print(f"Máquinas con KPIs: {len(df_kpis)}")
+
+df_daily = load_maintenance_intervention_hours_daily()
+df_monthly = load_maintenance_intervention_hours_monthly()
+df_fleet = load_maintenance_fleet_intervention_daily()
+df_status = load_maintenance_equipment_status()
 
 # Usar variable de entorno (opcional)
 # export CLIENT_NAME=cda
@@ -412,26 +440,25 @@ df_daily = repo.get_downtime_by_day_mtd()
 
 ## 🔍 Mejoras Futuras
 
-1. **Calcular `has_ongoing_maintenance` dinámicamente:**
-   - Actualmente todos los valores son `<NA>`
-   - Implementar lógica basada en `days_since_last_maintenance`
+1. **Usar `query_6_component_failure_ranking`:**
+   - Incorporar un ranking de componentes cuando la vista productiva lo requiera.
 
-2. **Usar `action_types_70d` y `top_3_components`:**
-   - Aprovechar arrays pre-calculados en `query_4`
-   - Crear visualizaciones de componentes más afectados
+2. **Agregar horas operativas si aparece una fuente gobernada:**
+   - Mantener `calendar_hours_month` como referencia hasta disponer de
+     horómetro o telemetría operativa.
 
-3. **Integrar `inspections_70d`, `replacements_70d`, etc.:**
-   - Mostrar breakdown de tipos de mantenimiento
-   - Gráficos de distribución por categoría
-
-4. **Completar el desglose temporal:**
-   - `query_4` entrega el total móvil de 70 días por equipo.
-   - `query_2` entrega intervalos por registro para distribuir la tendencia
-     diaria; mantener su definición alineada con el origen.
+3. **Confirmar la asunción horaria de EMIN:**
+   - El pipeline documenta qué reloj local corresponde a cada fuente.
 
 ---
 
 ## 📝 Changelog
+
+### v3.0 - 28 de Septiembre 2026 (Vistas canónicas de horas)
+- ✅ `query_4` migrado de una ventana móvil de 70 días a grano equipo-mes.
+- ✅ `query_7`, `query_8` y `query_9` como fuentes canónicas de horas.
+- ✅ `query_10` como fuente de estado puntual por equipo.
+- ✅ La pestaña ya no usa columnas `*_70d` para sus KPIs de tiempo.
 
 ### v2.1 - 12 de Marzo 2026 (Actualización de Arquitectura)
 - ✅ Consolidado loaders de mantenciones en `src/data/loaders.py`
@@ -441,7 +468,7 @@ df_daily = repo.get_downtime_by_day_mtd()
 - ✅ Fallback automático a root para desarrollo local
 - ✅ Funciones con parámetro `client` configurable
 
-### v2.0 - 12 de Marzo 2026
+### v2.0 - 12 de Marzo 2026 (Contrato histórico)
 - ✅ Migración de `query_1`, `query_2`, `query_3` a `query_3_actions_all_equipment` y `query_4_business_kpis`
 - ✅ Uso de KPIs pre-calculados para mejor rendimiento
 - ✅ Simplificación de lógica de status usando `has_ongoing_maintenance`
@@ -455,6 +482,6 @@ df_daily = repo.get_downtime_by_day_mtd()
 
 ---
 
-**Documento generado:** 12 de Marzo 2026  
+**Documento actualizado:** 28 de Septiembre 2026
 **Autor:** Sistema de Migración de Datos  
-**Versión:** 2.0
+**Versión:** 3.0

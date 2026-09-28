@@ -91,7 +91,11 @@ def _source_alert(meta: dict):
     coverage_label = coverage.get("window_label")
     source_files = estimated.get("source") or []
     source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
-    source_label = "KPIs de fuente" if estimated.get("source_kind") == "business_kpis_70d" else "Horas/KPIs no disponibles"
+    source_label = (
+        "Horas y KPIs de fuente"
+        if estimated.get("source_kind") in {"intervention_hours_monthly", "business_kpis_monthly", "business_kpis_70d"}
+        else "Horas/KPIs no disponibles"
+    )
     estimated_note = f"{source_label} · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
     reference_start = coverage.get("reference_start")
     reference_end = coverage.get("reference_end")

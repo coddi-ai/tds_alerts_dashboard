@@ -20,6 +20,10 @@ from src.data.loaders import (
     load_business_kpis,
     load_maintenance_reliability_monthly,
     load_maintenance_component_failure_ranking,
+    load_maintenance_intervention_hours_daily,
+    load_maintenance_intervention_hours_monthly,
+    load_maintenance_fleet_intervention_daily,
+    load_maintenance_equipment_status,
     load_oil_classified,
     list_maintenance_weeks,
     load_maintenance_week,
@@ -111,13 +115,13 @@ def _estimated_kpi_meta(
             calendar_days = 0
     schedule_days = calendar_days if scheduled_days is None else scheduled_days
     scheduled_hours = equipment * schedule_days * SCHEDULE_HOURS_PER_DAY
-    source = source or ["query_4_business_kpis.parquet"]
-    source_columns = source_columns or ["machine_code", "downtime_hours_70d", "reference_date"]
+    source = source or ["query_8_intervention_hours_monthly.parquet"]
+    source_columns = source_columns or ["machine_code", "year_month", "intervention_hours", "calendar_hours_month"]
     meta = {
         "status": status,
         "label": "FUENTE",
         "source_kind": source_kind,
-        "confidence": "source_defined" if source_kind == "business_kpis_70d" else "unavailable",
+        "confidence": "source_defined" if source_kind in {"business_kpis_monthly", "intervention_hours_monthly"} else "unavailable",
         "source": source,
         "source_columns": source_columns,
         "period": period,
@@ -139,8 +143,8 @@ def _estimated_kpi_meta(
             "mttr_est_hours": "h",
         },
         "assumptions": [
-            "Las horas fuera de servicio provienen de downtime_hours_70d definido por la fuente de negocio.",
-            "Horas programadas de referencia = equipos cubiertos × días de la ventana × 24 h.",
+            "Las horas intervenidas provienen de la unión deduplicada de intervalos de la vista mensual.",
+            "El denominador usa calendar_hours_month, es decir, horas calendario del equipo cubierto.",
             "Cuando la fuente de negocio no está disponible o no tiene desglose para los filtros, el KPI queda sin dato.",
         ],
         "formula": {
@@ -329,6 +333,10 @@ class MaintenanceRepository:
         self._parquet_kpis_cache = None
         self._parquet_reliability_cache = None
         self._parquet_component_failures_cache = None
+        self._parquet_hours_daily_cache = None
+        self._parquet_hours_monthly_cache = None
+        self._parquet_fleet_daily_cache = None
+        self._parquet_equipment_status_cache = None
         self._fleet_catalog_cache = None
 
     def _get_parquet_actions(self):
@@ -398,6 +406,38 @@ class MaintenanceRepository:
                 client=self.client
             )
         return self._parquet_component_failures_cache
+
+    def _get_parquet_hours_daily(self):
+        """Load canonical equipment-day hours (query 7)."""
+        if self._parquet_hours_daily_cache is None:
+            self._parquet_hours_daily_cache = load_maintenance_intervention_hours_daily(
+                client=self.client
+            )
+        return self._parquet_hours_daily_cache
+
+    def _get_parquet_hours_monthly(self):
+        """Load canonical equipment-month hours (query 8)."""
+        if self._parquet_hours_monthly_cache is None:
+            self._parquet_hours_monthly_cache = load_maintenance_intervention_hours_monthly(
+                client=self.client
+            )
+        return self._parquet_hours_monthly_cache
+
+    def _get_parquet_fleet_daily(self):
+        """Load canonical fleet-day totals (query 9)."""
+        if self._parquet_fleet_daily_cache is None:
+            self._parquet_fleet_daily_cache = load_maintenance_fleet_intervention_daily(
+                client=self.client
+            )
+        return self._parquet_fleet_daily_cache
+
+    def _get_parquet_equipment_status(self):
+        """Load point-in-time equipment status (query 10)."""
+        if self._parquet_equipment_status_cache is None:
+            self._parquet_equipment_status_cache = load_maintenance_equipment_status(
+                client=self.client
+            )
+        return self._parquet_equipment_status_cache
         
     def _get_dummy_data(self):
         """Get or generate dummy data."""
@@ -415,6 +455,10 @@ class MaintenanceRepository:
                 "kpis": self._get_parquet_kpis(),
                 "reliability": self._get_parquet_reliability(),
                 "component_failures": self._get_parquet_component_failures(),
+                "hours_daily": self._get_parquet_hours_daily(),
+                "hours_monthly": self._get_parquet_hours_monthly(),
+                "fleet_daily": self._get_parquet_fleet_daily(),
+                "equipment_status": self._get_parquet_equipment_status(),
             }
         return self._parquet_cache
 
@@ -590,6 +634,10 @@ class MaintenanceRepository:
         self._parquet_kpis_cache = None
         self._parquet_reliability_cache = None
         self._parquet_component_failures_cache = None
+        self._parquet_hours_daily_cache = None
+        self._parquet_hours_monthly_cache = None
+        self._parquet_fleet_daily_cache = None
+        self._parquet_equipment_status_cache = None
         self._fleet_catalog_cache = None
 
     def _actions_source_state(self) -> tuple[str, str | None]:
@@ -639,6 +687,22 @@ class MaintenanceRepository:
         actions = data["actions"]
         if not actions.empty and "change_date" in actions:
             months.update(actions["change_date"].dropna().dt.strftime("%Y-%m").tolist())
+        monthly_hours = data.get("hours_monthly", pd.DataFrame())
+        if not monthly_hours.empty and "year_month" in monthly_hours.columns:
+            values = monthly_hours["year_month"].astype("string").str.strip()
+            months.update(
+                values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)]
+                .dropna()
+                .tolist()
+            )
+        business_kpis = data.get("kpis", pd.DataFrame())
+        if not business_kpis.empty and "year_month" in business_kpis.columns:
+            values = business_kpis["year_month"].astype("string").str.strip()
+            months.update(
+                values[values.str.fullmatch(r"\d{4}-\d{2}", na=False)]
+                .dropna()
+                .tolist()
+            )
         reliability = data.get("reliability", pd.DataFrame())
         if not reliability.empty and "source_system" in reliability.columns:
             reliability = reliability[
@@ -1067,6 +1131,181 @@ class MaintenanceRepository:
         daily["hours_out_of_service"] = daily["hours_out_of_service"].round(3)
         return daily, source_name
 
+    def _canonical_monthly_hours(
+        self,
+        period: Optional[str],
+        equipment: Optional[List[str]] = None,
+    ) -> tuple[pd.DataFrame, Optional[str]]:
+        """Return the new monthly hours view, with query 4 as a fallback.
+
+        Query 8 is the canonical source for monthly hours. Query 4 exposes
+        the same hours for dashboard consumers, so it is a safe fallback when
+        an export omitted query 8. Legacy ``*_70d`` columns are deliberately
+        not accepted here.
+        """
+        candidates = (
+            (
+                self._get_parquet_data().get("kpis", pd.DataFrame()),
+                "query_4_business_kpis.parquet",
+            ),
+            (
+                self._get_parquet_data().get("hours_monthly", pd.DataFrame()),
+                "query_8_intervention_hours_monthly.parquet",
+            ),
+        )
+        required_base = {"machine_code", "year_month", "calendar_hours_month"}
+        for frame, source_name in candidates:
+            if frame.empty:
+                continue
+            if "source_system" in frame.columns:
+                frame = frame[
+                    frame["source_system"].astype("string").str.upper().eq(self.client.upper())
+                ]
+            hours_column = (
+                "intervention_hours"
+                if "intervention_hours" in frame.columns
+                else "downtime_hours"
+                if "downtime_hours" in frame.columns
+                else None
+            )
+            if hours_column is None or not required_base.issubset(frame.columns):
+                continue
+            frame = frame.copy()
+            if hours_column != "intervention_hours":
+                frame["intervention_hours"] = frame[hours_column]
+            frame["year_month"] = frame["year_month"].astype("string").str.strip()
+            frame = frame[frame["year_month"].eq(str(period))]
+            if equipment:
+                frame = frame[frame["machine_code"].astype(str).isin([str(value) for value in equipment])]
+            if frame.empty:
+                continue
+            return frame, source_name
+        return pd.DataFrame(), None
+
+    def _calculate_canonical_monthly_time_kpis(
+        self,
+        monthly_hours: pd.DataFrame,
+        period: Optional[str],
+        source_name: Optional[str],
+    ) -> tuple[dict, dict]:
+        """Calculate monthly time KPIs from deduplicated source hours."""
+        empty = {"availability_est_pct": None, "downtime_est_hours": None}
+        source_name = source_name or "query_8_intervention_hours_monthly.parquet"
+        meta = _estimated_kpi_meta(
+            period,
+            status="unavailable",
+            source_kind="intervention_hours_monthly",
+            source=[source_name],
+            source_columns=[
+                "machine_code",
+                "year_month",
+                "intervention_hours",
+                "calendar_hours_month",
+                "pct_month_intervened",
+            ],
+            window_label="mes calendario",
+            downtime_formula="sum(intervention_hours)",
+        )
+        if monthly_hours.empty:
+            meta["reason"] = "No hay filas de horas mensuales para el período y filtros seleccionados."
+            return empty, meta
+
+        hours = pd.to_numeric(monthly_hours["intervention_hours"], errors="coerce")
+        calendar = pd.to_numeric(monthly_hours["calendar_hours_month"], errors="coerce")
+        valid = hours.notna() & hours.map(math.isfinite) & hours.ge(0) & calendar.notna() & calendar.map(math.isfinite) & calendar.gt(0)
+        if not valid.any():
+            meta["reason"] = "Las horas mensuales no contienen valores finitos utilizables."
+            return empty, meta
+
+        hours = hours[valid]
+        calendar = calendar[valid]
+        downtime = float(hours.sum())
+        scheduled_hours = float(calendar.sum())
+        availability = (scheduled_hours - downtime) / scheduled_hours * 100
+        meta.update(
+            {
+                "status": "source",
+                "confidence": "source_defined",
+                "coverage": {
+                    **meta["coverage"],
+                    "equipment": int(monthly_hours.loc[valid, "machine_code"].nunique()),
+                    "calendar_days": int(pd.Period(str(period), freq="M").days_in_month) if period else None,
+                    "scheduled_hours": round(scheduled_hours, 3),
+                    "scheduled_hours_proxy": round(scheduled_hours, 3),
+                    "days_with_intervention": int(
+                        pd.to_numeric(
+                            monthly_hours.loc[valid].get("n_days_with_intervention", pd.Series(0, index=monthly_hours.loc[valid].index)),
+                            errors="coerce",
+                        ).fillna(0).sum()
+                    ),
+                },
+                "assumptions": [
+                    "La fuente ya unió solapes por equipo y repartió cada record por día calendario.",
+                    "Las horas se suman como horas-equipo; el denominador es calendario, no horas operativas.",
+                ],
+            }
+        )
+        return {
+            "availability_est_pct": round(availability, 1),
+            "downtime_est_hours": round(downtime, 1),
+        }, meta
+
+    def _canonical_daily_intervention_hours(
+        self,
+        period: Optional[str],
+        equipment: Optional[List[str]] = None,
+    ) -> tuple[pd.DataFrame, Optional[str]]:
+        """Return daily hours/counts from query 9 or filtered query 7."""
+        selected_equipment = {str(value) for value in (equipment or [])}
+        if not selected_equipment:
+            fleet = self._get_parquet_data().get("fleet_daily", pd.DataFrame())
+            required = {"day", "intervention_hours", "n_machines_intervened"}
+            if not fleet.empty and required.issubset(fleet.columns):
+                frame = fleet.copy()
+                if "source_system" in frame.columns:
+                    frame = frame[frame["source_system"].astype("string").str.upper().eq(self.client.upper())]
+                frame["day"] = pd.to_datetime(frame["day"], errors="coerce")
+                frame = frame[frame["day"].dt.strftime("%Y-%m").eq(str(period))]
+                result = pd.DataFrame(
+                    {
+                        "date": frame["day"].dt.strftime("%Y-%m-%d"),
+                        "hours_out_of_service": pd.to_numeric(frame["intervention_hours"], errors="coerce"),
+                        "equipment_count": pd.to_numeric(frame["n_machines_intervened"], errors="coerce"),
+                    }
+                )
+                result = result.dropna(subset=["date"]).sort_values("date")
+                result["hours_out_of_service"] = result["hours_out_of_service"].fillna(0).round(3)
+                result["equipment_count"] = result["equipment_count"].fillna(0).astype(int)
+                return result, "query_9_fleet_intervention_daily.parquet"
+
+        daily = self._get_parquet_data().get("hours_daily", pd.DataFrame())
+        required = {"day", "machine_code", "intervention_hours"}
+        if not daily.empty and required.issubset(daily.columns):
+            frame = daily.copy()
+            if "source_system" in frame.columns:
+                frame = frame[frame["source_system"].astype("string").str.upper().eq(self.client.upper())]
+            frame["day"] = pd.to_datetime(frame["day"], errors="coerce")
+            frame = frame[frame["day"].dt.strftime("%Y-%m").eq(str(period))]
+            if selected_equipment:
+                frame = frame[frame["machine_code"].astype(str).isin(selected_equipment)]
+            if not frame.empty:
+                result = (
+                    frame.assign(
+                        date=frame["day"].dt.strftime("%Y-%m-%d"),
+                        hours_out_of_service=pd.to_numeric(frame["intervention_hours"], errors="coerce"),
+                    )
+                    .groupby("date", as_index=False)
+                    .agg(
+                        hours_out_of_service=("hours_out_of_service", "sum"),
+                        equipment_count=("machine_code", "nunique"),
+                    )
+                    .sort_values("date")
+                )
+                result["hours_out_of_service"] = result["hours_out_of_service"].fillna(0).round(3)
+                result["equipment_count"] = result["equipment_count"].astype(int)
+                return result, "query_7_intervention_hours_daily.parquet"
+        return pd.DataFrame(), None
+
     def _pareto_scope(self) -> dict:
         """Return this client's serializable scope for Summary Pareto charts."""
         scope = {
@@ -1269,22 +1508,48 @@ class MaintenanceRepository:
             .rename(columns={"day": "date"})
             .sort_values("date")
         )
-        daily_hours, daily_time_source = self._daily_out_of_service_hours(df, start, end)
-        # Keep interval-only days as well as action days so the monthly card
-        # reconciles exactly with the daily hours series.
-        daily = daily.merge(daily_hours, on="date", how="outer")
-        daily["count"] = daily["count"].fillna(0).astype(int)
-        daily["equipment_count"] = daily["equipment_count"].fillna(0).astype(int)
+        canonical_monthly, canonical_monthly_source = (
+            self._canonical_monthly_hours(selected, equipment=equipment_filter)
+            if not systems and not subsystems
+            else (pd.DataFrame(), None)
+        )
+        canonical_daily, canonical_daily_source = (
+            self._canonical_daily_intervention_hours(selected, equipment=equipment_filter)
+            if not systems and not subsystems
+            else (pd.DataFrame(), None)
+        )
+        if canonical_daily_source:
+            daily_hours = canonical_daily[["date", "hours_out_of_service"]].copy()
+            daily_time_source = canonical_daily_source
+            daily = canonical_daily.merge(
+                daily.drop(columns=["equipment_count"]), on="date", how="outer"
+            )
+            daily["count"] = daily["count"].fillna(0).astype(int)
+            daily["equipment_count"] = canonical_daily["equipment_count"].fillna(0).astype(int)
+        else:
+            daily_hours, daily_time_source = self._daily_out_of_service_hours(df, start, end)
+            # Keep interval-only days as well as action days so the monthly card
+            # reconciles exactly with the daily hours series.
+            daily = daily.merge(daily_hours, on="date", how="outer")
+            daily["count"] = daily["count"].fillna(0).astype(int)
+            daily["equipment_count"] = daily["equipment_count"].fillna(0).astype(int)
         daily["hours_out_of_service"] = daily["hours_out_of_service"].round(3)
         daily = daily.sort_values("date").reset_index(drop=True)
-        time_kpis, time_meta = _calculate_monthly_time_kpis(
-            daily_hours,
-            selected,
-            equipment_count=int(df["machine_code"].nunique()),
-            source_name=daily_time_source,
-            start=start,
-            end=end,
-        )
+        if canonical_monthly_source:
+            time_kpis, time_meta = self._calculate_canonical_monthly_time_kpis(
+                canonical_monthly,
+                selected,
+                canonical_monthly_source,
+            )
+        else:
+            time_kpis, time_meta = _calculate_monthly_time_kpis(
+                daily_hours,
+                selected,
+                equipment_count=int(df["machine_code"].nunique()),
+                source_name=daily_time_source,
+                start=start,
+                end=end,
+            )
         kpis.update(_empty_estimated_kpis())
         kpis.update(time_kpis)
         reliability_cards = _monthly_reliability_cards()
@@ -1420,7 +1685,11 @@ class MaintenanceRepository:
                 "time_measure": {
                     "source": daily_time_source,
                     "unit": "h-equipo",
-                    "formula": "sum(intervalos unidos por equipo/día tras recortar al mes; duración last_event_ts - first_event_ts)",
+                    "formula": (
+                        "sum(intervention_hours) de query_8/query_9; la fuente ya une solapes y reparte records por día"
+                        if canonical_monthly_source
+                        else "sum(intervalos unidos por equipo/día tras recortar al mes; duración last_event_ts - first_event_ts)"
+                    ),
                     "scope": "equipos filtrados; el total de flota puede superar 24 h por día",
                 },
             },
@@ -1618,9 +1887,12 @@ class MaintenanceRepository:
             return pd.DataFrame(status_data)
 
         elif self.mode == "parquet":
-            # General only needs the compact KPI source for this operation;
-            # do not parse the detailed action history on the login path.
-            df_kpis = self._get_parquet_kpis()
+            # Status is a point-in-time view.  query_10 is authoritative;
+            # query_4 is retained only as a compatibility fallback for older
+            # exports that still materialized equipment_status there.
+            df_kpis = self._get_parquet_equipment_status()
+            if not {"machine_code", "equipment_status"}.issubset(df_kpis.columns):
+                df_kpis = self._get_parquet_kpis()
 
             if df_kpis.empty:
                 return pd.DataFrame([
@@ -1633,14 +1905,18 @@ class MaintenanceRepository:
             if systems:
                 df_kpis = df_kpis[df_kpis["machine_code"].isin(self._machines_for_systems(systems))]
 
-            # Usar equipment_status de query_4
-            # equipment_status = 'OPERATIVO' significa SANO
-            # Si tiene has_ongoing_maintenance = True, está DETENIDO
-            
-            # Contar máquinas por status
-            # Por ahora todos están como OPERATIVO según los datos
-            # Pero verificamos has_ongoing_maintenance para determinar si están detenidos
-            n_detenidos = df_kpis['has_ongoing_maintenance'].sum() if 'has_ongoing_maintenance' in df_kpis.columns else 0
+            if "equipment_status" in df_kpis.columns:
+                status = df_kpis["equipment_status"].astype("string").str.strip().str.upper()
+            elif "has_ongoing_maintenance" in df_kpis.columns:
+                status = pd.Series("OPERATIVO", index=df_kpis.index, dtype="string")
+                status.loc[df_kpis["has_ongoing_maintenance"].fillna(False).astype(bool)] = "DETENIDO"
+            else:
+                status = pd.Series("OPERATIVO", index=df_kpis.index, dtype="string")
+            n_detenidos = int(status.eq("DETENIDO").sum())
+            unknown = status.isna() | status.eq("") | ~status.isin({"DETENIDO", "OPERATIVO"})
+            if unknown.any() and "has_open_intervention" in df_kpis.columns:
+                open_intervention = df_kpis["has_open_intervention"].fillna(False).astype(bool)
+                n_detenidos += int((unknown & open_intervention).sum())
             total_machines = len(df_kpis)
             n_sanos = total_machines - n_detenidos
             
@@ -2125,6 +2401,30 @@ class MaintenanceRepository:
             return pd.DataFrame(daily_hours)
         
         elif self.mode == "parquet":
+            # Prefer the materialized daily views for the public repository
+            # method as well as for the productive tab.  System filters cannot
+            # be represented by query 7/9, so the legacy interval path below
+            # remains available for that compatibility case.
+            if not systems:
+                available_months = self.get_available_months()
+                period = (
+                    pd.Timestamp(date_start).strftime("%Y-%m")
+                    if date_start
+                    else (available_months[-1] if available_months else None)
+                )
+                canonical_daily, canonical_source = self._canonical_daily_intervention_hours(
+                    period, equipment=equipment
+                )
+                if canonical_source:
+                    daily = canonical_daily.rename(columns={"hours_out_of_service": "downtime_hours"})
+                    if date_start:
+                        start_date = pd.Timestamp(date_start).date()
+                        daily = daily[daily["date"] >= start_date.isoformat()]
+                    if date_end:
+                        end_date = pd.Timestamp(date_end).date()
+                        daily = daily[daily["date"] <= end_date.isoformat()]
+                    return daily[["date", "downtime_hours"]].reset_index(drop=True)
+
             df_actions = self._filtered_actions(systems=systems, equipment=equipment)
 
             if df_actions.empty:
