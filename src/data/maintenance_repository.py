@@ -1525,7 +1525,12 @@ class MaintenanceRepository:
                 daily.drop(columns=["equipment_count"]), on="date", how="outer"
             )
             daily["count"] = daily["count"].fillna(0).astype(int)
-            daily["equipment_count"] = canonical_daily["equipment_count"].fillna(0).astype(int)
+            # ``canonical_daily`` may retain the source parquet's original
+            # index (query_9 is dense and is filtered after loading).  Keep
+            # the equipment count from the date-keyed merge instead of
+            # assigning the source Series by index, which would turn every
+            # filtered month into zeros when those indexes differ.
+            daily["equipment_count"] = daily["equipment_count"].fillna(0).astype(int)
         else:
             daily_hours, daily_time_source = self._daily_out_of_service_hours(df, start, end)
             # Keep interval-only days as well as action days so the monthly card

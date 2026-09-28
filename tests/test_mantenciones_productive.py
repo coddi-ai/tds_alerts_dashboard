@@ -199,6 +199,35 @@ def test_equipment_filter_uses_query7_instead_of_fleet_total(monkeypatch):
     assert payload["meta"]["time_measure"]["source"] == "query_7_intervention_hours_daily.parquet"
 
 
+def test_fleet_equipment_counts_survive_query9_source_index_offset(monkeypatch):
+    actions, monthly, daily, fleet, status = _canonical_view_frames()
+    fleet = pd.concat(
+        [
+            pd.DataFrame(
+                [{"day": "2025-12-31", "n_machines_intervened": 9, "intervention_hours": 4.0}]
+            ),
+            fleet,
+        ],
+        ignore_index=True,
+    )
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: actions.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_unit_records_actions", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: monthly.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_reliability_monthly", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_component_failure_ranking", lambda client: pd.DataFrame())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_monthly", lambda client: monthly.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_intervention_hours_daily", lambda client: daily.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_fleet_intervention_daily", lambda client: fleet.copy())
+    monkeypatch.setattr(repository_module, "load_maintenance_equipment_status", lambda client: status.copy())
+
+    payload = MaintenanceRepository(mode="parquet", client="cda").get_monthly_payload("2026-01")
+
+    assert payload["data"]["daily"][:2] == [
+        {"date": "2026-01-01", "count": 0, "equipment_count": 2, "hours_out_of_service": 30.0},
+        {"date": "2026-01-02", "count": 1, "equipment_count": 0, "hours_out_of_service": 0.0},
+    ]
+
+
 def test_status_counts_use_query10_equipment_status(monkeypatch):
     _, _, _, _, status = _canonical_view_frames()
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: _actions())
