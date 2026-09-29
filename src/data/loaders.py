@@ -962,15 +962,27 @@ def get_model_run_date(client: str, component: str = None):
     """Latest `Fecha` in analisis_inteligente.parquet — the model's last run date.
 
     Shared by Estado de Flota and Evidencia (REQ-PR-08) so both tabs always
-    show the same date. Returns None if unavailable.
+    show the same date. Falls back to the Data Contract v2 `unit_status_summary`
+    partition when the legacy flat file doesn't exist for this client/component
+    (e.g. capstone/motor, which was migrated fully to v2). Returns None if
+    unavailable from either source.
     """
     df = load_analisis_inteligente(client)
-    if df.empty or "Fecha" not in df.columns:
-        return None
-    df = _filter_analisis_inteligente_component(df, component)
-    if df.empty:
-        return None
-    return df["Fecha"].max()
+    if not df.empty and "Fecha" in df.columns:
+        df = _filter_analisis_inteligente_component(df, component)
+        if not df.empty:
+            return df["Fecha"].max()
+
+    if component:
+        from src.data import predictive_v2
+        try:
+            df_v2 = predictive_v2.load_unit_status_summary(client, component)
+        except Exception:
+            return None
+        if not df_v2.empty and "Fecha" in df_v2.columns:
+            return df_v2["Fecha"].max()
+
+    return None
 
 
 @lru_cache(maxsize=8)
