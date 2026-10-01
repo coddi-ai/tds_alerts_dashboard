@@ -34,6 +34,23 @@ from src.campbell_ai.logging_setup import logging_description
 from src.campbell_ai.resources import CACHES, MEGABYTE, memory_snapshot
 from src.campbell_ai.schema import describe as schema_description
 
+
+def schema_refresh_stats() -> dict[str, Any]:
+    """State of the weekly regeneration, which runs as a thread in this process.
+
+    Imported lazily: `schema.refresh` imports `schema`, and this module is imported by the
+    API at startup. Read defensively for the same reason as the other stats here - a
+    diagnostics call must not fail because a background job is not running.
+    """
+    try:
+        from src.campbell_ai.schema.refresh import get_schema_refresher
+
+        refresher = get_schema_refresher()
+        return refresher.stats() if refresher is not None else {"running": False}
+    except Exception:  # pragma: no cover - diagnostics must not break the endpoint
+        return {"running": False}
+
+
 # Wall-clock start of this process, captured at first import. `time.monotonic` cannot be
 # compared across processes and gives no absolute date, so both are kept.
 _PROCESS_STARTED_AT = time.time()
@@ -199,7 +216,7 @@ def snapshot(*, include_disk: bool = True) -> dict[str, Any]:
         # State of the declared schema: whether it is in use, and whether it still matches the
         # data. The second half is the one that matters - trusting a declaration is only safe
         # while somebody can see that it is still true.
-        "schema": schema_description(),
+        "schema": {**schema_description(), "refresh": schema_refresh_stats()},
         "logging": logging_description(),
         "log_files": log_files_info(),
         "log_archive": log_archive_stats(),

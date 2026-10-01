@@ -16,6 +16,7 @@ from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
 from dashboard.auth import current_dashboard_user_data, is_admin
 from dashboard.services_registry import SERVICE_SECTIONS, SERVICE_LABELS, nav_path as _nav_path
+from dashboard.troubleshooting_handoff import troubleshooting_agent_configured
 
 
 # Component icon map for predictive nav sections
@@ -385,6 +386,10 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
         # the per-client service registry - so it can be pulled everywhere
         # (e.g. an OpenAI outage) without editing client_services.yaml.
         if service_id == "agents-campbell-ai" and not _campbell_ai_enabled():
+            return False
+        # Troubleshooting links out to another deployment: without a usable
+        # agent URL (TROUBLESHOOTING_AGENT_URL set empty) the tab is pulled.
+        if service_id == "agents-troubleshooting" and not troubleshooting_agent_configured():
             return False
         return is_service_enabled(selected_client, service_id)
 

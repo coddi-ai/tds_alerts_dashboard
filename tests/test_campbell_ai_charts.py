@@ -8,6 +8,8 @@ authorization and validation.
 
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -169,6 +171,9 @@ def test_the_catalogue_is_limited_by_what_each_client_declares(tmp_path, monkeyp
             },
         },
     )
+    # La declaracion se fija a mano, asi que tambien hay que fijar la ventana de
+    # frescura: `_load` re-mira los candidatos en disco pasado un minuto y pisaria esto.
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
     cda = {item["chart_id"] for item in registry.list_charts("cda")}
     enex = {item["chart_id"] for item in registry.list_charts("enex")}
 

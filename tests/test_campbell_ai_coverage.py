@@ -93,7 +93,6 @@ def test_a_missing_source_is_reported_as_a_missing_source(tmp_path, monkeypatch)
     repository = _oil_only_client(tmp_path)
     (tmp_path / "oil" / "golden" / "enex" / "machine_status.parquet").unlink()
     monkeypatch.setattr(data_module, "declared_columns", lambda *args, **kwargs: None)
-    data_module.clear_presence_cache()
 
     reasons = {
         item["key"]: item["reason"]
@@ -393,7 +392,11 @@ def test_h05_a_disabled_service_withdraws_its_analyses(tmp_path, monkeypatch):
     import config.client_services as services
 
     repository = _oil_only_client(tmp_path)
-    monkeypatch.setattr(services, "is_service_enabled", lambda client_id, service_id: False)
+    # La configuracion misma, no la funcion que la lee. `is_service_enabled` y
+    # `get_enabled_services` son dos entradas al mismo diccionario; parchear una sola dejaba
+    # este test sin proteger nada el dia que el codigo pasara a usar la otra, que es
+    # exactamente lo que ocurrio.
+    monkeypatch.setattr(services, "get_client_services_config", lambda: {})
 
     capabilities = repository.client_capabilities("enex")
 
@@ -411,10 +414,18 @@ def test_h05_only_the_disabled_service_is_withdrawn(tmp_path, monkeypatch):
     import config.client_services as services
 
     repository = _oil_only_client(tmp_path)
+    # Un config donde solo `monitoring-oil` esta apagado, para comprobar que la puerta es por
+    # servicio y no un interruptor que vacia el catalogo. Se parchea la configuracion y no la
+    # funcion que la lee, por la misma razon que en los otros casos.
     monkeypatch.setattr(
         services,
-        "is_service_enabled",
-        lambda client_id, service_id: service_id != "monitoring-oil",
+        "get_client_services_config",
+        lambda: {
+            "enex": {
+                service_id: {"display": service_id != "monitoring-oil", "dummy": False}
+                for service_id in services.KNOWN_SERVICE_IDS
+            }
+        },
     )
 
     available = {
@@ -430,21 +441,31 @@ def test_h05_an_unreadable_service_configuration_denies(tmp_path, monkeypatch):
 
     repository = _oil_only_client(tmp_path)
 
-    def _explode(client_id, service_id):
+    def _explode():
         raise RuntimeError("configuración ilegible")
 
-    monkeypatch.setattr(services, "is_service_enabled", _explode)
+    # Igual que arriba: se rompe la lectura de la configuracion, sea quien sea el que la pida.
+    monkeypatch.setattr(services, "get_client_services_config", _explode)
 
     assert repository.client_capabilities("enex")["available"] == []
 
 
-def test_h05_a_data_root_that_is_not_there_advertises_nothing(tmp_path, monkeypatch):
-    """The declaration says which columns, never whether the file is on disk right now."""
+def test_a_data_root_that_is_not_there_advertises_nothing_for_an_undeclared_client(
+    tmp_path, monkeypatch
+):
+    """Lo que sobrevive de la comprobacion en disco.
+
+    Un cliente *declarado* se toma del JSON y se anuncia aunque la raiz de datos no exista -
+    esa es la decision de confiar en la declaracion. Un cliente que el JSON no conoce no tiene
+    en que apoyarse, asi que se mira el disco, no hay nada, y no se le ofrece nada.
+    """
     import src.campbell_ai.data as data_module
 
     missing_root = tmp_path / "no-existe"
     repository = DashboardDataRepository(missing_root)
-    data_module.clear_presence_cache()
+    # Sin declaracion, que es lo que se quiere ejercitar: la puerta de datos y no la de
+    # servicios, que para un cliente desconocido se cierra antes y taparia el caso.
+    monkeypatch.setattr(data_module, "declared_columns", lambda *a, **k: None)
 
     capabilities = repository.client_capabilities("enex")
 
@@ -454,99 +475,33 @@ def test_h05_a_data_root_that_is_not_there_advertises_nothing(tmp_path, monkeypa
     assert "Faltan fuentes" in reasons["oil_components"]
 
 
-def test_a02_usability_rejects_absent_empty_and_unreadable_files(tmp_path):
-    """"Present" and "usable" are different questions, and a capability promises the second.
 
-    A zero-byte parquet exists, so an existence check kept advertising the analysis and the
-    tool then failed with `ArrowInvalid: Parquet file size is 0 bytes`.
+
+def test_a_declared_source_that_is_broken_is_still_advertised_and_fails_on_read(tmp_path):
+    """La garantia que se cedio al volver a confiar en la declaracion, dicha explicitamente.
+
+    Antes, un archivo declarado pero vacio o corrupto retiraba sus capacidades en el momento
+    de abrir la sesion. Eso costaba comprobar cada dataset en cada apertura - 28 operaciones
+    de disco por sesion, sobre almacenamiento de red donde cada una es un viaje -, asi que se
+    decidio volver a confiar en el JSON.
+
+    Lo que queda en su lugar: la capacidad se sigue anunciando, y el fallo aparece al leer la
+    fuente, con un error que nombra el archivo. Este test fija ese comportamiento para que el
+    costo de la decision este escrito y no se descubra en produccion.
     """
-    import pandas as pd
-
-    import src.campbell_ai.data as data_module
-
-    data_module.clear_presence_cache()
-    path = tmp_path / "archivo.parquet"
-
-    assert data_module.dataset_usability(path)["state"] == data_module.USABILITY_MISSING
-
-    path.write_bytes(b"")
-    data_module.clear_presence_cache()
-    empty = data_module.dataset_usability(path)
-    assert empty["usable"] is False
-    assert empty["state"] == data_module.USABILITY_EMPTY
-
-    path.write_bytes(b"no soy un parquet")
-    data_module.clear_presence_cache()
-    corrupt = data_module.dataset_usability(path)
-    assert corrupt["usable"] is False
-    assert corrupt["state"] == data_module.USABILITY_UNREADABLE
-
-    pd.DataFrame([{"unitId": "T_1", "sampleDate": "2026-07-01"}]).to_parquet(path)
-    data_module.clear_presence_cache()
-    healthy = data_module.dataset_usability(path)
-    assert healthy["usable"] is True
-    assert healthy["state"] == data_module.USABILITY_OK
-    # The real header travels, so required columns can be checked against the file.
-    assert set(healthy["columns"]) == {"unitId", "sampleDate"}
-    assert healthy["checked_at"]
-
-
-def test_a02_a_replaced_file_invalidates_its_own_cached_answer(tmp_path):
-    """Keyed by generation, so a new version is picked up without waiting for a TTL."""
-    import pandas as pd
-
-    import src.campbell_ai.data as data_module
-
-    data_module.clear_presence_cache()
-    path = tmp_path / "archivo.parquet"
-    path.write_bytes(b"")
-
-    assert data_module.dataset_usability(path)["usable"] is False
-
-    pd.DataFrame([{"unitId": "T_1"}]).to_parquet(path)
-    # No cache clear: the file's mtime and size changed, so the memo no longer applies.
-    assert data_module.dataset_usability(path)["usable"] is True
-    assert data_module.presence_cache_stats()["entries"] >= 1
-
-
-def test_a02_a_broken_source_withdraws_only_its_own_capabilities(tmp_path):
-    """A capability announced for an unusable file is the defect; the siblings stay."""
-    import pandas as pd
-
-    import src.campbell_ai.data as data_module
+    from src.campbell_ai.errors import CampbellDataError
 
     repository = _oil_only_client(tmp_path)
     (tmp_path / "oil" / "golden" / "enex" / "classified.parquet").write_bytes(b"")
-    data_module.clear_presence_cache()
 
     available = {
         item["key"] for item in repository.client_capabilities("enex")["available"]
     }
-    assert "oil_components" not in available
-    assert "oil_lab_kpis" not in available
-    # machine_status is untouched, so the fleet view survives.
-    assert "oil_fleet" in available
+    assert "oil_components" in available, "se confia en la declaracion, no se comprueba"
 
-    # And a recovered source comes back.
-    pd.DataFrame(
-        [
-            {
-                "unitId": "T_1",
-                "componentNameNormalized": "motor",
-                "componentName": "motor",
-                "report_status": "Normal",
-                "sampleDate": "2026-07-01",
-                "reportDate": "2026-07-03",
-                "severity_score": 1,
-            }
-        ]
-    ).to_parquet(tmp_path / "oil" / "golden" / "enex" / "classified.parquet")
-    data_module.clear_presence_cache()
-
-    recovered = {
-        item["key"] for item in repository.client_capabilities("enex")["available"]
-    }
-    assert {"oil_components", "oil_lab_kpis"} <= recovered
+    # Y el fallo llega al usarla, no antes.
+    with pytest.raises(CampbellDataError):
+        repository.load("oil_classified", "enex")
 
 
 def test_a02_the_payload_says_when_the_sources_were_checked(tmp_path):
@@ -554,7 +509,6 @@ def test_a02_the_payload_says_when_the_sources_were_checked(tmp_path):
     import src.campbell_ai.data as data_module
 
     repository = _oil_only_client(tmp_path)
-    data_module.clear_presence_cache()
 
     capabilities = repository.client_capabilities("enex")
 

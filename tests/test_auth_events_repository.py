@@ -205,7 +205,7 @@ def test_record_local_event_recovers_s3_history_first():
             self.s3_client = FakeS3Client(objects)
 
         def list_objects(self, prefix):
-            return list(self._objects.keys())
+            return [{"Key": key, "Size": len(body)} for key, body in self._objects.items()]
 
     prior_event = {"event_id": "old-1", "username": "old_user", "timestamp": "t0", "deploy_status": "production"}
     prefix = auth_events_repository.S3_PREFIX

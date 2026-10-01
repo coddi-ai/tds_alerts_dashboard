@@ -140,3 +140,52 @@ Trabajo del informe y auditoría específica terminado; validación global pendi
 Sin preguntas abiertas sobre los cambios solicitados. Siguiente acción: revisar
 el diff local de `dev` y resolver los nueve fallos de Campbell AI en su alcance
 antes de una publicación o integración que exija la suite completa verde.
+
+## Seguimiento: sincronización de dev con origin/dev
+
+Fecha: 2026-10-01. El usuario solicitó actualizar el repositorio local con
+`origin/dev`, conservando los ajustes, para publicar posteriormente.
+Este seguimiento actualiza el estado Git descrito en la auditoría anterior.
+
+### Trabajo terminado
+
+- `git fetch origin dev` actualizó `origin/dev` a
+  `623fbcc` (`fix: evidence date`). La rama local estaba 28 commits atrás.
+- Se guardaron los diez archivos auditados en el commit local `8ce5bb4`
+  (`Ajustar informe EMIN y registrar auditoría con datos reales`).
+- Se combinaron los cambios de `origin/dev` con ese commit mediante
+  `git merge --no-edit origin/dev`. Hubo conflictos en seis archivos:
+  callbacks, tab, loaders, repository, pruebas de mantenciones y contrato.
+- Se conservaron los contratos y controles EMIN auditados, junto con los
+  cambios remotos de los demás módulos. El cambio nuevo de
+  `get_model_run_date()` conserva su fallback a `unit_status_summary` v2.
+- La combinación automática duplicó tres funciones de gráficos y nueve
+  funciones de pruebas/fixtures. Se conciliaron sus versiones conservando
+  las definiciones locales que contienen los ajustes y cobertura ampliada.
+  No se descartaron pruebas únicas de origen.
+- El segundo commit local es el commit de combinación que contiene este
+  seguimiento. No se reescribió historia ni se publicó al remoto.
+
+### Validaciones después de combinar
+
+- `python -m pytest -q tests` — **9 failed, 871 passed, 10 skipped**, 67 warnings,
+  59,25 s. Log: `.coddi-local/pytest-origin-sync.log`.
+- `python .coddi-local/audit_real.py` — exit 0, **149 comprobaciones correctas**,
+  mismos hashes de las 26 fuentes. Log: `.coddi-local/audit-origin-sync.log`.
+- `git -c core.excludesFile=.gitignore -c core.safecrlf=false diff --cached origin/dev --check`
+  — exit 0 para los cambios locales respecto del destino actualizado.
+- Revisión del resultado: los seis archivos conciliados conservan los ajustes
+  auditados y no quedan marcadores de conflicto ni funciones duplicadas.
+
+Los nueve fallos globales siguen siendo los mismos de Campbell AI descritos
+arriba. No se presenta la suite completa como validada. Las advertencias de
+espacios finales en `dashboard/app.py` y `tests/test_campbell_ai_resources.py`
+proceden de origen y no forman parte del delta local frente a `origin/dev`.
+
+### Estado y siguiente acción
+
+`dev` contiene el origen actualizado y los ajustes locales en commits;
+su upstream sigue siendo `origin/dev`. La preparación Git está terminada.
+La validación global sigue pendiente de los nueve fallos conocidos.
+El push posterior requiere una solicitud explícita conforme a las reglas
+del repositorio. No quedan preguntas abiertas sobre la sincronización local.

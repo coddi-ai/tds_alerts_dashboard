@@ -4,6 +4,12 @@
 > [`PRODUCTIVE_VIEW.md`](PRODUCTIVE_VIEW.md). Este documento conserva la guía
 > histórica de la vista anterior; sus indicadores de disponibilidad, downtime,
 > estado sano/detenido y planes de acción no forman parte del nuevo alcance.
+> La vista productiva usa `query_5_reliability_monthly.parquet` como fuente de
+> las cards MTBF/MTTR. La pestaña independiente de confiabilidad mensual fue
+> retirada del Resumen; `query_6_component_failure_ranking.parquet` permanece
+> disponible en el repositorio para futuras vistas. En el shell actual, la
+> pestaña visible se presenta como **Informe de confiabilidad**; el identificador
+> de servicio y la ruta protegida permanecen sin cambios.
 
 ## 📋 Descripción
 
