@@ -1585,17 +1585,16 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         logger.info(f"Loading maintenance actions from {file_path}")
         df = pd.read_parquet(file_path)
         
-        # Convert date strings to datetime (UTC to handle mixed timezones)
-        # Maintenance exports contain ISO-8601 variants with optional
-        # fractional seconds and a trailing ``Z``. Pandas 3 uses strict
-        # single-format inference by default, so explicitly accept mixed ISO
-        # representations while keeping a uniform UTC dtype.
-        df['event_ts'] = pd.to_datetime(
-            df['event_ts'], utc=True, format='mixed', errors='coerce'
-        )
-        df['change_date'] = pd.to_datetime(
-            df['change_date'], utc=True, format='mixed', errors='coerce'
-        )
+        if str(client).strip().lower() == "emin":
+            df = _normalize_maintenance_source_timestamps(
+                df, ("event_ts", "change_date")
+            )
+        else:
+            for column in ("event_ts", "change_date"):
+                if column in df.columns:
+                    df[column] = pd.to_datetime(
+                        df[column], utc=True, format="mixed", errors="coerce"
+                    )
         
         logger.info(f"Loaded {len(df)} maintenance actions for {df['machine_code'].nunique()} machines")
         return df
@@ -1607,22 +1606,57 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         return pd.DataFrame()
 
 
+def load_maintenance_unit_records_actions(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
+    """Load maintenance record intervals from ``query_2``.
+
+    ``first_event_ts`` and ``last_event_ts`` are the source-defined temporal
+    boundaries for a maintenance record.  Keeping this source separate from
+    the action extract lets consumers calculate time from the upstream
+    interval definition instead of inferring a duration from action counts.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+        if base_path is None:
+            logger.warning(f"No maintenance record data available for client: {client}")
+            return pd.DataFrame()
+
+    file_path = base_path / "query_2_unit_records_actions.parquet"
+    try:
+        logger.info(f"Loading maintenance record intervals from {file_path}")
+        df = pd.read_parquet(file_path)
+        if str(client).strip().lower() == "emin":
+            df = _normalize_maintenance_source_timestamps(
+                df, ("first_event_ts", "last_event_ts")
+            )
+        else:
+            for column in ("first_event_ts", "last_event_ts"):
+                if column in df.columns:
+                    df[column] = pd.to_datetime(
+                        df[column], utc=True, format="mixed", errors="coerce"
+                    )
+        logger.info("Loaded %s maintenance record intervals for %s", len(df), client)
+        return df
+    except FileNotFoundError:
+        logger.warning(f"Maintenance record file not found: {file_path}")
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error(f"Error loading maintenance record intervals: {e}")
+        return pd.DataFrame()
+
+
 def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) -> pd.DataFrame:
     """
-    Load pre-calculated business KPIs from query_4_business_kpis.parquet.
+    Load pre-calculated monthly business KPIs from query_4_business_kpis.parquet.
     
     Args:
         client: Client name (default: "cda")
         base_path: Base path override. If None, uses production structure.
         
     Returns:
-        DataFrame with business KPIs (11 rows - one per machine, 18 columns)
-        Columns: machine_code, machine_id, equipment_status, has_ongoing_maintenance,
-                 last_ongoing_date, days_since_last_maintenance, last_action_date,
-                 total_actions_70d, ongoing_actions_70d, downtime_hours_70d,
-                 maintenance_frequency_per_day, action_types_70d, top_3_components,
-                 inspections_70d, replacements_70d, repairs_70d, maintenances_70d,
-                 reference_date
+        DataFrame with one row per equipment and month in the current view
+        contract. The loader intentionally does not rename source columns so
+        the repository can distinguish the new monthly contract from legacy
+        70-day exports.
     """
     if base_path is None:
         base_path = _get_mantentions_data_path(client)
@@ -1637,12 +1671,13 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
         df = pd.read_parquet(file_path)
         
         # Convert date columns to datetime
-        if 'last_action_date' in df.columns:
-            df['last_action_date'] = pd.to_datetime(df['last_action_date'])
-        if 'reference_date' in df.columns:
-            df['reference_date'] = pd.to_datetime(df['reference_date'])
-        if 'last_ongoing_date' in df.columns:
-            df['last_ongoing_date'] = pd.to_datetime(df['last_ongoing_date'])
+        for column in ('last_action_date', 'reference_date', 'last_ongoing_date'):
+            if column in df.columns:
+                df[column] = pd.to_datetime(
+                    df[column], format='mixed', errors='coerce'
+                )
+        if 'year_month' in df.columns:
+            df['year_month'] = df['year_month'].astype('string').str.strip()
         
         logger.info(f"Loaded KPIs for {len(df)} machines")
         return df
@@ -1652,3 +1687,177 @@ def load_business_kpis(client: str = "cda", base_path: Optional[Path] = None) ->
     except Exception as e:
         logger.error(f"Error loading business KPIs: {e}")
         return pd.DataFrame()
+
+
+def _load_maintenance_view(
+    client: str,
+    filename: str,
+    base_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Read one optional materialized maintenance view defensively.
+
+    Query 4 through query 10 are additive materialized sources. A missing or unreadable view
+    must not make the activity-based Mantenciones page fail, so callers receive
+    an empty frame and the repository exposes the source state separately.
+    """
+    if base_path is None:
+        base_path = _get_mantentions_data_path(client)
+    if base_path is None:
+        return pd.DataFrame()
+    file_path = base_path / filename
+    try:
+        logger.info("Loading maintenance view from %s", file_path)
+        return pd.read_parquet(file_path)
+    except FileNotFoundError:
+        logger.info("Optional maintenance view not found: %s", file_path)
+        return pd.DataFrame()
+    except Exception as exc:
+        logger.error("Error loading maintenance view %s: %s", file_path, exc)
+        return pd.DataFrame()
+
+
+def _normalize_maintenance_calendar_view(
+    frame: pd.DataFrame,
+    *,
+    date_columns: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    """Normalize date fields from the materialized calendar views.
+
+    The reliability pipeline deliberately emits local calendar values without
+    timezone information.  Do not pass these columns through ``utc=True``:
+    that would move rows across calendar boundaries and contradict the view's
+    day-splitting contract.
+    """
+    if frame.empty:
+        return frame
+    frame = frame.copy()
+    for column in date_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_datetime(frame[column], errors='coerce')
+    if 'year_month' in frame.columns:
+        frame['year_month'] = frame['year_month'].astype('string').str.strip()
+    return frame
+
+
+def _normalize_maintenance_source_timestamps(
+    frame: pd.DataFrame, columns: tuple[str, ...]
+) -> pd.DataFrame:
+    """Parse source timestamps while preserving their written calendar clock.
+
+    Offset suffixes in the source export are ingestion artifacts. They must
+    not be interpreted as real time zones and converted to UTC.
+    """
+    if frame.empty:
+        return frame
+    frame = frame.copy()
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        values = frame[column].astype("string").str.replace(
+            r"(?:Z|[+-]\d{2}:?\d{2})$", "", regex=True
+        )
+        frame[column] = pd.to_datetime(values, format="mixed", errors="coerce")
+    return frame
+
+
+def load_maintenance_component_maintenance(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load query 1 actions with one unambiguous component attribution."""
+    frame = _load_maintenance_view(
+        client, "query_1_component_maintenance.parquet", base_path=base_path,
+    )
+    if str(client).strip().lower() == "emin":
+        return _normalize_maintenance_source_timestamps(frame, ("event_ts", "change_date"))
+    for column in ("event_ts", "change_date"):
+        if column in frame.columns:
+            frame[column] = pd.to_datetime(frame[column], utc=True, format="mixed", errors="coerce")
+    return frame
+
+
+def load_maintenance_intervention_hours_daily(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load canonical equipment-day hours from query 7."""
+    return _normalize_maintenance_calendar_view(
+        _load_maintenance_view(
+            client,
+            "query_7_intervention_hours_daily.parquet",
+            base_path=base_path,
+        ),
+        date_columns=("day",),
+    )
+
+
+def load_maintenance_intervention_hours_monthly(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load canonical equipment-month hours and availability from query 8."""
+    return _normalize_maintenance_calendar_view(
+        _load_maintenance_view(
+            client,
+            "query_8_intervention_hours_monthly.parquet",
+            base_path=base_path,
+        )
+    )
+
+
+def load_maintenance_fleet_intervention_daily(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load canonical fleet-day hours and equipment counts from query 9."""
+    return _normalize_maintenance_calendar_view(
+        _load_maintenance_view(
+            client,
+            "query_9_fleet_intervention_daily.parquet",
+            base_path=base_path,
+        ),
+        date_columns=("day",),
+    )
+
+
+def load_maintenance_equipment_status(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load point-in-time equipment status from query 10."""
+    return _normalize_maintenance_calendar_view(
+        _load_maintenance_view(
+            client,
+            "query_10_equipment_status.parquet",
+            base_path=base_path,
+        ),
+        date_columns=(
+            "last_action_date",
+            "first_record_start",
+            "last_record_start",
+            "last_record_end",
+            "reference_date",
+        ),
+    )
+
+
+def load_maintenance_reliability_monthly(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the monthly reliability view (query 5).
+
+    The source grain is one ``machine_id`` × ``year_month``. NaN reliability
+    metrics are intentionally preserved: they mean that the source did not
+    have enough observations for that machine-month.
+    """
+    return _load_maintenance_view(
+        client,
+        "query_5_reliability_monthly.parquet",
+        base_path=base_path,
+    )
+
+
+def load_maintenance_component_failure_ranking(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load the accumulated component failure ranking (query 6)."""
+    return _load_maintenance_view(
+        client,
+        "query_6_component_failure_ranking.parquet",
+        base_path=base_path,
+    )

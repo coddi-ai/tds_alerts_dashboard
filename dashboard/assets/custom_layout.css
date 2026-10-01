@@ -262,3 +262,191 @@
 #dashboard-shell.sidebar-collapsed .sidebar-toggle-btn #sidebar-toggle-icon {
     transform: rotate(180deg);
 }
+
+/* EMIN reliability report: keep the mobile layout usable without changing
+   the shell behavior for other clients or dashboard sections. */
+@media (max-width: 900px) {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-sidebar {
+        width: 0 !important;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: none !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-content-wrapper {
+        width: 100%;
+        min-width: 0;
+        margin-left: 0 !important;
+        padding: 16px 12px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .sidebar-toggle-btn {
+        left: 6px;
+        top: 88px;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row {
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 12px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div {
+        flex: 0 1 auto;
+        min-width: 0;
+        width: auto;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child > div > div:last-child {
+        display: none;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child img {
+        height: 36px !important;
+        max-width: 105px !important;
+        padding: 3px 8px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-logo-img {
+        height: 36px !important;
+        max-width: 84px !important;
+        margin-left: 6px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-selector {
+        width: 100px !important;
+        font-size: 0.8rem !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(2) > div > span {
+        display: none;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(3) > div > div:first-child > div:last-child,
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(3) > div > div:nth-child(2) {
+        display: none;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #logout-button {
+        padding: 6px 9px;
+        font-size: 0;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #logout-button i {
+        margin-right: 0 !important;
+        font-size: 14px;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root {
+        min-width: 0;
+        overflow-x: clip;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-kpi-availability-est) > [class*="col-md-3"] {
+        flex: 0 0 50%;
+        max-width: 50%;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-daily) > [class*="col-md-6"],
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-system-mix) > [class*="col-md-6"],
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-pareto) > [class*="col-md-6"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .js-plotly-plot {
+        max-width: 100%;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open #app-sidebar {
+        width: 260px !important;
+        min-width: 260px;
+        overflow-y: auto;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2) !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open .sidebar-toggle-btn {
+        left: 246px;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin):not(.mobile-nav-open) #sidebar-toggle-icon {
+        transform: rotate(180deg);
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open #sidebar-toggle-icon {
+        transform: none;
+    }
+}
+
+@media (max-width: 480px) {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-content-wrapper {
+        padding: 14px 8px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child img {
+        height: 32px !important;
+        max-width: 92px !important;
+        padding: 2px 6px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-logo-img {
+        height: 32px !important;
+        max-width: 72px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-selector {
+        width: 84px !important;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .card-body {
+        padding: 0.75rem;
+    }
+}
+
+#dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-context-scope {
+    display: none;
+}
+
+#dashboard-shell:has(#maintenance-view-root.maintenance-emin) #maintenance-chart-equipment {
+    height: 420px !important;
+}
+
+#maintenance-view-root:not(.maintenance-emin) #maintenance-chart-equipment-note {
+    display: none;
+}
+
+#maintenance-view-root:not(.maintenance-emin) .maintenance-emin-only,
+#maintenance-view-root.maintenance-emin .maintenance-non-emin-only,
+#maintenance-view-root.maintenance-emin #maintenance-source-alert,
+#maintenance-view-root.maintenance-emin #maintenance-chart-equipment-note,
+#maintenance-view-root.maintenance-emin .maintenance-pareto-metric-control {
+    display: none !important;
+}
+
+/* Reserve room for the real seven-system legend without shrinking the plot. */
+#maintenance-view-root.maintenance-emin #maintenance-chart-pareto,
+#maintenance-view-root.maintenance-emin #maintenance-chart-pareto-tren-fuerza {
+    height: 520px !important;
+}
+
+@media (max-width: 900px) {
+    #maintenance-view-root.maintenance-emin {
+        padding: 12px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    #maintenance-view-root.maintenance-emin .row:has(#maintenance-kpi-availability-est) .card-body p {
+        font-size: 0.8rem;
+        overflow-wrap: normal;
+        word-break: normal;
+    }
+    #maintenance-view-root.maintenance-emin .row:has(#maintenance-kpi-availability-est) h3 {
+        font-size: clamp(1.1rem, 4.8vw, 1.4rem);
+        white-space: nowrap;
+    }
+}

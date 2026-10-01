@@ -1,4 +1,4 @@
-# Vista productiva de Mantenciones
+# Informe de confiabilidad · vista productiva de Mantenciones
 
 La ruta protegida `/monitoring/mantenciones` se controla con
 `monitoring-mantenciones` en `config/client_services.json`. Actualmente está
@@ -6,21 +6,37 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
-- **Resumen**: selector mensual, filtro de flota derivado del prefijo de unidad
-  y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
+La pestaña consume las vistas materializadas nuevas del pipeline de
+Mantenciones. `query_3_actions_all_equipment` sigue aportando el detalle de
+actividad; las horas ya no se reconstruyen desde acciones ni desde jobs.
+
+| Necesidad del informe | Fuente principal |
+| --- | --- |
+| KPIs mensuales por equipo | `query_4_business_kpis.parquet` |
+| Horas intervenidas por equipo-mes | `query_8_intervention_hours_monthly.parquet` |
+| Horas intervenidas por equipo-día | `query_7_intervention_hours_daily.parquet` |
+| Horas y equipos intervenidos por día de flota | `query_9_fleet_intervention_daily.parquet` |
+| Estado puntual del equipo | `query_10_equipment_status.parquet` |
+| MTBF / MTTR | `query_5_reliability_monthly.parquet` |
+| Ranking de componentes en fallas | `query_6_component_failure_ranking.parquet` |
+
+- **Informe de confiabilidad**: selector mensual, filtro de flota/tipo de equipo según el catálogo
+  de Tribología (los equipos sin coincidencia quedan en ``otros``) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
-  participación de acciones Motor; cuatro KPIs rotulados **ESTIMADO**
-  (disponibilidad, downtime, MTBF y MTTR); tendencia diaria, mix de actividad por
+  participación de acciones Motor; KPIs de tiempo respaldados por la fuente
+  (disponibilidad, downtime, MTBF y MTTR); tendencia diaria de horas-equipo
+  fuera de servicio, mix de actividad por
   sistema sin desglose por unidad, ranking de equipos y Paretos de actividad,
   seguido de una tabla con el detalle de las actividades realizadas. CDA conserva sus Paretos
-  enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
-  sistemas tanto por equipo como por sistema.
+  enfocados en Motor y Tren de Fuerza; CAPSTONE muestra acciones por equipo y
+  por sistema. EMIN muestra acciones por unidad, apiladas por sistema, y horas
+  intervenidas por unidad en un segundo Pareto independiente.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
   tareas agrupadas por día y sistema.
 
-En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
+En el shell productivo actual solo se muestra **Informe de confiabilidad**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
@@ -29,25 +45,60 @@ mensual, el filtro de flota y el selector ejecutivo de unidad. El selector seman
 montado dentro del contrato de Evidencia semanal, pero no se muestra en la
 cabecera ejecutiva.
 
-La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
+La jerarquía ejecutiva de **Informe de confiabilidad** sigue la lectura de los reportes de
 referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
-separadas de horas de intervención y equipos intervenidos, mix por sistema y
+separadas de horas-equipo fuera de servicio y equipos intervenidos, mix por sistema y
 ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
 actividad quedan al final como contexto y no compiten visualmente con los
 indicadores críticos.
 
 El filtro de flota y el selector de unidad se aplican a disponibilidad,
 downtime, MTBF, MTTR, actividad diaria, mix, ranking, ambos Paretos, indicadores
-de contexto y detalle tabular. La flota se deriva del fragmento de
-``machine_code`` anterior al primer guion bajo (por ejemplo ``T_01`` pertenece
-a la flota ``T``); si no hay guion bajo, el código completo identifica la
-flota. La unidad se filtra por ``machine_code`` y sus opciones se limitan a las
-flotas seleccionadas. Sin selección de flota/unidad se conserva todo el
-período.
+de contexto y detalle tabular. La clasificación sigue el catálogo de
+Tribología: ``classified.parquet`` aporta ``unitId → machineName`` y el valor
+de ``machineName`` es la flota/tipo de equipo visible (por ejemplo,
+``BULL_022 → bulldozer``). Antes de unir ambas fuentes se normalizan mayúsculas,
+guion/guion bajo y ceros de unidad (``BULL-022`` = ``BULL_022`` y
+``T_09`` = ``T_9``). Si una unidad de Mantenciones no existe en el catálogo,
+se clasifica en la categoría controlada ``otros``; no se infiere una flota desde
+el prefijo del código. La unidad se filtra por ``machine_code``
+y sus opciones se limitan a las flotas seleccionadas. Sin selección de
+flota/unidad se conserva todo el período.
 
-La metadata del contrato conserva el archivo fuente de los KPIs **ESTIMADOS**,
-su ventana de referencia y, cuando corresponde, la razón del fallback mensual;
+La metadata del contrato conserva el archivo fuente de los KPIs de tiempo,
+su ventana de referencia y, cuando corresponde, la razón por la que no están
+disponibles para un filtro;
 estos detalles técnicos no se muestran en la cabecera ejecutiva.
+
+### Cards de MTBF y MTTR
+
+La vista no expone una pestaña independiente de confiabilidad mensual. Las
+cards **MTBF** y **MTTR** del Resumen consumen directamente
+`query_5_reliability_monthly.parquet`, filtrado por el cliente, mes, flota y
+unidad seleccionados:
+
+- MTBF es el promedio ponderado de `mtbf_hours` por `n_mtbf_intervals`.
+- MTTR es `sum(total_downtime_hours) / sum(n_failures)`; si la vista omite el
+  total de downtime, solo se usa `mttr_hours × n_failures` como respaldo de la
+  misma fuente.
+- Los meses sin intervalos MTBF o fallas quedan como **sin dato**; no se
+  convierten en cero ni se interpolan. `low_confidence` se conserva en la
+  metadata del payload para auditoría.
+
+Disponibilidad y downtime usan `query_8_intervention_hours_monthly.parquet`.
+La vista ya entrega la unión deduplicada de intervalos, el reparto por día y
+el denominador de horas calendario. Para la tendencia diaria, la flota usa
+`query_9_fleet_intervention_daily.parquet`; cuando se selecciona una unidad o
+una flota, la serie se agrega desde `query_7_intervention_hours_daily.parquet`.
+Las cuatro vistas comparten el mismo núcleo de cálculo, por lo que no se
+reconstruyen horas desde acciones ni desde jobs. `query_4` queda como respaldo
+de las horas mensuales cuando `query_8` no está disponible, siempre que
+contenga las columnas del contrato nuevo; las columnas históricas `*_70d` no
+se usan.
+Si se filtra por sistema o subsistema, MTBF y MTTR siguen quedando sin dato
+porque query 5 no contiene ese desglose. `query_6_component_failure_ranking`
+continúa disponible como fuente de repositorio para futuras vistas, pero ya no
+se monta en el Resumen.
 
 Para mantener legibilidad aun cuando la hoja de Font Awesome no esté
 disponible (por ejemplo, sin acceso al CDN), los iconos decorativos propios de
@@ -77,61 +128,47 @@ indicadores del Resumen:
   `action_system_name` coincide con `Motor`, `Sistema Motor` o `Sistema de
   Motor`.
 
-La tendencia diaria agrupa acciones únicas por `change_date`. El mix por
-sistema agrega por sistema y no expone series o leyenda por unidad; el ranking
+La tendencia diaria lee `intervention_hours` y el conteo de equipos de
+`query_9` para la flota completa. Con una unidad o flota seleccionada, agrupa
+`query_7` por fecha y cuenta equipos distintos. Las vistas ya reparten cada
+record por límites de día calendario y unen solapes; no se interpretan los
+sufijos de offset de los timestamps de detalle como zonas horarias. El total
+de una flota puede superar 24 h en un día porque suma horas de varios equipos;
+con un equipo seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
+sistema y no expone series o leyenda por unidad; el ranking
 de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
 misma métrica de acciones únicas. Los
 Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
 de porcentaje acumulado; no representan frecuencia de fallas. CDA mantiene el
-foco en Motor y Tren de Fuerza. EMIN y CAPSTONE no aplican una lista permitida
-de sistemas: muestran un Pareto total por equipo y otro Pareto por todos los
-sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
+foco en Motor y Tren de Fuerza. CAPSTONE conserva acciones por equipo y por
+sistema. EMIN no excluye sistemas de origen: el primer Pareto desglosa acciones
+por unidad y sistema; el segundo usa horas por unidad sin atribuirlas a sistemas.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. En esta iteración se incorporan solo como proxies explícitos
-**ESTIMADOS**: query_4 aporta downtime y reparaciones precalculados en ventana
-70d, pero no horas operativas gobernadas ni confirmación de fallas. No se
-presentan como mediciones reales ni como frecuencia de fallas.
+imprevisto. En esta iteración las cards de tiempo usan las horas canónicas de
+`query_8` y no se infieren horas a partir del conteo de acciones.
 
-#### Metodología de los KPIs ESTIMADOS
+#### Metodología de los KPIs de tiempo
 
-Los cuatro valores priorizan `query_4_business_kpis.parquet` cuando están
-disponibles `downtime_hours_70d`, `repairs_70d`, `total_actions_70d` y
-`reference_date`. En ese caso la cobertura es la **ventana móvil de 70 días**
-del KPI precalculado, aunque el selector de Resumen siga mostrando un mes; esa
-diferencia se declara en `meta.estimated_kpis.coverage` y en el banner. Si el
-extracto 70d está ausente/incompleto, o se filtra por sistema/subsistema (que
-query_4 no desglosa), se usa el fallback mensual de acciones:
+Downtime y disponibilidad se leen para el mes seleccionado desde el contrato
+mensual de horas:
 
-- Con query_4: `downtime_est_hours = sum(downtime_hours_70d)` y el evento proxy
-  es `sum(repairs_70d)`; si no hay reparaciones, se usa `total_actions_70d` y
-  finalmente registros de acciones.
-- En fallback: `downtime_est_hours = acciones únicas × 1,5 h`; 1,5 h/acción es
-  el proxy conservador y parametrizado de duración/indisponibilidad.
-- `scheduled_hours_proxy = equipos cubiertos × días de la ventana × 24 h`
-  (70 días con query_4; días calendario del mes en fallback).
-- `availability_est_pct = max(scheduled_hours_proxy − downtime_est_hours, 0) /
-  scheduled_hours_proxy × 100`.
-- `event_count_proxy = reparaciones_70d`; si no hay reparaciones, `total_actions_70d`
-  y finalmente registros únicos del extracto de acciones.
-- `mttr_est_hours = downtime_est_hours / event_count_proxy`.
-- `mtbf_est_hours = max(scheduled_hours_proxy − downtime_est_hours, 0) /
-  event_count_proxy`.
+- `downtime_est_hours = sum(intervention_hours)`.
+- `calendar_hours = sum(calendar_hours_month)` de los equipos cubiertos.
+- `availability_est_pct = (calendar_hours − downtime_est_hours) /
+  calendar_hours × 100`.
 
-Se aplica una validación de plausibilidad antes de usar query_4: si el downtime
-70d es negativo, no finito o supera las horas calendario proxy de los equipos
-cubiertos, se rechaza todo el bloque 70d y se usa el fallback mensual. La
-anomalía queda en `meta.estimated_kpis.reason`; no se recorta silenciosamente
-ni se presenta una disponibilidad artificialmente extrema.
+MTBF y MTTR se obtienen en cambio desde `query_5_reliability_monthly.parquet`,
+según la agregación ponderada descrita arriba. Si cualquiera de las fuentes
+está ausente o incompleta, el valor correspondiente queda `null` con estado
+`unavailable`; no se imputan ceros ni se convierten acciones en horas.
 
-Cada payload expone en `meta.estimated_kpis` la etiqueta, fuente, columnas,
-unidad, cobertura, hipótesis y fórmulas. Los registros únicos son eventos de
-mantenimiento proxy, no fallas confirmadas; si faltan acciones o registros se
-devuelve `null` y un estado `unavailable`, nunca cero. Aunque query_4 aporta
-valores precalculados, los cuatro indicadores siguen rotulados **ESTIMADO**:
-no equivalen a una medición de disponibilidad ni confirman que los eventos
-sean fallas.
+Cada payload expone en `meta.estimated_kpis` la fuente, columnas, unidad,
+cobertura e hipótesis. Si faltan las columnas de tiempo se devuelve `null` y
+un estado `unavailable`, nunca cero. La aplicación respeta la definición de
+intervalos y el calendario del mes seleccionado. La pestaña no mezcla el
+conteo de equipos intervenidos de `query_9` con el total de horas-equipo.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad
@@ -141,13 +178,32 @@ Paretos de frecuencia/tiempo de reparación. Esta primera iteración conserva la
 jerarquía visual, pero reemplaza los indicadores no respaldados por actividad
 registrada auditable.
 
-La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
-se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la
+La actividad mensual usa `query_3_actions_all_equipment.parquet`. En EMIN, el
+Pareto principal ofrece un selector multiselección de sistemas que afecta solo
+a ese gráfico; comienza con todos los sistemas y cuenta `action_id` únicos por
+equipo. El segundo Pareto muestra horas desde `query_8`, independientemente
+del filtro de sistemas. El selector de métrica anterior se oculta en EMIN.
+La categoría fuente `Equipo` se presenta como
+“General del equipo (sin sistema técnico atribuido)” en el filtro y como
+“General del equipo” en las visualizaciones, sin alterar los datos ni excluirla
+de los totales. El ranking EMIN muestra las quince unidades con mayor actividad
+en barras horizontales de mayor a menor; las cards siguen usando toda la
+población filtrada. Cada Pareto comienza con el prefijo hasta el primer equipo
+que alcanza el 80%, más tres siguientes. El denominador de la curva conserva
+la población completa; el último equipo visible no se fuerza a 100%.
+«Mostrar todos» expande solo su gráfico. Mes, flota, unidad o cliente reinician
+ambos; sistemas reinicia solo acciones. «Restablecer unidad» conserva mes y flota.
+Se limitan rótulos de ejes sin eliminar barras del conjunto visible.
+El shell de Informe de confiabilidad EMIN también
+pliega la navegación en anchos estrechos y permite abrirla como panel superpuesto.
+
+Los timestamps de CDA/Capstone se normalizan a UTC; EMIN conserva su reloj
+escrito según el contrato de ingesta. Las agregaciones se agrupan por `change_date`, la
 fecha operacional. Los Paretos usan `action_id` únicos y `machine_code` para
 los cortes por equipo. En CDA el primer Pareto se filtra por Motor (acepta
 `Motor`, `Sistema Motor` y `Sistema de Motor`) y el segundo por Tren de Fuerza.
-En EMIN y CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
-segundo agrupa las acciones por sistema, sin excluir categorías de origen. Los
+En CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
+segundo agrupa las acciones por sistema. EMIN usa acciones y horas por unidad. Los
 títulos y `meta.pareto_scope` declaran el modo aplicado.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
 completa al navegador. En Resumen se presenta después de **Indicadores de
@@ -173,7 +229,6 @@ El botón **Refrescar** invalida las cachés del repositorio. La página abre el
 ## Alcance excluido
 
 Se mantienen fuera de la vista el backlog, estado sano/detenido, planes de
-acción, metas, horas reales de operación/reparación y clasificación de fallas.
-Los cuatro KPIs de confiabilidad visibles son únicamente los proxies
-**ESTIMADOS** descritos arriba y deben reemplazarse por mediciones gobernadas
-cuando exista esa fuente.
+acción, metas y clasificación de fallas. Las horas mostradas respetan las
+definiciones disponibles en el origen; si falta el desglose temporal para un
+filtro, el valor queda no disponible.
