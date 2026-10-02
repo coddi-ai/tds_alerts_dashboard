@@ -9,18 +9,37 @@
 
 ## 📊 Archivos Parquet Requeridos
 
-La pestaña usa `query_3` para actividad y detalle, `query_4`/`query_8` para
-KPIs mensuales, `query_7`/`query_9` para la tendencia diaria, `query_5` para
-MTBF/MTTR y `query_10` para el estado puntual del equipo. `query_6` queda
-disponible para análisis de componentes. Las columnas históricas `*_70d` no
-son una fuente válida para el informe nuevo.
+La pestaña **Informe de confiabilidad** usa las diez vistas como contrato de
+datos. `query_1` atribuye acciones a un componente inequívoco; `query_2`
+describe la intervención; `query_3` aporta acciones, equipos y sistemas;
+`query_4` gestiona equipo-mes; `query_5` calcula MTBF/MTTR; `query_6` es un
+ranking histórico; `query_7` y `query_8` contienen horas equipo-día y
+equipo-mes; `query_9` contiene el agregado flota-día; y `query_10` es una
+fotografía puntual por unidad. Las columnas históricas `*_70d` no son una
+fuente válida para los KPIs del informe.
 
 Las vistas de horas son canónicas: unen intervalos solapados, parten cada
 record por día calendario y exponen horas calendario como denominador. Sus
 timestamps de calendario no llevan zona horaria; no deben parsearse con
 `utc=True`.
 
-### 1. `query_3_actions_all_equipment.parquet` - Acciones de Mantenimiento Detalladas
+En el extracto EMIN, los sufijos de zona horaria en timestamps de actividad
+son ruido de ingesta: conservar la hora escrita y no convertirla a UTC. CDA y
+Capstone mantienen su normalización previa.
+
+### 1. `query_1_component_maintenance.parquet` - Acciones con componente inequívoco
+
+**Grano:** acciones atribuibles a un único componente. Se utiliza para
+enriquecer el detalle; una acción sin atribución única se muestra como tal y
+no se asigna por aproximación.
+
+### 2. `query_2_unit_records_actions.parquet` - Contexto de intervención
+
+**Grano:** una fila por intervención y equipo. `first_event_ts` y
+`last_event_ts` contextualizan las acciones de `query_3`; no se suman como
+horas de flota ni se presentan por sí solos como una detención operacional.
+
+### 3. `query_3_actions_all_equipment.parquet` - Acciones de Mantenimiento Detalladas
 
 **Propósito:** Registro completo de todas las acciones de mantenimiento realizadas en todos los equipos.
 
@@ -77,7 +96,7 @@ timestamps de calendario no llevan zona horaria; no deben parsearse con
 
 ---
 
-### 2. `query_4_business_kpis.parquet` - KPIs mensuales de negocio
+### 4. `query_4_business_kpis.parquet` - KPIs mensuales de negocio
 
 **Grano:** una fila por `machine_id × year_month`.
 
@@ -103,7 +122,7 @@ columnas principales para el dashboard son:
 Los campos con sufijo `*_70d` pertenecen al contrato anterior y no deben
 usarse para calcular horas, disponibilidad o estado.
 
-### 3. `query_7_intervention_hours_daily.parquet` - Horas por equipo-día
+### 5. `query_7_intervention_hours_daily.parquet` - Horas por equipo-día
 
 **Grano:** una fila por equipo y día con horas mayores que cero. La métrica
 canónica es `intervention_hours`; `intervention_hours_raw` y
@@ -111,27 +130,27 @@ canónica es `intervention_hours`; `intervention_hours_raw` y
 `calendar_hours_day`, `pct_day_intervened`, `is_saturated_day` y
 `touched_by_long_record`.
 
-### 4. `query_8_intervention_hours_monthly.parquet` - Horas por equipo-mes
+### 6. `query_8_intervention_hours_monthly.parquet` - Horas por equipo-mes
 
 **Grano:** una fila por equipo y mes entre el primer y último mes con
 actividad. Los meses intermedios aparecen con cero. Incluye las mismas
 métricas de `query_7` agregadas al mes y añade
 `calendar_hours_month`, `n_days_with_intervention` y `n_saturated_days`.
 
-### 5. `query_9_fleet_intervention_daily.parquet` - Flota día a día
+### 7. `query_9_fleet_intervention_daily.parquet` - Flota día a día
 
 **Grano:** una fila por día del rango observado, incluidos días sin actividad.
 `n_machines_intervened` y `intervention_hours` son métricas independientes.
 También incluye `n_machines_fleet`, `calendar_hours_fleet`,
 `pct_fleet_unavailable_calendar` y `avg_hours_per_intervened_machine`.
 
-### 6. `query_10_equipment_status.parquet` - Estado puntual por equipo
+### 8. `query_10_equipment_status.parquet` - Estado puntual por equipo
 
 **Grano:** una fila por equipo a `reference_date`. Incluye
 `equipment_status`, `has_open_intervention`, fechas de última actividad y
 conteos históricos. No se deriva desde el campo `ongoing` de la base.
 
-### 7. `query_5_reliability_monthly.parquet` - Confiabilidad mensual
+### 9. `query_5_reliability_monthly.parquet` - Confiabilidad mensual
 
 **Grano:** una fila por `machine_id × year_month`.
 
@@ -142,7 +161,7 @@ son datos insuficientes para ese equipo-mes y no se convierten a cero. Una fila
 con `low_confidence=true` se conserva y se marca visualmente cuando
 `n_mtbf_intervals < 3`.
 
-### 8. `query_6_component_failure_ranking.parquet` - Ranking acumulado
+### 10. `query_6_component_failure_ranking.parquet` - Ranking acumulado
 
 **Grano:** componente por equipo y fuente, acumulado histórico; no es una
 serie temporal. Incluye `source_system`, `machine_id`, `machine_code`,
@@ -193,33 +212,13 @@ total_downtime_month = df_month['intervention_hours'].sum()
 
 ---
 
-### Últimas Detenciones (por máquina)
+### Contexto de intervención por unidad
 
-**Fuente:** `query_3_actions_all_equipment.parquet`
-
-**Agrupación:** Por `machine_id` (unit_id) y `record_id` - cada combinación representa un período de detención único
-
-**Cálculo:**
-```python
-# Agrupar por machine_id y record_id
-for (machine_id, record_id, machine_code), group in df_actions.groupby(['machine_id', 'record_id', 'machine_code']):
-    # Tiempo de detención: diferencia entre primera y última acción del record
-    start_date = group['event_ts'].min()
-    end_date = group['event_ts'].max()
-    duration_hours = (end_date - start_date).total_seconds() / 3600
-    
-    # Array de todos los action_type_name únicos involucrados
-    action_types = group['action_type_name'].dropna().unique()
-    job_types = ", ".join(action_types)
-```
-
-**Lógica:**
-- Cada `record_id` representa un ciclo de mantenimiento
-- Se filtra por registros con `machine_id` y `record_id` válidos (no NaN)
-- El período de detención va desde la primera hasta la última acción del record
-- Los tipos de trabajo incluyen **todos** los `action_type_name` únicos (no limitado a 3)
-
-**Output:** Top N detenciones más recientes por máquina (ordenadas por `start_date` descendente)
+El detalle combina `query_3` con el inicio y fin registrados en `query_2` y,
+cuando `query_1` atribuye inequívocamente el componente, lo muestra junto a la
+acción. El inicio y fin son contexto del registro, no prueba de una detención.
+Las horas de downtime/disponibilidad solo se estiman desde `query_7`/`query_9`
+según el alcance del filtro.
 
 ---
 
@@ -260,30 +259,31 @@ individual no supera 24 h por día después de la distribución del intervalo.
 
 ---
 
-## 📈 KPIs Visualizados en el Dashboard
+## KPIs ejecutivos y Pareto
 
-### 1. Equipos Totales
-```python
-total = len(df_kpis)  # 11 máquinas
-```
-
-### 2. Equipos Sanos
-```python
-sanos = (df_status['equipment_status'] == 'OPERATIVO').sum()
-```
-
-### 3. Equipos Detenidos
-```python
-detenidos = (df_status['equipment_status'] == 'DETENIDO').sum()
-```
-
-### 4. Horas intervenidas del mes
-```python
-total_intervention_hours = df_month['intervention_hours'].sum()
-
-> El Resumen usa las horas deduplicadas de query8 y no las columnas históricas
-> `*_70d`.
-```
+- **Disponibilidad calendario estimada, flota completa:**
+  `100 × (1 − Σ query_9.intervention_hours / Σ query_9.calendar_hours_fleet)`
+  sobre los días observados. Para una selección de flota/unidad se suman las
+  horas de `query_7` y se usa `24 × días observados × equipos seleccionados`.
+- **Downtime estimado:** horas-equipo intervenidas deduplicadas: `query_9` para
+  la flota completa y `query_7` para equipos filtrados. No equivale a una
+  detención operacional confirmada.
+- **MTBF:** promedio ponderado de `query_5.mtbf_hours` por
+  `n_mtbf_intervals`. **MTTR:** `Σ total_downtime_hours / Σ n_failures` en las
+  filas válidas. Los nulos no se convierten a cero; cobertura y baja confianza
+  se informan fuera de las cards.
+- Los meses parciales se señalan con `query_4.is_partial_month` y días
+  observados de `query_9`; la fecha de `query_10.reference_date` identifica la
+  fotografía real del estado, no el día actual.
+- El Pareto principal agrupa por equipo y cuenta `action_id` únicos. EMIN parte
+  con todos los sistemas seleccionados y deduplica `machine_code × action_id`
+  para construir `data.emin_action_systems` (equipment, system_name, count).
+  `data.emin_hours_pareto` (equipment, value) procede de `query_8` y conserva
+  mes/flota/unidad, independientemente de los sistemas elegidos para acciones.
+  No hay atribución de horas por sistema. CDA conserva Motor y Tren de Fuerza;
+  Capstone conserva sus Paretos de acciones por equipo y por sistema.
+  Ambos Paretos EMIN muestran 80% + tres equipos inicialmente y conservan el
+  denominador completo; «Mostrar todos» expande cada gráfico de forma independiente.
 
 ---
 
@@ -293,8 +293,11 @@ total_intervention_hours = df_month['intervention_hours'].sum()
 ```python
 {
     "actions": load_maintenance_actions_all_equipment(),  # acciones
-    "records": load_maintenance_unit_records_actions(),   # compatibilidad
+    "component_actions": load_maintenance_component_maintenance(), # query1
+    "records": load_maintenance_unit_records_actions(),   # query2
     "kpis": load_business_kpis(),                         # query4 mensual
+    "reliability": load_maintenance_reliability_monthly(), # query5
+    "component_failures": load_maintenance_component_failure_ranking(), # query6 histórico
     "hours_daily": load_maintenance_intervention_hours_daily(),  # query7
     "hours_monthly": load_maintenance_intervention_hours_monthly(),  # query8
     "fleet_daily": load_maintenance_fleet_intervention_daily(),  # query9
@@ -308,7 +311,7 @@ total_intervention_hours = df_month['intervention_hours'].sum()
 |--------|------------------|--------|
 | `get_status_counts()` | `query_10` | SANO/DETENIDO counts |
 | `get_downtime_mtd()` | `query_8`/`query_9` | Horas-equipo del período |
-| `get_last_detentions()` | `query_3` Actions | Top 3 detenciones/máquina |
+| `get_monthly_payload()` | `query_1`–`query_10` | Contrato del informe; contexto, KPIs y Pareto |
 | `get_jobs_last_week()` | `query_3` Actions | 100 trabajos recientes |
 | `get_downtime_by_day_mtd()` | `query_7`/`query_9` | Horas-equipo fuera de servicio por día |
 
@@ -359,6 +362,8 @@ data/
     └── golden/
         └── {client}/                          # ej: "cda"
             └── Maintance_Labeler_Views/
+                ├── query_1_component_maintenance.parquet
+                ├── query_2_unit_records_actions.parquet
                 ├── query_3_actions_all_equipment.parquet
                 ├── query_4_business_kpis.parquet          # KPIs por equipo-mes
                 ├── query_5_reliability_monthly.parquet    # MTBF / MTTR

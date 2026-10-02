@@ -1597,17 +1597,16 @@ def load_maintenance_actions_all_equipment(client: str = "cda", base_path: Optio
         logger.info(f"Loading maintenance actions from {file_path}")
         df = pd.read_parquet(file_path)
         
-        # Convert date strings to datetime (UTC to handle mixed timezones)
-        # Maintenance exports contain ISO-8601 variants with optional
-        # fractional seconds and a trailing ``Z``. Pandas 3 uses strict
-        # single-format inference by default, so explicitly accept mixed ISO
-        # representations while keeping a uniform UTC dtype.
-        df['event_ts'] = pd.to_datetime(
-            df['event_ts'], utc=True, format='mixed', errors='coerce'
-        )
-        df['change_date'] = pd.to_datetime(
-            df['change_date'], utc=True, format='mixed', errors='coerce'
-        )
+        if str(client).strip().lower() == "emin":
+            df = _normalize_maintenance_source_timestamps(
+                df, ("event_ts", "change_date")
+            )
+        else:
+            for column in ("event_ts", "change_date"):
+                if column in df.columns:
+                    df[column] = pd.to_datetime(
+                        df[column], utc=True, format="mixed", errors="coerce"
+                    )
         
         logger.info(f"Loaded {len(df)} maintenance actions for {df['machine_code'].nunique()} machines")
         return df
@@ -1637,11 +1636,16 @@ def load_maintenance_unit_records_actions(client: str = "cda", base_path: Option
     try:
         logger.info(f"Loading maintenance record intervals from {file_path}")
         df = pd.read_parquet(file_path)
-        for column in ("first_event_ts", "last_event_ts"):
-            if column in df.columns:
-                df[column] = pd.to_datetime(
-                    df[column], utc=True, format="mixed", errors="coerce"
-                )
+        if str(client).strip().lower() == "emin":
+            df = _normalize_maintenance_source_timestamps(
+                df, ("first_event_ts", "last_event_ts")
+            )
+        else:
+            for column in ("first_event_ts", "last_event_ts"):
+                if column in df.columns:
+                    df[column] = pd.to_datetime(
+                        df[column], utc=True, format="mixed", errors="coerce"
+                    )
         logger.info("Loaded %s maintenance record intervals for %s", len(df), client)
         return df
     except FileNotFoundError:
@@ -1744,6 +1748,42 @@ def _normalize_maintenance_calendar_view(
             frame[column] = pd.to_datetime(frame[column], errors='coerce')
     if 'year_month' in frame.columns:
         frame['year_month'] = frame['year_month'].astype('string').str.strip()
+    return frame
+
+
+def _normalize_maintenance_source_timestamps(
+    frame: pd.DataFrame, columns: tuple[str, ...]
+) -> pd.DataFrame:
+    """Parse source timestamps while preserving their written calendar clock.
+
+    Offset suffixes in the source export are ingestion artifacts. They must
+    not be interpreted as real time zones and converted to UTC.
+    """
+    if frame.empty:
+        return frame
+    frame = frame.copy()
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        values = frame[column].astype("string").str.replace(
+            r"(?:Z|[+-]\d{2}:?\d{2})$", "", regex=True
+        )
+        frame[column] = pd.to_datetime(values, format="mixed", errors="coerce")
+    return frame
+
+
+def load_maintenance_component_maintenance(
+    client: str = "cda", base_path: Optional[Path] = None
+) -> pd.DataFrame:
+    """Load query 1 actions with one unambiguous component attribution."""
+    frame = _load_maintenance_view(
+        client, "query_1_component_maintenance.parquet", base_path=base_path,
+    )
+    if str(client).strip().lower() == "emin":
+        return _normalize_maintenance_source_timestamps(frame, ("event_ts", "change_date"))
+    for column in ("event_ts", "change_date"):
+        if column in frame.columns:
+            frame[column] = pd.to_datetime(frame[column], utc=True, format="mixed", errors="coerce")
     return frame
 
 

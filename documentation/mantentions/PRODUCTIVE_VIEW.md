@@ -28,8 +28,9 @@ actividad; las horas ya no se reconstruyen desde acciones ni desde jobs.
   fuera de servicio, mix de actividad por
   sistema sin desglose por unidad, ranking de equipos y Paretos de actividad,
   seguido de una tabla con el detalle de las actividades realizadas. CDA conserva sus Paretos
-  enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
-  sistemas tanto por equipo como por sistema.
+  enfocados en Motor y Tren de Fuerza; CAPSTONE muestra acciones por equipo y
+  por sistema. EMIN muestra acciones por unidad, apiladas por sistema, y horas
+  intervenidas por unidad en un segundo Pareto independiente.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
@@ -139,9 +140,9 @@ de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
 misma métrica de acciones únicas. Los
 Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
 de porcentaje acumulado; no representan frecuencia de fallas. CDA mantiene el
-foco en Motor y Tren de Fuerza. EMIN y CAPSTONE no aplican una lista permitida
-de sistemas: muestran un Pareto total por equipo y otro Pareto por todos los
-sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
+foco en Motor y Tren de Fuerza. CAPSTONE conserva acciones por equipo y por
+sistema. EMIN no excluye sistemas de origen: el primer Pareto desglosa acciones
+por unidad y sistema; el segundo usa horas por unidad sin atribuirlas a sistemas.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
@@ -177,13 +178,32 @@ Paretos de frecuencia/tiempo de reparación. Esta primera iteración conserva la
 jerarquía visual, pero reemplaza los indicadores no respaldados por actividad
 registrada auditable.
 
-La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
-se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la
+La actividad mensual usa `query_3_actions_all_equipment.parquet`. En EMIN, el
+Pareto principal ofrece un selector multiselección de sistemas que afecta solo
+a ese gráfico; comienza con todos los sistemas y cuenta `action_id` únicos por
+equipo. El segundo Pareto muestra horas desde `query_8`, independientemente
+del filtro de sistemas. El selector de métrica anterior se oculta en EMIN.
+La categoría fuente `Equipo` se presenta como
+“General del equipo (sin sistema técnico atribuido)” en el filtro y como
+“General del equipo” en las visualizaciones, sin alterar los datos ni excluirla
+de los totales. El ranking EMIN muestra las quince unidades con mayor actividad
+en barras horizontales de mayor a menor; las cards siguen usando toda la
+población filtrada. Cada Pareto comienza con el prefijo hasta el primer equipo
+que alcanza el 80%, más tres siguientes. El denominador de la curva conserva
+la población completa; el último equipo visible no se fuerza a 100%.
+«Mostrar todos» expande solo su gráfico. Mes, flota, unidad o cliente reinician
+ambos; sistemas reinicia solo acciones. «Restablecer unidad» conserva mes y flota.
+Se limitan rótulos de ejes sin eliminar barras del conjunto visible.
+El shell de Informe de confiabilidad EMIN también
+pliega la navegación en anchos estrechos y permite abrirla como panel superpuesto.
+
+Los timestamps de CDA/Capstone se normalizan a UTC; EMIN conserva su reloj
+escrito según el contrato de ingesta. Las agregaciones se agrupan por `change_date`, la
 fecha operacional. Los Paretos usan `action_id` únicos y `machine_code` para
 los cortes por equipo. En CDA el primer Pareto se filtra por Motor (acepta
 `Motor`, `Sistema Motor` y `Sistema de Motor`) y el segundo por Tren de Fuerza.
-En EMIN y CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
-segundo agrupa las acciones por sistema, sin excluir categorías de origen. Los
+En CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
+segundo agrupa las acciones por sistema. EMIN usa acciones y horas por unidad. Los
 títulos y `meta.pareto_scope` declaran el modo aplicado.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
 completa al navegador. En Resumen se presenta después de **Indicadores de

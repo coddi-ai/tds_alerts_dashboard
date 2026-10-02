@@ -34,9 +34,16 @@ def register_sidebar_callbacks(app: dash.Dash) -> None:
     # sidebar hides/shows instantly with no server round-trip.
     app.clientside_callback(
         """
-        function(n_clicks, collapsed) {
+        function(n_clicks, collapsed, client, pathname) {
             if (!n_clicks) {
                 throw window.dash_clientside.PreventUpdate;
+            }
+            const mobileEminReport =
+                String(client || "").toUpperCase() === "EMIN" &&
+                String(pathname || "").startsWith("/monitoring/mantenciones") &&
+                window.matchMedia("(max-width: 900px)").matches;
+            if (mobileEminReport) {
+                return collapsed;
             }
             return !collapsed;
         }
@@ -44,19 +51,30 @@ def register_sidebar_callbacks(app: dash.Dash) -> None:
         Output("sidebar-collapsed-store", "data"),
         Input("sidebar-toggle-btn", "n_clicks"),
         State("sidebar-collapsed-store", "data"),
+        State("client-selector", "value"),
+        State("_pages_location", "pathname"),
     )
 
-    # Apply the persisted flag to #dashboard-shell as a class - all visual
-    # effects of collapsing (sidebar width, content margin, toggle button
-    # position/icon) are pure CSS off '.sidebar-collapsed'
-    # (see dashboard/assets/custom_layout.css). Runs on load too, so a
-    # previously-collapsed preference is restored immediately.
+    # Apply the persisted flag to #dashboard-shell as a class. On narrow EMIN
+    # reliability screens the sidebar starts collapsed, while the same toggle
+    # remains available to open it as an overlay. Other routes/clients preserve
+    # the stored desktop behavior.
     app.clientside_callback(
         """
-        function(collapsed) {
+        function(collapsed, n_clicks, client, pathname) {
+            const mobileEminReport =
+                String(client || "").toUpperCase() === "EMIN" &&
+                String(pathname || "").startsWith("/monitoring/mantenciones") &&
+                window.matchMedia("(max-width: 900px)").matches;
+            if (mobileEminReport) {
+                return (n_clicks || 0) % 2 === 1 ? "mobile-nav-open" : "sidebar-collapsed";
+            }
             return collapsed ? "sidebar-collapsed" : "";
         }
         """,
         Output("dashboard-shell", "className"),
         Input("sidebar-collapsed-store", "data"),
+        Input("sidebar-toggle-btn", "n_clicks"),
+        Input("client-selector", "value"),
+        Input("_pages_location", "pathname"),
     )
