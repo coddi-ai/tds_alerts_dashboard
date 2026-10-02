@@ -2,6 +2,8 @@
 Reusable chart components for Multi-Technical-Alerts dashboard.
 """
 
+from src.i18n import t
+from dashboard.components.labels import status_label
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
@@ -51,25 +53,25 @@ def create_machine_status_donut(df: pd.DataFrame, title: str = "Machine Status D
     
     # Create labels with count and percentage for legend
     labels_with_counts = [
-        f"{status}: {count} ({percentages[status]}%)" 
+        f"{status_label(status)}: {count} ({percentages[status]}%)" 
         for status, count in status_counts.items()
     ]
     
     fig = go.Figure(data=[go.Pie(
-        labels=status_counts.index,
+        labels=[status_label(s) for s in status_counts.index],
         values=status_counts.values,
         marker=dict(colors=[STATUS_COLORS.get(s, '#999999') for s in status_counts.index]),
         hole=0.5,  # Donut hole
         textinfo='label+percent',
         textfont=dict(size=13),
-        hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>',
+        hovertemplate=t("charts.b_b_br_count_br_percentage"),
         text=labels_with_counts,  # For legend
         textposition='inside'
     )])
     
     # Add total count annotation in center
     fig.add_annotation(
-        text=f"<b>{total_machines}</b><br>Total",
+        text=t("charts.b_b_br_total", total_machines=total_machines),
         x=0.5, y=0.5,
         font=dict(size=20, color='#333'),
         showarrow=False,
@@ -181,14 +183,14 @@ def create_component_stacked_bar_chart(
                     # Show first 10 units, indicate if there are more
                     units_display = ', '.join(units[:10])
                     if count > 10:
-                        units_display += f'... (+{count-10} more)'
-                    hover_text = f"<b>{status}</b><br>Count: {count}<br>Units: {units_display}"
+                        units_display += t("charts.more", count_10=count-10)
+                    hover_text = t("charts.b_b_br_count_br_units", status=status_label(status), count=count, units_display=units_display)
                 else:
-                    hover_text = f"<b>{status}</b><br>Count: 0"
+                    hover_text = t("charts.b_b_br_count_0", status=status_label(status))
                 hover_texts.append(hover_text)
             
             fig.add_trace(go.Bar(
-                name=status,
+                name=status_label(status),
                 y=component_names,
                 x=status_df[status],
                 orientation='h',
@@ -206,10 +208,10 @@ def create_component_stacked_bar_chart(
             font=dict(size=16)
         ),
         xaxis=dict(
-            title="Number of Components",
+            title=t("charts.number_of_components"),
             tickangle=-90
         ),
-        yaxis_title="Component",
+        yaxis_title=t("tables.component"),
         barmode='stack',
         showlegend=True,
         legend=dict(
@@ -284,21 +286,21 @@ def create_radar_chart(
     fig.add_trace(go.Scatterpolar(
         r=marginal + [marginal[0]],
         theta=categories + [categories[0]],
-        name='Marginal',
+        name=t("status.marginal"),
         line=dict(color='#28a745', width=2, dash='dash')
     ))
     
     fig.add_trace(go.Scatterpolar(
         r=condenatorio + [condenatorio[0]],
         theta=categories + [categories[0]],
-        name='Condenatorio',
+        name=t("status.condemnatory"),
         line=dict(color='#ffc107', width=2, dash='dash')
     ))
     
     fig.add_trace(go.Scatterpolar(
         r=critico + [critico[0]],
         theta=categories + [categories[0]],
-        name='Crítico',
+        name=t("erp.severity.critical"),
         line=dict(color='#dc3545', width=2, dash='dash')
     ))
     
@@ -306,7 +308,7 @@ def create_radar_chart(
     fig.add_trace(go.Scatterpolar(
         r=values + [values[0]],
         theta=categories + [categories[0]],
-        name='Actual',
+        name=t("charts.actual"),
         fill='toself',
         fillcolor='rgba(23, 162, 184, 0.3)',
         line=dict(color='#17a2b8', width=3)
@@ -316,7 +318,7 @@ def create_radar_chart(
         polar=dict(
             radialaxis=dict(visible=True, range=[0, max(max(values), max(critico)) * 1.2])
         ),
-        title=f"Radar Chart - {group_element}",
+        title=t("charts.radar_chart", group_element=group_element),
         title_font_size=16,
         showlegend=True,
         height=500
@@ -382,15 +384,15 @@ def create_time_series_chart(
                             y=critic,
                             line_dash="dash",
                             line_color="#dc3545",
-                            annotation_text=f"{essay} Crítico",
+                            annotation_text=t("charts.critico", essay=essay),
                             annotation_position="right"
                         )
     
     fig.update_layout(
-        title=f"Time Series - {unit_id} / {component}",
+        title=t("charts.time_series", unit_id=unit_id, component=component),
         title_font_size=16,
-        xaxis_title="Sample Date",
-        yaxis_title="Value",
+        xaxis_title=t("charts.sample_date"),
+        yaxis_title=t("charts.value"),
         hovermode='x unified',
         height=500,
         showlegend=True
@@ -421,7 +423,7 @@ def create_bar_chart(data: Dict[str, int], title: str, color: str = '#17a2b8') -
         title=title,
         title_font_size=16,
         xaxis_title="",
-        yaxis_title="Count",
+        yaxis_title=t("charts.count"),
         height=350
     )
     
@@ -451,7 +453,7 @@ def create_component_heatmap(
     """
     if df.empty:
         fig = go.Figure()
-        fig.add_annotation(text="Sin datos disponibles", x=0.5, y=0.5,
+        fig.add_annotation(text=t("lab_compliance_callbacks.sin_datos_disponibles"), x=0.5, y=0.5,
                            showarrow=False, xref="paper", yref="paper",
                            font=dict(size=16, color="#6c757d"))
         fig.update_layout(height=200, xaxis=dict(visible=False), yaxis=dict(visible=False))
@@ -467,7 +469,7 @@ def create_component_heatmap(
 
     if filtered.empty:
         fig = go.Figure()
-        fig.add_annotation(text="Sin datos para los filtros seleccionados", x=0.5, y=0.5,
+        fig.add_annotation(text=t("machines_callbacks.sin_datos_para_los_filtros_seleccionados"), x=0.5, y=0.5,
                            showarrow=False, xref="paper", yref="paper",
                            font=dict(size=14, color="#6c757d"))
         fig.update_layout(height=200, xaxis=dict(visible=False), yaxis=dict(visible=False))
@@ -485,7 +487,7 @@ def create_component_heatmap(
 
     if latest.empty:
         fig = go.Figure()
-        fig.add_annotation(text="Sin datos para los filtros seleccionados", x=0.5, y=0.5,
+        fig.add_annotation(text=t("machines_callbacks.sin_datos_para_los_filtros_seleccionados"), x=0.5, y=0.5,
                            showarrow=False, xref="paper", yref="paper",
                            font=dict(size=14, color="#6c757d"))
         fig.update_layout(height=200, xaxis=dict(visible=False), yaxis=dict(visible=False))
@@ -532,16 +534,16 @@ def create_component_heatmap(
     for unit in pivot_status.index:
         row_text = []
         for comp in pivot_status.columns:
-            status = pivot_status.loc[unit, comp] if pd.notna(pivot_status.loc[unit, comp]) else 'Sin dato'
+            status = pivot_status.loc[unit, comp] if pd.notna(pivot_status.loc[unit, comp]) else t("charts.sin_dato")
             anomaly = hover_pivot.loc[unit, comp] if pd.notna(hover_pivot.loc[unit, comp]) else ''
             date_val = date_pivot.loc[unit, comp]
             date_str = date_val.strftime('%Y-%m-%d') if pd.notna(date_val) else 'N/A'
 
-            text = f"<b>{unit}</b> — {comp.title()}<br>"
-            text += f"Estado: {status}<br>"
-            text += f"Fecha: {date_str}<br>"
+            text = t("charts.b_b_br", unit=unit, comp_title=comp.title())
+            text += t("charts.estado_br", status=status_label(status))
+            text += t("charts.fecha_br", date_str=date_str)
             if anomaly and anomaly != 'Normal':
-                text += f"Anomalía: {anomaly}"
+                text += t("charts.anomalia", anomaly=anomaly)
             row_text.append(text)
         hover_text.append(row_text)
 
@@ -578,13 +580,13 @@ def create_component_heatmap(
 
     fig.update_layout(
         xaxis=dict(
-            title="Componente",
+            title=t("alerts_tables.col_componente"),
             side="top",
             tickangle=-45,
             tickfont=dict(size=11)
         ),
         yaxis=dict(
-            title="Unidad",
+            title=t("alerts_general.filter_unit"),
             autorange="reversed",
             tickfont=dict(size=11)
         ),

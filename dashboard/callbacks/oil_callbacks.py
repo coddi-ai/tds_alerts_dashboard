@@ -4,6 +4,7 @@ Callbacks for the unified Oil Tab.
 Handles switching between internal tabs (Fleet Overview / Report Detail / Component Hours).
 """
 
+from src.i18n import t
 from dash import callback, Input, Output, State
 from dashboard.tabs.tab_machines import create_machines_tab
 from dashboard.tabs.tab_reports import create_reports_tab
@@ -63,10 +64,9 @@ def render_oil_tab_content(active_tab, client):
             return create_component_hours_tab()
         else:
             return html.Div([
-                html.H4("⚠️ Módulo no disponible", className="mt-4 text-warning"),
+                html.H4(t("oil_callbacks.modulo_no_disponible"), className="mt-4 text-warning"),
                 html.P(
-                    f"El horómetro de componentes no está disponible para el cliente seleccionado. "
-                    f"Disponible para: {', '.join(allowed)}.",
+                    t("oil_callbacks.el_horometro_de_componentes_no_esta", join_allowed=', '.join(allowed)),
                     className="text-muted"
                 )
             ], className="p-4")

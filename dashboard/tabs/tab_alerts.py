@@ -5,6 +5,7 @@ This tab combines the General and Detail views into a single navigation entry
 with internal tabs for switching between views.
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -27,10 +28,10 @@ def create_layout() -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-exclamation-triangle me-3"),
-                    "Resumen de Alertas"
+                    t("tab_alerts.resumen_de_alertas")
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Identifique unidades afectadas, causa, evidencia y próxima acción",
+                    t("tab_alerts.identifique_unidades_afectadas_causa_evide"),
                     className="text-muted"
                 )
             ])
@@ -43,13 +44,13 @@ def create_layout() -> html.Div:
             value='general',
             children=[
                 dcc.Tab(
-                    label='Vista General',
+                    label=t("tab_alerts.vista_general"),
                     value='general',
                     className='custom-tab',
                     selected_className='custom-tab--selected'
                 ),
                 dcc.Tab(
-                    label='Vista Detallada',
+                    label=t("tab_alerts.vista_detallada"),
                     value='detail',
                     className='custom-tab',
                     selected_className='custom-tab--selected'

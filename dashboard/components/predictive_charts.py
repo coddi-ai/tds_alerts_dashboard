@@ -1,6 +1,8 @@
 """
 Componentes de gráficos para la página de evidencia.
 """
+from src.i18n import t as _t
+from dashboard.components.labels import status_label
 import plotly.graph_objects as go
 import pandas as pd
 
@@ -21,23 +23,28 @@ def _oil_date_col(df) -> str:
     return "Fecha"
 
 
-def create_fleet_scatter(df_latest, selected_unit, status_colors, p80_30d):
+FLEET_SCATTER_THRESHOLD = 50.0  # splits both axes (ranking today / 30d average)
+
+
+def create_fleet_scatter(df_latest, selected_unit, status_colors):
     """
     Crear scatter de ranking vs avg_ranking_30d con todos los equipos.
-    Destaca el equipo seleccionado.
+    Destaca el equipo seleccionado. Ambos ejes se dividen en
+    FLEET_SCATTER_THRESHOLD para formar las cuatro regiones.
     """
     x_all = df_latest["ranking"].astype(float)
     y_all = df_latest["avg_ranking_30d"].astype(float)
+
+    x_thresh = y_thresh = FLEET_SCATTER_THRESHOLD
 
     x_min, x_max = float(x_all.min()), float(x_all.max())
     y_min, y_max = float(y_all.min()), float(y_all.max())
     x_pad = max((x_max - x_min) * 0.12, 5)
     y_pad = max((y_max - y_min) * 0.12, 2)
-    x0, x1 = max(0, x_min - x_pad), x_max + x_pad
-    y0, y1 = max(0, y_min - y_pad), y_max + y_pad
-
-    x_thresh = 80.0
-    y_thresh = p80_30d
+    # The range always contains the threshold, so no region collapses when the
+    # whole fleet sits on one side of it.
+    x0, x1 = max(0, min(x_min - x_pad, x_thresh - 5)), max(x_max + x_pad, x_thresh + 5)
+    y0, y1 = max(0, min(y_min - y_pad, y_thresh - 5)), max(y_max + y_pad, y_thresh + 5)
 
     fig = go.Figure()
 
@@ -68,10 +75,10 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, p80_30d):
         showarrow=False, font=dict(size=9, color="rgba(0,0,0,0.2)"),
         xanchor="center", yanchor="middle"
     )
-    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y_thresh + y1) / 2, text="Crítica sostenida", **ql)
-    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y0 + y_thresh) / 2, text="Empeoró de golpe", **ql)
-    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y_thresh + y1) / 2, text="Mejoró recientemente", **ql)
-    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y0 + y_thresh) / 2, text="Zona saludable", **ql)
+    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y_thresh + y1) / 2, text=_t("predictive_charts.critica_sostenida"), **ql)
+    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y0 + y_thresh) / 2, text=_t("predictive_charts.empeoro_de_golpe"), **ql)
+    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y_thresh + y1) / 2, text=_t("predictive_charts.mejoro_recientemente"), **ql)
+    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y0 + y_thresh) / 2, text=_t("predictive_charts.zona_saludable"), **ql)
 
     # Fleet points (all units except selected)
     for st, color in status_colors.items():
@@ -83,15 +90,16 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, p80_30d):
             x=subset["ranking"].astype(float),
             y=subset["avg_ranking_30d"].astype(float),
             mode="markers+text",
-            name=st,
+            name=status_label(st),
             text=subset["Unit"],
+            customdata=subset["Unit"],  # read back by click-to-Evidence
             textposition="top center",
             textfont=dict(size=9, color=color),
             marker=dict(
                 color=color, size=8,
                 line=dict(color="white", width=1.2), opacity=0.5
             ),
-            hovertemplate="<b>%{text}</b><br>Ranking: %{x:.0f}<br>Prom 30d: %{y:.1f}<extra></extra>",
+            hovertemplate=_t("predictive_charts.b_b_br_ranking_br_prom"),
         ))
 
     # Selected unit — highlighted
@@ -103,13 +111,14 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, p80_30d):
             mode="markers+text",
             name=selected_unit,
             text=[selected_unit],
+            customdata=[selected_unit],
             textposition="top center",
             textfont=dict(size=11, color="#2563EB", family="DM Sans"),
             marker=dict(
                 color="#2563EB", size=14,
                 line=dict(color="white", width=2), opacity=1.0
             ),
-            hovertemplate=f"<b>{selected_unit}</b><br>Ranking: %{{x:.0f}}<br>Prom 30d: %{{y:.1f}}<extra></extra>",
+            hovertemplate=_t("predictive_charts.b_b_br_ranking_br_prom_2", selected_unit=selected_unit),
         ))
 
     fig.update_layout(
@@ -120,12 +129,12 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, p80_30d):
         margin=dict(l=60, r=20, t=20, b=50),
         showlegend=False,
         xaxis=dict(
-            title="Ranking actual",
+            title=_t("tab_predictive_evidence.ranking_actual"),
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[x0, x1]
         ),
         yaxis=dict(
-            title="Ranking 30 días",
+            title=_t("predictive_charts.ranking_30_dias"),
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[y0, y1]
         ),
@@ -170,10 +179,10 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
     fig.add_trace(go.Bar(
         y=data['mode'],
         x=data['fleet'],
-        name='Promedio flota',
+        name=_t("predictive_charts.promedio_flota"),
         orientation='h',
         marker=dict(color='rgba(0,0,0,0.15)'),
-        hovertemplate='<b>%{y}</b><br>Promedio flota: %{x:.1f}<extra></extra>',
+        hovertemplate=_t("predictive_charts.b_b_br_promedio_flota_extra"),
     ))
     
     # Barra: Unidad seleccionada
@@ -202,7 +211,7 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
             x=1,
         ),
         xaxis=dict(
-            title="Score de riesgo por modo de falla",
+            title=_t("predictive_charts.score_de_riesgo_por_modo_de"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=True,
@@ -215,6 +224,173 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
         ),
     )
     
+    return fig
+
+
+# Four-band criticidad classification, the same one `mode_failure_analisis`
+# uses for every client (lower bound inclusive): Saludable <35, Monitoreo
+# 35-55, Prioridad alta 55-75, Crítico >=75. Index == band code in the heatmap.
+CRITICIDAD_BANDS = [
+    ("Saludable", "#1d9e75"),
+    ("Monitoreo", "#f2d04b"),
+    ("Prioridad alta", "#ef7f27"),
+    ("Crítico", "#e24b4a"),
+]
+_CRITICIDAD_EDGES = (35.0, 55.0, 75.0)
+_BAND_LABEL_KEYS = (
+    "predictive_charts.band_healthy",
+    "predictive_charts.band_monitoring",
+    "predictive_charts.band_high_priority",
+    "predictive_charts.band_critical",
+)
+
+
+def _band_label(index: int) -> str:
+    """Display label of band `index` of CRITICIDAD_BANDS (which holds the Spanish source text)."""
+    return _t(_BAND_LABEL_KEYS[index])
+
+
+_NO_DATA_CODE = len(CRITICIDAD_BANDS)
+_NO_DATA_COLOR = "#e5e7eb"
+
+_WEAR_PALETTE = ["#2563EB", "#E24B4A", "#1D9E75", "#7C3AED", "#EF9F27", "#0891B2"]
+
+
+def classify_criticidad(value):
+    """Band index (0..3) of a risk score, or None when there is no score -
+    a missing day is "no data", never implicitly Saludable."""
+    if value is None or pd.isna(value):
+        return None
+    return sum(float(value) >= edge for edge in _CRITICIDAD_EDGES)
+
+
+def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90):
+    """Calendar heatmap: one row per failure mode, one column per day over the
+    `days` days ending at `end_date`, coloured by the criticidad band of that
+    day's `risk_value`. `df_unit` is the unit's wide risk frame (Fecha + one
+    column per mode); a mode/day with no value renders as "Sin datos".
+    Dotted vertical lines mark each Monday (week start).
+    """
+    if df_unit is None or df_unit.empty or end_date is None:
+        return None
+    modes = [k for k in failure_modes if k in df_unit.columns]
+    if not modes:
+        return None
+
+    end = pd.Timestamp(end_date).normalize()
+    dates = pd.date_range(end=end, periods=days, freq="D")
+    daily = (
+        df_unit.assign(Fecha=pd.to_datetime(df_unit["Fecha"]).dt.normalize())
+        .drop_duplicates(subset="Fecha", keep="last")
+        .set_index("Fecha")
+        .reindex(dates)[modes]
+    )
+    # Worst mode on top: order by mean over the window, ties by catalogue order.
+    order = sorted(modes, key=lambda m: (-(daily[m].mean() if daily[m].notna().any() else -1.0), modes.index(m)))
+
+    z, hover = [], []
+    for m in order:
+        row_z, row_h = [], []
+        for d, v in zip(dates, daily[m]):
+            band = classify_criticidad(v)
+            row_z.append(_NO_DATA_CODE if band is None else band)
+            row_h.append(
+                _t("predictive_charts.sin_datos", d=d) if band is None
+                else f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}"
+            )
+        z.append(row_z)
+        hover.append(row_h)
+
+    # Discrete colorscale: code k occupies [k/n, (k+1)/n] with n = bands + no data.
+    palette = [c for _, c in CRITICIDAD_BANDS] + [_NO_DATA_COLOR]
+    n = len(palette)
+    colorscale = []
+    for i, c in enumerate(palette):
+        colorscale += [[i / n, c], [(i + 1) / n, c]]
+
+    fig = go.Figure(go.Heatmap(
+        x=dates, y=[failure_modes[m] for m in order], z=z,
+        zmin=-0.5, zmax=n - 0.5,  # each integer code sits mid-bin
+        colorscale=colorscale, showscale=False,
+        xgap=1, ygap=1,
+        text=hover, hovertemplate="<b>%{y}</b><br>%{text}<extra></extra>",
+    ))
+
+    # Week starts: the line sits on the left edge of each Monday's cell.
+    for d in dates[dates.dayofweek == 0]:
+        edge = d - pd.Timedelta(hours=12)
+        fig.add_shape(
+            type="line", xref="x", yref="paper", x0=edge, x1=edge, y0=0, y1=1,
+            line=dict(color="rgba(0,0,0,0.45)", width=1, dash="dot"), layer="above",
+        )
+
+    # Legend: heatmaps have none, so one empty marker trace per band.
+    for label, color in [*[(_band_label(i), c) for i, (_, c) in enumerate(CRITICIDAD_BANDS)], (_t("oil_machine_detail.sin_datos"), _NO_DATA_COLOR)]:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers", name=label, hoverinfo="skip",
+            marker=dict(symbol="square", size=10, color=color),
+        ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="DM Sans, sans-serif", size=11, color="#6C7280"),
+        height=380,
+        margin=dict(l=20, r=20, t=20, b=60),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5, font=dict(size=10)),
+        xaxis=dict(
+            showgrid=False, zeroline=False, tickfont=dict(size=10), tickformat="%d %b",
+            range=[dates[0] - pd.Timedelta(hours=12), dates[-1] + pd.Timedelta(hours=12)],
+        ),
+        yaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), autorange="reversed"),
+    )
+    return fig
+
+
+def create_accumulated_wear_chart(df_meter, metal_suffix="_acum_total"):
+    """Cumulative wear curves from `oil_meter_history`: one line per wear metal
+    (`{Metal}_acum_total`) over `Fecha`. `df_meter` must already be scoped to a
+    single component life (see predictive_v2.load_latest_cycle_oil_meter_history),
+    so nothing here encodes `ciclo_motor`; each metal only gets its own colour.
+    Values are plotted as published - the totals can dip between samples of the
+    same oil charge, so there is no smoothing, clipping or monotonic fix-up.
+    Returns None when there is nothing to plot.
+    """
+    if df_meter is None or df_meter.empty:
+        return None
+    metals = [c for c in df_meter.columns if c.endswith(metal_suffix)]
+    if not metals:
+        return None
+
+    df = df_meter.sort_values("Fecha")
+    fig = go.Figure()
+    for i, metal_col in enumerate(metals):
+        series = df[["Fecha", metal_col]].dropna(subset=[metal_col])
+        if series.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=series["Fecha"], y=series[metal_col].astype(float),
+            mode="lines", name=metal_col[: -len(metal_suffix)],
+            line=dict(width=2, color=_WEAR_PALETTE[i % len(_WEAR_PALETTE)]),
+            hovertemplate="%{x|%d %b %Y}<br><b>%{y:.1f}</b><extra></extra>",
+        ))
+    if not fig.data:
+        return None
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="DM Sans, sans-serif", size=11, color="#6C7280"),
+        height=360,
+        margin=dict(l=60, r=24, t=30, b=50),
+        showlegend=True,
+        hovermode="x unified",
+        xaxis=dict(title="", showgrid=False, zeroline=False, tickfont=dict(size=10), tickformat="%b %Y"),
+        yaxis=dict(title=_t("predictive_charts.desgaste_acumulado_ppm"), showgrid=True, gridcolor="rgba(0,0,0,0.05)",
+                   zeroline=False, tickfont=dict(size=10)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
     return fig
 
 
@@ -249,7 +425,7 @@ def create_radar_comparison(unit_row, df_latest, failure_modes):
         r=avg_vals_closed,
         theta=fm_labels_closed,
         fill="toself",
-        name="Promedio flota",
+        name=_t("predictive_charts.promedio_flota"),
         line=dict(color="rgba(0,0,0,0.15)", width=1),
         fillcolor="rgba(0,0,0,0.04)",
     ))
@@ -407,7 +583,7 @@ def create_oil_timeseries_90d(df_unit, variables, oil_labels, oil_limits_four=No
             tickformat="%d %b",
         ),
         yaxis=dict(
-            title="Valor",
+            title=_t("alerts_charts.valor"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=False,
@@ -469,7 +645,7 @@ def create_oil_timeseries(df_unit, variables, oil_labels):
             tickformat="%b %Y",
         ),
         yaxis=dict(
-            title="Valor",
+            title=_t("alerts_charts.valor"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=False,
@@ -522,9 +698,9 @@ def create_telemetry_signal_chart(df_unit, signal, telemetry_labels):
         fig.add_trace(go.Bar(
             x=df_grouped["Fecha"],
             y=df_grouped["alert_rate_total"],
-            name="Alert",
+            name=_t("predictive_charts.alert"),
             marker=dict(color="#ef9f27"),
-            hovertemplate="%{x|%d %b %Y}<br>Alert: %{y:.1%}<extra></extra>",
+            hovertemplate=_t("predictive_charts.br_alert_extra_extra"),
         ))
     
     # Barras: Critic rate
@@ -532,9 +708,9 @@ def create_telemetry_signal_chart(df_unit, signal, telemetry_labels):
         fig.add_trace(go.Bar(
             x=df_grouped["Fecha"],
             y=df_grouped["critic_rate_total"],
-            name="Crítico",
+            name=_t("erp.severity.critical"),
             marker=dict(color="#e24b4a"),
-            hovertemplate="%{x|%d %b %Y}<br>Crítico: %{y:.1%}<extra></extra>",
+            hovertemplate=_t("predictive_charts.br_critico_extra_extra"),
         ))
     
     signal_label = telemetry_labels.get(signal, signal)
@@ -561,7 +737,7 @@ def create_telemetry_signal_chart(df_unit, signal, telemetry_labels):
             tickformat="%d %b",
         ),
         yaxis=dict(
-            title="Tasa",
+            title=_t("predictive_charts.tasa"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=False,
@@ -610,17 +786,17 @@ def create_telemetry_signal_chart_from_long(df_signal, signal, telemetry_labels)
         fig.add_trace(go.Bar(
             x=df_sig["Fecha"],
             y=df_sig["pct_time_alert"] / 100.0,
-            name="Alert",
+            name=_t("predictive_charts.alert"),
             marker=dict(color="#ef9f27"),
-            hovertemplate="%{x|%d %b %Y}<br>Alert: %{y:.1%}<extra></extra>",
+            hovertemplate=_t("predictive_charts.br_alert_extra_extra"),
         ))
     if has_critical:
         fig.add_trace(go.Bar(
             x=df_sig["Fecha"],
             y=df_sig["pct_time_critical"] / 100.0,
-            name="Crítico",
+            name=_t("erp.severity.critical"),
             marker=dict(color="#e24b4a"),
-            hovertemplate="%{x|%d %b %Y}<br>Crítico: %{y:.1%}<extra></extra>",
+            hovertemplate=_t("predictive_charts.br_critico_extra_extra"),
         ))
 
     signal_label = telemetry_labels.get(signal, signal)
@@ -647,7 +823,7 @@ def create_telemetry_signal_chart_from_long(df_signal, signal, telemetry_labels)
             tickformat="%d %b",
         ),
         yaxis=dict(
-            title="% tiempo",
+            title=_t("predictive_charts.tiempo"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=False,
@@ -727,7 +903,7 @@ def create_telemetry_alerts_timeseries(df_unit, telemetry_vars, telemetry_labels
             tickformat="%b %Y",
         ),
         yaxis=dict(
-            title="Tasa de alertas",
+            title=_t("predictive_charts.tasa_de_alertas"),
             showgrid=True,
             gridcolor="rgba(0,0,0,0.05)",
             zeroline=False,

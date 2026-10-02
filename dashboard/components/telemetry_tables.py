@@ -4,11 +4,12 @@ Table/data helpers for Telemetry Health Dashboard.
 Build display DataFrames from golden layer outputs.
 """
 
+from src.i18n import t
 import pandas as pd
 import json
 from typing import Optional
 
-from dashboard.components.telemetry_charts import translate_system
+from dashboard.components.telemetry_charts import translate_system, untranslate_system
 
 
 def build_fleet_priority_table(unit_health_df: pd.DataFrame) -> list:
@@ -91,11 +92,7 @@ def build_signal_overview_table(
 
     # Reverse-translate system name for filtering (Spanish → English)
     if system:
-        reverse_map = {v: k for k, v in {
-            'Engine': 'Motor', 'Transmission': 'Transmisión',
-            'Brakes': 'Frenos', 'Steering': 'Dirección'
-        }.items()}
-        system_en = reverse_map.get(system, system)
+        system_en = untranslate_system(system)
         dev = dev[dev['system'] == system_en]
 
     if dev.empty:
@@ -155,7 +152,7 @@ def build_signal_kpi(
         'total_events': 0,
         'warnings': 0,
         'longest_episode': 0,
-        'trend_detected': 'No',
+        'trend_detected': t("common.no"),
         'trend_direction': '-',
         'trend_formula': '-'
     }
@@ -180,7 +177,7 @@ def build_signal_kpi(
         ]
         if not trnd.empty:
             best = trnd.sort_values('r2', ascending=False).iloc[0]
-            kpi['trend_detected'] = 'Sí'
+            kpi['trend_detected'] = t("common.yes")
             kpi['trend_direction'] = best.get('trend_interpretation', '-')
             slope = best.get('slope_per_day', 0)
             r2 = best.get('r2', 0)

@@ -262,3 +262,138 @@
 #dashboard-shell.sidebar-collapsed .sidebar-toggle-btn #sidebar-toggle-icon {
     transform: rotate(180deg);
 }
+
+/* ========================================
+   FLEET OVERVIEW - UNIT TABLE & COLLAPSIBLE BANDS
+   (08_fleet_overview_table_format.md). Header/cell metrics mirror the
+   Monitoring > Oil table (machines_callbacks.py: #343a40 header, centered
+   11-12px cells); the severity colors are set inline from that same table's
+   palette.
+   ======================================== */
+
+/* Band header toggles its band's table (collapsed state persisted
+   client-side, see dashboard/assets/fleet_overview_state.js). */
+.fleet-band-chevron {
+    transition: transform 0.2s ease;
+}
+
+.fleet-band-header.fleet-band-collapsed .fleet-band-chevron {
+    transform: rotate(-90deg);
+}
+
+.fleet-table-wrap {
+    overflow-x: auto;
+}
+
+.fleet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.fleet-table th {
+    background-color: #343a40;
+    color: #fff;
+    font-weight: 700;
+    font-size: 11px;
+    text-align: center;
+    padding: 6px 10px;
+    white-space: nowrap;
+}
+
+.fleet-table th.fleet-table-unit,
+.fleet-table td.fleet-table-unit {
+    text-align: left;
+    min-width: 90px;
+}
+
+.fleet-table td {
+    padding: 0;
+    border-bottom: 1px solid var(--border-strong, #dee2e6);
+    text-align: center;
+    white-space: nowrap;
+}
+
+.fleet-table td.fleet-table-unit {
+    font-weight: 600;
+}
+
+.fleet-table-estado {
+    font-weight: 700;
+}
+
+/* The whole cell is the link, so the entire row opens the Unit Summary
+   (08, Required Changes #6) and the hover tooltip (title) is available
+   anywhere over a cell. */
+.fleet-cell-link {
+    display: block;
+    padding: 7px 10px;
+    color: inherit;
+    text-decoration: none;
+}
+
+.fleet-cell-link:hover {
+    color: inherit;
+    text-decoration: none;
+}
+
+.fleet-table-row {
+    cursor: pointer;
+}
+
+.fleet-table-row:hover td {
+    filter: brightness(0.95);
+}
+
+/* "Mostrar siguientes N unidades" - loads the band's next page of rows. */
+.fleet-more-btn {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    padding: 7px 10px;
+    border: 1px dashed var(--border-strong, #adb5bd);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted, #6c757d);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.fleet-more-btn:hover {
+    background-color: rgba(52, 152, 219, 0.08);
+}
+
+.fleet-more-btn[hidden] {
+    display: none;
+}
+
+/* ========================================
+   UNIT SUMMARY - NAVIGATION SHELL
+   ======================================== */
+
+.unit-summary-back-link:hover,
+.unit-summary-sticky-header a:hover {
+    background-color: rgba(52, 152, 219, 0.08);
+}
+
+.unit-summary-switcher .dropdown-menu {
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+/* Monitoreo 2x2 grid (spec 09): two columns when all 4 techniques apply,
+   collapsing to one column on narrow viewports. minmax(0, 1fr) lets wide
+   cards (oil table) scroll inside instead of stretching their column. */
+.unit-summary-grid-2x2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+@media (max-width: 991px) {
+    .unit-summary-grid-2x2 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

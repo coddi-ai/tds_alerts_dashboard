@@ -35,26 +35,76 @@ logger = get_logger(__name__)
 # unchanged: `from dashboard.components.predictive_config import ...` keeps working, and there
 # is only one definition to keep correct.
 
+from src import i18n as _i18n
+from src.data import predictive_catalog as _catalog
 from src.data.predictive_catalog import (  # noqa: F401  (re-exported)
     FAILURE_MODE_CONFIG,
     FAILURE_MODE_METHODOLOGY,
-    OIL_LABELS,
-    TELEMETRY_LABELS,
     get_all_oil_variables,
     get_available_components,
-    get_failure_mode_label,
-    get_failure_mode_methodology,
-    get_failure_mode_options,
-    get_failure_modes_dict,
-    get_failure_modes_for_component,
     get_oil_variables_for_mode,
     get_signals_catalog,
     get_telemetry_signals_for_mode,
     get_telemetry_variables_for_mode,
     humanize_mode_key,
-    resolve_failure_mode_options,
-    resolve_failure_modes,
 )
+
+# ---------------------------------------------------------------------------
+# Display translation. The catalog above is written in Spanish and is also read as-is by
+# Campbell AI, so it is never edited for the UI. These wrappers return the same shapes with the
+# *display* text (failure-mode names/descriptions/methodology, oil and telemetry labels)
+# translated for the language of the request being served; identifiers, variable keys and
+# thresholds are untouched.
+# ---------------------------------------------------------------------------
+_vocab = _i18n.vocab
+
+OIL_LABELS = _i18n.NestedVocabMapping(_catalog.OIL_LABELS)
+TELEMETRY_LABELS = _i18n.NestedVocabMapping(_catalog.TELEMETRY_LABELS)
+
+
+def _translated_mode(config: dict) -> dict:
+    translated = dict(config)
+    for field in ("label", "description"):
+        if isinstance(translated.get(field), str):
+            translated[field] = _vocab(translated[field])
+    return translated
+
+
+def get_failure_modes_for_component(component: str, client: str = "cda") -> dict:
+    return {
+        key: _translated_mode(config)
+        for key, config in _catalog.get_failure_modes_for_component(component, client).items()
+    }
+
+
+def get_failure_mode_label(mode_key: str, *args, **kwargs) -> str:
+    return _vocab(_catalog.get_failure_mode_label(mode_key, *args, **kwargs))
+
+
+def get_failure_mode_methodology(mode_key: str, *args, **kwargs) -> str:
+    return _vocab(_catalog.get_failure_mode_methodology(mode_key, *args, **kwargs))
+
+
+def get_failure_mode_options(*args, **kwargs) -> list:
+    return [
+        {**option, "label": _vocab(option["label"])}
+        for option in _catalog.get_failure_mode_options(*args, **kwargs)
+    ]
+
+
+def get_failure_modes_dict(*args, **kwargs) -> dict:
+    return {key: _vocab(label) for key, label in _catalog.get_failure_modes_dict(*args, **kwargs).items()}
+
+
+def resolve_failure_modes(*args, **kwargs) -> dict:
+    return {key: _vocab(label) for key, label in _catalog.resolve_failure_modes(*args, **kwargs).items()}
+
+
+def resolve_failure_mode_options(*args, **kwargs) -> list:
+    return [
+        {**option, "label": _vocab(option["label"])}
+        for option in _catalog.resolve_failure_mode_options(*args, **kwargs)
+    ]
 
 
 # =============================================================================

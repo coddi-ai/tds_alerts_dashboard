@@ -161,13 +161,14 @@ itself is parameterized by `{cliente}/{componente}`. As observed in the local mi
 | Client | Component | `risk_scores` / `unit_status_summary` (new parquet) | `cumulative_risk_curve` | Legacy CSV still present |
 |---|---|:-:|:-:|:-:|
 | `capstone` | `motor` | ✅ | ✅ | ✅ (`motor.csv`) |
-| `cda` | `motor` | ✅ (history back to `year=2021`) | ❌ | ✅ (`motor.csv`) |
+| `cda` | `motor` | ✅ (history back to `year=2021`) | ✅ (`year=2026/week=29`) | ✅ (`motor.csv`) |
 | `cda` | `transmision` | ❌ — not migrated | ❌ | ✅ (`transmision.csv`) |
 
 So the new layout currently only covers `componente = motor`, across at least two clients
 (`capstone`, `cda`); `transmision` has **not** been migrated for either client and is still only
-available as the old wide CSV. `cumulative_risk_curve` has only been observed for `capstone`.
-Whether/how multi-client, multi-component discovery works against this layout (equivalent to
+available as the old wide CSV. `cumulative_risk_curve` is now observed for both `capstone` and
+`cda` (as of 2026-09-29 — previously capstone-only; re-check before assuming this has stayed
+current). Whether/how multi-client, multi-component discovery works against this layout (equivalent to
 v1.0's `_discover_components`) is **not formally specified** — treat the table above as a snapshot
 of what exists today, not a guarantee, and re-check before assuming a client/component pair is
 covered.

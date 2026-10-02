@@ -1,5 +1,6 @@
 """Main Telemetry tab with executive fleet and unit evidence views."""
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
@@ -14,10 +15,10 @@ def create_layout(client: str = 'cda') -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-heartbeat me-3"),
-                    "Monitoreo de salud de la flota"
+                    t("tab_telemetry.monitoreo_de_salud_de_la_flota")
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Monitoreo de salud de flota basado en telemetría multi-técnica",
+                    t("tab_telemetry.monitoreo_de_salud_de_flota_basado"),
                     className="text-muted"
                 )
             ]),
@@ -35,13 +36,13 @@ def create_layout(client: str = 'cda') -> html.Div:
             value='fleet-overview',
             children=[
                 dcc.Tab(
-                    label='Vista de Flota',
+                    label=t("tab_telemetry.vista_de_flota"),
                     value='fleet-overview',
                     className='custom-tab',
                     selected_className='custom-tab--selected'
                 ),
                 dcc.Tab(
-                    label='Detalle de Unidad',
+                    label=t("tab_telemetry.detalle_de_unidad"),
                     value='unit-detail',
                     className='custom-tab',
                     selected_className='custom-tab--selected'

@@ -7,6 +7,7 @@ Custom CSS for navigation and layout styling is automatically loaded from:
 - dashboard/assets/custom_layout.css
 """
 
+from src.i18n import t
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 import dash
@@ -14,8 +15,9 @@ import os
 from pathlib import Path
 from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
+from dashboard.components.language_selector import create_language_selector, LANGUAGE_SYNC_STORE_ID
 from dashboard.auth import current_dashboard_user_data, is_admin
-from dashboard.services_registry import SERVICE_SECTIONS, SERVICE_LABELS, nav_path as _nav_path
+from dashboard.services_registry import SERVICE_SECTIONS, nav_path as _nav_path, section_label, service_label
 from dashboard.troubleshooting_handoff import troubleshooting_agent_configured
 
 
@@ -50,6 +52,10 @@ def create_login_page() -> dbc.Container:
         Bootstrap container with professional login form
     """
     return dbc.Container([
+        html.Div(
+            create_language_selector(),
+            style={"position": "fixed", "top": "16px", "right": "24px", "zIndex": 1000},
+        ),
         dbc.Row([
             dbc.Col([
                 # Login card with integrated branding
@@ -73,7 +79,7 @@ def create_login_page() -> dbc.Container:
                                 className="text-center"
                             ),
                             html.H3(
-                                "Plataforma de Monitoreo Multi-Técnica",
+                                t("app.platform_title"),
                                 className="text-center mt-3 mb-1",
                                 style={"fontWeight": "600", "color": "#1a252f", "fontSize": "1.4rem"}
                             ),
@@ -91,7 +97,7 @@ def create_login_page() -> dbc.Container:
                         # Login form section
                         html.Div([
                             html.H4(
-                                "Iniciar Sesión",
+                                t("login.title"),
                                 className="mb-1 text-center",
                                 style={"fontWeight": "600", "fontSize": "1.3rem"}
                             ),
@@ -112,7 +118,7 @@ def create_login_page() -> dbc.Container:
                             # Username field
                             html.Div([
                                 html.Label(
-                                    "Usuario",
+                                    t("login.username"),
                                     className="form-label fw-500 mb-2",
                                     style={"fontSize": "0.9rem", "color": "#495057"}
                                 ),
@@ -123,7 +129,7 @@ def create_login_page() -> dbc.Container:
                                     ),
                                     dbc.Input(
                                         id='username-input',
-                                        placeholder='Ingrese su usuario',
+                                        placeholder=t("login.username_placeholder"),
                                         type='text',
                                         style={"fontSize": "0.95rem"},
                                         autoComplete="username"
@@ -134,7 +140,7 @@ def create_login_page() -> dbc.Container:
                             # Password field
                             html.Div([
                                 html.Label(
-                                    "Contraseña",
+                                    t("login.password"),
                                     className="form-label fw-500 mb-2",
                                     style={"fontSize": "0.9rem", "color": "#495057"}
                                 ),
@@ -145,7 +151,7 @@ def create_login_page() -> dbc.Container:
                                     ),
                                     dbc.Input(
                                         id='password-input',
-                                        placeholder='Ingrese su contraseña',
+                                        placeholder=t("login.password_placeholder"),
                                         type='password',
                                         style={"fontSize": "0.95rem"},
                                         autoComplete="current-password"
@@ -157,7 +163,7 @@ def create_login_page() -> dbc.Container:
                             dbc.Button(
                                 [
                                     html.I(className="fas fa-sign-in-alt me-2"),
-                                    "Iniciar Sesión"
+                                    t("login.title")
                                 ],
                                 id='login-button',
                                 n_clicks=0,
@@ -256,12 +262,12 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                             # Platform title
                             html.Div([
                                 html.H5(
-                                    "Plataforma de Monitoreo Multi-Técnica",
+                                    t("app.platform_title"),
                                     className="mb-0 text-white",
                                     style={"fontWeight": "600", "letterSpacing": "-0.3px"}
                                 ),
                                 html.Small(
-                                    "Technical Alerts Dashboard",
+                                    t("app.platform_subtitle"),
                                     className="text-white-50",
                                     style={"fontSize": "0.8rem"}
                                 )
@@ -273,7 +279,7 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                     dbc.Col([
                         html.Div([
                             html.Span(
-                                [html.I(className="fas fa-building me-2", style={"fontSize": "0.75rem"}), "Cliente:"],
+                                [html.I(className="fas fa-building me-2", style={"fontSize": "0.75rem"}), t("nav.client_label")],
                                 className="text-white-50 me-2",
                                 style={"fontSize": "0.75rem", "fontWeight": "400"}
                             ),
@@ -282,6 +288,10 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                                 options=[{'label': client, 'value': client} for client in available_clients],
                                 value=available_clients[0] if available_clients else None,
                                 clearable=False,
+                                # The chosen client survives the page reload that applying a language
+                                # needs (sessionStorage, keyed by user so another account starts clean).
+                                persistence=user_data.get('username') or True,
+                                persistence_type='session',
                                 style={
                                     "width": "140px",
                                     "fontSize": "0.85rem"
@@ -290,7 +300,10 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                             )
                         ], className="d-flex align-items-center")
                     ], width="auto", className="ms-auto me-4"),
-                    
+
+                    # Language selector (Español / English)
+                    dbc.Col(create_language_selector(), width="auto", className="me-4"),
+
                     # User info section
                     dbc.Col([
                         html.Div([
@@ -314,7 +327,7 @@ def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.
                                 className="me-3"
                             ),
                             dbc.Button(
-                                [html.I(className="fas fa-sign-out-alt me-2"), "Cerrar Sesión"],
+                                [html.I(className="fas fa-sign-out-alt me-2"), t("nav.logout")],
                                 id='logout-button',
                                 color="danger",
                                 size="sm",
@@ -355,13 +368,13 @@ def create_placeholder_content(section_name: str) -> html.Div:
             dbc.CardBody([
                 html.Div([
                     html.I(className="fas fa-tools fa-3x mb-3 text-muted"),
-                    html.H3("En Desarrollo", className="text-muted"),
+                    html.H3(t("placeholder.title"), className="text-muted"),
                     html.P(
-                        f"Estamos trabajando en la sección {section_name}.",
+                        t("placeholder.working_on", section=section_name),
                         className="text-muted mb-2"
                     ),
                     html.P(
-                        "Esta funcionalidad estará disponible pronto.",
+                        t("placeholder.coming_soon"),
                         className="text-muted small"
                     )
                 ], className="text-center py-5")
@@ -412,14 +425,14 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
     navigation_items = []
     for section_def in SERVICE_SECTIONS:
         subsections = [
-            {'id': service_id, 'label': SERVICE_LABELS[service_id]}
+            {'id': service_id, 'label': service_label(service_id)}
             for service_id in section_def['services']
             if _enabled(service_id)
         ]
         if subsections:
             navigation_items.append({
                 'section': section_def['section'],
-                'label': section_def['label'],
+                'label': section_label(section_def['section']),
                 'icon': section_def['icon'],
                 'subsections': subsections,
             })
@@ -427,10 +440,10 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
         if section_def['section'] == 'monitoring' and predictive_nav_components:
             navigation_items.append({
                 'section': 'predictive',
-                'label': 'Predictivo',
+                'label': section_label('predictive'),
                 'icon': 'fas fa-brain',
                 'subsections': [
-                    {'id': f'predictive-{comp}', 'label': comp.title()}
+                    {'id': f'predictive-{comp}', 'label': t(f'nav.service.predictive-{comp}.short')}
                     for comp in predictive_nav_components
                 ]
             })
@@ -439,11 +452,11 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
     if is_admin(user_data):
         navigation_items.append({
             'section': 'admin',
-            'label': 'Administración',
+            'label': section_label('admin'),
             'icon': 'fas fa-cog',
             'subsections': [
-                {'id': 'admin-main', 'label': 'Administración'},
-                {'id': 'admin-user-registry', 'label': 'Registro de usuarios'},
+                {'id': 'admin-main', 'label': service_label('admin-main')},
+                {'id': 'admin-user-registry', 'label': service_label('admin-user-registry')},
             ]
         })
 
@@ -527,7 +540,7 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             html.Div([
                 html.I(className="fas fa-bars me-3", style={"fontSize": "1.2rem"}),
                 html.Span(
-                    "Navigation",
+                    t("nav.sidebar_title"),
                     style={
                         "fontSize": "1.1rem",
                         "fontWeight": "700",
@@ -570,7 +583,7 @@ def create_main_dashboard(user_data: dict) -> html.Div:
     sidebar_toggle_button = html.Button(
         html.I(id='sidebar-toggle-icon', className="fas fa-chevron-left"),
         id='sidebar-toggle-btn',
-        title='Ocultar/mostrar menú de navegación',
+        title=t("nav.sidebar_toggle"),
         n_clicks=0,
         className='sidebar-toggle-btn'
     )
@@ -637,6 +650,10 @@ def create_app_layout() -> html.Div:
         # Sidebar collapsed/expanded preference - persisted across page
         # navigation and browser sessions (see dashboard/callbacks/sidebar_callbacks.py).
         dcc.Store(id='sidebar-collapsed-store', storage_type='local', data=False),
+
+        # Sink for the language selector's clientside callback (see
+        # dashboard/components/language_selector.py); it holds no data.
+        dcc.Store(id=LANGUAGE_SYNC_STORE_ID, storage_type='memory', data=None),
 
         # Page content (initialized with login page, will be replaced by callback)
         html.Div(id='page-content', children=create_login_page())

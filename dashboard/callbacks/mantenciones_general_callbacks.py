@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.i18n import t
 from datetime import datetime
 
 import pandas as pd
@@ -29,7 +30,7 @@ def _options(values):
 
 
 def _equipment_options(values):
-    return [{"label": "Todas", "value": "__all__"}] + [
+    return [{"label": t("tab_health_index.todas"), "value": "__all__"}] + [
         {"label": value, "value": value} for value in values if value != "__all__"
     ]
 
@@ -38,7 +39,7 @@ def _empty_contract():
     pareto_scope = {**PARETO_SCOPE, "system_aliases": list(PARETO_SCOPE["system_aliases"])}
     return {
         "status": "empty",
-        "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "FUENTE", "reason": "Sin fuente cargada."}},
+        "meta": {"period": None, "period_label": t("oil_machine_detail.sin_datos"), "available_months": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "estimated_kpis": {"status": "unavailable", "label": "FUENTE", "reason": t("mantenciones_general_callbacks.sin_fuente_cargada")}},
         "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
         "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": []},
@@ -52,15 +53,15 @@ def _pareto_presentation(client, meta=None):
     if client_name in {"EMIN", "CAPSTONE"} or scope_mode == "all_systems":
         return {
             "all_systems": True,
-            "equipment_title": "Pareto de actividad de mantenimiento · todos los sistemas por equipo",
-            "system_title": "Pareto de actividad de mantenimiento · todos los sistemas por sistema",
-            "system_label": "todos los sistemas",
+            "equipment_title": t("mantenciones_general_callbacks.pareto_de_actividad_de_mantenimiento_todos"),
+            "system_title": t("mantenciones_general_callbacks.pareto_de_actividad_de_mantenimiento_todos_2"),
+            "system_label": t("mantenciones_general_callbacks.todos_los_sistemas"),
         }
     return {
         "all_systems": False,
-        "equipment_title": "Pareto de actividad de mantenimiento · Motor por equipo",
-        "system_title": "Pareto de actividad de mantenimiento · Tren de Fuerza por equipo",
-        "system_label": "Motor",
+        "equipment_title": t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_motor"),
+        "system_title": t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_tren"),
+        "system_label": t("label.component.engine"),
     }
 
 
@@ -84,32 +85,32 @@ def _format_estimated(value, suffix: str) -> str:
 def _source_alert(meta: dict):
     end = meta.get("source_end")
     if not end:
-        return html.Div([html.I(className="fas fa-database me-2"), "No hay datos de mantenciones disponibles para este cliente."], className="alert alert-warning")
+        return html.Div([html.I(className="fas fa-database me-2"), t("mantenciones_general_callbacks.no_hay_datos_de_mantenciones_disponibles")], className="alert alert-warning")
     date_label = str(end)[:10]
     estimated = meta.get("estimated_kpis", {})
     coverage = estimated.get("coverage", {})
     coverage_label = coverage.get("window_label")
     source_files = estimated.get("source") or []
-    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else "fuente de actividad"
+    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else t("mantenciones_general_callbacks.fuente_de_actividad")
     source_label = (
-        "Horas y KPIs de fuente"
+        t("mantenciones_general_callbacks.horas_y_kpis_de_fuente")
         if estimated.get("source_kind") in {"intervention_hours_monthly", "business_kpis_monthly", "business_kpis_70d"}
-        else "Horas/KPIs no disponibles"
+        else t("mantenciones_general_callbacks.horas_kpis_no_disponibles")
     )
-    estimated_note = f"{source_label} · fuente: {source_name} · cobertura: {coverage_label or 'no disponible'}."
+    estimated_note = t("mantenciones_general_callbacks.fuente_cobertura", source_label=source_label, source_name=source_name, coverage_label_or_=coverage_label or t("mantenciones_general_callbacks.not_available"))
     reference_start = coverage.get("reference_start")
     reference_end = coverage.get("reference_end")
     if reference_start and reference_end:
-        estimated_note += f" Referencia: {str(reference_start)[:10]} a {str(reference_end)[:10]}."
+        estimated_note += t("mantenciones_general_callbacks.referencia_a", str_reference_star=str(reference_start)[:10], str_reference_end_=str(reference_end)[:10])
     reason = estimated.get("reason")
     if reason:
-        estimated_note += f" Fallback: {reason}"
+        estimated_note += t("mantenciones_general_callbacks.fallback", reason=reason)
     return html.Div(
         [
             html.I(className="fas fa-database me-2"),
-            html.Span("Cobertura de fuente: ", className="fw-bold"),
+            html.Span(t("mantenciones_general_callbacks.cobertura_de_fuente"), className="fw-bold"),
             html.Span(f"{str(meta.get('source_start') or '')[:10]} a {date_label}. "),
-            html.Span("El último período disponible se muestra por defecto; la fuente puede estar histórica.", className="text-muted"),
+            html.Span(t("mantenciones_general_callbacks.el_ultimo_periodo_disponible_se_muestra"), className="text-muted"),
             html.Br(),
             html.Span(estimated_note, className="text-muted small"),
         ],
@@ -170,7 +171,7 @@ def register_mantenciones_general_callbacks(app):
                 _options(meta["systems"]),
             )
         except Exception as exc:
-            return {}, html.Div(f"Error al cargar la fuente de mantenciones: {exc}", className="alert alert-danger"), [], None, [], [], [], None, [], []
+            return {}, html.Div(t("mantenciones_general_callbacks.error_al_cargar_la_fuente_de", exc=exc), className="alert alert-danger"), [], None, [], [], [], None, [], []
 
 
     @app.callback(
@@ -251,7 +252,7 @@ def register_mantenciones_general_callbacks(app):
             return {
                 **_empty_contract(),
                 "status": "error",
-                "meta": {"client": str(client).upper(), "period": month, "period_label": month or "Sin datos", "error": str(exc)},
+                "meta": {"client": str(client).upper(), "period": month, "period_label": month or t("oil_machine_detail.sin_datos"), "error": str(exc)},
             }, None
 
 
@@ -286,13 +287,13 @@ def register_mantenciones_general_callbacks(app):
         meta = payload.get("meta", {}) or {}
         presentation = _pareto_presentation(meta.get("client"), meta)
         if status == "error":
-            message = payload.get("meta", {}).get("error", "Error desconocido")
-            empty = create_empty_figure("Error al cargar datos")
-            detail_message = html.P("No se pudo cargar el detalle.", className="text-danger")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
+            message = payload.get("meta", {}).get("error", t("mantenciones_general_callbacks.unknown_error"))
+            empty = create_empty_figure(t("mantenciones_general_callbacks.error_al_cargar_datos"))
+            detail_message = html.P(t("mantenciones_general_callbacks.no_se_pudo_cargar_el_detalle"), className="text-danger")
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(t("mantenciones_general_callbacks.error_al_cargar_mantenciones", message=message), className="alert alert-danger"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
         if status != "ok":
-            empty = create_empty_figure("Sin datos para este período")
-            message = "No hay acciones registradas para los filtros seleccionados."
+            empty = create_empty_figure(t("mantenciones.no_data_for_period"))
+            message = t("mantenciones_general_callbacks.no_hay_acciones_registradas_para_los")
             detail_message = html.P(message, className="text-muted text-center p-3")
             kpis = payload.get("kpis", {}) or {}
             return _format_estimated(kpis.get("availability_est_pct"), "%"), _format_estimated(kpis.get("downtime_est_hours"), "h"), _format_estimated(kpis.get("mtbf_est_hours"), "h"), _format_estimated(kpis.get("mttr_est_hours"), "h"), "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"]
@@ -302,7 +303,7 @@ def register_mantenciones_general_callbacks(app):
         banner = None
         if not meta.get("is_current_period"):
             banner = html.Div(
-                f"Período histórico seleccionado: {meta.get('period_label', 'N/A')}. Último dato de fuente: {str(meta.get('source_end', ''))[:10]}.",
+                t("mantenciones_general_callbacks.periodo_historico_seleccionado_ultimo_dato", meta_get_period_la=meta.get('period_label', 'N/A'), str_meta_get_sourc=str(meta.get('source_end', ''))[:10]),
                 className="alert alert-warning",
             )
         motor_share = kpis.get("motor_share_pct")
@@ -324,7 +325,7 @@ def register_mantenciones_general_callbacks(app):
             create_equipment_pareto_chart(pd.DataFrame(data.get("pareto", [])), system_label=presentation["system_label"]),
             create_equipment_pareto_chart(
                 pd.DataFrame(data.get("system_pareto", []) if presentation["all_systems"] else data.get("train_force_pareto", [])),
-                system_label=presentation["system_label"] if presentation["all_systems"] else "Tren de Fuerza",
+                system_label=presentation["system_label"] if presentation["all_systems"] else t("tab_health_index.tren_de_fuerza"),
             ),
             create_system_activity_chart(
                 pd.DataFrame(data.get("system_mix", [])),
@@ -372,10 +373,10 @@ def register_mantenciones_general_callbacks(app):
         payload = payload or {"status": "empty", "meta": {}, "summary": [], "tasks": []}
         status = payload.get("status")
         if status == "error":
-            msg = payload.get("meta", {}).get("error", "Error desconocido")
-            return html.Div(f"Error al cargar evidencia semanal: {msg}", className="alert alert-danger"), create_week_summary_table([]), create_week_task_table([])
+            msg = payload.get("meta", {}).get("error", t("mantenciones_general_callbacks.unknown_error"))
+            return html.Div(t("mantenciones_general_callbacks.error_al_cargar_evidencia_semanal", msg=msg), className="alert alert-danger"), create_week_summary_table([]), create_week_task_table([])
         if status == "empty":
-            return html.Div("No hay evidencia semanal disponible.", className="alert alert-warning"), create_week_summary_table([]), create_week_task_table([])
+            return html.Div(t("mantenciones_general_callbacks.no_hay_evidencia_semanal_disponible"), className="alert alert-warning"), create_week_summary_table([]), create_week_task_table([])
         invalid = payload.get("meta", {}).get("invalid_rows", 0)
-        alert = html.Div(f"Se omitieron {invalid} filas con tareas no interpretables.", className="alert alert-warning") if invalid else None
+        alert = html.Div(t("mantenciones_general_callbacks.se_omitieron_filas_con_tareas_no", invalid=invalid), className="alert alert-warning") if invalid else None
         return alert, create_week_summary_table(payload.get("summary", [])), create_week_task_table(payload.get("tasks", []))

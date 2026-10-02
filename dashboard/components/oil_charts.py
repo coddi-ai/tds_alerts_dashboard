@@ -15,6 +15,7 @@ limit line is drawn for a given essay is decided per-essay from the data
 contract nulls LIC/LIM for whole essay groups (Desgaste, Aditivo).
 """
 
+from src.i18n import t as _t, vocab
 from pathlib import Path
 
 import pandas as pd
@@ -130,19 +131,29 @@ def limit_values_are_equivalent(value_a, value_b) -> bool:
     return abs(value_a - value_b) <= tolerance
 
 
+def _direction_word(direction: str) -> str:
+    """'inferior'/'superior' (the stored tier direction) in the current language."""
+    return _t(f"oil_charts.direction_{direction}")
+
+
+def _tier_word(word: str) -> str:
+    """'marginal'/'condenatorio' (the stored tier word) in the current language."""
+    return _t(f"oil_charts.tier_{word}")
+
+
 def _single_tier_label(feature: str, tier: str, other_line_exists: bool) -> str:
     if not other_line_exists:
-        return f"Límite {feature}"
-    return f"Límite {FOUR_LIMIT_TIER_DIRECTION[tier]} {feature}"
+        return _t("oil_charts.limit_single", feature=feature)
+    return _t("oil_charts.limit_single_directed", direction=_direction_word(FOUR_LIMIT_TIER_DIRECTION[tier]), feature=feature)
 
 
 def _combined_tier_label(feature: str, tiers) -> str:
-    words = list(dict.fromkeys(FOUR_LIMIT_TIER_WORDS[t] for t in tiers))
-    directions = {FOUR_LIMIT_TIER_DIRECTION[t] for t in tiers}
-    joined = " y ".join(words)
+    words = list(dict.fromkeys(_tier_word(FOUR_LIMIT_TIER_WORDS[tier]) for tier in tiers))
+    directions = {FOUR_LIMIT_TIER_DIRECTION[tier] for tier in tiers}
+    joined = _t("oil_charts.and").join(words)
     if directions == {'inferior'}:
-        return f"Límite {joined} inferior de {feature}"
-    return f"Límite {joined} de {feature}"
+        return _t("oil_charts.limit_combined_lower", joined=joined, feature=feature)
+    return _t("oil_charts.limit_combined", joined=joined, feature=feature)
 
 
 def consolidate_limit_entries(entries):
@@ -213,7 +224,7 @@ def consolidate_limit_entries(entries):
         tiers = list(dict.fromkeys(m['tier'] for m in members))
 
         if len(features) > 1:
-            label = "Límite " + " y ".join(features)
+            label = _t("oil_charts.limit_multi_feature", features=_t("oil_charts.and").join(features))
         elif len(tiers) > 1:
             label = _combined_tier_label(features[0], tiers)
         else:
@@ -298,7 +309,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         nothing to plot.
     """
     if history.empty:
-        return html.P("Sin historial para este equipo/componente", className="text-muted")
+        return html.P(_t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
 
     # Discover all "Aditivo" essays from the essays mapping table and build the
     # "Paquete de Aditivos" charts for this render. Split into two side-by-side
@@ -330,7 +341,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
     chart_elements = []
     for chart_config in charts_to_render:
         essays = chart_config['essays']
-        title = chart_config['title']
+        title = vocab(chart_config['title'])
         is_full_width = chart_config.get('full_width', False)
         col_width = 12 if is_full_width else 6
 
@@ -343,7 +354,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
                     dbc.Card([
                         dbc.CardBody([
                             html.H6(title, className="text-muted text-center mb-2", style={'fontSize': '0.85rem'}),
-                            html.P("Sin datos", className="text-muted text-center small")
+                            html.P(_t("oil_machine_detail.sin_datos"), className="text-muted text-center small")
                         ])
                     ], className="h-100")
                 ], md=col_width, className="mb-3")
@@ -369,7 +380,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
                 x=essay_dates,
                 y=essay_values,
                 mode='lines+markers',
-                name=essay,
+                name=vocab(essay),
                 line=dict(color=colors[idx % len(colors)], width=2),
                 marker=dict(size=4),
             ))
@@ -429,7 +440,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         )
 
     if not chart_elements:
-        return html.P("Sin datos de ensayos disponibles", className="text-muted")
+        return html.P(_t("oil_charts.sin_datos_de_ensayos_disponibles"), className="text-muted")
 
     return dbc.Row(chart_elements)
 
@@ -543,21 +554,21 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
 
         if group_has_lower:
             ring_specs = [
-                (80, 'LSC (Superior Condenatorio)', UPPER_LIMIT_COLOR),
-                (60, 'LSM (Superior Marginal)', 'orange'),
-                (40, 'LIM (Inferior Marginal)', LOWER_LIMIT_COLOR),
-                (20, 'LIC (Inferior Condenatorio)', LOWER_LIMIT_COLOR),
+                (80, _t("oil_charts.lsc_superior_condenatorio"), UPPER_LIMIT_COLOR),
+                (60, _t("oil_charts.lsm_superior_marginal"), 'orange'),
+                (40, _t("oil_charts.lim_inferior_marginal"), LOWER_LIMIT_COLOR),
+                (20, _t("oil_charts.lic_inferior_condenatorio"), LOWER_LIMIT_COLOR),
             ]
         else:
             ring_specs = [
-                (80, 'LSC (Superior Condenatorio)', UPPER_LIMIT_COLOR),
-                (60, 'LSM (Superior Marginal)', 'orange'),
+                (80, _t("oil_charts.lsc_superior_condenatorio"), UPPER_LIMIT_COLOR),
+                (60, _t("oil_charts.lsm_superior_marginal"), 'orange'),
             ]
 
         for radius, ring_name, ring_color in ring_specs:
             fig.add_trace(go.Scatterpolar(
                 r=[radius] * len(valid_essays),
-                theta=valid_essays,
+                theta=[vocab(e) for e in valid_essays],
                 name=ring_name,
                 line=dict(color=ring_color, dash='dash', width=2),
                 fill=None,
@@ -573,13 +584,13 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
 
         fig.add_trace(go.Scatterpolar(
             r=normalized_values,
-            theta=valid_essays,
-            name='Valores Actuales',
+            theta=[vocab(e) for e in valid_essays],
+            name=_t("alerts_charts.valores_actuales"),
             line=dict(color=status_color, width=3),
             fill='toself',
             fillcolor=status_color,
             opacity=0.4,
-            hovertemplate='<b>%{theta}</b><br>Valor Real: %{customdata}<br>Normalizado: %{r:.1f}<extra></extra>',
+            hovertemplate=_t("oil_charts.b_b_br_valor_real_br"),
             customdata=actual_values
         ))
 
@@ -597,7 +608,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
                 )
             ),
             title=dict(
-                text=f"{group_name}",
+                text=vocab(group_name),
                 x=0.5,
                 xanchor='center',
                 font=dict(size=14, weight='bold')
@@ -617,9 +628,9 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
 
         group_table = dash_table.DataTable(
             columns=[
-                {'name': 'Ensayo', 'id': 'essay'},
-                {'name': 'Valor', 'id': 'value', 'type': 'numeric'},
-                {'name': 'Estado', 'id': 'status'},
+                {'name': _t("reports_callbacks.ensayo"), 'id': 'essay'},
+                {'name': _t("alerts_charts.valor"), 'id': 'value', 'type': 'numeric'},
+                {'name': _t("fleet_overview.col_status"), 'id': 'status'},
                 {'name': 'LIC', 'id': 'lic'},
                 {'name': 'LIM', 'id': 'lim'},
                 {'name': 'LSM', 'id': 'lsm'},
@@ -685,7 +696,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader([
-                            html.H6(f"Detalle - {group_name}", className="mb-0")
+                            html.H6(_t("oil_charts.detalle", group_name=vocab(group_name)), className="mb-0")
                         ]),
                         dbc.CardBody([
                             group_table
@@ -696,6 +707,6 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
         )
 
     if not charts_and_tables:
-        return [html.P("Sin datos de ensayos disponibles para el último ensayo", className="text-muted")]
+        return [html.P(_t("oil_charts.sin_datos_de_ensayos_disponibles_para"), className="text-muted")]
 
     return charts_and_tables

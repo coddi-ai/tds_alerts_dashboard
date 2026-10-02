@@ -2,6 +2,7 @@
 Reusable filter components for Multi-Technical-Alerts dashboard.
 """
 
+from src.i18n import t
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
@@ -17,12 +18,12 @@ def create_machine_selector(machines: list[str] = None) -> dbc.Col:
         Bootstrap column with machine dropdown
     """
     return dbc.Col([
-        html.Label("Select Machine:", className="fw-bold"),
+        html.Label(t("tab_limits.select_machine"), className="fw-bold"),
         dcc.Dropdown(
             id='machine-selector',
             options=[{'label': m, 'value': m} for m in (machines or [])],
             value=None,
-            placeholder="Select a machine...",
+            placeholder=t("tab_limits.select_a_machine"),
             className="mb-3"
         )
     ], width=4)
@@ -39,12 +40,12 @@ def create_component_selector(components: list[str] = None) -> dbc.Col:
         Bootstrap column with component dropdown
     """
     return dbc.Col([
-        html.Label("Select Component:", className="fw-bold"),
+        html.Label(t("tab_limits.select_component"), className="fw-bold"),
         dcc.Dropdown(
             id='component-selector',
             options=[{'label': c, 'value': c} for c in (components or [])],
             value=None,
-            placeholder="Select a component...",
+            placeholder=t("tab_limits.select_a_component"),
             className="mb-3"
         )
     ], width=4)
@@ -58,7 +59,7 @@ def create_date_range_picker() -> dbc.Col:
         Bootstrap column with date range picker
     """
     return dbc.Col([
-        html.Label("Date Range:", className="fw-bold"),
+        html.Label(t("filters.date_range"), className="fw-bold"),
         dcc.DatePickerRange(
             id='date-range-picker',
             display_format='YYYY-MM-DD',
@@ -75,13 +76,13 @@ def create_status_filter() -> dbc.Col:
         Bootstrap column with status checkboxes
     """
     return dbc.Col([
-        html.Label("Filter by Status:", className="fw-bold"),
+        html.Label(t("filters.filter_by_status"), className="fw-bold"),
         dcc.Checklist(
             id='status-filter',
             options=[
-                {'label': ' Normal', 'value': 'Normal'},
-                {'label': ' Alerta', 'value': 'Alerta'},
-                {'label': ' Anormal', 'value': 'Anormal'}
+                {'label': t("filters.normal"), 'value': 'Normal'},
+                {'label': t("tab_machines.alerta_2"), 'value': 'Alerta'},
+                {'label': t("tab_machines.anormal_2"), 'value': 'Anormal'}
             ],
             value=['Normal', 'Alerta', 'Anormal'],
             inline=True,

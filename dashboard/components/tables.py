@@ -2,6 +2,8 @@
 Reusable table components for Multi-Technical-Alerts dashboard.
 """
 
+from src.i18n import t
+from dashboard.components.labels import status_label
 from dash import dash_table, html
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -24,7 +26,7 @@ def create_limits_table(df: pd.DataFrame) -> dash_table.DataTable:
         Dash DataTable
     """
     if df.empty:
-        return html.Div("No limits data available", className="text-muted p-3")
+        return html.Div(t("tables.no_limits_data_available"), className="text-muted p-3")
 
     # Apply title() to machine and component names
     df = df.copy()
@@ -36,14 +38,14 @@ def create_limits_table(df: pd.DataFrame) -> dash_table.DataTable:
     return dash_table.DataTable(
         id='limits-table',
         columns=[
-            {'name': 'Machine', 'id': 'machine'},
-            {'name': 'Component', 'id': 'component'},
-            {'name': 'Essay', 'id': 'essay'},
-            {'name': 'Oil Hour Range', 'id': 'oilHourRange'},
-            {'name': 'LIC (Inferior Condenatorio)', 'id': 'LIC', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-            {'name': 'LIM (Inferior Marginal)', 'id': 'LIM', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-            {'name': 'LSM (Superior Marginal)', 'id': 'LSM', 'type': 'numeric', 'format': {'specifier': '.2f'}},
-            {'name': 'LSC (Superior Condenatorio)', 'id': 'LSC', 'type': 'numeric', 'format': {'specifier': '.2f'}}
+            {'name': t("tables.machine"), 'id': 'machine'},
+            {'name': t("tables.component"), 'id': 'component'},
+            {'name': t("tables.essay"), 'id': 'essay'},
+            {'name': t("tables.oil_hour_range"), 'id': 'oilHourRange'},
+            {'name': t("tables.lic_inferior_condenatorio"), 'id': 'LIC', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+            {'name': t("tables.lim_inferior_marginal"), 'id': 'LIM', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+            {'name': t("tables.lsm_superior_marginal"), 'id': 'LSM', 'type': 'numeric', 'format': {'specifier': '.2f'}},
+            {'name': t("tables.lsc_superior_condenatorio"), 'id': 'LSC', 'type': 'numeric', 'format': {'specifier': '.2f'}}
         ],
         data=df.to_dict('records'),
         style_table={'overflowX': 'auto'},
@@ -100,7 +102,7 @@ def create_priority_table(df: pd.DataFrame, status_filter: Optional[str] = None)
         Dash DataTable
     """
     if df.empty:
-        return html.Div("No machine data available", className="text-muted p-3")
+        return html.Div(t("tables.no_machine_data_available"), className="text-muted p-3")
     
     # Apply status filter if provided (OIL-M-01: clickable donut)
     if status_filter and status_filter != 'All':
@@ -111,27 +113,28 @@ def create_priority_table(df: pd.DataFrame, status_filter: Optional[str] = None)
     
     # Select only the 3 required columns
     display_df = df[['unit_id', 'overall_status']].copy()
+    display_df['overall_status'] = display_df['overall_status'].map(status_label)
     
     # Add AI recommendation if available
     if 'machine_ai_recommendation' in df.columns:
         display_df['ai_recommendation'] = df['machine_ai_recommendation'].apply(
-            lambda x: str(x) if pd.notna(x) else 'No recommendation available'
+            lambda x: str(x) if pd.notna(x) else t("tables.no_recommendation_available")
         )
     else:
-        display_df['ai_recommendation'] = 'No recommendation available'
+        display_df['ai_recommendation'] = t("tables.no_recommendation_available")
     
     # Keep unit_id in original format (don't convert case) for proper matching
     # The data uses format like 'T_10', 'T_11', etc.
     
     if display_df.empty:
-        return html.Div("Ninguna máquina coincide con el filtro seleccionado", className="text-info p-3")
+        return html.Div(t("tables.ninguna_maquina_coincide_con_el_filtro"), className="text-info p-3")
     
     return dash_table.DataTable(
         id='priority-table',
         columns=[
-            {'name': 'Unidad', 'id': 'unit_id'},
-            {'name': 'Estado', 'id': 'overall_status'},
-            {'name': 'Recomendación IA', 'id': 'ai_recommendation'}
+            {'name': t("alerts_general.filter_unit"), 'id': 'unit_id'},
+            {'name': t("fleet_overview.col_status"), 'id': 'overall_status'},
+            {'name': t("tables.recomendacion_ia"), 'id': 'ai_recommendation'}
         ],
         data=display_df.to_dict('records'),
         style_table={'overflowX': 'auto'},
@@ -153,7 +156,7 @@ def create_priority_table(df: pd.DataFrame, status_filter: Optional[str] = None)
             # Status column styling (GR-05: Single status design language)
             {
                 'if': {
-                    'filter_query': '{overall_status} = "Anormal"',
+                    'filter_query': '{overall_status} = "%s"' % status_label("Anormal"),
                     'column_id': 'overall_status'
                 },
                 'backgroundColor': '#dc3545',
@@ -162,7 +165,7 @@ def create_priority_table(df: pd.DataFrame, status_filter: Optional[str] = None)
             },
             {
                 'if': {
-                    'filter_query': '{overall_status} = "Alerta"',
+                    'filter_query': '{overall_status} = "%s"' % status_label("Alerta"),
                     'column_id': 'overall_status'
                 },
                 'backgroundColor': '#ffc107',
@@ -171,7 +174,7 @@ def create_priority_table(df: pd.DataFrame, status_filter: Optional[str] = None)
             },
             {
                 'if': {
-                    'filter_query': '{overall_status} = "Normal"',
+                    'filter_query': '{overall_status} = "%s"' % status_label("Normal"),
                     'column_id': 'overall_status'
                 },
                 'backgroundColor': '#28a745',
@@ -211,7 +214,7 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
         Dash DataTable
     """
     if df.empty:
-        return html.Div("Seleccione una máquina para ver los detalles", className="text-muted p-3")
+        return html.Div(t("tables.seleccione_una_maquina_para_ver_los"), className="text-muted p-3")
     
     df = df.copy()
     
@@ -287,22 +290,24 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
     else:
         df['anomaly_display'] = '—'
     
+    df['report_status'] = df['report_status'].map(status_label)
+
     # Define columns: Component, Status, Anomaly, Horómetro, Sample Date, Essays Broken, AI Recommendation
     has_horometro = 'componentHours_cleaned' in df.columns
     
     columns = [
-        {'name': 'Componente', 'id': 'componentName'},
-        {'name': 'Estado', 'id': 'report_status'},
-        {'name': 'Anomalía', 'id': 'anomaly_display'},
+        {'name': t("tab_mantenciones_general.componente"), 'id': 'componentName'},
+        {'name': t("fleet_overview.col_status"), 'id': 'report_status'},
+        {'name': t("oil_machine_detail.anomalia"), 'id': 'anomaly_display'},
     ]
     
     if has_horometro:
-        columns.append({'name': 'Horómetro', 'id': 'horometro_display'})
+        columns.append({'name': t("tables.horometro"), 'id': 'horometro_display'})
     
     columns.extend([
-        {'name': 'Fecha Muestra', 'id': 'sampleDate'},
-        {'name': 'Ensayos Anormales', 'id': 'essays_broken_names'},
-        {'name': 'Recomendación IA', 'id': 'ai_text'}
+        {'name': t("tables.fecha_muestra"), 'id': 'sampleDate'},
+        {'name': t("tables.ensayos_anormales"), 'id': 'essays_broken_names'},
+        {'name': t("tables.recomendacion_ia"), 'id': 'ai_text'}
     ])
     
     return dash_table.DataTable(
@@ -327,7 +332,7 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
             # Status column styling (GR-05: Single status design language)
             {
                 'if': {
-                    'filter_query': '{report_status} = "Anormal"',
+                    'filter_query': '{report_status} = "%s"' % status_label("Anormal"),
                     'column_id': 'report_status'
                 },
                 'backgroundColor': '#f8d7da',
@@ -336,7 +341,7 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
             },
             {
                 'if': {
-                    'filter_query': '{report_status} = "Alerta"',
+                    'filter_query': '{report_status} = "%s"' % status_label("Alerta"),
                     'column_id': 'report_status'
                 },
                 'backgroundColor': '#fff3cd',
@@ -345,7 +350,7 @@ def create_machine_detail_table(df: pd.DataFrame) -> dash_table.DataTable:
             },
             {
                 'if': {
-                    'filter_query': '{report_status} = "Normal"',
+                    'filter_query': '{report_status} = "%s"' % status_label("Normal"),
                     'column_id': 'report_status'
                 },
                 'backgroundColor': '#d4edda',
@@ -384,7 +389,7 @@ def create_ai_recommendations_card(recommendations: List[Dict]) -> dbc.Card:
     """
     if not recommendations:
         return dbc.Card(
-            dbc.CardBody("No AI recommendations available"),
+            dbc.CardBody(t("tables.no_ai_recommendations_available")),
             className="mb-3"
         )
     
@@ -392,9 +397,9 @@ def create_ai_recommendations_card(recommendations: List[Dict]) -> dbc.Card:
     for rec in recommendations[:5]:  # Show top 5
         cards.append(
             dbc.Card([
-                dbc.CardHeader(f"Sample: {rec.get('sampleNumber', 'N/A')}", className="fw-bold"),
+                dbc.CardHeader(t("tables.sample", rec_get_samplenumb=rec.get('sampleNumber', 'N/A')), className="fw-bold"),
                 dbc.CardBody([
-                    html.P(f"Status: {rec.get('status', 'N/A')}", className="mb-2"),
+                    html.P(t("tables.status", rec_get_status_n_a=rec.get('status', 'N/A')), className="mb-2"),
                     html.P(rec.get('recommendation', 'N/A'), className="text-muted")
                 ])
             ], className="mb-2")

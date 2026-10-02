@@ -227,6 +227,16 @@ FAILURE_MODE_CONFIG = {
                 ],
                 "description": "Desgaste de anillos y liner con fuga de gases de combustión al cárter"
             },
+            # Modo puntuado (v2.8) cuya evidencia NO es aceite/telemetría estándar:
+            # se muestra la curva de desgaste acumulado de oil_meter_history
+            # (columnas {Metal}_acum_total por ciclo_motor). Sin variables
+            # asociadas a propósito: no hay mapeo modo -> variable que inventar.
+            "accumulated_wear_risk": {
+                "label": "Riesgo Acumulado",
+                "oil_variables": [],
+                "telemetry_variables": [],
+                "description": "Desgaste metálico acumulado del componente en su vida actual"
+            },
         },
         },  # end "components"
     },
@@ -512,6 +522,11 @@ FAILURE_MODE_METHODOLOGY = {
                 "Se evalúa Sodio y Potasio en aceite junto con la temperatura y "
                 "presión del refrigerante. Su presencia indica ingreso de "
                 "refrigerante al circuito de aceite."
+            ),
+            "accumulated_wear_risk": (
+                "Se evalúa el desgaste metálico acumulado del componente desde su "
+                "último cambio (Hierro, Cobre, Plomo, Cromo, Aluminio y Estaño), "
+                "a partir de los totales acumulados por ciclo de vida del motor."
             ),
         },
     },

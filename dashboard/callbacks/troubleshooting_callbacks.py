@@ -10,6 +10,7 @@ consume su vida util. El `href` solo lleva el cliente; la autorizacion real
 se repite en la ruta.
 """
 
+from src.i18n import t
 from urllib.parse import urlencode
 
 import dash
@@ -40,24 +41,24 @@ def build_troubleshooting_card(client: str, agent_configured: bool, with_sso: bo
     client = normalize_client_id(client)
 
     if not agent_configured:
-        body = [_unavailable("El agente de troubleshooting no está disponible en este entorno.")]
+        body = [_unavailable(t("troubleshooting_callbacks.el_agente_de_troubleshooting_no_esta"))]
     elif not client or not is_service_enabled(client, SERVICE_ID) or is_service_dummy(client, SERVICE_ID):
         # El selector puede cambiar de cliente estando en esta pagina; la
         # guarda de rutas solo actua al navegar.
-        body = [_unavailable("El agente de troubleshooting no está habilitado para este cliente.")]
+        body = [_unavailable(t("troubleshooting_callbacks.el_agente_de_troubleshooting_no_esta_2"))]
     else:
         access_note = (
-            "Entrarás con tu sesión del dashboard."
+            t("troubleshooting_callbacks.entraras_con_tu_sesion_del_dashboard")
             if with_sso
-            else "El agente te pedirá sus propias credenciales."
+            else t("troubleshooting_callbacks.el_agente_te_pedira_sus_propias")
         )
         body = [
             html.P(
-                f"Consulta manuales y códigos de falla de la flota de {client}.",
+                t("troubleshooting_callbacks.consulta_manuales_y_codigos_de_falla", client=client),
                 className="mb-3",
             ),
             html.A(
-                [html.I(className="fas fa-arrow-up-right-from-square me-2"), "Abrir agente de troubleshooting"],
+                [html.I(className="fas fa-arrow-up-right-from-square me-2"), t("troubleshooting_callbacks.abrir_agente_de_troubleshooting")],
                 id="troubleshooting-open-link",
                 href=handoff_href(client),
                 target="_blank",
@@ -66,8 +67,8 @@ def build_troubleshooting_card(client: str, agent_configured: bool, with_sso: bo
             ),
             html.P(
                 [
-                    f"Se abre en una pestaña nueva. {access_note} ",
-                    "Si recargas esa pestaña, vuelve a abrirla desde aquí.",
+                    t("troubleshooting_callbacks.se_abre_en_una_pestana_nueva", access_note=access_note),
+                    t("troubleshooting_callbacks.si_recargas_esa_pestana_vuelve_a"),
                 ],
                 className="text-muted small mt-3 mb-0",
             ),
@@ -75,7 +76,7 @@ def build_troubleshooting_card(client: str, agent_configured: bool, with_sso: bo
 
     return dbc.Card([
         dbc.CardHeader(
-            html.H5([html.I(className="fas fa-robot me-2"), "Troubleshooting"], className="mb-0"),
+            html.H5([html.I(className="fas fa-robot me-2"), t("nav.service.agents-troubleshooting")], className="mb-0"),
             className="bg-light",
         ),
         dbc.CardBody(body),

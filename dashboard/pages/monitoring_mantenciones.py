@@ -1,3 +1,4 @@
+from src.i18n import page_title
 import dash
 from dashboard.tabs.tab_mantenciones_general import layout_mantenciones_general
 
@@ -9,4 +10,4 @@ def layout(**kwargs):
 # pages_folder="" disables Dash's auto-discovery "plug" step, which is what
 # normally fills in page["layout"] from the module's `layout` attribute — so
 # with manual registration, `layout=` must be passed explicitly here.
-dash.register_page(__name__, path="/monitoring/mantenciones", title="Informe de confiabilidad | Multi-Technical Alerts", layout=layout)
+dash.register_page(__name__, path="/monitoring/mantenciones", title=page_title("page.title.monitoring_mantenciones"), layout=layout)

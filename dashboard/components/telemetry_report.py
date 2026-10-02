@@ -5,6 +5,7 @@ AI datasets needed by the dashboard.  This module only joins and orders those
 results for display; it does not recalculate health scores or diagnostics.
 """
 
+from src.i18n import t
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -496,7 +497,7 @@ def build_fleet_priority_rows(
             "top_signal": top_signal or "-",
             "top_signal_display": snapshot.signal_registry.get(top_signal, translate_signal(top_signal or "-")),
             "urgency": _text(comment, "urgency") or "-",
-            "description": _comment_text(comment, snapshot.signal_registry, "description", "comment") or client_facing_text(_text(unit_row, "executive_summary"), snapshot.signal_registry) or "Operando dentro de parámetros normales.",
+            "description": _comment_text(comment, snapshot.signal_registry, "description", "comment") or client_facing_text(_text(unit_row, "executive_summary"), snapshot.signal_registry) or t("telemetry_callbacks.operando_dentro_de_parametros_normales"),
             "explaining": _comment_text(comment, snapshot.signal_registry, "explaining"),
             "recommended_action": _comment_text(comment, snapshot.signal_registry, "recommended_action"),
         })
@@ -542,7 +543,7 @@ def build_fleet_matrix_rows(
             system_lookup[(unit, display)] = {
                 "status": row.get("system_status", "InsufficientData"),
                 "action": _comment_text(comment, snapshot.signal_registry, "recommended_action")
-                    or "Sin acción recomendada registrada.",
+                    or t("telemetry_report.sin_accion_recomendada_registrada"),
                 "raw": row.get("system", ""),
                 "score": float(row.get("system_score", 0) or 0),
             }
@@ -560,7 +561,7 @@ def build_fleet_matrix_rows(
         for display in selected:
             cell = system_lookup.get((unit, display), {
                 "status": "InsufficientData",
-                "action": "Sin evidencia de sistema disponible.",
+                "action": t("telemetry_report.no_system_evidence"),
                 "raw": "",
                 "score": 0,
             })
@@ -668,10 +669,10 @@ def build_signal_rows(snapshot: TelemetrySnapshot, unit: str, system: str) -> li
             "total_events": int(stats.get("total_events", 0) or 0),
             "warnings": int(stats.get("warnings", 0) or 0),
             "longest_episode": int(stats.get("longest_episode", 0) or 0),
-            "trend_detected": "Sí" if best_trend is not None else "No",
+            "trend_detected": t("common.yes") if best_trend is not None else t("common.no"),
             "trend_direction": translate_trend(best_trend.get("trend_interpretation", "-")) if best_trend is not None else "-",
             "trend_formula": f"{float(best_trend.get('slope_per_day', 0)):+.2f}/día (R²={float(best_trend.get('r2', 0)):.2f})" if best_trend is not None else "-",
-            "description": _comment_text(comment, snapshot.signal_registry, "description", "comment") or "Sin comentario IA disponible.",
+            "description": _comment_text(comment, snapshot.signal_registry, "description", "comment") or t("telemetry_report.sin_comentario_ia_disponible"),
             "explaining": _comment_text(comment, snapshot.signal_registry, "explaining"),
             "unit_label": snapshot.signal_metadata.get(signal, {}).get("unit", ""),
         })
@@ -680,8 +681,8 @@ def build_signal_rows(snapshot: TelemetrySnapshot, unit: str, system: str) -> li
 
 def format_urgency(value: Any) -> str:
     return {
-        "routine": "Rutina",
-        "monitor": "Monitorear",
-        "schedule_inspection": "Programar inspección",
-        "immediate": "Acción inmediata",
+        "routine": t("telemetry_report.rutina"),
+        "monitor": t("telemetry_report.monitorear"),
+        "schedule_inspection": t("telemetry_report.programar_inspeccion"),
+        "immediate": t("telemetry_report.accion_inmediata"),
     }.get(str(value), str(value or "-"))

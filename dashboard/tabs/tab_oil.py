@@ -6,6 +6,7 @@ Report Detail (former monitoring > oil) views into a single navigation
 entry with internal tabs for switching between views.
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -31,10 +32,10 @@ def create_layout() -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-oil-can me-3"),
-                    "Monitor de Aceite"
+                    t("tab_oil.monitor_de_aceite")
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Análisis de aceite: visión de flota y detalle de reportes",
+                    t("tab_oil.analisis_de_aceite_vision_de_flota"),
                     className="text-muted"
                 )
             ])
@@ -47,19 +48,19 @@ def create_layout() -> html.Div:
             value='fleet-overview',
             children=[
                 dcc.Tab(
-                    label='Visión de Flota',
+                    label=t("tab_oil.vision_de_flota"),
                     value='fleet-overview',
                     className='custom-tab',
                     selected_className='custom-tab--selected'
                 ),
                 dcc.Tab(
-                    label='Detalle de Reporte',
+                    label=t("tab_oil.detalle_de_reporte"),
                     value='report-detail',
                     className='custom-tab',
                     selected_className='custom-tab--selected'
                 ),
                 dcc.Tab(
-                    label='Cumplimiento Laboratorio',
+                    label=t("tab_oil.cumplimiento_laboratorio"),
                     value='lab-compliance',
                     className='custom-tab',
                     selected_className='custom-tab--selected'

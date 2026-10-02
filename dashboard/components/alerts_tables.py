@@ -4,6 +4,7 @@ Table components for Alerts Dashboard.
 Functions to create Dash DataTables for alerts listings.
 """
 
+from src.i18n import t
 import pandas as pd
 import re
 import ast
@@ -82,7 +83,7 @@ def parse_ia_message_sections(mensaje_ia: str) -> Dict[str, str]:
             else:
                 sections['acciones'] = _translate_signal_text(str(actions).strip())
             sections['causa_probable'] = (
-                'No se infiere una causa probable con la evidencia disponible.'
+                t("alerts_tables.no_se_infiere_una_causa_probable")
             )
             return sections
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -125,6 +126,29 @@ def parse_ia_message_sections(mensaje_ia: str) -> Dict[str, str]:
     return sections
 
 
+_COLUMN_LABEL_KEYS = {
+    "ID": "alerts_tables.col_id",
+    "Fecha": "alerts_tables.col_fecha",
+    "Unidad": "alerts_tables.col_unidad",
+    "Sistema": "alerts_tables.col_sistema",
+    "Componente": "alerts_tables.col_componente",
+    "Fuente": "alerts_tables.col_fuente",
+    "Diagnóstico IA": "alerts_tables.col_diagnostico_ia",
+    "Telemetría": "alerts_tables.col_telemetria",
+    "Tribología": "alerts_tables.col_tribologia",
+    "Señal / variable": "alerts_tables.col_senal_variable",
+    "Diagnóstico": "alerts_tables.col_diagnostico",
+    "Acción": "alerts_tables.col_accion",
+}
+
+
+def _column_label(column_id: str) -> str:
+    """Header text of a table column; the column *id* stays the Spanish source name because
+    callbacks and row dictionaries key off it."""
+    key = _COLUMN_LABEL_KEYS.get(column_id)
+    return t(key) if key else column_id
+
+
 def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     """
     Create interactive DataTable for alerts listing.
@@ -138,7 +162,7 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     if alerts_df.empty:
         logger.warning("Cannot create alerts table: empty dataframe")
         return html.Div([
-            dbc.Alert("No hay alertas disponibles", color="info")
+            dbc.Alert(t("alerts_tables.no_hay_alertas_disponibles"), color="info")
         ])
     
     try:
@@ -158,7 +182,7 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         table_df['sistema'] = table_df['sistema'].map(_translate_system)
         table_df['componente'] = table_df['componente'].map(_translate_component)
         table_df['Trigger_type'] = table_df['Trigger_type'].map(
-            {"Telemetria": "Telemetría", "Tribologia": "Tribología"}
+            {"Telemetria": source_style("Telemetria")[0], "Tribologia": source_style("Tribologia")[0]}
         ).fillna(table_df['Trigger_type'])
         
         # Convert booleans to symbols
@@ -183,7 +207,7 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         table = dash_table.DataTable(
             id='alerts-datatable',
             columns=[
-                {"name": col, "id": col, "selectable": True} 
+                {"name": _column_label(col), "id": col, "selectable": True} 
                 for col in display_df.columns
             ],
             data=display_df.to_dict('records'),
@@ -235,14 +259,14 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     except Exception as e:
         logger.error(f"Error creating alerts DataTable: {e}")
         return html.Div([
-            dbc.Alert(f"Error al crear tabla: {str(e)}", color="danger")
+            dbc.Alert(t("alerts_tables.error_al_crear_tabla", str_e=str(e)), color="danger")
         ])
 
 
 def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     """Create the executive alerts table with client-facing fields only."""
     if alerts_df is None or alerts_df.empty:
-        return html.Div([dbc.Alert("No hay alertas para los filtros seleccionados.", color="info")])
+        return html.Div([dbc.Alert(t("alerts_callbacks.no_hay_alertas_para_los_filtros"), color="info")])
     try:
         # W34-04: derive both the highlight rule's match text and its color
         # from the same source of truth the cells themselves use — a
@@ -260,7 +284,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         rows = []
         for _, row in sorted_alerts_df.iterrows():
             sections = parse_ia_message_sections(row.get("mensaje_ia", ""))
-            trigger_vars = row.get("Trigger_Var", "Sin señal registrada")
+            trigger_vars = row.get("Trigger_Var", t("alerts_report.sin_senal_registrada"))
             # Mixed alerts store Trigger_Var as a serialized list. Preserve
             # that representation so each telemetry/oil variable is translated.
             raw_signal_values = trigger_vars
@@ -276,19 +300,19 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 signal_key = str(signal).strip()
                 if signal_key and signal_key not in signal_labels:
                     signal_labels.append(FEATURE_NAMES_ES.get(signal_key, signal_key))
-            signal_label = ", ".join(signal_labels) or "Sin señal registrada"
+            signal_label = ", ".join(signal_labels) or t("alerts_report.sin_senal_registrada")
             # W34-04: single source of truth for the label (SOURCE_STYLE in
             # labels.py), instead of an inline dict duplicating the one in
             # alerts_report.py's translate_alert_source.
             source, _source_color = source_style(row.get("Trigger_type", ""))
             if bool(row.get("has_telemetry")) and bool(row.get("has_tribology")):
-                evidence = "Telemetría + Tribología"
+                evidence = t("alerts_report.telemetria_tribologia")
             elif bool(row.get("has_telemetry")):
-                evidence = "Telemetría"
+                evidence = t("alert_evidence.telemetry")
             elif bool(row.get("has_tribology")):
-                evidence = "Tribología"
+                evidence = t("alert_evidence.tribology")
             else:
-                evidence = "Sin evidencia"
+                evidence = t("alerts_report.sin_evidencia")
             rows.append({
                 "ID": row.get("FusionID", "-"),
                 # W34-06: local wall-clock time (Timestamp is already
@@ -299,12 +323,12 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 "Componente": _translate_component(row.get("componente", "-")),
                 "Señal / variable": signal_label,
                 "Fuente": source,
-                "Diagnóstico": sections.get("diagnostico", "Sin diagnóstico IA disponible"),
-                "diagnostico_completo": sections.get("diagnostico", "Sin diagnóstico IA disponible"),
-                "causa_completa": sections.get("causa_probable", "Sin causa probable registrada"),
-                "accion_completa": sections.get("acciones", "Sin acción recomendada registrada"),
+                "Diagnóstico": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
+                "diagnostico_completo": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
+                "causa_completa": sections.get("causa_probable", t("alerts_report.sin_causa_probable_registrada")),
+                "accion_completa": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
                 "Evidencia": evidence,
-                "Acción": sections.get("acciones", "Sin acción recomendada registrada"),
+                "Acción": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
             })
         table = dash_table.DataTable(
             id="alerts-datatable",
@@ -314,7 +338,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             # same "kept in data, absent from columns" pattern already used
             # for diagnostico_completo/causa_completa/accion_completa above.
             columns=[
-                {"name": name, "id": name}
+                {"name": _column_label(name), "id": name}
                 for name in ["Fecha", "Unidad", "Sistema", "Componente", "Señal / variable", "Diagnóstico", "Acción"]
             ],
             data=rows,
@@ -346,7 +370,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         return table
     except Exception as exc:
         logger.error(f"Error creando tabla ejecutiva de alertas: {exc}")
-        return dbc.Alert(f"Error al crear tabla: {exc}", color="danger")
+        return dbc.Alert(t("alerts_tables.error_al_crear_tabla_2", exc=exc), color="danger")
 
 
 def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
@@ -360,7 +384,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
         Bootstrap Card with alert details
     """
     if alert_row.empty:
-        return dbc.Alert("No se ha seleccionado ninguna alerta", color="warning")
+        return dbc.Alert(t("alerts_tables.no_se_ha_seleccionado_ninguna_alerta"), color="warning")
     
     try:
         # Parse AI diagnosis into structured sections
@@ -371,7 +395,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
             dbc.CardHeader([
                 html.H4([
                     html.I(className="fas fa-exclamation-circle me-2"),
-                    f"Alerta: {alert_row.get('FusionID', 'N/A')}"
+                    t("alerts_tables.alerta", alert_row_get_fusi=alert_row.get('FusionID', 'N/A'))
                 ], className="mb-0 text-white")
             ], className="bg-danger"),
             
@@ -380,7 +404,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                 html.Div([
                     html.H5([
                         html.I(className="fas fa-info-circle me-2"),
-                        "Información de la Alerta"
+                        t("tab_alerts_detail.informacion_de_la_alerta")
                     ], className="text-primary mb-3 pb-2 border-bottom"),
                     
                     dbc.Row([
@@ -388,7 +412,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-calendar-alt me-2 text-muted"),
-                                    html.Strong("Fecha: ")
+                                    html.Strong(t("alerts_tables.fecha"))
                                 ]),
                                 html.Span(alert_row['Timestamp'].strftime('%d/%m/%Y %H:%M:%S'))
                             ], className="mb-3"),
@@ -396,7 +420,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-truck me-2 text-muted"),
-                                    html.Strong("Unidad: ")
+                                    html.Strong(t("alerts_tables.unidad"))
                                 ]),
                                 html.Span(alert_row['UnitId'], className="badge bg-primary")
                             ], className="mb-3"),
@@ -404,7 +428,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-broadcast-tower me-2 text-muted"),
-                                    html.Strong("Fuente: ")
+                                    html.Strong(t("tab_alerts_general.fuente"))
                                 ]),
                                 html.Span(alert_row['Trigger_type'], 
                                          className="badge bg-info")
@@ -415,7 +439,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-cogs me-2 text-muted"),
-                                    html.Strong("Sistema: ")
+                                    html.Strong(t("alerts_tables.sistema"))
                                 ]),
                                 html.Span(alert_row['sistema'], className="text-dark")
                             ], className="mb-3"),
@@ -423,7 +447,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-layer-group me-2 text-muted"),
-                                    html.Strong("SubSistema: ")
+                                    html.Strong(t("alerts_tables.subsistema"))
                                 ]),
                                 html.Span(alert_row['subsistema'] if pd.notna(alert_row['subsistema']) else 'N/A')
                             ], className="mb-3"),
@@ -431,7 +455,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             html.Div([
                                 html.Span([
                                     html.I(className="fas fa-wrench me-2 text-muted"),
-                                    html.Strong("Componente: ")
+                                    html.Strong(t("alerts_tables.componente"))
                                 ]),
                                 html.Span(alert_row['componente'] if pd.notna(alert_row['componente']) else 'N/A')
                             ], className="mb-3")
@@ -443,7 +467,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                 html.Div([
                     html.H5([
                         html.I(className="fas fa-brain me-2"),
-                        "Análisis Inteligente"
+                        t("tab_predictive_evidence.analisis_inteligente")
                     ], className="text-primary mb-3 pb-2 border-bottom"),
                     
                     # Diagnóstico subsection
@@ -453,7 +477,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                             "Diagnóstico"
                         ], className="text-dark mb-2"),
                         html.P(
-                            diagnosis_sections['diagnostico'] or "No disponible",
+                            diagnosis_sections['diagnostico'] or t("tab_alerts_detail.no_disponible"),
                             className="text-muted ps-4",
                             style={'whiteSpace': 'pre-wrap', 'lineHeight': '1.6'}
                         )
@@ -463,10 +487,10 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
                     html.Div([
                         html.H6([
                             html.Span("✅", className="me-2"),
-                            "Recomendaciones"
+                            t("alerts_tables.recomendaciones")
                         ], className="text-dark mb-2"),
                         html.P(
-                            diagnosis_sections['acciones'] or "No disponible",
+                            diagnosis_sections['acciones'] or t("tab_alerts_detail.no_disponible"),
                             className="text-muted ps-4",
                             style={'whiteSpace': 'pre-wrap', 'lineHeight': '1.6'}
                         )
@@ -480,7 +504,7 @@ def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:
     
     except Exception as e:
         logger.error(f"Error creating alert detail card: {e}")
-        return dbc.Alert(f"Error al mostrar detalles: {str(e)}", color="danger")
+        return dbc.Alert(t("alerts_tables.error_al_mostrar_detalles", str_e=str(e)), color="danger")
 
 
 def create_context_kpis_cards(
@@ -503,7 +527,7 @@ def create_context_kpis_cards(
         Bootstrap Row with KPI cards
     """
     if telemetry_data.empty:
-        return dbc.Alert("No hay datos de contexto disponibles", color="info")
+        return dbc.Alert(t("alerts_tables.no_hay_datos_de_contexto_disponibles"), color="info")
     
     try:
         # Get data at alert time (closest point)
@@ -517,38 +541,38 @@ def create_context_kpis_cards(
             gradient = (elevation_after - elevation_before) / 5 if pd.notna(elevation_before) and pd.notna(elevation_after) else 0
             
             if gradient > 0.05:
-                elevation_status = "⬆️ Subiendo"
+                elevation_status = t("alerts_tables.subiendo")
                 elevation_color = "info"
             elif gradient < -0.05:
-                elevation_status = "⬇️ Bajando"
+                elevation_status = t("alerts_tables.bajando")
                 elevation_color = "warning"
             else:
-                elevation_status = "➡️ Plano"
+                elevation_status = t("alerts_tables.plano")
                 elevation_color = "secondary"
         else:
-            elevation_status = "❓ Desconocido"
+            elevation_status = t("alerts_tables.desconocido")
             elevation_color = "light"
         
         # KPI 2: Payload Status
         payload_status = alert_point.get('EstadoCarga', 'Desconocido')
         if payload_status == 'Cargado':
-            payload_display = "✅ Cargado"
+            payload_display = t("alerts_tables.cargado")
             payload_color = "success"
         elif payload_status == 'Vacío':
-            payload_display = "❌ Vacío"
+            payload_display = t("alerts_tables.vacio")
             payload_color = "danger"
         else:
-            payload_display = "❓ Desconocido"
+            payload_display = t("alerts_tables.desconocido")
             payload_color = "light"
         
         # KPI 3: Engine RPM
         rpm_cols = [col for col in telemetry_data.columns if 'rpm' in col.lower() or 'engspd' in col.lower()]
         if rpm_cols:
             rpm_value = round(alert_point.get(rpm_cols[0], None), -2)
-            rpm_display = f"{rpm_value:.0f} RPM" if pd.notna(rpm_value) else "❓ Desconocido"
+            rpm_display = f"{rpm_value:.0f} RPM" if pd.notna(rpm_value) else t("alerts_tables.desconocido")
             rpm_color = "primary"
         else:
-            rpm_display = "❓ Desconocido"
+            rpm_display = t("alerts_tables.desconocido")
             rpm_color = "light"
         
         # Create KPI cards
@@ -556,7 +580,7 @@ def create_context_kpis_cards(
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
-                        html.H6("🏔️ Elevación", className="text-muted mb-2"),
+                        html.H6(t("alerts_tables.elevacion"), className="text-muted mb-2"),
                         html.H4(elevation_status, className="mb-0")
                     ])
                 ], color=elevation_color, outline=True)
@@ -565,7 +589,7 @@ def create_context_kpis_cards(
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
-                        html.H6("📦 Estado de Carga", className="text-muted mb-2"),
+                        html.H6(t("alerts_tables.estado_de_carga"), className="text-muted mb-2"),
                         html.H4(payload_display, className="mb-0")
                     ])
                 ], color=payload_color, outline=True)
@@ -574,7 +598,7 @@ def create_context_kpis_cards(
             dbc.Col([
                 dbc.Card([
                     dbc.CardBody([
-                        html.H6("⚙️ RPM del Motor", className="text-muted mb-2"),
+                        html.H6(t("alerts_tables.rpm_del_motor"), className="text-muted mb-2"),
                         html.H4(rpm_display, className="mb-0")
                     ])
                 ], color=rpm_color, outline=True)
@@ -586,7 +610,7 @@ def create_context_kpis_cards(
     
     except Exception as e:
         logger.error(f"Error creating context KPI cards: {e}")
-        return dbc.Alert(f"Error al mostrar KPIs: {str(e)}", color="danger")
+        return dbc.Alert(t("alerts_tables.error_al_mostrar_kpis", str_e=str(e)), color="danger")
 
 
 def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -> dbc.Card:
@@ -601,7 +625,7 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
         Bootstrap Card with maintenance information
     """
     if maintenance_data.empty:
-        return dbc.Alert("No hay datos de mantenimiento disponibles", color="info")
+        return dbc.Alert(t("alerts_tables.no_hay_datos_de_mantenimiento_disponibles"), color="info")
     
     try:
         import json
@@ -610,21 +634,21 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
             dbc.CardHeader([
                 html.H5([
                     html.I(className="fas fa-wrench me-2"),
-                    f"Mantenimiento - Semana {maintenance_data.get('Semana', 'N/A')}"
+                    t("alerts_tables.mantenimiento_semana", maintenance_data_g=maintenance_data.get('Semana', 'N/A'))
                 ], className="mb-0")
             ]),
             
             dbc.CardBody([
                 html.P([
-                    html.Strong("🚜 Unidad: "),
+                    html.Strong(t("alerts_tables.unidad_2")),
                     maintenance_data.get('UnitId', 'N/A')
                 ], className="mb-3"),
                 
                 # Summary
                 html.Div([
-                    html.H6("📝 Resumen de Actividades:", className="text-primary mb-2"),
+                    html.H6(t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
                     html.P(
-                        maintenance_data.get('Summary', 'No disponible'),
+                        maintenance_data.get('Summary', t("tab_alerts_detail.no_disponible")),
                         className="text-muted",
                         style={'whiteSpace': 'pre-wrap'}
                     )
@@ -634,10 +658,10 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                 
                 # Tasks filtered by system
                 html.Div([
-                    html.H6(f"📋 Actividades Relacionadas con {alert_system}:", className="text-primary mb-2"),
+                    html.H6(t("alerts_tables.actividades_relacionadas_con", alert_system=alert_system), className="text-primary mb-2"),
                     html.Div(id='maintenance-tasks-list')
                 ]) if pd.notna(maintenance_data.get('Tasks_List')) else html.Div([
-                    dbc.Alert("No hay lista de tareas disponible", color="info")
+                    dbc.Alert(t("alerts_tables.no_hay_lista_de_tareas_disponible"), color="info")
                 ])
             ])
         ], className="shadow")
@@ -662,7 +686,7 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                 
                 if not found_tasks:
                     tasks_elements = [dbc.Alert(
-                        f"No se encontraron actividades específicas para {alert_system}",
+                        t("alerts_tables.no_se_encontraron_actividades_especificas", alert_system=alert_system),
                         color="warning"
                     )]
                 
@@ -670,26 +694,26 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-wrench me-2"),
-                            f"Mantenimiento - Semana {maintenance_data.get('Semana', 'N/A')}"
+                            t("alerts_tables.mantenimiento_semana", maintenance_data_g=maintenance_data.get('Semana', 'N/A'))
                         ], className="mb-0")
                     ]),
                     
                     dbc.CardBody([
                         html.P([
-                            html.Strong("🚜 Unidad: "),
+                            html.Strong(t("alerts_tables.unidad_2")),
                             maintenance_data.get('UnitId', 'N/A')
                         ], className="mb-3"),
                         
                         html.P([
-                            html.Strong("🔧 Sistema de Interés: "),
+                            html.Strong(t("alerts_tables.sistema_de_interes")),
                             alert_system
                         ], className="mb-3"),
                         
                         # Summary
                         html.Div([
-                            html.H6("📝 Resumen de Actividades:", className="text-primary mb-2"),
+                            html.H6(t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
                             html.P(
-                                maintenance_data.get('Summary', 'No disponible'),
+                                maintenance_data.get('Summary', t("tab_alerts_detail.no_disponible")),
                                 className="text-muted",
                                 style={'whiteSpace': 'pre-wrap'}
                             )
@@ -698,7 +722,7 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                         html.Hr(),
                         
                         html.Div([
-                            html.H6(f"📋 Actividades Relacionadas con {alert_system}:", className="text-primary mb-2"),
+                            html.H6(t("alerts_tables.actividades_relacionadas_con", alert_system=alert_system), className="text-primary mb-2"),
                             html.Ul(tasks_elements, className="mb-0")
                         ])
                     ])
@@ -712,4 +736,4 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
     
     except Exception as e:
         logger.error(f"Error creating maintenance display: {e}")
-        return dbc.Alert(f"Error al mostrar mantenimiento: {str(e)}", color="danger")
+        return dbc.Alert(t("alerts_tables.error_al_mostrar_mantenimiento", str_e=str(e)), color="danger")

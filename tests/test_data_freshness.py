@@ -19,13 +19,15 @@ import pandas as pd
 from datetime import datetime
 import pytz
 
-# Import the functions from the callback module
+# Import the functions from the callback module. process_freshness_data (the
+# pivot used by the old Data Summary tab) was retired in Phase 1 - see
+# documentation/general/general_specs/01_fleet_overview_unified_view.md;
+# dashboard/components/fleet_overview.py now reads freshness per-card instead.
 from dashboard.callbacks.data_freshness_callbacks import (
     FRESHNESS_CRITERIA,
     load_data_freshness,
     convert_utc_to_chile,
     calculate_freshness_status,
-    process_freshness_data
 )
 
 
@@ -133,59 +135,16 @@ def test_status_calculation_handles_missing_and_unknown_inputs():
     assert status == "Desconocido"
 
 
-def test_data_processing():
-    """Test complete data processing pipeline"""
-    print("\n" + "=" * 80)
-    print("TEST 4: Data Processing Pipeline")
-    print("=" * 80)
-    
-    # Load raw data
-    df_raw = load_data_freshness()
-    
-    if df_raw.empty:
-        print("❌ ERROR: No data to process")
-        return False
-    
-    # Process data
-    df_processed = process_freshness_data(df_raw)
-    
-    if df_processed.empty:
-        print("❌ ERROR: Processing failed")
-        return False
-    
-    print(f"✅ Processed {len(df_processed)} units")
-    print(f"\nColumns: {df_processed.columns.tolist()}")
-    
-    # Show summary statistics
-    if 'Estado_General' in df_processed.columns:
-        print("\n📊 STATUS DISTRIBUTION:")
-        status_counts = df_processed['Estado_General'].value_counts()
-        for status, count in status_counts.items():
-            print(f"  {status}: {count} units")
-    
-    # Show first few rows
-    print("\n👁️ SAMPLE DATA (first 3 units):")
-    display_cols = ['Unidad', 'Estado_General', 'Telemetría_Tiempo', 'Tribología_Tiempo']
-    if all(col in df_processed.columns for col in display_cols):
-        print(df_processed[display_cols].head(3).to_string(index=False))
-    else:
-        print(df_processed.head(3))
-    
-    print("\n✅ Data processing test passed!")
-    return True
-
-
 def main():
     """Run all tests"""
     print("\n" + "=" * 80)
     print("🧪 DATA FRESHNESS FUNCTIONALITY TESTS")
     print("=" * 80 + "\n")
-    
+
     tests = [
         ("Load CSV Data", test_load_data),
         ("Timezone Conversion", test_timezone_conversion),
         ("Status Calculation", test_status_calculation),
-        ("Data Processing", test_data_processing)
     ]
     
     results = []

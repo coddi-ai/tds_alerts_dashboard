@@ -1,6 +1,8 @@
 """
 Componentes de tablas para la página de evidencia.
 """
+from src.i18n import t
+from dashboard.components.labels import status_label
 from dash import html
 import pandas as pd
 
@@ -27,7 +29,7 @@ def create_oil_variables_table(df_unit, variables, oil_labels, oil_limits_four=N
     """
     if not variables:
         return html.P(
-            "No hay variables de aceite asociadas a este modo de falla.",
+            t("predictive_tables.no_hay_variables_de_aceite_asociadas"),
             style={"color": "var(--text-muted)", "fontSize": "13px"}
         )
 
@@ -37,7 +39,7 @@ def create_oil_variables_table(df_unit, variables, oil_labels, oil_limits_four=N
     
     if len(df_sorted) < 1:
         return html.P(
-            "No hay datos de aceite disponibles.",
+            t("predictive_tables.no_hay_datos_de_aceite_disponibles"),
             style={"color": "var(--text-muted)", "fontSize": "13px"}
         )
 
@@ -113,7 +115,7 @@ def create_oil_variables_table(df_unit, variables, oil_labels, oil_limits_four=N
             ),
             # Valor anterior (último diferente)
             html.Td(
-                f"{prev_val:.2f}" if prev_val is not None else "Sin muestra previa",
+                f"{prev_val:.2f}" if prev_val is not None else t("predictive_tables.sin_muestra_previa"),
                 className="fm-td",
                 style={"textAlign": "right", "fontFamily": "DM Mono, monospace", "color": "var(--text-light)"}
             ),
@@ -139,18 +141,18 @@ def create_oil_variables_table(df_unit, variables, oil_labels, oil_limits_four=N
 
     if not rows:
         return html.P(
-            "No hay datos suficientes para las variables seleccionadas.",
+            t("predictive_tables.no_hay_datos_suficientes_para_las"),
             style={"color": "var(--text-muted)", "fontSize": "13px"}
         )
 
     table = html.Table([
         html.Thead(html.Tr([
-            html.Th("Variable", className="fm-th"),
-            html.Th("Valor actual", className="fm-th", style={"textAlign": "right"}),
-            html.Th("Valor anterior", className="fm-th", style={"textAlign": "right"}),
-            html.Th("Variación", className="fm-th", style={"textAlign": "center"}),
-            html.Th("Vel. Desgaste", className="fm-th", style={"textAlign": "center"}),
-            html.Th("Estado", className="fm-th", style={"textAlign": "center"}),
+            html.Th(t("predictive_tables.variable"), className="fm-th"),
+            html.Th(t("predictive_tables.valor_actual"), className="fm-th", style={"textAlign": "right"}),
+            html.Th(t("predictive_tables.valor_anterior"), className="fm-th", style={"textAlign": "right"}),
+            html.Th(t("predictive_tables.variacion"), className="fm-th", style={"textAlign": "center"}),
+            html.Th(t("predictive_tables.vel_desgaste"), className="fm-th", style={"textAlign": "center"}),
+            html.Th(t("fleet_overview.col_status"), className="fm-th", style={"textAlign": "center"}),
         ])),
         html.Tbody(rows),
     ], className="fm-table")
@@ -268,7 +270,7 @@ def _render_status_badge(status):
     c = colors.get(status, {"bg": "#f0f0f0", "text": "#444"})
 
     return html.Span(
-        status,
+        status_label(status),
         className="status-badge",
         style={
             "background": c["bg"],

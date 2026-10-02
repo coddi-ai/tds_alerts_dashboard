@@ -6,6 +6,7 @@ Alertas -> Detalle (dashboard/callbacks/alerts_callbacks.py::_alert_case_header)
 so AI-generated diagnosis text is styled the same everywhere it appears.
 """
 
+from src.i18n import t
 import json
 
 import dash_bootstrap_components as dbc
@@ -33,7 +34,7 @@ def _parse_acciones(acciones) -> list:
     return [str(acciones).strip()]
 
 
-def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text="Analisis Inteligente"):
+def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=None):
     """
     Build the "Analisis Inteligente" card: Diagnostico / Causa probable / Acciones.
 
@@ -41,8 +42,11 @@ def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=
     already) and rendered as a bullet list instead of raw text.
     """
 
+    if header_text is None:
+        header_text = t("ai_panel.header")
+
     def _text_block(title, value, icon):
-        text = value if (value and str(value).strip()) else "No disponible"
+        text = value if (value and str(value).strip()) else t("tab_alerts_detail.no_disponible")
         return dbc.Col([
             html.Div([
                 html.H6([html.I(className=f"fas {icon} me-2"), title], className="mb-2"),
@@ -57,11 +61,11 @@ def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=
             className="mb-0 ps-3",
         )
     else:
-        actions_body = html.P("No disponible", className="mb-0")
+        actions_body = html.P(t("tab_alerts_detail.no_disponible"), className="mb-0")
 
     actions_block = dbc.Col([
         html.Div([
-            html.H6([html.I(className="fas fa-wrench me-2"), "Acciones"], className="mb-2"),
+            html.H6([html.I(className="fas fa-wrench me-2"), t("tab_mantenciones_general.acciones")], className="mb-2"),
             actions_body,
         ], className="p-3 bg-light rounded h-100")
     ], md=4)
@@ -71,8 +75,8 @@ def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=
             html.H5([html.I(className="fas fa-brain me-2"), header_text],
                     className="text-primary mb-3 pb-2 border-bottom"),
             dbc.Row([
-                _text_block("Diagnostico", diagnostico, "fa-search"),
-                _text_block("Causa probable", causa_probable, "fa-project-diagram"),
+                _text_block(t("ai_analysis_panel.diagnostico"), diagnostico, "fa-search"),
+                _text_block(t("ai_analysis_panel.causa_probable"), causa_probable, "fa-project-diagram"),
                 actions_block,
             ], className="g-3"),
         ])

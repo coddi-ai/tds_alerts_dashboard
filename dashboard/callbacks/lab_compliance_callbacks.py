@@ -9,6 +9,7 @@ Date Filtering: Uses reportDate as the primary date reference for period selecti
 Records without valid reportDate are excluded from filtered results.
 """
 
+from src.i18n import t
 from dash import callback, Input, Output, State, no_update
 import pandas as pd
 import plotly.graph_objects as go
@@ -103,7 +104,7 @@ def init_date_range(active_tab, client):
     [State('oil-internal-tabs', 'value')]
 )
 def update_kpis(start_date, end_date, client, active_tab):
-    defaults = ("Tiempo de Tránsito Prom.", "—", "Tiempo de Laboratorio Prom.", "—", "—")
+    defaults = (t("tab_lab_compliance.tiempo_de_transito_prom"), "—", t("tab_lab_compliance.tiempo_de_laboratorio_prom"), "—", "—")
     if active_tab != 'lab-compliance' or not client:
         return defaults
 
@@ -123,13 +124,13 @@ def update_kpis(start_date, end_date, client, active_tab):
     if use_split:
         transit_avg = df['transit_time'].dropna().mean()
         lab_avg = df['lab_time'].dropna().mean()
-        return ("Tiempo de Tránsito Prom.", f"{transit_avg:.1f}" if pd.notna(transit_avg) else "—",
-                "Tiempo de Laboratorio Prom.", f"{lab_avg:.1f}" if pd.notna(lab_avg) else "—",
+        return (t("tab_lab_compliance.tiempo_de_transito_prom"), f"{transit_avg:.1f}" if pd.notna(transit_avg) else "—",
+                t("tab_lab_compliance.tiempo_de_laboratorio_prom"), f"{lab_avg:.1f}" if pd.notna(lab_avg) else "—",
                 total)
     else:
         diag_avg = df['diagnostic_time'].dropna().mean()
-        return ("Tiempo Diagnóstico Prom.", f"{diag_avg:.1f}" if pd.notna(diag_avg) else "—",
-                "(Lab Time no disponible)", "—",
+        return (t("lab_compliance_callbacks.tiempo_diagnostico_prom"), f"{diag_avg:.1f}" if pd.notna(diag_avg) else "—",
+                t("lab_compliance_callbacks.lab_time_no_disponible"), "—",
                 total)
 
 
@@ -145,8 +146,8 @@ def update_kpis(start_date, end_date, client, active_tab):
     [State('oil-internal-tabs', 'value')]
 )
 def update_weekly_chart(start_date, end_date, client, active_tab):
-    empty = _empty_fig("Sin datos disponibles")
-    default_title = "Comparación Semanal"
+    empty = _empty_fig(t("lab_compliance_callbacks.sin_datos_disponibles"))
+    default_title = t("lab_compliance_callbacks.comparacion_semanal")
 
     if active_tab != 'lab-compliance' or not client:
         return empty, default_title
@@ -175,19 +176,19 @@ def update_weekly_chart(start_date, end_date, client, active_tab):
 
         fig.add_trace(go.Bar(
             x=weekly['week'], y=weekly['transit'],
-            name='Tiempo de Tránsito', marker_color='#0d6efd',
+            name=t("lab_compliance_callbacks.tiempo_de_transito"), marker_color='#0d6efd',
             text=weekly['transit'], texttemplate='%{text:.1f}',
             textposition='inside', insidetextanchor='end',
             textfont=dict(color='white', size=10)
         ))
         fig.add_trace(go.Bar(
             x=weekly['week'], y=weekly['lab'],
-            name='Tiempo de Laboratorio', marker_color='#6610f2',
+            name=t("lab_compliance_callbacks.tiempo_de_laboratorio"), marker_color='#6610f2',
             text=weekly['lab'], texttemplate='%{text:.1f}',
             textposition='inside', insidetextanchor='end',
             textfont=dict(color='white', size=10)
         ))
-        title = "Comparación Semanal: Tiempo de Tránsito vs Tiempo de Laboratorio"
+        title = t("tab_lab_compliance.comparacion_semanal_tiempo_de_transito_vs")
     else:
         weekly = df.groupby('week').agg(
             diagnostic=('diagnostic_time', 'mean')
@@ -195,26 +196,26 @@ def update_weekly_chart(start_date, end_date, client, active_tab):
 
         fig.add_trace(go.Bar(
             x=weekly['week'], y=weekly['diagnostic'],
-            name='Tiempo Diagnóstico', marker_color='#fd7e14',
+            name=t("lab_compliance_callbacks.tiempo_diagnostico"), marker_color='#fd7e14',
             text=weekly['diagnostic'], texttemplate='%{text:.1f}',
             textposition='inside', insidetextanchor='end',
             textfont=dict(color='white', size=10)
         ))
-        title = "Evolución Semanal: Tiempo Diagnóstico (reportDate - sampleDate)"
+        title = t("lab_compliance_callbacks.evolucion_semanal_tiempo_diagnostico_repor")
 
     threshold_days = get_settings().get_lab_compliance_threshold_days(client)
     fig.add_hline(
         y=threshold_days,
         line=dict(color='#dc3545', width=1.5, dash='dash'),
-        annotation_text=f"Umbral de cumplimiento ({threshold_days:g} días)",
+        annotation_text=t("lab_compliance_callbacks.umbral_de_cumplimiento_dias", threshold_days=threshold_days),
         annotation_position="top left",
         annotation_font=dict(size=10, color='#dc3545'),
     )
 
     fig.update_layout(
         barmode='group',
-        xaxis_title="Semana",
-        yaxis_title="Días (promedio)",
+        xaxis_title=t("alerts_general.filter_week"),
+        yaxis_title=t("lab_compliance_callbacks.dias_promedio"),
         template="plotly_white",
         margin=dict(l=40, r=20, t=30, b=40),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
@@ -234,7 +235,7 @@ def update_weekly_chart(start_date, end_date, client, active_tab):
     [State('oil-internal-tabs', 'value')]
 )
 def update_unit_chart(start_date, end_date, client, active_tab):
-    empty = _empty_fig("Sin datos disponibles")
+    empty = _empty_fig(t("lab_compliance_callbacks.sin_datos_disponibles"))
     if active_tab != 'lab-compliance' or not client:
         return empty
 
@@ -252,10 +253,10 @@ def update_unit_chart(start_date, end_date, client, active_tab):
 
     if use_split:
         col = 'transit_time'
-        ylabel = "Demora Tránsito Prom. (días)"
+        ylabel = t("lab_compliance_callbacks.demora_transito_prom_dias")
     else:
         col = 'diagnostic_time'
-        ylabel = "Demora Diagnóstico Prom. (días)"
+        ylabel = t("lab_compliance_callbacks.demora_diagnostico_prom_dias")
 
     by_unit = df.groupby('unitId')[col].mean().dropna().sort_values(ascending=False).head(20)
 
@@ -272,13 +273,13 @@ def update_unit_chart(start_date, end_date, client, active_tab):
     fig.add_hline(
         y=threshold_days,
         line=dict(color='#dc3545', width=1.5, dash='dash'),
-        annotation_text=f"Umbral de cumplimiento ({threshold_days:g} días)",
+        annotation_text=t("lab_compliance_callbacks.umbral_de_cumplimiento_dias", threshold_days=threshold_days),
         annotation_position="top left",
         annotation_font=dict(size=10, color='#dc3545'),
     )
 
     fig.update_layout(
-        xaxis_title="Unidad",
+        xaxis_title=t("alerts_general.filter_unit"),
         yaxis_title=ylabel,
         template="plotly_white",
         margin=dict(l=40, r=20, t=30, b=60)

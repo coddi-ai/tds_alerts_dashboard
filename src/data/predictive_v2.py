@@ -320,30 +320,90 @@ def risk_scores_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
 def get_failure_mode_keys(client: str, component: str) -> list:
     """Distinct failure modes actually present in this client/component's
     data (Change 3: mode lists must come from the data, not a hardcoded
-    count). Prefers `unit_status_summary.modos_ordenados` (already ordered
-    highest->lowest); falls back to the distinct `risk_scores.failure_mode`
-    values. Returns [] when neither new-layout table exists, so callers can
-    fall back to their config-driven list unchanged.
+    count). Starts from `unit_status_summary.modos_ordenados` (already ordered
+    highest->lowest) and appends any mode `risk_scores` scores that the
+    status snapshot doesn't list - a mode added upstream (e.g.
+    `accumulated_wear_risk`) must show up as soon as it is scored, even while
+    an older `unit_status_summary` partition is still the latest one. Falls
+    back to the distinct `risk_scores.failure_mode` values alone. Returns []
+    when neither new-layout table exists, so callers can fall back to their
+    config-driven list unchanged.
     """
+    ordered = []
     df_status = load_unit_status_summary(client, component)
     if not df_status.empty and "modos_ordenados" in df_status.columns:
         raw = df_status["modos_ordenados"].dropna()
         if not raw.empty:
             try:
-                modos = json.loads(raw.iloc[0])
-                keys = list(modos.keys())
-                if keys:
-                    return keys
-            except (TypeError, ValueError, json.JSONDecodeError):
+                ordered = list(json.loads(raw.iloc[0]).keys())
+            except (TypeError, ValueError, json.JSONDecodeError, AttributeError):
                 logger.warning(
                     "No se pudo parsear modos_ordenados para %s/%s", client, component
                 )
+    scored = []
     df_scores = load_risk_scores(client, component)
     if not df_scores.empty and "failure_mode" in df_scores.columns:
-        modes = sorted(m for m in df_scores["failure_mode"].unique() if m != "ranking")
-        if modes:
-            return modes
-    return []
+        scored = sorted(m for m in df_scores["failure_mode"].unique() if m != "ranking")
+    seen = set(ordered)
+    return ordered + [m for m in scored if m not in seen]
+
+
+# ── Oil meter history (oil technique golden layer, capstone/motor only) ───
+
+WEAR_METAL_SUFFIX = "_acum_total"
+
+
+def oil_meter_history_base_path(client: str, component: str) -> Path:
+    return dashboard_data_root() / "oil" / "golden" / (client or "").lower() / component / "oil_meter_history"
+
+
+@lru_cache(maxsize=4)
+def _load_oil_meter_history_cached(base: str, mtime_ns: int, size: int) -> pd.DataFrame:
+    # Straight reads, not _read_partition: ~130 partitions would evict the
+    # 64-slot per-partition cache risk_scores/signal_daily_status rely on.
+    frames = [safe_read_parquet(path) for _, _, path in _list_week_partitions(Path(base))]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    df["Fecha"] = pd.to_datetime(df["Fecha"])
+    return df.drop_duplicates(subset=["Unit", "Fecha"], keep="last").sort_values(["Unit", "Fecha"])
+
+
+def load_oil_meter_history(client: str, component: str, unit: str) -> pd.DataFrame:
+    """`oil_meter_history` rows for one unit, full history (Unit, Fecha,
+    ciclo_motor, `{Metal}_acum_total`...). The running totals reset with every
+    component life (`ciclo_motor`), so a cycle can only be read against its own
+    rows - hence all partitions, not just the last 13 weeks `risk_scores` uses.
+    Empty DataFrame if the table doesn't exist for this client/component (only
+    capstone/motor publishes it)."""
+    base = oil_meter_history_base_path(client, component)
+    partitions = _list_week_partitions(base)
+    if not partitions:
+        return pd.DataFrame()
+    gens = [_partition_generation(p) for _, _, p in partitions]
+    df = _load_oil_meter_history_cached(
+        str(base), max(g[0] for g in gens), sum(g[1] for g in gens)
+    )
+    if df.empty or "Unit" not in df.columns:
+        return pd.DataFrame()
+    return df[df["Unit"] == unit].copy()
+
+
+def load_latest_cycle_oil_meter_history(client: str, component: str, unit: str) -> pd.DataFrame:
+    """`oil_meter_history` rows for `unit` restricted to its latest
+    `ciclo_motor` (the highest value present - its current, ongoing component
+    life). Earlier lives are dropped here, before anything is plotted, since
+    the running totals restart at every reset and must not be mixed. Empty
+    DataFrame when there is no history or no usable `ciclo_motor`; it never
+    falls back to a previous cycle."""
+    df = load_oil_meter_history(client, component, unit)
+    if df.empty or "ciclo_motor" not in df.columns:
+        return pd.DataFrame()
+    latest = df["ciclo_motor"].max()
+    if pd.isna(latest):
+        return pd.DataFrame()
+    return df[df["ciclo_motor"] == latest].copy()
 
 
 # ── Cumulative risk curve (Change 6: dedicated reader, own metadata) ──────

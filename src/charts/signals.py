@@ -15,7 +15,8 @@ If units become available upstream, add them here and the agents can cite them.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
+
+from src.i18n import VocabMapping
 
 
 # Signal code -> Spanish description. Kept in sync with
@@ -131,7 +132,9 @@ _SIGNAL_LABELS: dict[str, str] = {
 # Read-only view: the single source of truth for signal labels, shared by
 # Alertas, Telemetría and Campbell AI. See the W34-11 note above `_SIGNAL_LABELS`
 # for why this must never be a plain mutable dict again.
-SIGNAL_LABELS: Mapping[str, str] = MappingProxyType(_SIGNAL_LABELS)
+# Read-only and language-aware: `[]`/`.get` return the description in the language of the
+# request being served (Spanish outside a request, which is what Campbell AI's backend sees).
+SIGNAL_LABELS: Mapping[str, str] = VocabMapping(_SIGNAL_LABELS)
 
 # Signals the dashboard omits from its views.
 OMITTED_SIGNALS: tuple[str, ...] = ("GroundSpd", "EngLoad")

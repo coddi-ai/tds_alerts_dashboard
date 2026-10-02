@@ -2,6 +2,7 @@
 Predictive Component Page - Unified page per component with internal tabs (Resumen / Evidencia).
 """
 
+from src.i18n import t
 from dash import html, dcc
 from dashboard.components.predictive_config import get_failure_mode_options
 from dashboard.tabs.tab_predictive_overview import (
@@ -36,9 +37,9 @@ def layout(client: str, component: str):
         return html.Div([
             html.Div([
                 html.I(className="fas fa-brain me-3"),
-                f"Predictivo — {component.title()}"
+                t("tab_predictive_component.predictivo", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.P(f"No hay datos predictivos disponibles para {component}.",
+            html.P(t("tab_predictive_component.no_hay_datos_predictivos_disponibles_para", component=component),
                    className="text-muted", style={"padding": "40px", "textAlign": "center"})
         ])
 
@@ -49,7 +50,7 @@ def layout(client: str, component: str):
     if df_latest is not None and not df_latest.empty:
         overview_content = _render_component_overview(df_latest, prev_ranking, component, client, df=df_ov)
     else:
-        overview_content = html.P(f"No hay datos de resumen para {component}.",
+        overview_content = html.P(t("tab_predictive_component.no_hay_datos_de_resumen_para", component=component),
                                   className="text-muted text-center", style={"padding": "40px"})
 
     # Load evidence data for initial render
@@ -81,8 +82,8 @@ def layout(client: str, component: str):
         # Failure mode selector
         html.Div([
             html.Div([
-                html.H5([html.I(className="fas fa-cogs me-2"), "Seleccionar Modo de Falla"], className="mb-2"),
-                html.P("Elige un modo de falla para ver evidencia detallada de aceite y telemetría",
+                html.H5([html.I(className="fas fa-cogs me-2"), t("tab_predictive_component.seleccionar_modo_de_falla")], className="mb-2"),
+                html.P(t("tab_predictive_component.elige_un_modo_de_falla_para"),
                        className="text-muted mb-2", style={"fontSize": "12px"}),
             ]),
             dcc.Dropdown(
@@ -106,9 +107,9 @@ def layout(client: str, component: str):
         html.Div([
             html.Div([
                 html.I(className=f"{icon} me-2"),
-                f"Predictivo — {component.title()}"
+                t("tab_predictive_component.predictivo", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.Div(f"Análisis predictivo de condición — {component}", className="page-subtitle"),
+            html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
         ], style={"marginBottom": "16px"}),
         render_service_source_status(client, "predictive"),
 
@@ -117,9 +118,9 @@ def layout(client: str, component: str):
             id='predictive-component-internal-tabs',
             value='resumen',
             children=[
-                dcc.Tab(label='  Resumen', value='resumen',
+                dcc.Tab(label=t("tab_predictive_component.resumen"), value='resumen',
                         className='custom-tab', selected_className='custom-tab--selected'),
-                dcc.Tab(label='  Evidencia', value='evidencia',
+                dcc.Tab(label=t("tab_predictive_component.evidencia"), value='evidencia',
                         className='custom-tab', selected_className='custom-tab--selected'),
             ],
             className='mb-4'
@@ -130,6 +131,9 @@ def layout(client: str, component: str):
 
         # Hidden stores
         dcc.Store(id="predictive-ev-client-store", data=client),
+        # Unit shown in Evidence: set by a click in Resumen's scatter/table and
+        # mirrored from Evidence's own unit selector, so it survives tab switches.
+        dcc.Store(id="predictive-selected-unit-store", data=None),
         dcc.Store(id="predictive-ev-component-store", data=component),
         # Store the pre-rendered overview so the callback can restore it without re-computing
         dcc.Store(id="predictive-overview-cache", data="cached"),

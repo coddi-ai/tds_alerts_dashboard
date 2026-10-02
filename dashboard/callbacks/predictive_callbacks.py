@@ -2,6 +2,8 @@
 Predictive callbacks - handles internal tab switching and evidence interactivity.
 """
 
+from src.i18n import t
+from dashboard.components.labels import status_label
 from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import pandas as pd
 from src.utils.logger import get_logger
@@ -19,21 +21,12 @@ from dashboard.tabs.tab_predictive_overview import (
     _failure_table,
     attach_status,
     WINDOW_SUFFIX,
-    _load_component_hours_if_available,
 )
 from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_component,
     render_initial_content,
     render_detailed_evidence,
 )
-from dashboard.components.accumulated_curve import (
-    build_accumulated_figure,
-    build_accumulated_figure_from_curve,
-    _get_legacy_curve_data,
-    _curve_badge_row,
-    _curve_chip_groups,
-)
-from src.data import predictive_v2
 
 logger = get_logger(__name__)
 
@@ -56,8 +49,9 @@ def register_callbacks(app):
         Input("predictive-component-internal-tabs", "value"),
         State("predictive-ev-client-store", "data"),
         State("predictive-ev-component-store", "data"),
+        State("predictive-selected-unit-store", "data"),
     )
-    def switch_internal_tab(tab_value, client, component):
+    def switch_internal_tab(tab_value, client, component, selected_unit):
         if not client or not component:
             return no_update
 
@@ -66,11 +60,11 @@ def register_callbacks(app):
             components = _discover_components(client)
             filepath = components.get(component)
             if not filepath:
-                return html.P(f"No hay datos para {component}.", className="text-muted text-center")
+                return html.P(t("predictive_callbacks.no_hay_datos_para", component=component), className="text-muted text-center")
 
             df, df_latest, prev_ranking = _load_overview_component(filepath, component, client)
             if df_latest is None or df_latest.empty:
-                return html.P(f"No hay datos disponibles para {component}.", className="text-muted text-center")
+                return html.P(t("tab_predictive_overview.no_hay_datos_disponibles_para", component=component), className="text-muted text-center")
 
             return _render_component_overview(df_latest, prev_ranking, component, client, df=df)
 
@@ -79,11 +73,20 @@ def register_callbacks(app):
             components = _discover_components(client)
             filepath = components.get(component)
             if not filepath:
-                return html.P(f"No hay datos para {component}.", className="text-muted text-center")
+                return html.P(t("predictive_callbacks.no_hay_datos_para", component=component), className="text-muted text-center")
 
             df, df_latest = _load_evidence_component(filepath, component, client)
             units = sorted(df["Unit"].unique()) if df is not None else []
             failure_mode_options = resolve_failure_mode_options(component, client)
+
+            # A unit picked in Resumen (scatter/table click) or earlier in this
+            # tab wins over the first-unit default. It is offered as an option
+            # even if this component has no data for it, so the selector always
+            # shows the clicked unit and Evidence renders its standard no-data state.
+            unit_options = list(units)
+            if selected_unit and selected_unit not in unit_options:
+                unit_options.append(selected_unit)
+            default_unit = selected_unit or (units[0] if units else None)
 
             return html.Div([
                 # Unit selector
@@ -91,8 +94,8 @@ def register_callbacks(app):
                     html.Div([
                         dcc.Dropdown(
                             id="predictive-ev-unit",
-                            options=[{"label": u, "value": u} for u in units],
-                            value=units[0] if units else None,
+                            options=[{"label": u, "value": u} for u in unit_options],
+                            value=default_unit,
                             clearable=False,
                             className="ev-unit-dropdown",
                         ),
@@ -108,8 +111,8 @@ def register_callbacks(app):
                 # Failure mode selector
                 html.Div([
                     html.Div([
-                        html.H5([html.I(className="fas fa-cogs me-2"), "Seleccionar Modo de Falla"], className="mb-2"),
-                        html.P("Elige un modo de falla para ver evidencia detallada de aceite y telemetría",
+                        html.H5([html.I(className="fas fa-cogs me-2"), t("tab_predictive_component.seleccionar_modo_de_falla")], className="mb-2"),
+                        html.P(t("tab_predictive_component.elige_un_modo_de_falla_para"),
                                className="text-muted mb-2", style={"fontSize": "12px"}),
                     ]),
                     dcc.Dropdown(
@@ -127,20 +130,45 @@ def register_callbacks(app):
             ])
 
     # ══════════════════════════════════════════════════════════════════════════
-    # OVERVIEW: Análisis de Riesgo view switch (Riesgo Acumulado / Prioridad Actual)
+    # OVERVIEW -> EVIDENCE: click a scatter point / table row to open that unit
     # ══════════════════════════════════════════════════════════════════════════
 
     @app.callback(
-        Output("predictive-risk-curve-container", "style"),
-        Output("predictive-risk-priority-container", "style"),
-        Input("predictive-risk-view-selector", "value"),
+        Output("predictive-component-internal-tabs", "value"),
+        Output("predictive-selected-unit-store", "data", allow_duplicate=True),
+        Input("predictive-fleet-scatter", "clickData"),
+        Input({"type": "predictive-fm-row", "unit": ALL}, "n_clicks"),
         prevent_initial_call=True,
     )
-    def toggle_risk_view(view):
-        """Switch between the accumulated-risk curve and the priority cards without re-rendering either."""
-        if view == "acumulado":
-            return {"display": "block"}, {"display": "none"}
-        return {"display": "none"}, {"display": "block"}
+    def navigate_to_evidence_from_overview(click_data, _row_clicks):
+        """Open Evidence with the clicked unit selected. Only the unit travels:
+        the failure mode keeps Evidence's own default."""
+        triggered = ctx.triggered_id
+        unit = None
+        if triggered == "predictive-fleet-scatter":
+            points = (click_data or {}).get("points") or []
+            if points:
+                unit = points[0].get("customdata", points[0].get("text"))
+                if isinstance(unit, (list, tuple)):
+                    unit = unit[0] if unit else None
+        elif isinstance(triggered, dict) and triggered.get("type") == "predictive-fm-row":
+            # A re-rendered (re-sorted) table creates fresh rows with n_clicks 0;
+            # only a real click, i.e. a positive count, navigates.
+            if ctx.triggered and ctx.triggered[0].get("value"):
+                unit = triggered.get("unit")
+        if not unit:
+            return no_update, no_update
+        return "evidencia", unit
+
+    @app.callback(
+        Output("predictive-selected-unit-store", "data", allow_duplicate=True),
+        Input("predictive-ev-unit", "value"),
+        prevent_initial_call=True,
+    )
+    def remember_evidence_unit(selected_unit):
+        """Mirror Evidence's selector so leaving and re-entering the tab keeps
+        the unit instead of snapping back to an earlier click or the first unit."""
+        return selected_unit or no_update
 
     # ══════════════════════════════════════════════════════════════════════════
     # OVERVIEW: Sort failure mode table by selected period
@@ -213,124 +241,6 @@ def register_callbacks(app):
             sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
 
         return _failure_table(sorted_df, window, sort_by, ascending, failure_modes), state
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # OVERVIEW: Curva Acumulada — selector de unidades y badges de riesgo
-    # ══════════════════════════════════════════════════════════════════════════
-
-    @app.callback(
-        Output("predictive-curve-unit-select", "value"),
-        Output("predictive-curve-badge-store", "data"),
-        Input({"type": "predictive-curve-chip", "unit": ALL}, "n_clicks"),
-        Input({"type": "predictive-curve-badge", "status": ALL}, "n_clicks"),
-        Input("predictive-curve-unit-select", "value"),
-        State("predictive-curve-badge-store", "data"),
-        State("predictive-curve-units-store", "data"),
-        State("predictive-curve-resumen-store", "data"),
-        prevent_initial_call=True,
-    )
-    def sync_curve_selection(_chip_clicks, _badge_clicks, dropdown_value, active_badge, units_all, resumen_data):
-        """Mantiene sincronizados el dropdown de unidades, los chips de color
-        y los badges de riesgo, sin tocar la fuente de datos - todo se
-        resuelve contra los Store llenados en el render inicial (units y
-        resumen no cambian con la seleccion).
-
-        El dropdown es a la vez Input y Output de este callback (un click en
-        un chip o badge lo actualiza), asi que cada cambio se re-dispara a si
-        mismo con ctx.triggered_id apuntando al propio dropdown. Para no
-        entrar en un ciclo que borre el badge activo que se acaba de fijar,
-        esa rama no limpia el filtro incondicionalmente: primero comprueba si
-        el valor actual del dropdown sigue siendo exactamente el conjunto que
-        implica el badge activo (eco de este mismo callback) - solo lo limpia
-        si el usuario lo diverge a mano.
-        """
-        units_all = units_all or []
-        resumen_data = resumen_data or {}
-        zona_por_unit = dict(zip(resumen_data.get("Unit", []), resumen_data.get("zona_final", [])))
-
-        triggered = ctx.triggered_id
-
-        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-chip":
-            unit = triggered["unit"]
-            current = list(dropdown_value or [])
-            if unit in current:
-                current.remove(unit)
-            else:
-                current.append(unit)
-            return current, None
-
-        if isinstance(triggered, dict) and triggered.get("type") == "predictive-curve-badge":
-            status = triggered["status"]
-            if active_badge == status:
-                return units_all, None
-            return [u for u in units_all if zona_por_unit.get(u) == status], status
-
-        # El dropdown cambio (typeahead, quitar un tag, etc). Si no hay badge
-        # activo no hay nada que reconciliar; si lo hay, solo se limpia
-        # cuando la seleccion actual ya no coincide con lo que ese badge
-        # implicaba (ver docstring).
-        if active_badge is None:
-            return no_update, no_update
-        expected = sorted(u for u in units_all if zona_por_unit.get(u) == active_badge)
-        if sorted(dropdown_value or []) == expected:
-            return no_update, no_update
-        return no_update, None
-
-    @app.callback(
-        Output("predictive-curve-graph", "figure"),
-        Output("predictive-curve-chips", "children"),
-        Output("predictive-curve-badges", "children"),
-        Input("predictive-curve-unit-select", "value"),
-        Input("predictive-curve-badge-store", "data"),
-        State("predictive-ev-client-store", "data"),
-        State("predictive-ev-component-store", "data"),
-        State("predictive-curve-colormap-store", "data"),
-        prevent_initial_call=True,
-    )
-    def update_curve_display(selected_units, active_badge, client, component, color_map):
-        """Reconstruye el grafico + chips + badges cuando cambia la
-        seleccion de unidades o el filtro de badge activo. Reusa la misma
-        fuente (cumulative_risk_curve precomputada o el pipeline legacy
-        cacheado via _get_legacy_curve_data) que _render_component_overview,
-        para no divergir de que curva se muestra en el render inicial.
-        """
-        if not client or not component:
-            return no_update, no_update, no_update
-
-        selected_units = selected_units or []
-
-        components = _discover_components(client)
-        filepath = components.get(component)
-        if not filepath:
-            return no_update, no_update, no_update
-
-        df_curve = None
-        try:
-            df_curve = predictive_v2.read_cumulative_risk_curve(client, component)
-        except Exception as exc:  # noqa: BLE001 - la curva nunca rompe la UI
-            logger.warning(f"No se pudo leer cumulative_risk_curve para {client}/{component}: {exc}")
-
-        if df_curve is not None and not df_curve.empty:
-            fig, resumen, units_all, curve_color_map = build_accumulated_figure_from_curve(
-                df_curve, component=component, selected_units=selected_units,
-            )
-        else:
-            df, _df_latest, _prev = _load_overview_component(filepath, component, client)
-            df_component_hours = _load_component_hours_if_available(client)
-            if df is None or df.empty or df_component_hours is None or df_component_hours.empty:
-                return no_update, no_update, no_update
-            df_acum = _get_legacy_curve_data(client, component, df, df_component_hours)
-            fig, resumen, units_all, curve_color_map = build_accumulated_figure(
-                df_acum, component=component, selected_units=selected_units,
-            )
-
-        if fig is None:
-            return no_update, no_update, no_update
-
-        color_map = color_map or curve_color_map
-        chips = _curve_chip_groups(units_all, color_map, resumen, selected_units)
-        badges = _curve_badge_row(resumen, active_badge)
-        return fig, chips, badges
 
     # ══════════════════════════════════════════════════════════════════════════
     # EVIDENCE: Unit banner
@@ -438,7 +348,7 @@ def register_callbacks(app):
                         html.I(className="fas fa-truck", style={"fontSize": "28px"}),
                     ], style={"marginRight": "16px"}),
                     html.Div([
-                        html.Div("Unidad en Análisis", style={
+                        html.Div(t("predictive_callbacks.unidad_en_analisis"), style={
                             "fontSize": "11px", "fontWeight": "500",
                             "textTransform": "uppercase", "letterSpacing": "0.5px",
                             "opacity": "0.8", "marginBottom": "2px"
@@ -447,7 +357,7 @@ def register_callbacks(app):
                             "fontSize": "32px", "fontWeight": "700", "letterSpacing": "-0.5px",
                             "lineHeight": "1.1"
                         }),
-                        html.Div(f"Componente: {component_label}", style={
+                        html.Div(t("predictive_callbacks.componente", component_label=component_label), style={
                             "fontSize": "12px", "opacity": "0.8", "marginTop": "2px"
                         }),
                     ]),
@@ -456,7 +366,7 @@ def register_callbacks(app):
                 html.Div([
                     # Horómetro badge
                     html.Div([
-                        html.Div("Horómetro", style={
+                        html.Div(t("tables.horometro"), style={
                             "fontSize": "10px", "textTransform": "uppercase",
                             "letterSpacing": "0.5px", "opacity": "0.8", "marginBottom": "4px"
                         }),
@@ -469,7 +379,7 @@ def register_callbacks(app):
                     ], style={"textAlign": "center", "marginRight": "20px"}),
                     # Ranking badge
                     html.Div([
-                        html.Div("Ranking Actual", style={
+                        html.Div(t("predictive_callbacks.ranking_actual"), style={
                             "fontSize": "10px", "textTransform": "uppercase",
                             "letterSpacing": "0.5px", "opacity": "0.8", "marginBottom": "4px"
                         }),
@@ -478,11 +388,11 @@ def register_callbacks(app):
                         }),
                     ], style={"textAlign": "center", "marginRight": "20px"}),
                     html.Div([
-                        html.Div("Estado", style={
+                        html.Div(t("fleet_overview.col_status"), style={
                             "fontSize": "10px", "textTransform": "uppercase",
                             "letterSpacing": "0.5px", "opacity": "0.8", "marginBottom": "4px"
                         }),
-                        html.Span(status_text, style={
+                        html.Span(status_label(status_text), style={
                             "background": "rgba(255,255,255,0.2)",
                             "padding": "4px 12px", "borderRadius": "12px",
                             "fontSize": "13px", "fontWeight": "600",
@@ -511,16 +421,16 @@ def register_callbacks(app):
     )
     def update_initial_content(selected_unit, client, component):
         if not selected_unit or not client or not component:
-            return html.Div(html.P("Seleccione una unidad.", className="text-muted text-center", style={"padding": "40px"}))
+            return html.Div(html.P(t("predictive_callbacks.seleccione_una_unidad"), className="text-muted text-center", style={"padding": "40px"}))
 
         components = _discover_components(client)
         filepath = components.get(component)
         if not filepath:
-            return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+            return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
 
         df, df_latest = _load_evidence_component(filepath, component, client)
         if df is None:
-            return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+            return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
 
         return render_initial_content(selected_unit, df, df_latest, component, client)
 
@@ -570,17 +480,17 @@ def register_callbacks(app):
     )
     def update_detailed_evidence(selected_unit, selected_failure_mode, client, component):
         if not selected_unit or not selected_failure_mode or not client or not component:
-            return html.Div(html.P("Seleccione una unidad y modo de falla.",
+            return html.Div(html.P(t("predictive_callbacks.seleccione_una_unidad_y_modo_de"),
                                    className="text-muted text-center", style={"padding": "40px"}))
 
         components = _discover_components(client)
         filepath = components.get(component)
         if not filepath:
-            return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+            return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
 
         df, df_latest = _load_evidence_component(filepath, component, client)
         if df is None:
-            return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+            return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
 
         return render_detailed_evidence(selected_unit, df, df_latest, selected_failure_mode, component, client)
 
@@ -603,7 +513,7 @@ def register_callbacks(app):
         from dashboard.components.predictive_config import OIL_LABELS, load_predictive_oil_limits_four
 
         if not selected_vars or not selected_unit or not client or not component:
-            return html.P("Seleccione al menos una variable de aceite.",
+            return html.P(t("predictive_callbacks.seleccione_al_menos_una_variable_de"),
                          className="text-muted", style={"fontSize": "13px", "padding": "20px", "textAlign": "center"})
 
         # Resolve per-client labels (fallback to cda if missing) and the
@@ -620,7 +530,7 @@ def register_callbacks(app):
         # samples we show an empty state instead of falling back to it.
         df_oil_real = load_real_oil_samples(client, component, selected_unit)
         if df_oil_real is None or not any(v in df_oil_real.columns for v in selected_vars):
-            return html.P("No hay muestras de aceite reales disponibles para este componente.",
+            return html.P(t("predictive_callbacks.no_hay_muestras_de_aceite_reales"),
                          className="text-muted", style={"fontSize": "13px", "padding": "20px", "textAlign": "center"})
 
         # Always pass limits — the chart function shows limit lines when len(vars)==1
@@ -632,4 +542,4 @@ def register_callbacks(app):
 
         if fig:
             return dcc.Graph(figure=fig, config={"displayModeBar": False})
-        return html.P("No hay suficientes datos históricos.", className="text-muted", style={"fontSize": "13px"})
+        return html.P(t("predictive_callbacks.no_hay_suficientes_datos_historicos"), className="text-muted", style={"fontSize": "13px"})

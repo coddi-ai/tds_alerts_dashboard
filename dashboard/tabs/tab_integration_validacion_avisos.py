@@ -19,6 +19,7 @@ static (just visually inert until a warning is selected) sidesteps it.
 """
 from __future__ import annotations
 
+from src.i18n import t
 from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
@@ -96,36 +97,36 @@ def _context_section(warning: Warning) -> html.Div:
     return html.Div(
         [
             html.H4(
-                [html.I(className="fas fa-info-circle me-2"), "Contexto del Aviso"],
+                [html.I(className="fas fa-info-circle me-2"), t("tab_integration_validacion_avisos.contexto_del_aviso")],
                 className="text-primary mb-3 mt-2 pb-2 border-bottom",
             ),
-            html.P("Información generada por el agente de IA. Solo lectura.", className="text-muted mb-3"),
+            html.P(t("tab_integration_validacion_avisos.informacion_generada_por_el_agente_de"), className="text-muted mb-3"),
             dbc.Row(
                 [
                     dbc.Col(
                         [
-                            html.Small("Fuente", className="text-muted fw-bold d-block"),
+                            html.Small(t("tab_integration_validacion_avisos.fuente"), className="text-muted fw-bold d-block"),
                             html.P(SOURCE_LABELS.get(warning.source, warning.source.value), className="mb-0"),
                         ],
                         md=2,
                     ),
                     dbc.Col(
                         [
-                            html.Small("Sistema", className="text-muted fw-bold d-block"),
+                            html.Small(t("alerts_general.filter_system"), className="text-muted fw-bold d-block"),
                             html.P(SYSTEM_LABELS.get(warning.system, warning.system.value), className="mb-0"),
                         ],
                         md=2,
                     ),
                     dbc.Col(
                         [
-                            html.Small("Id Del Activo", className="text-muted fw-bold d-block"),
+                            html.Small(t("tab_integration_validacion_avisos.id_del_activo"), className="text-muted fw-bold d-block"),
                             html.P(warning.asset_id, className="mb-0"),
                         ],
                         md=2,
                     ),
                     dbc.Col(
                         [
-                            html.Small("Clasificación", className="text-muted fw-bold d-block"),
+                            html.Small(t("tab_integration_validacion_avisos.clasificacion"), className="text-muted fw-bold d-block"),
                             dbc.Badge(
                                 CONDITION_LABEL_LABELS.get(warning.condition_label, warning.condition_label.value),
                                 color=_LABEL_COLOR.get(warning.condition_label.value, "secondary"),
@@ -135,7 +136,7 @@ def _context_section(warning: Warning) -> html.Div:
                     ),
                     dbc.Col(
                         [
-                            html.Small("Generado", className="text-muted fw-bold d-block"),
+                            html.Small(t("tab_integration_validacion_avisos.generado"), className="text-muted fw-bold d-block"),
                             html.P(warning.generated_at.strftime("%d/%m/%Y %H:%M"), className="mb-0"),
                         ],
                         md=3,
@@ -144,7 +145,7 @@ def _context_section(warning: Warning) -> html.Div:
                 className="g-2 mb-2",
             ),
             html.Small(
-                f"Evidencia: {len(warning.supporting_data.get('raw_signal', []))} registro(s)",
+                t("tab_integration_validacion_avisos.evidencia_registro_s", len_warning_suppor=len(warning.supporting_data.get('raw_signal', []))),
                 className="text-muted",
             ),
         ]
@@ -155,12 +156,12 @@ def _erp_fields_section(warning: Warning) -> html.Div:
     return html.Div(
         [
             html.H4(
-                [html.I(className="fas fa-paper-plane me-2"), "Datos para el ERP"],
+                [html.I(className="fas fa-paper-plane me-2"), t("tab_integration_validacion_avisos.datos_para_el_erp")],
                 className="text-primary mb-3 mt-4 pb-2 border-bottom",
             ),
-            html.P("Revise y complete la información antes de enviar al ERP.", className="text-muted mb-3"),
+            html.P(t("tab_integration_validacion_avisos.revise_y_complete_la_informacion_antes"), className="text-muted mb-3"),
             html.Label(
-                [html.I(className="fas fa-heading me-1"), " Título (Short Text SAP, ≤ 40 caracteres)"],
+                [html.I(className="fas fa-heading me-1"), t("tab_integration_validacion_avisos.titulo_short_text_sap_40_caracteres")],
                 className="fw-bold mb-1",
             ),
             dbc.Input(
@@ -171,20 +172,20 @@ def _erp_fields_section(warning: Warning) -> html.Div:
                 className="mb-3",
             ),
             html.Label(
-                [html.I(className="fas fa-align-left me-1"), " Descripción (Long Text SAP)"],
+                [html.I(className="fas fa-align-left me-1"), t("tab_integration_validacion_avisos.descripcion_long_text_sap")],
                 className="fw-bold mb-1",
             ),
             dbc.Textarea(id="erp-validator-field-description", rows=4, value=warning.description, className="mb-3"),
-            html.Label([html.I(className="fas fa-tools me-1"), " Acción recomendada"], className="fw-bold mb-1"),
+            html.Label([html.I(className="fas fa-tools me-1"), t("tab_integration_validacion_avisos.accion_recomendada")], className="fw-bold mb-1"),
             dbc.Textarea(
                 id="erp-validator-field-action", rows=3, value=warning.recommended_action, className="mb-3"
             ),
-            html.Label([html.I(className="fas fa-sticky-note me-1"), " Notas del operador"], className="fw-bold mb-1"),
+            html.Label([html.I(className="fas fa-sticky-note me-1"), t("tab_integration_validacion_avisos.notas_del_operador")], className="fw-bold mb-1"),
             dbc.Textarea(
                 id="erp-validator-field-notes", rows=2, value=warning.operator_notes or "", className="mb-3"
             ),
             html.Label(
-                [html.I(className="fas fa-tachometer-alt me-1"), " Severidad (Prioridad SAP)"],
+                [html.I(className="fas fa-tachometer-alt me-1"), t("tab_integration_validacion_avisos.severidad_prioridad_sap")],
                 className="fw-bold mb-1",
             ),
             dcc.Dropdown(
@@ -211,14 +212,14 @@ def create_detail_form(warning: Warning) -> html.Div:
             html.Div(
                 [
                     dbc.Button(
-                        [html.I(className="fas fa-paper-plane me-2"), "Aprobar y Enviar al ERP"],
+                        [html.I(className="fas fa-paper-plane me-2"), t("tab_integration_validacion_avisos.aprobar_y_enviar_al_erp")],
                         id="erp-validator-btn-approve",
                         color="success",
                         size="lg",
                         className="me-3",
                     ),
                     dbc.Button(
-                        [html.I(className="fas fa-times me-2"), "Rechazar"],
+                        [html.I(className="fas fa-times me-2"), t("tab_integration_validacion_avisos.rechazar")],
                         id="erp-validator-btn-reject",
                         color="danger",
                         outline=True,
@@ -242,7 +243,7 @@ def _operator_bar() -> dbc.Card:
                 [
                     dbc.Col(
                         html.Label(
-                            [html.I(className="fas fa-user me-1"), " Operador (obligatorio)"],
+                            [html.I(className="fas fa-user me-1"), t("tab_integration_validacion_avisos.operador_obligatorio")],
                             className="fw-bold mb-0",
                         ),
                         width="auto",
@@ -253,7 +254,7 @@ def _operator_bar() -> dbc.Card:
                             dbc.Input(
                                 id="erp-validator-operator-input",
                                 type="text",
-                                placeholder="Ingrese su nombre...",
+                                placeholder=t("tab_integration_validacion_avisos.ingrese_su_nombre"),
                                 debounce=True,
                             ),
                             html.Small(id="erp-validator-operator-feedback", className="text-danger"),
@@ -275,11 +276,11 @@ def create_layout() -> dbc.Container:
             html.Div(
                 [
                     html.H3(
-                        [html.I(className="fas fa-clipboard-check me-2"), "Validación de Avisos"],
+                        [html.I(className="fas fa-clipboard-check me-2"), t("nav.service.integration-validacion-avisos")],
                         className="text-primary mb-2",
                     ),
                     html.P(
-                        "Revise, edite y apruebe los avisos generados por el agente de IA antes de enviarlos al ERP.",
+                        t("tab_integration_validacion_avisos.revise_edite_y_apruebe_los_avisos"),
                         className="text-muted",
                     ),
                 ],
@@ -294,7 +295,7 @@ def create_layout() -> dbc.Container:
                             [
                                 dbc.CardHeader(
                                     html.H5(
-                                        [html.I(className="fas fa-list me-2"), "Avisos Pendientes"],
+                                        [html.I(className="fas fa-list me-2"), t("tab_integration_validacion_avisos.avisos_pendientes")],
                                         className="mb-0",
                                     ),
                                     className="bg-primary text-white",
@@ -319,7 +320,7 @@ def create_layout() -> dbc.Container:
                             [
                                 dbc.CardHeader(
                                     html.H5(
-                                        [html.I(className="fas fa-clipboard-check me-2"), "Detalle del Aviso"],
+                                        [html.I(className="fas fa-clipboard-check me-2"), t("tab_integration_validacion_avisos.detalle_del_aviso")],
                                         className="mb-0",
                                     ),
                                     className="bg-light",
@@ -329,7 +330,7 @@ def create_layout() -> dbc.Container:
                                         dcc.Loading(
                                             html.Div(
                                                 id="erp-validator-form-content",
-                                                children=create_detail_placeholder("Seleccione un aviso pendiente."),
+                                                children=create_detail_placeholder(t("tab_integration_validacion_avisos.seleccione_un_aviso_pendiente")),
                                             ),
                                             type="circle",
                                         ),
@@ -340,18 +341,18 @@ def create_layout() -> dbc.Container:
                                                 html.Label(
                                                     [
                                                         html.I(className="fas fa-comment-alt me-1"),
-                                                        " Motivo de rechazo",
+                                                        t("tab_integration_validacion_avisos.motivo_de_rechazo"),
                                                     ],
                                                     className="fw-bold mb-1 mt-3 text-danger",
                                                 ),
                                                 dbc.Textarea(
                                                     id="erp-validator-field-rejection",
                                                     rows=2,
-                                                    placeholder="Indique por qué se rechaza este aviso...",
+                                                    placeholder=t("tab_integration_validacion_avisos.indique_por_que_se_rechaza_este"),
                                                     className="border-danger",
                                                 ),
                                                 dbc.Button(
-                                                    "Confirmar Rechazo",
+                                                    t("tab_integration_validacion_avisos.confirmar_rechazo"),
                                                     id="erp-validator-btn-confirm-reject",
                                                     color="danger",
                                                     className="mt-2",

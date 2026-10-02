@@ -1,7 +1,6 @@
 {
   "CDA": {
     "overview-general": {"display": true, "dummy": false},
-    "overview-data-freshness": {"display": true, "dummy": false},
     "monitoring-alerts": {"display": true, "dummy": false},
     "monitoring-telemetry": {"display": true, "dummy": false},
     "monitoring-oil": {"display": true, "dummy": false},
@@ -16,7 +15,6 @@
   },
   "EMIN": {
     "overview-general": {"display": true, "dummy": false},
-    "overview-data-freshness": {"display": false, "dummy": true},
     "monitoring-alerts": {"display": true, "dummy": false},
     "monitoring-telemetry": {"display": false, "dummy": false},
     "monitoring-oil": {"display": true, "dummy": false},
@@ -34,7 +32,6 @@
   },
   "CAPSTONE": {
     "overview-general": {"display": true, "dummy": false},
-    "overview-data-freshness": {"display": false, "dummy": false},
     "monitoring-alerts": {"display": true, "dummy": false},
     "monitoring-oil": {"display": true, "dummy": false},
     "monitoring-mantenciones": {"display": true, "dummy": false},

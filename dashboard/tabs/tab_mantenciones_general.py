@@ -6,6 +6,7 @@ uses source-defined maintenance intervals for out-of-service time.
 
 from __future__ import annotations
 
+from src.i18n import t
 import colorsys
 import hashlib
 
@@ -240,8 +241,8 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-month-status", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col(create_kpi_card("Disponibilidad", component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
-                    dbc.Col(create_kpi_card("Downtime", component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
+                    dbc.Col(create_kpi_card(t("tab_mantenciones_general.disponibilidad"), component_id="maintenance-kpi-availability-est", icon="fa-gauge-high", color="success"), md=3),
+                    dbc.Col(create_kpi_card(t("tab_mantenciones_general.downtime"), component_id="maintenance-kpi-downtime-est", icon="fa-hourglass-half", color="danger"), md=3),
                     dbc.Col(create_kpi_card("MTBF", component_id="maintenance-kpi-mtbf-est", icon="fa-arrows-rotate", color="info"), md=3),
                     dbc.Col(create_kpi_card("MTTR", component_id="maintenance-kpi-mttr-est", icon="fa-screwdriver-wrench", color="warning"), md=3),
                 ],
@@ -249,22 +250,22 @@ def layout_mantenciones_general():
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Tendencia diaria de horas-equipo fuera de servicio", dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "300px"}), "fa-chart-line"), md=6),
-                    dbc.Col(_card("Equipos intervenidos por día", dcc.Graph(id="maintenance-chart-daily-equipment", config={"displayModeBar": False}, style={"height": "300px"}), "fa-truck-loading"), md=6),
+                    dbc.Col(_card(t("tab_mantenciones_general.tendencia_diaria_de_horas_equipo_fuera"), dcc.Graph(id="maintenance-chart-daily", config={"displayModeBar": False}, style={"height": "300px"}), "fa-chart-line"), md=6),
+                    dbc.Col(_card(t("tab_mantenciones_general.equipos_intervenidos_por_dia"), dcc.Graph(id="maintenance-chart-daily-equipment", config={"displayModeBar": False}, style={"height": "300px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card("Mix de actividad por sistema", dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
-                    dbc.Col(_card("Equipos con mayor actividad", dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
+                    dbc.Col(_card(t("tab_mantenciones_general.mix_de_actividad_por_sistema"), dcc.Graph(id="maintenance-chart-system-mix", config={"displayModeBar": False}, style={"height": "340px"}), "fa-sitemap"), md=6),
+                    dbc.Col(_card(t("tab_mantenciones_general.equipos_con_mayor_actividad"), dcc.Graph(id="maintenance-chart-equipment", config={"displayModeBar": False}, style={"height": "320px"}), "fa-truck-loading"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
             dbc.Row(
                 [
-                    dbc.Col(_card(html.Span("Pareto de actividad de mantenimiento · Motor por equipo", id="maintenance-chart-pareto-title"), dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
-                    dbc.Col(_card(html.Span("Pareto de actividad de mantenimiento · Tren de Fuerza por equipo", id="maintenance-chart-pareto-tren-fuerza-title"), dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card(html.Span(t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_motor"), id="maintenance-chart-pareto-title"), dcc.Graph(id="maintenance-chart-pareto", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
+                    dbc.Col(_card(html.Span(t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_tren"), id="maintenance-chart-pareto-tren-fuerza-title"), dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -272,19 +273,19 @@ def layout_mantenciones_general():
                 [
                     html.Div(
                         [
-                            html.Span("Indicadores de Interés", className="fw-semibold"),
-                            html.Span("Agregados del período seleccionado", className="text-muted small ms-2"),
+                            html.Span(t("tab_mantenciones_general.indicadores_de_interes"), className="fw-semibold"),
+                            html.Span(t("tab_mantenciones_general.agregados_del_periodo_seleccionado"), className="text-muted small ms-2"),
                         ],
                         className="mb-2",
                     ),
                     dbc.Row(
                         [
-                            dbc.Col(create_context_metric("Equipos con actividad", "maintenance-kpi-equipment", "fa-truck", "info"), xs=6, md=2),
-                            dbc.Col(create_context_metric("Acciones registradas", "maintenance-kpi-actions", "fa-wrench", "primary"), xs=6, md=2),
-                            dbc.Col(create_context_metric("Registros", "maintenance-kpi-records", "fa-clipboard-list", "success"), xs=6, md=2),
-                            dbc.Col(create_context_metric("Sistemas intervenidos", "maintenance-kpi-systems", "fa-sitemap", "warning"), xs=6, md=2),
-                            dbc.Col(create_context_metric("Días con actividad", "maintenance-kpi-days", "fa-calendar-day", "secondary", "fecha operacional"), xs=6, md=2),
-                            dbc.Col(create_context_metric("Actividad en Motor", "maintenance-kpi-motor-share", "fa-percentage", "danger", "% de acciones"), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.equipos_con_actividad"), "maintenance-kpi-equipment", "fa-truck", "info"), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.acciones_registradas"), "maintenance-kpi-actions", "fa-wrench", "primary"), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.registros"), "maintenance-kpi-records", "fa-clipboard-list", "success"), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.sistemas_intervenidos"), "maintenance-kpi-systems", "fa-sitemap", "warning"), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.dias_con_actividad"), "maintenance-kpi-days", "fa-calendar-day", "secondary", t("tab_mantenciones_general.fecha_operacional")), xs=6, md=2),
+                            dbc.Col(create_context_metric(t("tab_mantenciones_general.actividad_en_motor"), "maintenance-kpi-motor-share", "fa-percentage", "danger", t("tab_mantenciones_general.de_acciones")), xs=6, md=2),
                         ],
                         className="g-1",
                     ),
@@ -293,11 +294,11 @@ def layout_mantenciones_general():
             ),
             html.Div(
                 _card(
-                    "Detalle de actividades realizadas",
+                    t("tab_mantenciones_general.detalle_de_actividades_realizadas"),
                     html.Div(
                         [
                             html.P(
-                                "Hasta 250 actividades del período para mantener ágil la vista; puedes ordenar y filtrar las columnas.",
+                                t("tab_mantenciones_general.hasta_250_actividades_del_periodo_para"),
                                 className="text-muted small mb-3",
                             ),
                             html.Div(id="maintenance-summary-detail-table"),
@@ -314,14 +315,14 @@ def layout_mantenciones_general():
         [
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Sistema", className="small text-muted"), dcc.Dropdown(id="maintenance-activity-system", multi=True, placeholder="Todos los sistemas")], md=4),
-                    dbc.Col([html.Label("Subsistema", className="small text-muted"), dcc.Dropdown(id="maintenance-activity-subsystem", multi=True, placeholder="Todos los subsistemas")], md=4),
-                    dbc.Col([html.Label("Equipo", className="small text-muted"), dcc.Dropdown(id="maintenance-activity-equipment", multi=True, placeholder="Todos los equipos")], md=4),
+                    dbc.Col([html.Label(t("alerts_general.filter_system"), className="small text-muted"), dcc.Dropdown(id="maintenance-activity-system", multi=True, placeholder=t("tab_telemetry_fleet.todos_los_sistemas"))], md=4),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.subsistema"), className="small text-muted"), dcc.Dropdown(id="maintenance-activity-subsystem", multi=True, placeholder=t("tab_mantenciones_general.todos_los_subsistemas"))], md=4),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.equipo"), className="small text-muted"), dcc.Dropdown(id="maintenance-activity-equipment", multi=True, placeholder=t("tab_mantenciones_general.todos_los_equipos"))], md=4),
                 ],
                 className="g-3 mb-4",
             ),
-            dbc.Row([dbc.Col(_card("Matriz de acciones por equipo y sistema", dcc.Graph(id="maintenance-chart-matrix", config={"displayModeBar": False}, style={"height": "420px"}), "fa-th"), md=12)], className="g-3 mb-4"),
-            _card("Detalle de acciones registradas", html.Div(id="maintenance-activity-table"), "fa-table"),
+            dbc.Row([dbc.Col(_card(t("tab_mantenciones_general.matriz_de_acciones_por_equipo_y"), dcc.Graph(id="maintenance-chart-matrix", config={"displayModeBar": False}, style={"height": "420px"}), "fa-th"), md=12)], className="g-3 mb-4"),
+            _card(t("tab_mantenciones_general.detalle_de_acciones_registradas"), html.Div(id="maintenance-activity-table"), "fa-table"),
         ]
     )
 
@@ -329,13 +330,13 @@ def layout_mantenciones_general():
         [
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Equipo", className="small text-muted"), dcc.Dropdown(id="maintenance-week-equipment", multi=True, placeholder="Todos los equipos")], md=6),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.equipo"), className="small text-muted"), dcc.Dropdown(id="maintenance-week-equipment", multi=True, placeholder=t("tab_mantenciones_general.todos_los_equipos"))], md=6),
                 ],
                 className="g-3 mb-4",
             ),
             html.Div(id="maintenance-week-status"),
-            dbc.Row([dbc.Col(_card("Resumen semanal por equipo", html.Div(id="maintenance-week-summary-table"), "fa-comment-alt"), md=12)], className="g-3 mb-4"),
-            dbc.Row([dbc.Col(_card("Actividades por día y sistema", html.Div(id="maintenance-week-task-table"), "fa-calendar-week"), md=12)], className="g-3"),
+            dbc.Row([dbc.Col(_card(t("tab_mantenciones_general.resumen_semanal_por_equipo"), html.Div(id="maintenance-week-summary-table"), "fa-comment-alt"), md=12)], className="g-3 mb-4"),
+            dbc.Row([dbc.Col(_card(t("tab_mantenciones_general.actividades_por_dia_y_sistema"), html.Div(id="maintenance-week-task-table"), "fa-calendar-week"), md=12)], className="g-3"),
         ]
     )
 
@@ -345,13 +346,13 @@ def layout_mantenciones_general():
                 [
                     dbc.Col(
                         [
-                            html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), "Informe de confiabilidad"]),
-                            html.P("Resumen ejecutivo · horas fuera de servicio y actividad de mantenimiento", className="text-muted mb-0"),
+                            html.H2([html.Span("◆", className="maintenance-icon me-2", **{"aria-hidden": "true"}), t("tab_mantenciones_general.informe_de_confiabilidad")]),
+                            html.P(t("tab_mantenciones_general.resumen_ejecutivo_horas_fuera_de_servicio"), className="text-muted mb-0"),
                         ],
                         md=7,
                     ),
                     dbc.Col(
-                        dbc.Button([html.I(className="fas fa-sync-alt me-2"), "Refrescar"], id="btn-refresh-maintenance", color="primary"),
+                        dbc.Button([html.I(className="fas fa-sync-alt me-2"), t("tab_mantenciones_general.refrescar")], id="btn-refresh-maintenance", color="primary"),
                         md=5,
                         className="d-flex justify-content-end align-items-center",
                     ),
@@ -361,13 +362,13 @@ def layout_mantenciones_general():
             html.Div(id="maintenance-source-alert", style={"display": "none"}),
             dbc.Row(
                 [
-                    dbc.Col([html.Label("Mes de análisis", className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder="Seleccione un mes")], md=4),
-                    dbc.Col([html.Label("Flota / tipo de equipo", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder="Todas las flotas"), html.Small("Catálogo de Tribología; sin coincidencia: otros", className="text-muted")], md=4),
-                    dbc.Col([html.Label("Unidad", className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": "Todas", "value": "__all__"}], value="__all__", placeholder="Todas")], md=4),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.mes_de_analisis"), className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder=t("tab_mantenciones_general.seleccione_un_mes"))], md=4),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.flota_tipo_de_equipo"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder=t("tab_mantenciones_general.todas_las_flotas")), html.Small(t("tab_mantenciones_general.catalogo_de_tribologia_sin_coincidencia_ot"), className="text-muted")], md=4),
+                    dbc.Col([html.Label(t("alerts_general.filter_unit"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": t("tab_health_index.todas"), "value": "__all__"}], value="__all__", placeholder=t("tab_health_index.todas"))], md=4),
                     # The weekly selector remains mounted for its disabled tab's
                     # callback contract, but is intentionally not exposed while
                     # Evidencia semanal is hidden from the product shell.
-                    dbc.Col([html.Label("Semana de evidencia", className="small text-muted"), dcc.Dropdown(id="maintenance-week", clearable=False, placeholder="Seleccione una semana")], md=6, style={"display": "none"}),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.semana_de_evidencia"), className="small text-muted"), dcc.Dropdown(id="maintenance-week", clearable=False, placeholder=t("tab_mantenciones_general.seleccione_una_semana"))], md=6, style={"display": "none"}),
                 ],
                 className="g-3 mb-4",
             ),
@@ -379,12 +380,12 @@ def layout_mantenciones_general():
                 id="maintenance-tabs",
                 value="summary",
                 children=[
-                    dcc.Tab(label="Informe de confiabilidad", value="summary", children=summary_tab, className="pt-3"),
+                    dcc.Tab(label=t("tab_mantenciones_general.informe_de_confiabilidad"), value="summary", children=summary_tab, className="pt-3"),
                     # Keep the future views mounted for callback/layout
                     # compatibility, but do not expose them in the product
                     # shell until their next UX iteration is approved.
                     dcc.Tab(
-                        label="Actividad",
+                        label=t("tab_mantenciones_general.actividad"),
                         value="activity",
                         children=activity_tab,
                         className="pt-3",
@@ -392,7 +393,7 @@ def layout_mantenciones_general():
                         style={"display": "none"},
                     ),
                     dcc.Tab(
-                        label="Evidencia semanal",
+                        label=t("tab_mantenciones_general.evidencia_semanal"),
                         value="weekly",
                         children=weekly_tab,
                         className="pt-3",
@@ -406,7 +407,9 @@ def layout_mantenciones_general():
     )
 
 
-def create_empty_figure(message: str = "Sin datos para este período") -> go.Figure:
+def create_empty_figure(message: str | None = None) -> go.Figure:
+    if message is None:
+        message = t("mantenciones.no_data_for_period")
     fig = go.Figure()
     fig.add_annotation(text=message, x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font={"size": 14, "color": "#6c757d"})
     fig.update_layout(template="plotly_white", xaxis={"visible": False}, yaxis={"visible": False}, margin={"l": 20, "r": 20, "t": 20, "b": 20})
@@ -416,35 +419,35 @@ def create_empty_figure(message: str = "Sin datos para este período") -> go.Fig
 def create_daily_activity_chart(df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return create_empty_figure()
-    fig = go.Figure(go.Scatter(x=df["date"], y=df["count"], mode="lines+markers", name="Acciones", line={"color": "#2f80ed", "width": 3}, marker={"size": 7}, fill="tozeroy", fillcolor="rgba(47,128,237,0.12)"))
-    fig.update_layout(template="plotly_white", xaxis_title="Fecha operacional", yaxis_title="Acciones", hovermode="x unified", margin={"l": 45, "r": 20, "t": 20, "b": 45})
+    fig = go.Figure(go.Scatter(x=df["date"], y=df["count"], mode="lines+markers", name=t("tab_mantenciones_general.acciones"), line={"color": "#2f80ed", "width": 3}, marker={"size": 7}, fill="tozeroy", fillcolor="rgba(47,128,237,0.12)"))
+    fig.update_layout(template="plotly_white", xaxis_title=t("tab_mantenciones_general.fecha_operacional_2"), yaxis_title=t("tab_mantenciones_general.acciones"), hovermode="x unified", margin={"l": 45, "r": 20, "t": 20, "b": 45})
     return fig
 
 
 def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
     """Render source-defined daily equipment out-of-service hours."""
     if df.empty:
-        return create_empty_figure("Sin horas de equipo fuera de servicio")
+        return create_empty_figure(t("tab_mantenciones_general.sin_horas_de_equipo_fuera_de"))
     # This is a time series, so it keeps operational-date order rather than
     # being ranked by value like the categorical activity charts below.
     data = df.sort_values("date", kind="mergesort").copy()
     if "hours_out_of_service" not in data.columns:
-        return create_empty_figure("La fuente no trae intervalos de fuera de servicio")
+        return create_empty_figure(t("tab_mantenciones_general.la_fuente_no_trae_intervalos_de"))
     hours = pd.to_numeric(data["hours_out_of_service"], errors="coerce")
     if hours.notna().sum() == 0:
-        return create_empty_figure("La fuente no trae intervalos de fuera de servicio")
+        return create_empty_figure(t("tab_mantenciones_general.la_fuente_no_trae_intervalos_de"))
     fig = go.Figure(
         go.Bar(
             x=data["date"],
             y=hours,
             orientation="v",
-            name="Horas-equipo fuera de servicio",
+            name=t("tab_mantenciones_general.horas_equipo_fuera_de_servicio"),
             marker_color="#6f8fb3",
-            hovertemplate="<b>%{x}</b><br>Horas-equipo fuera de servicio: %{y:.1f} h<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_horas_equipo_fuera"),
         )
     )
-    fig.update_yaxes(title_text="Horas-equipo fuera de servicio", rangemode="tozero")
-    fig.update_xaxes(title_text="Fecha operacional")
+    fig.update_yaxes(title_text=t("tab_mantenciones_general.horas_equipo_fuera_de_servicio"), rangemode="tozero")
+    fig.update_xaxes(title_text=t("tab_mantenciones_general.fecha_operacional_2"))
     fig.update_layout(
         template="plotly_white",
         margin={"l": 55, "r": 25, "t": 25, "b": 48},
@@ -456,26 +459,26 @@ def create_daily_intervention_hours_chart(df: pd.DataFrame) -> go.Figure:
 def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
     """Render the daily count of distinct equipment with an intervention."""
     if df.empty:
-        return create_empty_figure("Sin equipos intervenidos por día")
+        return create_empty_figure(t("tab_mantenciones_general.sin_equipos_intervenidos_por_dia"))
     if "equipment_count" not in df.columns:
-        return create_empty_figure("Sin equipos intervenidos por día")
+        return create_empty_figure(t("tab_mantenciones_general.sin_equipos_intervenidos_por_dia"))
     fig = go.Figure(
         go.Scatter(
             x=df["date"],
             y=df["equipment_count"],
             mode="lines+markers",
-            name="Equipos intervenidos",
+            name=t("tab_mantenciones_general.equipos_intervenidos"),
             line={"color": "#4f8a8b", "width": 3},
             marker={"color": "#4f8a8b", "size": 7},
             fill="tozeroy",
             fillcolor="rgba(79,138,139,0.14)",
-            hovertemplate="<b>%{x}</b><br>Equipos intervenidos: %{y}<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_equipos_intervenidos_extra"),
         )
     )
     fig.update_layout(
         template="plotly_white",
-        xaxis_title="Fecha operacional",
-        yaxis_title="Equipos intervenidos",
+        xaxis_title=t("tab_mantenciones_general.fecha_operacional_2"),
+        yaxis_title=t("tab_mantenciones_general.equipos_intervenidos"),
         yaxis={"rangemode": "tozero", "tick0": 0, "dtick": 5},
         margin={"l": 55, "r": 25, "t": 25, "b": 48},
         showlegend=False,
@@ -483,9 +486,11 @@ def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor") -> go.Figure:
+def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str | None = None) -> go.Figure:
+    if system_label is None:
+        system_label = t("mantenciones.system_engine")
     if df.empty:
-        return create_empty_figure(f"Sin actividad de {system_label} por equipo")
+        return create_empty_figure(t("tab_mantenciones_general.sin_actividad_de_por_equipo", system_label=system_label))
     # ``system_name`` is accepted as a compatibility fallback for cached
     # payloads from the previous contract; new payloads use ``equipment``.
     dimension = "equipment" if "equipment" in df.columns else "system_name"
@@ -497,19 +502,19 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
         df.loc[df.index[-1], "cumulative_pct"] = 100.0
     dimension_values = df[dimension].astype(str)
     dimension_colors = _equipment_color_map(dimension_values) if dimension == "equipment" else _system_color_map(dimension_values)
-    dimension_title = "Equipo" if dimension == "equipment" else "Sistema"
+    dimension_title = t("tab_mantenciones_general.equipo") if dimension == "equipment" else t("alerts_general.filter_system")
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
         go.Bar(
             x=df[dimension],
             y=df["count"],
             orientation="v",
-            name=f"Acciones {system_label}",
+            name=t("tab_mantenciones_general.acciones_2", system_label=system_label),
             marker_color=[dimension_colors[str(value)] for value in df[dimension]],
             text=df["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
-            hovertemplate=f"<b>%{{x}}</b><br>Acciones {system_label}: %{{y}}<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_acciones_extra_extra", system_label=system_label),
         ),
         secondary_y=False,
     )
@@ -517,15 +522,15 @@ def create_equipment_pareto_chart(df: pd.DataFrame, system_label: str = "Motor")
         go.Scatter(
             x=df[dimension],
             y=df["cumulative_pct"],
-            name="% acumulado",
+            name=t("tab_mantenciones_general.acumulado"),
             mode="lines",
             line={"color": PARETO_LINE_COLOR, "width": 2},
-            hovertemplate="<b>%{x}</b><br>Acumulado: %{y:.1f}%<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_acumulado_extra_extra"),
         ),
         secondary_y=True,
     )
-    fig.update_yaxes(title_text="Acciones", rangemode="tozero", secondary_y=False)
-    fig.update_yaxes(title_text="% acumulado", range=[0, 100], ticksuffix="%", secondary_y=True)
+    fig.update_yaxes(title_text=t("tab_mantenciones_general.acciones"), rangemode="tozero", secondary_y=False)
+    fig.update_yaxes(title_text=t("tab_mantenciones_general.acumulado"), range=[0, 100], ticksuffix="%", secondary_y=True)
     fig.update_xaxes(title_text=dimension_title, tickangle=-35)
     fig.update_layout(
         template="plotly_white",
@@ -544,12 +549,12 @@ create_system_pareto_chart = create_equipment_pareto_chart
 def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = False) -> go.Figure:
     """Render recorded action volume by system, not failure frequency."""
     if df.empty:
-        return create_empty_figure("Sin actividad por sistema")
+        return create_empty_figure(t("tab_mantenciones_general.sin_actividad_por_sistema"))
     data = df.copy()
     if not include_all_systems:
         data = data.loc[~data["system_name"].map(_is_excluded_activity_system)].copy()
     if data.empty:
-        return create_empty_figure("Sin sistemas elegibles para este período")
+        return create_empty_figure(t("tab_mantenciones_general.sin_sistemas_elegibles_para_este_periodo"))
     data = (
         data.groupby("system_name", as_index=False)["count"]
         .sum()
@@ -562,18 +567,18 @@ def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = F
             x=data["system_name"],
             y=data["count"],
             orientation="v",
-            name="Acciones registradas",
+            name=t("tab_mantenciones_general.acciones_registradas"),
             marker_color=[palette[str(system)] for system in data["system_name"]],
             text=data["count"].astype(int),
             textposition="outside",
             cliponaxis=False,
-            hovertemplate="<b>%{x}</b><br>Acciones únicas: %{y}<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_acciones_unicas_extra"),
         )
     )
     fig.update_layout(
         template="plotly_white",
-        xaxis_title="Sistema",
-        yaxis_title="Acciones únicas",
+        xaxis_title=t("alerts_general.filter_system"),
+        yaxis_title=t("tab_mantenciones_general.acciones_unicas"),
         margin={"l": 45, "r": 20, "t": 20, "b": 85},
         showlegend=False,
     )
@@ -583,7 +588,7 @@ def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = F
 
 def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool = False) -> go.Figure:
     if df.empty:
-        return create_empty_figure("Sin actividad por equipo")
+        return create_empty_figure(t("tab_mantenciones_general.sin_actividad_por_equipo"))
 
     # Detailed equipment × system data enables a stacked vertical chart:
     # equipment remain the x-axis entities while systems become the
@@ -595,7 +600,7 @@ def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool 
         if not include_all_systems:
             eligible = eligible.loc[~eligible["system_name"].map(_is_excluded_activity_system)].copy()
         if eligible.empty:
-            return create_empty_figure("Sin sistemas elegibles para este período")
+            return create_empty_figure(t("tab_mantenciones_general.sin_sistemas_elegibles_para_este_periodo"))
         # Rank only the systems actually shown; the x-axis then reads
         # left-to-right from highest to lowest total activity.
         equipment_totals = (
@@ -621,14 +626,14 @@ def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool 
                     name=system,
                     marker_color=palette[system],
                     customdata=values,
-                    hovertemplate=f"<b>%{{x}}</b><br>Sistema: {system}<br>Acciones: %{{y}}<extra></extra>",
+                    hovertemplate=t("tab_mantenciones_general.b_b_br_sistema_br_acciones", system=system),
                 )
             )
         fig.update_layout(
             template="plotly_white",
             barmode="stack",
-            xaxis_title="Equipo",
-            yaxis_title="Acciones",
+            xaxis_title=t("tab_mantenciones_general.equipo"),
+            yaxis_title=t("tab_mantenciones_general.acciones"),
             margin={"l": 55, "r": 30, "t": 45, "b": 90},
             legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         )
@@ -650,23 +655,23 @@ def create_equipment_activity_chart(df: pd.DataFrame, include_all_systems: bool 
             textposition="outside",
             cliponaxis=False,
             customdata=systems,
-            hovertemplate="<b>%{x}</b><br>Sistema predominante: %{customdata}<br>Acciones: %{y}<extra></extra>",
+            hovertemplate=t("tab_mantenciones_general.b_b_br_sistema_predominante_br"),
         )
     )
-    fig.update_layout(template="plotly_white", xaxis_title="Equipo", yaxis_title="Acciones", margin={"l": 55, "r": 30, "t": 20, "b": 90}, showlegend=False)
+    fig.update_layout(template="plotly_white", xaxis_title=t("tab_mantenciones_general.equipo"), yaxis_title=t("tab_mantenciones_general.acciones"), margin={"l": 55, "r": 30, "t": 20, "b": 90}, showlegend=False)
     fig.update_xaxes(categoryorder="array", categoryarray=data["machine_code"].tolist(), tickangle=-35, automargin=True)
     return fig
 
 
 def _confidence_label(value) -> str:
-    return "⚠ confianza baja" if bool(value) else "Confianza suficiente"
+    return t("tab_mantenciones_general.confianza_baja") if bool(value) else t("tab_mantenciones_general.confianza_suficiente")
 
 
 def create_reliability_mtbf_mttf_chart(df: pd.DataFrame) -> go.Figure:
     """Render monthly MTBF/MTTF, preserving missing values and confidence flags."""
     required = {"year_month", "machine_code", "mtbf_hours", "mttf_hours"}
     if df.empty or not required.issubset(df.columns):
-        return create_empty_figure("Sin datos suficientes de MTBF/MTTF")
+        return create_empty_figure(t("tab_mantenciones_general.sin_datos_suficientes_de_mtbf_mttf"))
     data = df.copy()
     data["machine_code"] = data["machine_code"].astype(str)
     data = data.sort_values(["year_month", "machine_code"], kind="mergesort")
@@ -693,7 +698,7 @@ def create_reliability_mtbf_mttf_chart(df: pd.DataFrame) -> go.Figure:
                     line={"color": palette[equipment], "dash": dash, "width": 2},
                     marker={"color": palette[equipment], "size": 7},
                     customdata=customdata.loc[valid].tolist(),
-                    hovertemplate=f"<b>%{{x}}</b><br>Equipo: {equipment}<br>{label}: %{{y:.1f}} h<br>%{{customdata}}<extra></extra>",
+                    hovertemplate=t("tab_mantenciones_general.b_b_br_equipo_br_h", equipment=equipment, label=label),
                 )
             )
             low = valid & confidence
@@ -703,11 +708,11 @@ def create_reliability_mtbf_mttf_chart(df: pd.DataFrame) -> go.Figure:
                         x=equipment_rows.loc[low, "year_month"],
                         y=values.loc[low],
                         mode="markers",
-                        name=f"{equipment} · {label} · baja confianza",
+                        name=t("tab_mantenciones_general.baja_confianza", equipment=equipment, label=label),
                         legendgroup=equipment,
                         showlegend=False,
                         marker={"color": palette[equipment], "symbol": "diamond-open", "size": 12, "line": {"width": 2}},
-                        hovertemplate=f"<b>%{{x}}</b><br>Equipo: {equipment}<br>{label}: %{{y:.1f}} h<br>⚠ confianza baja · menos de 3 intervalos MTBF<extra></extra>",
+                        hovertemplate=t("tab_mantenciones_general.b_b_br_equipo_br_h_2", equipment=equipment, label=label),
                     )
                 )
             low_without_value_months.update(
@@ -715,7 +720,7 @@ def create_reliability_mtbf_mttf_chart(df: pd.DataFrame) -> go.Figure:
             )
             traces += 1
     if not traces:
-        return create_empty_figure("Sin datos suficientes de MTBF/MTTF")
+        return create_empty_figure(t("tab_mantenciones_general.sin_datos_suficientes_de_mtbf_mttf"))
     for month in sorted(low_without_value_months):
         fig.add_annotation(
             x=month,
@@ -724,13 +729,13 @@ def create_reliability_mtbf_mttf_chart(df: pd.DataFrame) -> go.Figure:
             text="⚠",
             showarrow=False,
             font={"color": "#b7791f", "size": 16},
-            hovertext="Confianza baja; MTBF/MTTF sin dato suficiente",
+            hovertext=t("tab_mantenciones_general.confianza_baja_mtbf_mttf_sin_dato"),
         )
     fig.update_layout(
         template="plotly_white",
-        title="MTBF y MTTF mensual por equipo",
-        xaxis_title="Mes",
-        yaxis_title="Horas",
+        title=t("tab_mantenciones_general.mtbf_y_mttf_mensual_por_equipo"),
+        xaxis_title=t("tab_mantenciones_general.mes"),
+        yaxis_title=t("tab_mantenciones_general.horas"),
         hovermode="x unified",
         margin={"l": 55, "r": 30, "t": 55, "b": 48},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
@@ -743,7 +748,7 @@ def create_reliability_mttr_downtime_chart(df: pd.DataFrame) -> go.Figure:
     """Render monthly MTTR and total downtime with a secondary hours axis."""
     required = {"year_month", "machine_code", "mttr_hours", "total_downtime_hours"}
     if df.empty or not required.issubset(df.columns):
-        return create_empty_figure("Sin datos suficientes de MTTR/downtime")
+        return create_empty_figure(t("tab_mantenciones_general.sin_datos_suficientes_de_mttr_downtime"))
     data = df.copy()
     data["machine_code"] = data["machine_code"].astype(str)
     data = data.sort_values(["year_month", "machine_code"], kind="mergesort")
@@ -757,9 +762,9 @@ def create_reliability_mttr_downtime_chart(df: pd.DataFrame) -> go.Figure:
         if downtime.notna().any():
             fig.add_trace(
                 go.Bar(
-                    x=rows["year_month"], y=downtime, name=f"{equipment} · downtime",
+                    x=rows["year_month"], y=downtime, name=t("tab_mantenciones_general.downtime_2", equipment=equipment),
                     legendgroup=equipment, marker_color=color,
-                    hovertemplate=f"<b>%{{x}}</b><br>Equipo: {equipment}<br>Downtime: %{{y:.1f}} h<extra></extra>",
+                    hovertemplate=t("tab_mantenciones_general.b_b_br_equipo_br_downtime", equipment=equipment),
                 ),
                 secondary_y=True,
             )
@@ -771,9 +776,9 @@ def create_reliability_mttr_downtime_chart(df: pd.DataFrame) -> go.Figure:
             fig.add_trace(
                 go.Scatter(
                     x=rows.loc[valid, "year_month"], y=mttr.loc[valid], mode="lines+markers",
-                    name=f"{equipment} · MTTR", legendgroup=equipment,
+                    name=t("tab_mantenciones_general.mttr", equipment=equipment), legendgroup=equipment,
                     line={"color": color, "width": 2}, marker={"color": color, "size": 7},
-                    hovertemplate=f"<b>%{{x}}</b><br>Equipo: {equipment}<br>MTTR: %{{y:.1f}} h<br>%{{customdata}}<extra></extra>",
+                    hovertemplate=t("tab_mantenciones_general.b_b_br_equipo_br_mttr", equipment=equipment),
                     customdata=[_confidence_label(value) for value in confidence.loc[valid]],
                 ),
                 secondary_y=False,
@@ -783,36 +788,36 @@ def create_reliability_mttr_downtime_chart(df: pd.DataFrame) -> go.Figure:
                 fig.add_trace(
                     go.Scatter(
                         x=rows.loc[low, "year_month"], y=mttr.loc[low], mode="markers",
-                        name=f"{equipment} · MTTR · baja confianza", legendgroup=equipment,
+                        name=t("tab_mantenciones_general.mttr_baja_confianza", equipment=equipment), legendgroup=equipment,
                         showlegend=False,
                         marker={"color": color, "symbol": "diamond-open", "size": 12, "line": {"width": 2}},
-                        hovertemplate=f"<b>%{{x}}</b><br>Equipo: {equipment}<br>MTTR: %{{y:.1f}} h<br>⚠ confianza baja · menos de 3 intervalos MTBF<extra></extra>",
+                        hovertemplate=t("tab_mantenciones_general.b_b_br_equipo_br_mttr_2", equipment=equipment),
                     ),
                     secondary_y=False,
                 )
             traces += 1
     if not traces:
-        return create_empty_figure("Sin datos suficientes de MTTR/downtime")
+        return create_empty_figure(t("tab_mantenciones_general.sin_datos_suficientes_de_mttr_downtime"))
     fig.update_layout(
         template="plotly_white",
-        title="MTTR y downtime mensual por equipo",
-        xaxis_title="Mes",
+        title=t("tab_mantenciones_general.mttr_y_downtime_mensual_por_equipo"),
+        xaxis_title=t("tab_mantenciones_general.mes"),
         hovermode="x unified",
         barmode="group",
         margin={"l": 55, "r": 55, "t": 55, "b": 48},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
     )
-    fig.update_yaxes(title_text="MTTR (h)", rangemode="tozero", secondary_y=False)
-    fig.update_yaxes(title_text="Downtime total (h)", rangemode="tozero", secondary_y=True)
+    fig.update_yaxes(title_text=t("tab_mantenciones_general.mttr_h"), rangemode="tozero", secondary_y=False)
+    fig.update_yaxes(title_text=t("tab_mantenciones_general.downtime_total_h"), rangemode="tozero", secondary_y=True)
     return fig
 
 
 def create_activity_matrix(df: pd.DataFrame) -> go.Figure:
     if df.empty:
-        return create_empty_figure("Sin actividad para la matriz")
+        return create_empty_figure(t("tab_mantenciones_general.sin_actividad_para_la_matriz"))
     matrix = df.pivot(index="machine_code", columns="system_name", values="count").fillna(0)
-    fig = go.Figure(go.Heatmap(z=matrix.values, x=matrix.columns.tolist(), y=matrix.index.tolist(), colorscale="Blues", hovertemplate="Equipo %{y}<br>Sistema %{x}<br>Acciones %{z}<extra></extra>"))
-    fig.update_layout(template="plotly_white", xaxis_title="Sistema", yaxis_title="Equipo", margin={"l": 65, "r": 20, "t": 20, "b": 100})
+    fig = go.Figure(go.Heatmap(z=matrix.values, x=matrix.columns.tolist(), y=matrix.index.tolist(), colorscale="Blues", hovertemplate=t("tab_mantenciones_general.equipo_br_sistema_br_acciones_extra")))
+    fig.update_layout(template="plotly_white", xaxis_title=t("alerts_general.filter_system"), yaxis_title=t("tab_mantenciones_general.equipo"), margin={"l": 65, "r": 20, "t": 20, "b": 100})
     return fig
 
 
@@ -820,12 +825,12 @@ def create_component_failure_table(data):
     return _table(
         data,
         [
-            ("machine_code", "Equipo"),
-            ("component_name", "Componente"),
-            ("n_failure_records", "Registros de falla"),
-            ("n_failure_actions", "Acciones de falla"),
+            ("machine_code", t("tab_mantenciones_general.equipo")),
+            ("component_name", t("tab_mantenciones_general.componente")),
+            ("n_failure_records", t("tab_mantenciones_general.registros_de_falla")),
+            ("n_failure_actions", t("tab_mantenciones_general.acciones_de_falla")),
         ],
-        "Sin componentes con fallas para los filtros seleccionados",
+        t("tab_mantenciones_general.sin_componentes_con_fallas_para_los"),
         page_size=12,
     )
 
@@ -849,18 +854,18 @@ def _table(data, columns, empty_message: str, page_size: int = 12):
 def create_activity_table(data):
     return _table(
         data,
-        [("date", "Fecha"), ("timestamp_utc", "Timestamp UTC"), ("equipment", "Equipo"), ("system_name", "Sistema"), ("subsystem_name", "Subsistema"), ("action_type", "Tipo de acción"), ("detail", "Detalle")],
-        "Sin acciones para los filtros seleccionados",
+        [("date", t("tab_mantenciones_general.fecha")), ("timestamp_utc", t("tab_mantenciones_general.timestamp_utc")), ("equipment", t("tab_mantenciones_general.equipo")), ("system_name", t("alerts_general.filter_system")), ("subsystem_name", t("tab_mantenciones_general.subsistema")), ("action_type", t("tab_mantenciones_general.tipo_de_accion")), ("detail", t("tab_mantenciones_general.detalle"))],
+        t("tab_mantenciones_general.sin_acciones_para_los_filtros_seleccionado"),
         page_size=15,
     )
 
 
 def create_week_summary_table(data):
-    return _table(data, [("equipment", "Equipo"), ("summary", "Resumen")], "Sin resumen semanal disponible", page_size=11)
+    return _table(data, [("equipment", t("tab_mantenciones_general.equipo")), ("summary", t("tab_mantenciones_general.resumen"))], t("tab_mantenciones_general.sin_resumen_semanal_disponible"), page_size=11)
 
 
 def create_week_task_table(data):
-    return _table(data, [("equipment", "Equipo"), ("day", "Día"), ("system_name", "Sistema"), ("task", "Actividad")], "Sin tareas estructuradas para esta semana", page_size=15)
+    return _table(data, [("equipment", t("tab_mantenciones_general.equipo")), ("day", t("tab_mantenciones_general.dia")), ("system_name", t("alerts_general.filter_system")), ("task", t("tab_mantenciones_general.actividad"))], t("tab_mantenciones_general.sin_tareas_estructuradas_para_esta_semana"), page_size=15)
 
 
 # Compatibility aliases for callers that still import the old chart helpers.
@@ -868,8 +873,8 @@ create_downtime_trend_chart = create_daily_activity_chart
 
 
 def create_detentions_table(df_detentions: pd.DataFrame):
-    return _table(df_detentions.to_dict("records"), [(c, c) for c in df_detentions.columns], "Sin registros", page_size=10)
+    return _table(df_detentions.to_dict("records"), [(c, c) for c in df_detentions.columns], t("tab_mantenciones_general.sin_registros"), page_size=10)
 
 
 def create_jobs_table(df_jobs: pd.DataFrame):
-    return _table(df_jobs.to_dict("records"), [(c, c) for c in df_jobs.columns], "Sin acciones", page_size=10)
+    return _table(df_jobs.to_dict("records"), [(c, c) for c in df_jobs.columns], t("tab_mantenciones_general.sin_acciones"), page_size=10)

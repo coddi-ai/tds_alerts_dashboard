@@ -5,6 +5,7 @@ Handles all interactivity for the unified alerts view with internal tabs,
 interactive filtering, and cross-navigation.
 """
 
+from src.i18n import t
 import pandas as pd
 from dash import callback, callback_context, clientside_callback, ALL, Input, Output, State, html, dcc, no_update, dash_table
 from dash.exceptions import PreventUpdate
@@ -144,7 +145,7 @@ def render_tab_content(active_tab):
     elif active_tab == 'detail':
         return create_detail_layout()
     else:
-        return html.Div("Tab no encontrado")
+        return html.Div(t("alerts_callbacks.tab_no_encontrado"))
 
 
 # ========================================
@@ -201,8 +202,8 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
 
     if alerts_df.empty:
         logger.warning(f"No alerts data available for client: {client}")
-        empty_fig = {'data': [], 'layout': {'title': 'No data available'}}
-        empty_alert = dbc.Alert("No hay datos de alertas disponibles", color="warning")
+        empty_fig = {'data': [], 'layout': {'title': t("alerts_callbacks.no_data_available")}}
+        empty_alert = dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, "", [], {'display': 'none'}
 
     active_filters = active_filters or {}
@@ -227,9 +228,9 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
 
         if filtered_df.empty:
             logger.warning("No data after applying filters")
-            empty_fig = {'data': [], 'layout': {'title': 'No hay datos con los filtros aplicados'}}
-            empty_alert = dbc.Alert("No hay datos con los filtros aplicados", color="info")
-            return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, "No hay alertas para los filtros seleccionados.", badges, clear_all_style
+            empty_fig = {'data': [], 'layout': {'title': t("alerts_callbacks.no_hay_datos_con_los_filtros")}}
+            empty_alert = dbc.Alert(t("alerts_callbacks.no_hay_datos_con_los_filtros"), color="info")
+            return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, t("alerts_callbacks.no_hay_alertas_para_los_filtros"), badges, clear_all_style
 
         # Create charts (using filtered data for visualization) - removed trigger_chart
         unit_chart = create_alerts_per_unit_chart(filtered_df)
@@ -244,15 +245,15 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
         table = create_alerts_report_table(filtered_df)
 
         latest = format_local(summary['latest'])  # W34-06: local wall-clock time
-        filter_summary = f"Mostrando {summary['total']} alertas de {summary['units']} unidades · última alerta: {latest}"
+        filter_summary = t("alerts_callbacks.mostrando_alertas_de_unidades_ultima_alert", summary_total=summary['total'], summary_units=summary['units'], latest=latest)
         logger.info(f"General tab updated successfully with {summary['total']} alerts")
         return unit_chart, month_chart, system_chart, stats, table, filter_summary, badges, clear_all_style
 
     except Exception as e:
         logger.error(f"Error updating general tab: {e}")
-        error_fig = {'data': [], 'layout': {'title': f'Error: {str(e)}'}}
-        error_alert = dbc.Alert(f"Error al cargar datos: {str(e)}", color="danger")
-        return error_fig, error_fig, error_fig, error_alert, error_alert, f"Error: {str(e)}", badges, clear_all_style
+        error_fig = {'data': [], 'layout': {'title': t("component_hours_callbacks.error", str_e=str(e))}}
+        error_alert = dbc.Alert(t("alerts_callbacks.error_al_cargar_datos", str_e=str(e)), color="danger")
+        return error_fig, error_fig, error_fig, error_alert, error_alert, t("component_hours_callbacks.error", str_e=str(e)), badges, clear_all_style
 
 
 @callback(
@@ -344,24 +345,24 @@ def render_selected_alert_summary(active_cell, table_data):
     return dbc.Card([
         dbc.CardHeader([
             html.I(className='fas fa-bullseye me-2'),
-            f"Resumen de {row.get('ID', '-')}",
+            t("alerts_callbacks.resumen_de", row_get_id=row.get('ID', '-')),
         ]),
         dbc.CardBody([
             dbc.Row([
-                dbc.Col([html.Small('Unidad', className='text-muted d-block'), html.Strong(row.get('Unidad', '-'))], md=2),
-                dbc.Col([html.Small('Sistema', className='text-muted d-block'), html.Strong(row.get('Sistema', '-'))], md=2),
-                dbc.Col([html.Small('Fuente', className='text-muted d-block'), html.Strong(row.get('Fuente', '-'))], md=2),
-                dbc.Col([html.Small('Evidencia', className='text-muted d-block'), html.Strong(row.get('Evidencia', '-'))], md=6),
+                dbc.Col([html.Small(t("alerts_general.filter_unit"), className='text-muted d-block'), html.Strong(row.get('Unidad', '-'))], md=2),
+                dbc.Col([html.Small(t("alerts_general.filter_system"), className='text-muted d-block'), html.Strong(row.get('Sistema', '-'))], md=2),
+                dbc.Col([html.Small(t("tab_integration_validacion_avisos.fuente"), className='text-muted d-block'), html.Strong(row.get('Fuente', '-'))], md=2),
+                dbc.Col([html.Small(t("alerts_callbacks.evidencia"), className='text-muted d-block'), html.Strong(row.get('Evidencia', '-'))], md=6),
             ], className='mb-3'),
-            html.Strong(row.get('diagnostico_completo') or row.get('Diagnóstico', 'Sin diagnóstico IA disponible'), className='d-block'),
-            html.P(row.get('causa_completa') or 'Sin causa probable registrada', className='text-muted mt-2 mb-1', style={'whiteSpace': 'pre-wrap'}),
+            html.Strong(row.get('diagnostico_completo') or row.get('Diagnóstico', t("alerts_report.sin_diagnostico_ia_disponible")), className='d-block'),
+            html.P(row.get('causa_completa') or t("alerts_report.sin_causa_probable_registrada"), className='text-muted mt-2 mb-1', style={'whiteSpace': 'pre-wrap'}),
             html.Div([
                 html.I(className='fas fa-wrench me-1'),
-                html.Strong('Acción: '),
-                row.get('accion_completa') or row.get('Acción', 'Sin acción recomendada registrada'),
+                html.Strong(t("telemetry_callbacks.accion")),
+                row.get('accion_completa') or row.get('Acción', t("alerts_report.sin_accion_recomendada_registrada")),
             ], className='text-primary mt-2'),
             dbc.Button([
-                html.I(className='fas fa-arrow-right me-1'), 'Ver detalle de la alerta'
+                html.I(className='fas fa-arrow-right me-1'), t("alerts_callbacks.ver_detalle_de_la_alerta")
             ], id='general-nav-to-detail-button', color='primary', size='sm', className='mt-3'),
         ]),
     ], className='shadow-sm', style={'borderLeft': '4px solid #3498db'})
@@ -710,7 +711,7 @@ def _alert_case_header(row: pd.Series) -> html.Div:
     source_label, source_badge_color = source_style(prepared.get('Trigger_type', ''))
 
     def _analysis_block(title, value, icon, color='light'):
-        text = value or 'No disponible'
+        text = value or t("tab_alerts_detail.no_disponible")
         return dbc.Col([
             html.Div([
                 html.H6([html.I(className=f'fas {icon} me-2'), title], className='mb-2'),
@@ -721,16 +722,16 @@ def _alert_case_header(row: pd.Series) -> html.Div:
     return dbc.Card([
         dbc.CardHeader([
             html.I(className='fas fa-fingerprint me-2'),
-            html.Strong(f"Alerta {prepared.get('FusionID', '-')}")
+            html.Strong(t("alerts_callbacks.alerta", prepared_get_fusio=prepared.get('FusionID', '-')))
         ], className='bg-light'),
         dbc.CardBody([
             dbc.Row([
-                dbc.Col([html.Small('Unidad', className='text-muted d-block text-nowrap'), html.Strong(prepared.get('UnitId', '-'))], xs=6, lg=2),
-                dbc.Col([html.Small('Sistema', className='text-muted d-block text-nowrap'), html.Strong(prepared.get('system_display', '-'))], xs=6, lg=2),
-                dbc.Col([html.Small('Componente', className='text-muted d-block text-nowrap'), html.Strong(prepared.get('component_display', '-'))], xs=6, lg=3),
-                dbc.Col([html.Small('Fecha', className='text-muted d-block text-nowrap'), html.Strong(timestamp)], xs=6, lg=3),
+                dbc.Col([html.Small(t("alerts_general.filter_unit"), className='text-muted d-block text-nowrap'), html.Strong(prepared.get('UnitId', '-'))], xs=6, lg=2),
+                dbc.Col([html.Small(t("alerts_general.filter_system"), className='text-muted d-block text-nowrap'), html.Strong(prepared.get('system_display', '-'))], xs=6, lg=2),
+                dbc.Col([html.Small(t("tab_mantenciones_general.componente"), className='text-muted d-block text-nowrap'), html.Strong(prepared.get('component_display', '-'))], xs=6, lg=3),
+                dbc.Col([html.Small(t("tab_mantenciones_general.fecha"), className='text-muted d-block text-nowrap'), html.Strong(timestamp)], xs=6, lg=3),
                 dbc.Col([
-                    html.Small('Fuente', className='text-muted d-block text-nowrap'),
+                    html.Small(t("tab_integration_validacion_avisos.fuente"), className='text-muted d-block text-nowrap'),
                     # Same accent-text-on-tint treatment as the "Alertas
                     # multitécnicas" KPI card (tab_alerts_general.py), not a
                     # solid fill with an implied (and untested) white text
@@ -757,20 +758,20 @@ def _alert_case_header(row: pd.Series) -> html.Div:
                 ], xs=6, lg=2),
             ], className='g-3'),
             html.Div([
-                html.Strong('Señal / variable: ', className='text-muted'),
-                prepared.get('signal_display', 'Sin señal registrada'),
+                html.Strong(t("alerts_callbacks.senal_variable"), className='text-muted'),
+                prepared.get('signal_display', t("alerts_report.sin_senal_registrada")),
                 html.Span(' · ', className='text-muted'),
-                html.Strong('Evidencia: ', className='text-muted'),
-                prepared.get('evidence_display', 'Sin evidencia'),
+                html.Strong(t("alerts_callbacks.evidencia_2"), className='text-muted'),
+                prepared.get('evidence_display', t("alerts_report.sin_evidencia")),
             ], className='mt-3 small'),
             html.H5([
                 html.I(className='fas fa-brain me-2'),
-                'Analisis inteligente'
+                t("alerts_callbacks.analisis_inteligente")
             ], className='text-primary mt-4 mb-3 pb-2 border-bottom'),
             dbc.Row([
-                _analysis_block('Diagnostico', diagnosis.get('diagnostico'), 'fa-search', 'light'),
-                _analysis_block('Causa probable', diagnosis.get('causa_probable'), 'fa-project-diagram', 'light'),
-                _analysis_block('Accion recomendada', diagnosis.get('acciones'), 'fa-wrench', 'light'),
+                _analysis_block(t("ai_analysis_panel.diagnostico"), diagnosis.get('diagnostico'), 'fa-search', 'light'),
+                _analysis_block(t("ai_analysis_panel.causa_probable"), diagnosis.get('causa_probable'), 'fa-project-diagram', 'light'),
+                _analysis_block(t("alerts_callbacks.accion_recomendada"), diagnosis.get('acciones'), 'fa-wrench', 'light'),
             ], className='g-3'),
         ])
     ], className='shadow-sm', style={'borderTop': '3px solid #3498db'})
@@ -815,7 +816,7 @@ def update_detail_view(dropdown_value, client, nav_data):
         logger.info("No alert selected, showing placeholder")
         return dbc.Alert([
             html.I(className="fas fa-arrow-up me-2"),
-            "Por favor, seleccione una alerta para ver los detalles"
+            t("tab_alerts_detail.por_favor_seleccione_una_alerta_para")
         ], color="info", className="text-center")
     
     logger.info(f"Loading detail view for alert: {selected_fusion_id}")
@@ -824,13 +825,13 @@ def update_detail_view(dropdown_value, client, nav_data):
     alerts_df = load_alerts_data(client)
     
     if alerts_df.empty:
-        return dbc.Alert("No hay datos de alertas disponibles", color="warning")
+        return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
     
     # Find selected alert
     alert_row = alerts_df[alerts_df['FusionID'] == selected_fusion_id]
     
     if alert_row.empty:
-        return dbc.Alert(f"Alerta no encontrada: {selected_fusion_id}", color="danger")
+        return dbc.Alert(t("alerts_callbacks.alerta_no_encontrada", selected_fusion_id=selected_fusion_id), color="danger")
     
     alert_row = alert_row.iloc[0]
     
@@ -864,7 +865,7 @@ def update_detail_view(dropdown_value, client, nav_data):
     
     except Exception as e:
         logger.error(f"Error creating detail view: {e}")
-        return dbc.Alert(f"Error al cargar detalles: {str(e)}", color="danger")
+        return dbc.Alert(t("alerts_callbacks.error_al_cargar_detalles", str_e=str(e)), color="danger")
 
 
 clientside_callback(
@@ -918,11 +919,11 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
 
         if not alert_ids:
             return html.Div([
-                dbc.Alert("Esta alerta no tiene un identificador asociado", color="info")
+                dbc.Alert(t("alerts_callbacks.esta_alerta_no_tiene_un_identificador"), color="info")
             ])
         if not unit_id:
             return html.Div([
-                dbc.Alert("Esta alerta no tiene UnitId asociado", color="info")
+                dbc.Alert(t("alerts_callbacks.esta_alerta_no_tiene_unitid_asociado"), color="info")
             ])
 
         # Read only the selected alert/unit when Polars is available. The
@@ -933,7 +934,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
 
         if telemetry_golden.empty:
             return html.Div([
-                dbc.Alert("No hay datos de telemetría disponibles", color="warning")
+                dbc.Alert(t("alerts_callbacks.no_hay_datos_de_telemetria_disponibles"), color="warning")
             ])
 
         # Filter telemetry data by BOTH AlertID AND Unit (AlertID is unique
@@ -944,8 +945,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         if alert_data.empty:
             return html.Div([
                 dbc.Alert(
-                    "No se encontraron datos de telemetría para los identificadores: "
-                    f"{', '.join(alert_ids)}",
+                    t("alerts_callbacks.no_se_encontraron_datos_de_telemetria", join_alert_ids=', '.join(alert_ids)),
                     color="warning",
                 )
             ])
@@ -974,7 +974,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
             or '-'
         )
         trigger_display = (
-            feature_name_map.get(trigger, trigger) if pd.notna(trigger) else 'Sin señal'
+            feature_name_map.get(trigger, trigger) if pd.notna(trigger) else t("alerts_callbacks.sin_senal")
         )
 
         # Identify features to plot (columns ending with _Value)
@@ -994,7 +994,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
 
         if not feature_names:
             return html.Div([
-                dbc.Alert("No se encontraron señales con valores para graficar", color="warning")
+                dbc.Alert(t("alerts_callbacks.no_se_encontraron_senales_con_valores"), color="warning")
             ])
 
         logger.info(f"Found {len(feature_names)} features to plot: {feature_names}")
@@ -1031,9 +1031,9 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
                 dbc.Col([
                     html.H4([
                         html.I(className="fas fa-signal me-2"),
-                        "Evidencia de Telemetría"
+                        t("tab_alerts_detail.evidencia_de_telemetria")
                     ], className="text-primary mb-3 mt-4 pb-2 border-bottom"),
-                    html.P("Análisis de datos de sensores y ubicación GPS durante el evento", 
+                    html.P(t("tab_alerts_detail.analisis_de_datos_de_sensores_y"), 
                            className="text-muted mb-3")
                 ])
             ]),
@@ -1045,10 +1045,10 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-chart-line me-2"),
-                                "Tendencias de Sensores"
+                                t("tab_alerts_detail.tendencias_de_sensores")
                             ], className="mb-0"),
                             html.Div(
-                                f"Alerta {alert_id_display} · {unit_id} · Gatillo: {trigger_display}",
+                                t("alerts_callbacks.alerta_gatillo", alert_id_display=alert_id_display, unit_id=unit_id, trigger_display=trigger_display),
                                 className="small fw-bold text-primary mt-1"
                             ),
                             # Quality-review follow-up: a signal present in the
@@ -1061,8 +1061,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
                             html.Div(
                                 [
                                     html.I(className="fas fa-triangle-exclamation me-1"),
-                                    f"{len(uncatalogued)} señal(es) adicional(es) no catalogada(s) "
-                                    "omitida(s) de este gráfico.",
+                                    t("alerts_callbacks.senal_es_adicional_es_no_catalogada", len_uncatalogued=len(uncatalogued)),
                                 ],
                                 className="small text-warning mt-1",
                             ) if uncatalogued else None,
@@ -1091,7 +1090,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-tachometer-alt me-2"),
-                                "Indicadores de Contexto"
+                                t("tab_alerts_detail.indicadores_de_contexto")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -1110,7 +1109,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-map-marked-alt me-2"),
-                                "Ubicación y Ruta GPS"
+                                t("tab_alerts_detail.ubicacion_y_ruta_gps")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -1134,7 +1133,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
     except Exception as e:
         logger.error(f"Error creating telemetry evidence: {e}")
         return html.Div([
-            dbc.Alert(f"Error al cargar evidencia de telemetría: {str(e)}", color="danger")
+            dbc.Alert(t("alerts_callbacks.error_al_cargar_evidencia_de_telemetria", str_e=str(e)), color="danger")
         ])
 
 
@@ -1166,7 +1165,7 @@ def _build_oil_tendencia_view(history_full, comp_limits, oil_hour_range, start_d
     return [
         dbc.Row([
             dbc.Col([
-                html.Small("Rango de fechas (reporte de aceite): ", className="text-muted me-2"),
+                html.Small(t("alerts_callbacks.rango_de_fechas_reporte_de_aceite"), className="text-muted me-2"),
                 dcc.DatePickerRange(
                     id='alert-oil-tendencia-date-range',
                     start_date=start_date,
@@ -1176,7 +1175,7 @@ def _build_oil_tendencia_view(history_full, comp_limits, oil_hour_range, start_d
                 ),
             ], width='auto'),
             dbc.Col([
-                dbc.Button([html.I(className="fas fa-times me-1"), "Limpiar"],
+                dbc.Button([html.I(className="fas fa-times me-1"), t("alerts_callbacks.limpiar")],
                            id='alert-oil-tendencia-date-clear', color="outline-secondary", size="sm")
             ], width='auto'),
         ], className="mb-2 align-items-center g-2"),
@@ -1208,7 +1207,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         tribology_id = alert_row.get('TribologyID')
         if oil_classified.empty or tribology_id is None or (isinstance(tribology_id, float) and pd.isna(tribology_id)):
             return html.Div([
-                dbc.Alert("No hay datos de tribología disponibles", color="warning")
+                dbc.Alert(t("alerts_callbacks.no_hay_datos_de_tribologia_disponibles"), color="warning")
             ])
         
         # Filter for this sample
@@ -1218,7 +1217,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         
         if oil_report.empty:
             return html.Div([
-                dbc.Alert(f"Reporte no encontrado para muestra: {tribology_id}", color="warning")
+                dbc.Alert(t("alerts_callbacks.reporte_no_encontrado_para_muestra", tribology_id=tribology_id), color="warning")
             ])
         
         oil_report = oil_report.iloc[0]
@@ -1227,7 +1226,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         essays_file = _data_path("oil", "essays_elements.xlsx")
         if not essays_file.exists():
             return html.Div([
-                dbc.Alert("Archivo essays_elements.xlsx no encontrado", color="warning")
+                dbc.Alert(t("reports_callbacks.archivo_essays_elements_xlsx_no_encontrado"), color="warning")
             ])
         
         essays_df = load_essays_mapping(essays_file)
@@ -1241,7 +1240,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
 
         if not limits:
             return html.Div([
-                dbc.Alert("Límites Stewart no disponibles", color="warning")
+                dbc.Alert(t("alerts_callbacks.limites_stewart_no_disponibles"), color="warning")
             ])
 
         # Get limits for this component
@@ -1250,7 +1249,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
 
         if client not in limits or machine not in limits[client] or component_normalized not in limits[client][machine]:
             return html.Div([
-                dbc.Alert(f"Límites no disponibles para {machine}/{component_normalized}", color="warning")
+                dbc.Alert(t("alerts_callbacks.limites_no_disponibles_para", machine=machine, component_normalized=component_normalized), color="warning")
             ])
 
         comp_limits = limits[client][machine][component_normalized]
@@ -1319,9 +1318,9 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
             'UNKNOWN': 'secondary'  # Unknown - gray
         }
         oil_hour_range_labels = {
-            'LT_1000': 'Aceite Fresco (<1000h)',
-            'GE_1000': 'Aceite Envejecido (≥1000h)',
-            'UNKNOWN': 'Edad de Aceite Desconocida'
+            'LT_1000': t("alerts_callbacks.aceite_fresco_1000h"),
+            'GE_1000': t("alerts_callbacks.aceite_envejecido_1000h"),
+            'UNKNOWN': t("alerts_callbacks.edad_de_aceite_desconocida")
         }
         oil_hour_color = oil_hour_range_colors.get(sample_oil_hour_range, 'secondary')
         oil_hour_label = oil_hour_range_labels.get(sample_oil_hour_range, sample_oil_hour_range)
@@ -1331,23 +1330,23 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
                 dbc.Col([
                     html.H4([
                         html.I(className="fas fa-flask me-2"),
-                        "Análisis de Aceite"
+                        t("alerts_callbacks.analisis_de_aceite")
                     ], className="text-warning mb-2"),
                     html.Div([
                         dbc.Badge(
-                            f"Estado: {report_status}",
+                            t("alerts_callbacks.estado", report_status=report_status),
                             color=status_color,
                             className="me-2",
                             style={'fontSize': '1rem'}
                         ),
                         dbc.Badge(
-                            f"ID Muestra: {tribology_id}",
+                            t("alerts_callbacks.id_muestra", tribology_id=tribology_id),
                             color="info",
                             className="me-2",
                             style={'fontSize': '1rem'}
                         ),
                         dbc.Badge(
-                            f"Horas Aceite: {oil_meter_display}",
+                            t("alerts_callbacks.horas_aceite", oil_meter_display=oil_meter_display),
                             color="dark",
                             className="me-2",
                             style={'fontSize': '1rem'}
@@ -1357,7 +1356,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
                             color=oil_hour_color,
                             className="mb-3",
                             style={'fontSize': '1rem'},
-                            title="Límites estratificados v2.3 basados en edad del aceite"
+                            title=t("alerts_callbacks.limites_estratificados_v2_3_basados_en")
                         )
                     ], className="mb-3")
                 ])
@@ -1367,9 +1366,9 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
                 id='alert-oil-view-selector',
                 value='tendencia',
                 children=[
-                    dcc.Tab(label='  Tendencia', value='tendencia',
+                    dcc.Tab(label=t("tab_reports.tendencia"), value='tendencia',
                             className='custom-tab', selected_className='custom-tab--selected'),
-                    dcc.Tab(label='  Último Ensayo', value='ultimo_ensayo',
+                    dcc.Tab(label=t("tab_reports.ultimo_ensayo"), value='ultimo_ensayo',
                             className='custom-tab', selected_className='custom-tab--selected'),
                 ],
                 className='mb-3'
@@ -1384,7 +1383,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         import traceback
         logger.error(traceback.format_exc())
         return html.Div([
-            dbc.Alert(f"Error al cargar evidencia de tribología: {str(e)}", color="danger")
+            dbc.Alert(t("alerts_callbacks.error_al_cargar_evidencia_de_tribologia", str_e=str(e)), color="danger")
         ])
 
 
@@ -1471,7 +1470,7 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
         
         if pd.isna(maintenance_week):
             return html.Div([
-                dbc.Alert("No hay referencia de semana de mantenimiento", color="info")
+                dbc.Alert(t("alerts_callbacks.no_hay_referencia_de_semana_de"), color="info")
             ])
         
         # Load maintenance data
@@ -1479,7 +1478,7 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
         
         if maintenance_df.empty:
             return html.Div([
-                dbc.Alert(f"No hay datos de mantenimiento para semana {maintenance_week}", color="warning")
+                dbc.Alert(t("alerts_callbacks.no_hay_datos_de_mantenimiento_para", maintenance_week=maintenance_week), color="warning")
             ])
         
         # Filter for this unit
@@ -1489,7 +1488,7 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
         
         if unit_maintenance.empty:
             return html.Div([
-                dbc.Alert(f"No hay datos de mantenimiento para unidad {alert_row['UnitId']}", color="warning")
+                dbc.Alert(t("alerts_callbacks.no_hay_datos_de_mantenimiento_para_2", alert_row_unitid=alert_row['UnitId']), color="warning")
             ])
         
         unit_maintenance = unit_maintenance.iloc[0]
@@ -1506,7 +1505,7 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
                 dbc.Col([
                     html.H4([
                         html.I(className="fas fa-tools me-2"),
-                        "Evidencia de Mantenimiento"
+                        t("alerts_callbacks.evidencia_de_mantenimiento")
                     ], className="text-secondary mb-3")
                 ])
             ]),
@@ -1521,5 +1520,5 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
     except Exception as e:
         logger.error(f"Error creating maintenance evidence: {e}")
         return html.Div([
-            dbc.Alert(f"Error al cargar evidencia de mantenimiento: {str(e)}", color="danger")
+            dbc.Alert(t("alerts_callbacks.error_al_cargar_evidencia_de_mantenimiento", str_e=str(e)), color="danger")
         ])

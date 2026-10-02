@@ -5,6 +5,7 @@ fields. This module only normalizes those fields for a consistent report UI;
 it does not create a new severity score or diagnosis.
 """
 
+from src.i18n import t
 import ast
 from typing import Any, Iterable, Optional
 
@@ -39,7 +40,7 @@ def _bool(value: Any) -> bool:
 
 def _signal_labels(value: Any) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
-        return "Sin señal registrada"
+        return t("alerts_report.sin_senal_registrada")
     values = value
     if isinstance(value, str):
         try:
@@ -49,7 +50,7 @@ def _signal_labels(value: Any) -> str:
     if not isinstance(values, (list, tuple, set)):
         values = [values]
     labels = [FEATURE_NAMES_ES.get(str(item), str(item)) for item in values if str(item).strip()]
-    return ", ".join(dict.fromkeys(labels)) or "Sin señal registrada"
+    return ", ".join(dict.fromkeys(labels)) or t("alerts_report.sin_senal_registrada")
 
 
 def _message_sections(value: Any) -> dict:
@@ -60,12 +61,12 @@ def _evidence_label(row: pd.Series) -> str:
     telemetry = _bool(row.get("has_telemetry"))
     tribology = _bool(row.get("has_tribology"))
     if telemetry and tribology:
-        return "Telemetría + Tribología"
+        return t("alerts_report.telemetria_tribologia")
     if telemetry:
-        return "Telemetría"
+        return t("fleet_overview.technique_telemetry")
     if tribology:
-        return "Tribología"
-    return "Sin evidencia"
+        return t("fleet_overview.technique_oil")
+    return t("alerts_report.sin_evidencia")
 
 
 def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
@@ -88,9 +89,9 @@ def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
     frame["component_display"] = frame.get("componente", "").map(translate_alert_component)
     frame["signal_display"] = frame.get("Trigger_Var", "").map(_signal_labels)
     sections = frame.get("mensaje_ia", pd.Series("", index=frame.index)).map(_message_sections)
-    frame["diagnosis_display"] = sections.map(lambda item: item.get("diagnostico") or "Sin diagnóstico IA disponible")
-    frame["cause_display"] = sections.map(lambda item: item.get("causa_probable") or "Sin causa probable registrada")
-    frame["action_display"] = sections.map(lambda item: item.get("acciones") or "Sin acción recomendada registrada")
+    frame["diagnosis_display"] = sections.map(lambda item: item.get("diagnostico") or t("alerts_report.sin_diagnostico_ia_disponible"))
+    frame["cause_display"] = sections.map(lambda item: item.get("causa_probable") or t("alerts_report.sin_causa_probable_registrada"))
+    frame["action_display"] = sections.map(lambda item: item.get("acciones") or t("alerts_report.sin_accion_recomendada_registrada"))
     frame["evidence_display"] = frame.apply(_evidence_label, axis=1)
     # W34-06: local wall-clock time, not the internal UTC-naive value — this
     # is the instant every surface (table, header, chart, dropdown) must agree on.

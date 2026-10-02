@@ -14,6 +14,7 @@ Displays detailed view for a selected alert with:
   - Weekly Maintenance Summary
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -35,9 +36,9 @@ def create_layout() -> html.Div:
         html.Div([
             html.H3([
                 html.I(className="fas fa-microscope me-2"),
-                "Análisis Detallado de Alerta"
+                t("tab_alerts_detail.analisis_detallado_de_alerta")
             ], className="text-primary mb-2"),
-            html.P("Explore evidencia completa de telemetría, tribología y mantenimiento", 
+            html.P(t("tab_alerts_detail.explore_evidencia_completa_de_telemetria_t"), 
                    className="text-muted")
         ], className="mb-4"),
         
@@ -46,7 +47,7 @@ def create_layout() -> html.Div:
             dbc.CardHeader([
                 html.H5([
                     html.I(className="fas fa-filter me-2"),
-                    "Filtros de Búsqueda"
+                    t("tab_alerts_detail.filtros_de_busqueda")
                 ], className="mb-0")
             ], className="bg-light"),
             dbc.CardBody([
@@ -55,11 +56,11 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-truck me-1"),
-                            "Unidad"
+                            t("tab_alerts_detail.unidad")
                         ], className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='detail-filter-unit',
-                            placeholder="Todas las unidades...",
+                            placeholder=t("tab_alerts_detail.todas_las_unidades"),
                             clearable=True,
                             searchable=True,
                             multi=True
@@ -70,11 +71,11 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-cogs me-1"),
-                            "Sistema"
+                            t("tab_alerts_detail.sistema")
                         ], className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='detail-filter-sistema',
-                            placeholder="Todos los sistemas...",
+                            placeholder=t("tab_alerts_detail.todos_los_sistemas"),
                             clearable=True,
                             multi=True
                         )
@@ -88,11 +89,11 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-calendar-alt me-1"),
-                            "Fecha desde"
+                            t("tab_alerts_detail.fecha_desde")
                         ], className="fw-bold mb-2"),
                         dcc.DatePickerSingle(
                             id='detail-filter-date-from',
-                            placeholder="Sin límite",
+                            placeholder=t("tab_alerts_detail.sin_limite"),
                             display_format='DD/MM/YYYY',
                             clearable=True,
                             className='w-100'
@@ -103,15 +104,15 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-oil-can me-1"),
-                            "Con Tribología"
+                            t("tab_alerts_detail.con_tribologia")
                         ], className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='detail-filter-tribology',
                             options=[
-                                {'label': '✓ Sí', 'value': 'yes'},
-                                {'label': '✗ No', 'value': 'no'}
+                                {'label': t("tab_alerts_detail.si"), 'value': 'yes'},
+                                {'label': t("tab_alerts_detail.no"), 'value': 'no'}
                             ],
-                            placeholder="Todos",
+                            placeholder=t("tab_alerts_detail.todos"),
                             clearable=True
                         )
                     ], md=3)
@@ -124,7 +125,7 @@ def create_layout() -> html.Div:
             dbc.CardHeader([
                 html.H5([
                     html.I(className="fas fa-bullseye me-2"),
-                    "Selección de Alerta"
+                    t("tab_alerts_detail.seleccion_de_alerta")
                 ], className="mb-0")
             ], className="bg-primary text-white"),
             dbc.CardBody([
@@ -132,11 +133,11 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-search me-1"),
-                            "Buscar alerta:"
+                            t("tab_alerts_detail.buscar_alerta")
                         ], className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='alert-selector-dropdown',
-                            placeholder="Buscar por ID, unidad, sistema...",
+                            placeholder=t("tab_alerts_detail.buscar_por_id_unidad_sistema"),
                             clearable=True,
                             searchable=True,
                             className='alerts-detail-selector-dropdown'
@@ -146,7 +147,7 @@ def create_layout() -> html.Div:
                 html.Div([
                     html.Small([
                         html.I(className="fas fa-info-circle me-1"),
-                        "También puede seleccionar una alerta desde la Vista General"
+                        t("tab_alerts_detail.tambien_puede_seleccionar_una_alerta_desde")
                     ], className="text-muted mt-2 d-block")
                 ])
             ])
@@ -163,7 +164,7 @@ def create_layout() -> html.Div:
                     # Placeholder when no alert selected
                     dbc.Alert([
                         html.I(className="fas fa-arrow-up me-2"),
-                        "Por favor, seleccione una alerta para ver los detalles"
+                        t("tab_alerts_detail.por_favor_seleccione_una_alerta_para")
                     ], color="info", className="text-center")
                 ])
             ]
@@ -207,7 +208,7 @@ def create_alert_detail_content(
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-info-circle me-2"),
-                            "Información de la Alerta"
+                            t("tab_alerts_detail.informacion_de_la_alerta")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -225,9 +226,9 @@ def create_alert_detail_content(
             html.Div([
                 html.H4([
                     html.I(className="fas fa-signal me-2"),
-                    "Evidencia de Telemetría"
+                    t("tab_alerts_detail.evidencia_de_telemetria")
                 ], className="text-primary mb-3 mt-4 pb-2 border-bottom"),
-                html.P("Análisis de datos de sensores y ubicación GPS durante el evento", 
+                html.P(t("tab_alerts_detail.analisis_de_datos_de_sensores_y"), 
                        className="text-muted mb-3")
             ])
         )
@@ -240,7 +241,7 @@ def create_alert_detail_content(
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-chart-line me-2"),
-                                "Tendencias de Sensores"
+                                t("tab_alerts_detail.tendencias_de_sensores")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -269,7 +270,7 @@ def create_alert_detail_content(
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-tachometer-alt me-2"),
-                                "Indicadores de Contexto"
+                                t("tab_alerts_detail.indicadores_de_contexto")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -288,7 +289,7 @@ def create_alert_detail_content(
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-map-marked-alt me-2"),
-                                "Ubicación y Ruta GPS"
+                                t("tab_alerts_detail.ubicacion_y_ruta_gps")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -316,9 +317,9 @@ def create_alert_detail_content(
             html.Div([
                 html.H4([
                     html.I(className="fas fa-oil-can me-2"),
-                    "Evidencia Tribológica"
+                    t("tab_alerts_detail.evidencia_tribologica")
                 ], className="text-primary mb-3 mt-4 pb-2 border-bottom"),
-                html.P("Análisis de aceite y desgaste de componentes", 
+                html.P(t("tab_alerts_detail.analisis_de_aceite_y_desgaste_de"), 
                        className="text-muted mb-3")
             ])
         )
@@ -330,7 +331,7 @@ def create_alert_detail_content(
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-flask me-2"),
-                                "Niveles de Elementos y Estado"
+                                t("tab_alerts_detail.niveles_de_elementos_y_estado")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -367,9 +368,9 @@ def create_alert_detail_content(
             html.Div([
                 html.H4([
                     html.I(className="fas fa-tools me-2"),
-                    "Historial de Mantenimiento"
+                    t("tab_alerts_detail.historial_de_mantenimiento")
                 ], className="text-primary mb-3 mt-4 pb-2 border-bottom"),
-                html.P("Actividades de mantenimiento relacionadas con el sistema afectado", 
+                html.P(t("tab_alerts_detail.actividades_de_mantenimiento_relacionadas"), 
                        className="text-muted mb-3")
             ])
         )
@@ -381,7 +382,7 @@ def create_alert_detail_content(
                         dbc.CardHeader([
                             html.H5([
                                 html.I(className="fas fa-wrench me-2"),
-                                "Intervenciones Recientes"
+                                t("tab_alerts_detail.intervenciones_recientes")
                             ], className="mb-0")
                         ], className="bg-light"),
                         dbc.CardBody([
@@ -431,21 +432,21 @@ def create_oil_status_display(
         
         # Breached Essays
         html.Div([
-            html.H6("Ensayos en Alerta:", className="text-muted mb-2"),
+            html.H6(t("tab_alerts_detail.ensayos_en_alerta"), className="text-muted mb-2"),
             html.Ul([
                 html.Li(str(essay), className="text-danger")
                 for essay in breached_essays
-            ]) if (breached_essays and len(breached_essays) > 0) else html.P("Ninguno", className="text-success")
+            ]) if (breached_essays and len(breached_essays) > 0) else html.P(t("tab_alerts_detail.ninguno"), className="text-success")
         ], className="mb-3"),
         
         # AI Recommendation
         html.Div([
             html.H6([
                 html.I(className="fas fa-robot me-2"),
-                "Recomendación AI:"
+                t("tab_alerts_detail.recomendacion_ai")
             ], className="text-primary mb-2"),
             html.P(
-                ai_recommendation if ai_recommendation else "No disponible",
+                ai_recommendation if ai_recommendation else t("tab_alerts_detail.no_disponible"),
                 className="text-muted",
                 style={'fontSize': '0.9rem', 'whiteSpace': 'pre-wrap'}
             )

@@ -6,6 +6,7 @@ This tab provides a critical system monitoring view with:
 2. Critical Systems Table: Highlights the most critical equipment-system combinations ranked by alert count
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -28,10 +29,10 @@ def create_layout() -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-exclamation-triangle me-3"),
-                    "Control de Amenazas"
+                    t("tab_menace_control.control_de_amenazas")
                 ], className="text-danger mb-1"),
                 html.P(
-                    "Monitoreo de criticidad de equipos y sistemas basado en alertas y análisis de tribología",
+                    t("tab_menace_control.monitoreo_de_criticidad_de_equipos_y"),
                     className="text-muted"
                 )
             ])
@@ -45,16 +46,16 @@ def create_layout() -> html.Div:
                         html.Div([
                             html.Label([
                                 html.I(className="fas fa-calendar-alt me-2"),
-                                "Rango de Análisis:"
+                                t("tab_menace_control.rango_de_analisis")
                             ], className="fw-bold me-3"),
                             dcc.Dropdown(
                                 id='menace-days-selector',
                                 options=[
-                                    {'label': 'Últimos 30 días', 'value': 30},
-                                    {'label': 'Últimos 60 días', 'value': 60},
-                                    {'label': 'Últimos 90 días', 'value': 90},
-                                    {'label': 'Últimos 180 días', 'value': 180},
-                                    {'label': 'Último año', 'value': 365}
+                                    {'label': t("tab_menace_control.ultimos_30_dias"), 'value': 30},
+                                    {'label': t("tab_menace_control.ultimos_60_dias"), 'value': 60},
+                                    {'label': t("tab_menace_control.ultimos_90_dias"), 'value': 90},
+                                    {'label': t("tab_menace_control.ultimos_180_dias"), 'value': 180},
+                                    {'label': t("tab_menace_control.ultimo_ano"), 'value': 365}
                                 ],
                                 value=90,
                                 clearable=False,
@@ -73,7 +74,7 @@ def create_layout() -> html.Div:
         html.Div([
             html.H4([
                 html.I(className="fas fa-table me-2"),
-                "Estado General de Equipos"
+                t("tab_menace_control.estado_general_de_equipos")
             ], className="text-primary mb-3")
         ]),
         
@@ -83,13 +84,12 @@ def create_layout() -> html.Div:
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-truck me-2"),
-                            "Resumen de Alertas por Equipo y Sistema"
+                            t("tab_menace_control.resumen_de_alertas_por_equipo_y")
                         ], className="mb-0")
                     ], className="bg-light"),
                     dbc.CardBody([
                         html.P(
-                            "Tabla que muestra el número de alertas por equipo y sistema. "
-                            "Los equipos con mayor número de eventos aparecen primero.",
+                            t("tab_menace_control.tabla_que_muestra_el_numero_de"),
                             className="text-muted small mb-3"
                         ),
                         dcc.Loading(
@@ -108,7 +108,7 @@ def create_layout() -> html.Div:
         html.Div([
             html.H4([
                 html.I(className="fas fa-fire me-2"),
-                "Sistemas Más Críticos"
+                t("tab_menace_control.sistemas_mas_criticos")
             ], className="text-danger mb-3 mt-4")
         ]),
         
@@ -118,13 +118,12 @@ def create_layout() -> html.Div:
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-exclamation-circle me-2"),
-                            "Ranking de Criticidad por Equipo-Sistema"
+                            t("tab_menace_control.ranking_de_criticidad_por_equipo_sistema")
                         ], className="mb-0")
                     ], className="bg-light"),
                     dbc.CardBody([
                         html.P(
-                            "Lista ordenada de los sistemas más críticos basada en el número de alertas/eventos. "
-                            "Incluye información del estado de tribología más reciente.",
+                            t("tab_menace_control.lista_ordenada_de_los_sistemas_mas"),
                             className="text-muted small mb-3"
                         ),
                         dcc.Loading(

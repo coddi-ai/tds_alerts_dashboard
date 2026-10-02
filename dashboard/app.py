@@ -36,6 +36,8 @@ from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
 from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 from dashboard.callbacks.overview_general_callbacks import register_overview_general_callbacks
+from dashboard.callbacks.unit_summary_callbacks import register_unit_summary_callbacks
+from dashboard.components.language_selector import register_language_callbacks
 
 # Import alerts callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.alerts_callbacks
@@ -61,8 +63,6 @@ import dashboard.callbacks.integration_avisos_callbacks
 # Import health index callbacks module
 from dashboard.callbacks.health_index_callbacks import register_health_index_callbacks
 
-# Import data freshness callbacks (uses @callback decorator, auto-registered on import)
-import dashboard.callbacks.data_freshness_callbacks
 
 # Import predictive callbacks
 from dashboard.callbacks.predictive_callbacks import register_callbacks as register_predictive_callbacks
@@ -119,6 +119,9 @@ PATH_PREFIX = normalize_prefix(os.getenv("DASH_PATH_PREFIX"))
 # Initialize Dash app with Bootstrap theme
 app = dash.Dash(
     __name__,
+    # Per-request UI strings for clientside JS (language comes from the cookie); loaded ahead
+    # of the app's own assets so `window.appI18n.messages` exists when callbacks first run.
+    external_scripts=[{"src": f"{PATH_PREFIX}_i18n/messages.js"}],
     use_pages=True,
     pages_folder="",  # Pages are registered explicitly below, no folder auto-discovery
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
@@ -143,7 +146,7 @@ server = app.server
 # after the app is created since register_page() looks up the active app).
 import dashboard.pages.index
 import dashboard.pages.overview_general
-import dashboard.pages.overview_data_freshness
+import dashboard.pages.overview_unit_summary
 import dashboard.pages.monitoring_alerts
 import dashboard.pages.monitoring_telemetry
 import dashboard.pages.monitoring_oil
@@ -166,6 +169,22 @@ import dashboard.pages.no_services
 # Evaluado una sola vez al importar no habria request desde el cual leerla, y toda pestana
 # nueva arrancaria sin identidad. Reconstruirlo cuesta ~0.3 ms.
 app.layout = create_app_layout
+
+@app.server.route(f"{PATH_PREFIX}_i18n/messages.js")
+def i18n_messages_script():
+    """JS strings for the language of the requesting browser (see src/i18n.js_messages)."""
+    from flask import Response
+    import json as _json
+
+    from src.i18n import current_language, js_messages
+
+    body = (
+        "window.appI18n = window.appI18n || {};\n"
+        f"window.appI18n.language = {_json.dumps(current_language())};\n"
+        f"window.appI18n.messages = {_json.dumps(js_messages(), ensure_ascii=True)};\n"
+    )
+    return Response(body, mimetype="application/javascript")
+
 
 # Add health check endpoint for ALB
 @app.server.route('/alerts-dashboard/health')
@@ -196,12 +215,14 @@ def serve_logo(filename):
 
 # Register all callbacks
 register_auth_callbacks(app)
+register_language_callbacks(app)
 register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
 register_reports_callbacks(app)
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
+register_unit_summary_callbacks(app)
 register_health_index_callbacks(app)
 register_predictive_callbacks(app)
 register_component_hours_callbacks(app)

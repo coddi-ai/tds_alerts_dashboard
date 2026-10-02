@@ -7,12 +7,13 @@ route guard resolves the client's first enabled service and redirects there
 depends on which services are enabled for the logged-in user's client).
 """
 
+from src.i18n import t
 import dash
 from dash import html
 
 
 def layout(**kwargs):
-    return html.Div("Cargando...", className="text-muted text-center py-5")
+    return html.Div(t("common.loading"), className="text-muted text-center py-5")
 
 
 dash.register_page(__name__, path="/", layout=layout)

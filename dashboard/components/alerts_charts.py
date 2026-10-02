@@ -14,6 +14,7 @@ Chart components for Alerts Dashboard.
 Functions to create Plotly figures for alerts analytics.
 """
 
+from src.i18n import t, t_or
 import ast
 import math
 import re
@@ -55,18 +56,41 @@ SYSTEM_TRANSLATION = {
 def translate_system_label(value) -> str:
     """Return the display label for a raw alert system value."""
     if value is None or (not isinstance(value, (list, tuple, dict)) and pd.isna(value)):
-        return 'Sin sistema'
+        return t("labels.no_system")
     raw = str(value).strip()
     if not raw:
-        return 'Sin sistema'
+        return t("labels.no_system")
     translated = SYSTEM_TRANSLATION.get(raw)
     if translated is not None:
-        return translated
+        return _localized_system(translated)
     folded = raw.casefold()
     for key, label in SYSTEM_TRANSLATION.items():
         if key.casefold() == folded:
-            return label
+            return _localized_system(label)
     return raw
+
+
+# Catalog key per canonical (Spanish) system label in SYSTEM_TRANSLATION.
+_SYSTEM_LABEL_KEYS = {
+    'Tren de fuerza': 'alerts_charts.system_powertrain',
+    'Motor': 'alerts_charts.system_engine',
+    'Frenos': 'alerts_charts.system_brakes',
+    'Dirección': 'alerts_charts.system_steering',
+}
+
+
+def _localized_system(canonical_label: str) -> str:
+    key = _SYSTEM_LABEL_KEYS.get(canonical_label)
+    return t(key) if key else canonical_label
+
+
+def _system_colors() -> Dict[str, str]:
+    """SISTEMA_COLORS keyed by the *displayed* (translated) system label, since the
+    charts color their series by display name."""
+    colors: Dict[str, str] = {}
+    for canonical, color in SISTEMA_COLORS.items():
+        colors[translate_system_label(canonical)] = color
+    return colors
 
 # Operational state color mapping
 STATE_COLORS = {
@@ -144,9 +168,21 @@ def _state_color(value, default='#95a5a6'):
     return _state_lookup(value, STATE_COLORS, default)
 
 
+_STATE_LABEL_KEYS = {
+    'Operacional': 'alerts_charts.state_operational',
+    'Potencia': 'alerts_charts.state_power',
+    'Preparación': 'alerts_charts.state_preparation',
+    'Ralentí': 'alerts_charts.state_idle',
+    'Ralentí / RPM baja': 'alerts_charts.state_idle_low_rpm',
+    'Transición': 'alerts_charts.state_transition',
+}
+
+
 def _state_label(value):
     fallback = str(value).strip() if value is not None else ''
-    return _state_lookup(value, STATE_LABELS, fallback)
+    label = _state_lookup(value, STATE_LABELS, fallback)
+    key = _STATE_LABEL_KEYS.get(label)
+    return t(key) if key else label
 
 # Spanish feature names mapping
 # Signal labels live in src/charts/signals.py so the dashboard and Campbell AI use
@@ -240,7 +276,7 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
     if alerts_df.empty:
         logger.warning("Cannot create alerts per unit chart: empty dataframe")
         return go.Figure().add_annotation(
-            text="No data available",
+            text=t("alerts_callbacks.no_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -293,7 +329,7 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
             go.Bar(
                 x=counts['UnitId'],
                 y=counts['Count'],
-                name='Alertas',
+                name=t("erp.source.alertas"),
                 marker_color=PARETO_BAR_COLOR,
                 text=bar_text,
                 textposition='auto',
@@ -301,7 +337,7 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
                 insidetextfont=dict(size=value_font_size, color='white'),
                 outsidetextfont=dict(size=value_font_size, color='#2c3e50'),
                 cliponaxis=False,
-                hovertemplate='Alertas: %{y}<extra></extra>',
+                hovertemplate=t("alerts_charts.alertas_extra_extra"),
             ),
             secondary_y=False,
         )
@@ -309,7 +345,7 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
             go.Scatter(
                 x=counts['UnitId'],
                 y=counts['CumulativePct'],
-                name='% acumulado',
+                name=t("tab_mantenciones_general.acumulado"),
                 mode='lines+markers+text',
                 text=cumulative_text,
                 textposition='top center',
@@ -317,13 +353,13 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
                 line=dict(color=PARETO_LINE_COLOR, width=2),
                 marker=dict(size=6, color=PARETO_LINE_COLOR),
                 cliponaxis=False,
-                hovertemplate='%% acumulado: %{y:.1f}%<extra></extra>',
+                hovertemplate=t("alerts_charts.acumulado_extra_extra"),
             ),
             secondary_y=True,
         )
 
         xaxis_kwargs = dict(
-            title_text='Identificador de Unidad',
+            title_text=t("alerts_charts.identificador_de_unidad"),
             type='category',
             tickangle=-45,
             tickfont=dict(size=tick_font_size),
@@ -334,13 +370,13 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
             xaxis_kwargs.update(tickmode='linear', dtick=math.ceil(unit_count / 40))
         fig.update_xaxes(**xaxis_kwargs)
         fig.update_yaxes(
-            title_text='Número de Alertas',
+            title_text=t("alerts_charts.numero_de_alertas"),
             range=[0, axis_max],
             nticks=6,
             secondary_y=False,
         )
         fig.update_yaxes(
-            title_text='Porcentaje Acumulado',
+            title_text=t("alerts_charts.porcentaje_acumulado"),
             range=[0, 100],
             tickvals=[0, 20, 40, 60, 80, 100],
             ticksuffix='%',
@@ -360,7 +396,7 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame) -> go.Figure:
     except Exception as e:
         logger.error(f"Error creating alerts per unit chart: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -379,7 +415,7 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
     if alerts_df.empty:
         logger.warning("Cannot create alerts per month chart: empty dataframe")
         return go.Figure().add_annotation(
-            text="No data available",
+            text=t("alerts_callbacks.no_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -408,17 +444,17 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
             y='Count',
             color='_system_display',
             title=None,
-            labels={'Month_str': 'Mes', 'Count': 'Número de Alertas', '_system_display': 'Sistema'},
+            labels={'Month_str': t("tab_mantenciones_general.mes"), 'Count': t("alerts_charts.numero_de_alertas"), '_system_display': t("alerts_general.filter_system")},
             template='plotly_white',
             height=500,
-            color_discrete_map=SISTEMA_COLORS
+            color_discrete_map=_system_colors()
         )
         # Horizontal, compact legend at top right
         fig.update_layout(
             xaxis_tickangle=-45,
             showlegend=True,
             legend=dict(
-                title='Sistema',
+                title=t("alerts_general.filter_system"),
                 orientation='h',
                 x=1,
                 y=1.08,
@@ -436,7 +472,7 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
     except Exception as e:
         logger.error(f"Error creating alerts per month chart: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -445,7 +481,7 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
 def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
     """Create a weekly stacked alert evolution chart."""
     if alerts_df is None or alerts_df.empty:
-        return go.Figure().add_annotation(text="No hay alertas para el período", x=0.5, y=0.5, showarrow=False)
+        return go.Figure().add_annotation(text=t("alerts_charts.no_hay_alertas_para_el_periodo"), x=0.5, y=0.5, showarrow=False)
     frame = alerts_df.copy()
     timestamp = pd.to_datetime(frame.get('Timestamp'), errors='coerce')
     frame = frame.loc[timestamp.notna()].copy()
@@ -468,8 +504,8 @@ def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
         color='_system_display',
         barmode='stack',
         text='_label',
-        labels={'Semana': 'Semana', 'Count': 'Alertas', '_system_display': 'Sistema'},
-        color_discrete_map=SISTEMA_COLORS,
+        labels={'Semana': t("alerts_charts.week"), 'Count': t("erp.source.alertas"), '_system_display': t("alerts_general.filter_system")},
+        color_discrete_map=_system_colors(),
         template='plotly_white',
         height=ALERTS_CHART_HEIGHT,
         custom_data=['_week_start_iso'],
@@ -479,7 +515,7 @@ def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
         insidetextfont=dict(size=10, color='white'),
         outsidetextfont=dict(size=10, color='#2c3e50'),
         cliponaxis=False,
-        hovertemplate='<b>%{fullData.name}</b><br>Semana: %{x}<br>Alertas: %{y}<extra></extra>',
+        hovertemplate=t("alerts_charts.weekly_hover"),
     )
     # A single-system client sees every stacked bar in one color anyway, so
     # the "Sistema" legend is redundant - only show it once there's more
@@ -507,7 +543,7 @@ def create_trigger_distribution_treemap(alerts_df: pd.DataFrame) -> go.Figure:
     if alerts_df.empty:
         logger.warning("Cannot create trigger distribution treemap: empty dataframe")
         return go.Figure().add_annotation(
-            text="No data available",
+            text=t("alerts_callbacks.no_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -537,7 +573,7 @@ def create_trigger_distribution_treemap(alerts_df: pd.DataFrame) -> go.Figure:
     except Exception as e:
         logger.error(f"Error creating trigger distribution treemap: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -577,7 +613,7 @@ def create_sensor_trends_chart(
     if telemetry_values.empty:
         logger.warning("Cannot create sensor trends chart: empty telemetry values")
         return go.Figure().add_annotation(
-            text="No telemetry data available",
+            text=t("alerts_charts.no_telemetry_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -601,7 +637,7 @@ def create_sensor_trends_chart(
         if unit_data.empty:
             logger.warning("No telemetry data in time window")
             return go.Figure().add_annotation(
-                text="No data in time window",
+                text=t("alerts_charts.no_data_in_time_window"),
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False
             )
@@ -656,9 +692,9 @@ def create_sensor_trends_chart(
                         ),
                         hovertemplate=(
                             f'<b>{sensor_name}</b><br>' +
-                            'Hora: %{x}<br>' +
-                            'Valor: %{y:.2f}<br>' +
-                            f'Estado: {estado}<br>' +
+                            t("alerts_charts.hora_br") +
+                            t("alerts_charts.valor_br") +
+                            t("alerts_charts.estado_br", estado=estado) +
                             '<extra></extra>'
                         )
                     ),
@@ -676,11 +712,11 @@ def create_sensor_trends_chart(
                         x=unit_data['Fecha'],
                         y=unit_data[lower_col],
                         mode='lines',
-                        name='Límite Inferior',
+                        name=t("alerts_charts.limite_inferior"),
                         legendgroup='limits',
                         showlegend=(idx == 1),
                         line=dict(color='red', width=2, dash='dash'),
-                        hovertemplate='Límite Inferior: %{y:.2f}<extra></extra>'
+                        hovertemplate=t("alerts_charts.limite_inferior_extra_extra")
                     ),
                     row=idx,
                     col=1
@@ -692,11 +728,11 @@ def create_sensor_trends_chart(
                         x=unit_data['Fecha'],
                         y=unit_data[upper_col],
                         mode='lines',
-                        name='Límite Superior',
+                        name=t("alerts_charts.limite_superior"),
                         legendgroup='limits',
                         showlegend=(idx == 1),
                         line=dict(color='red', width=2, dash='dash'),
-                        hovertemplate='Límite Superior: %{y:.2f}<extra></extra>'
+                        hovertemplate=t("alerts_charts.limite_superior_extra_extra")
                     ),
                     row=idx,
                     col=1
@@ -721,11 +757,11 @@ def create_sensor_trends_chart(
                         x=[alert_time, alert_time],
                         y=[y_extended_min, y_extended_max],
                         mode='lines',
-                        name='⚠️ Alerta',
+                        name=t("alerts_charts.alerta"),
                         legendgroup='alert',
                         showlegend=(idx == 1),
                         line=dict(color='orange', width=3),
-                        hovertemplate=f"Momento de Alerta: {alert_time}<extra></extra>"
+                        hovertemplate=t("alerts_charts.momento_de_alerta_extra_extra", alert_time=alert_time)
                     ),
                     row=idx,
                     col=1
@@ -734,7 +770,7 @@ def create_sensor_trends_chart(
         # Update layout
         fig.update_layout(
             title={
-                'text': f'Análisis de Tendencias - {unit_id}',
+                'text': t("alerts_charts.analisis_de_tendencias", unit_id=unit_id),
                 'x': 0.5,
                 'xanchor': 'center',
                 'font': dict(size=16, color='#2c3e50')
@@ -747,7 +783,7 @@ def create_sensor_trends_chart(
         
         # Update axes
         fig.update_xaxes(
-            title_text='Hora',
+            title_text=t("alerts_charts.hora"),
             showgrid=True,
             gridwidth=1,
             gridcolor='#ecf0f1',
@@ -757,7 +793,7 @@ def create_sensor_trends_chart(
         
         for i in range(1, len(sensor_columns) + 1):
             fig.update_yaxes(
-                title_text='Valor',
+                title_text=t("alerts_charts.valor"),
                 showgrid=True,
                 gridwidth=1,
                 gridcolor='#ecf0f1',
@@ -771,7 +807,7 @@ def create_sensor_trends_chart(
     except Exception as e:
         logger.error(f"Error creating sensor trends chart: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -805,7 +841,7 @@ def create_gps_route_map(
     if telemetry_values.empty:
         logger.warning("Cannot create GPS map: empty telemetry values")
         return go.Figure().add_annotation(
-            text="No GPS data available",
+            text=t("alerts_charts.no_gps_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -823,7 +859,7 @@ def create_gps_route_map(
         if gps_data.empty:
             logger.warning("No GPS data in time window")
             return go.Figure().add_annotation(
-                text="No GPS data in time window",
+                text=t("alerts_charts.no_gps_data_in_time_window"),
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False
             )
@@ -863,7 +899,7 @@ def create_gps_route_map(
             ),
             showlegend=False,
             text=gps_data['Fecha'].dt.strftime('%H:%M:%S'),
-            hovertemplate='Hora: %{text}<extra></extra>'
+            hovertemplate=t("alerts_charts.hora_extra_extra")
         ))
         
         # Add alert marker
@@ -880,7 +916,7 @@ def create_gps_route_map(
                 symbol='marker'
             ),
             showlegend=False,
-            text=[f"⚠️ Alerta: {alert_time.strftime('%H:%M:%S')}"],
+            text=[t("alerts_charts.alerta_2", alert_time_strftim=alert_time.strftime('%H:%M:%S'))],
             hovertemplate='%{text}<extra></extra>'
         ))
         
@@ -894,7 +930,7 @@ def create_gps_route_map(
                 ),
                 zoom=14
             ),
-            title='Ruta GPS - Vista Satelital',
+            title=t("alerts_charts.ruta_gps_vista_satelital"),
             height=600,
             margin=dict(l=0, r=0, t=40, b=0),
             showlegend=False
@@ -906,7 +942,7 @@ def create_gps_route_map(
     except Exception as e:
         logger.error(f"Error creating GPS route map: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -927,7 +963,7 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
     if oil_report is None or len(oil_report) == 0 or not essay_cols:
         logger.warning("Cannot create oil radar chart: empty data or no essay columns")
         return go.Figure().add_annotation(
-            text="No oil data available",
+            text=t("alerts_charts.no_oil_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -947,9 +983,9 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
             r=r_values,
             theta=theta_values,
             fill='toself',
-            name='Valores Actuales',
+            name=t("alerts_charts.valores_actuales"),
             line_color='#3498db',
-            hovertemplate='<b>%{theta}</b><br>Valor: %{r:.2f} ppm<extra></extra>'
+            hovertemplate=t("alerts_charts.b_b_br_valor_ppm_extra")
         ))
         
         fig.update_layout(
@@ -959,7 +995,7 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
                     range=[0, max_value * 1.2]
                 )
             ),
-            title='Análisis de Aceite - Niveles de Elementos',
+            title=t("alerts_charts.analisis_de_aceite_niveles_de_elementos"),
             height=500,
             showlegend=True
         )
@@ -970,7 +1006,7 @@ def create_oil_radar_chart(oil_report: pd.Series, essay_cols: List[str]) -> go.F
     except Exception as e:
         logger.error(f"Error creating oil radar chart: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1104,9 +1140,10 @@ def _treemap_root_colors(root_labels) -> Dict[str, str]:
     palette = plotly.colors.qualitative.Set2
     colors: Dict[str, str] = {}
     next_index = 0
+    system_colors = _system_colors()
     for label in sorted(set(root_labels)):
-        if label in SISTEMA_COLORS:
-            colors[label] = SISTEMA_COLORS[label]
+        if label in system_colors:
+            colors[label] = system_colors[label]
             continue
         colors[label] = palette[next_index % len(palette)]
         next_index += 1
@@ -1145,7 +1182,7 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
     if alerts_df.empty:
         logger.warning("Cannot create system/signal treemap: empty dataframe")
         return go.Figure().add_annotation(
-            text="No data available",
+            text=t("alerts_callbacks.no_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1157,7 +1194,7 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
         frame['_signal_key'] = trigger_var.map(_first_signal_key)
         frame['_signal_display'] = frame['_signal_key'].map(
             lambda key: FEATURE_NAMES_ES.get(key, key) if key else None
-        ).fillna('Sin señal registrada')
+        ).fillna(t("alerts_report.sin_senal_registrada"))
 
         systems_present = frame['_system_display'].dropna().unique()
         group_map = {}
@@ -1169,11 +1206,11 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
             frame['_root_display'] = frame['_signal_key'].map(
                 lambda key: _functional_group_label(group_map[key]) if key and key in group_map else None
             )
-            frame['_root_display'] = frame['_root_display'].fillna('Sin familia')
-            root_dimension = 'Familia'
+            frame['_root_display'] = frame['_root_display'].fillna(t("alerts_charts.sin_familia"))
+            root_dimension = t("alerts_charts.familia")
         else:
             frame['_root_display'] = frame['_system_display']
-            root_dimension = 'Sistema'
+            root_dimension = t("alerts_general.filter_system")
 
         total = len(frame)
         leaves = frame.groupby(['_root_display', '_signal_display']).size().reset_index(name='Count')
@@ -1196,9 +1233,7 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
             colors.append(root_colors.get(root, PARETO_BAR_COLOR))
             system_values.append(system)
             hover_text.append(
-                f"<b>{root_dimension}:</b> {root}<br>"
-                f"<b>Alertas:</b> {int(row['Count'])}<br>"
-                f"<b>Porcentaje:</b> {row['Pct']:.1f}%"
+                t("alerts_charts.b_b_br_b_alertas_b", root_dimension=root_dimension, root=root, int_row_count=int(row['Count']), row_pct=row['Pct'])
             )
         for _, row in leaves.iterrows():
             root = row['_root_display']
@@ -1211,10 +1246,7 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
             colors.append(root_colors.get(root, PARETO_BAR_COLOR))
             system_values.append(system)
             hover_text.append(
-                f"<b>{root_dimension}:</b> {root}<br>"
-                f"<b>Señal/Variable:</b> {signal}<br>"
-                f"<b>Alertas:</b> {int(row['Count'])}<br>"
-                f"<b>Porcentaje:</b> {row['Pct']:.1f}%"
+                t("alerts_charts.b_b_br_b_senal_variable", root_dimension=root_dimension, root=root, signal=signal, int_row_count=int(row['Count']), row_pct=row['Pct'])
             )
 
         fig = go.Figure(
@@ -1245,7 +1277,7 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame, client: Optional[str] 
     except Exception as e:
         logger.error(f"Error creating system/signal treemap: {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1310,7 +1342,7 @@ def create_sensor_trends_chart_golden(
     if alert_data.empty or not feature_names:
         logger.warning("Cannot create sensor trends chart: empty data or no features")
         return go.Figure().add_annotation(
-            text="No sensor data available",
+            text=t("alerts_charts.no_sensor_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1330,7 +1362,7 @@ def create_sensor_trends_chart_golden(
         if alert_data_filtered.empty:
             logger.warning(f"No data in time window [{time_window_start}, {time_window_end}]")
             return go.Figure().add_annotation(
-                text="No sensor data in time window",
+                text=t("alerts_charts.no_sensor_data_in_time_window"),
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False
             )
@@ -1385,7 +1417,7 @@ def create_sensor_trends_chart_golden(
                 trigger_feature is not None
                 and trigger_feature == str(feature).strip().casefold()
             )
-            title = f'<b>GATILLO · {display_name}</b>' if is_trigger else display_name
+            title = t("alerts_charts.b_gatillo_b", display_name=display_name) if is_trigger else display_name
 
             panel_specs.append(dict(
                 feature=feature,
@@ -1481,9 +1513,9 @@ def create_sensor_trends_chart_golden(
                         line=dict(color=SIGNAL_LINE_COLOR, width=line_width),
                         hovertemplate=(
                             f'<b>{display_name}</b><br>' +
-                            'Hora: %{x|%d/%m/%Y %H:%M:%S}<br>' +
-                            'Valor: %{y:.2f}<br>' +
-                            'Estado: %{customdata}<br>' +
+                            t("alerts_charts.hora_br_2") +
+                            t("alerts_charts.valor_br") +
+                            t("alerts_charts.estado_br_2") +
                             '<extra></extra>'
                         )
                     ),
@@ -1518,8 +1550,8 @@ def create_sensor_trends_chart_golden(
             # gap-segmented so a missing limit window doesn't draw a
             # straight connector across it.
             for limit_col, limit_label, dash_style in (
-                (lower_col, 'Límite Inferior', 'dash'),
-                (upper_col, 'Límite Superior', 'dash'),
+                (lower_col, t("alerts_charts.limite_inferior"), 'dash'),
+                (upper_col, t("alerts_charts.limite_superior"), 'dash'),
             ):
                 if limit_col not in alert_data.columns or not alert_data[limit_col].notna().any():
                     continue
@@ -1530,7 +1562,7 @@ def create_sensor_trends_chart_golden(
                             x=segment['TimeStart'],
                             y=segment[limit_col],
                             mode='lines',
-                            name='Límite',
+                            name=t("alerts_charts.limite"),
                             legendgroup='limits',
                             showlegend=not limit_legend_shown,
                             line=dict(
@@ -1540,8 +1572,8 @@ def create_sensor_trends_chart_golden(
                             ),
                             hovertemplate=(
                                 limit_label + '<br>' +
-                                'Hora: %{x|%d/%m/%Y %H:%M:%S}<br>' +
-                                'Valor: %{y:.2f}<br>' +
+                                t("alerts_charts.hora_br_2") +
+                                t("alerts_charts.valor_br") +
                                 '<extra></extra>'
                             )
                         ),
@@ -1634,7 +1666,7 @@ def create_sensor_trends_chart_golden(
                 y=1,
                 xref=xref,
                 yref=f'{yref} domain',
-                text='Alerta',
+                text=t("erp.condition.alerta"),
                 showarrow=False,
                 xanchor='left',
                 yanchor='top',
@@ -1705,7 +1737,7 @@ def create_sensor_trends_chart_golden(
     except Exception as e:
         logger.error(f"Error creating sensor trends chart (golden layer): {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1732,7 +1764,7 @@ def create_gps_route_map_golden(
     if alert_data.empty:
         logger.warning("Cannot create GPS map: empty data")
         return go.Figure().add_annotation(
-            text="No GPS data available",
+            text=t("alerts_charts.no_gps_data_available"),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1754,7 +1786,7 @@ def create_gps_route_map_golden(
         if gps_data.empty:
             logger.warning("No GPS data with valid coordinates")
             return go.Figure().add_annotation(
-                text="No GPS data with valid coordinates",
+                text=t("alerts_charts.no_gps_data_with_valid_coordinates"),
                 xref="paper", yref="paper",
                 x=0.5, y=0.5, showarrow=False
             )
@@ -1804,7 +1836,7 @@ def create_gps_route_map_golden(
                 # site here is enough — the windowing/closest-point math
                 # above stays in UTC-naive, unchanged.
                 text=to_local_naive(non_alert_gps['TimeStart']).dt.strftime('%H:%M:%S'),
-                hovertemplate='Hora: %{text}<extra></extra>'
+                hovertemplate=t("alerts_charts.hora_extra_extra")
             ))
         
         # Add white border circle first (bottom layer) for alert point
@@ -1835,7 +1867,7 @@ def create_gps_route_map_golden(
                 allowoverlap=True
             ),
             showlegend=False,
-            text=[f"⚠️ Alerta: {to_local_naive(alert_time).strftime('%H:%M:%S')}"],
+            text=[t("alerts_charts.alerta_3", to_local_naive_ale=to_local_naive(alert_time).strftime('%H:%M:%S'))],
             hovertemplate='%{text}<extra></extra>'
         ))
         
@@ -1861,7 +1893,7 @@ def create_gps_route_map_golden(
     except Exception as e:
         logger.error(f"Error creating GPS route map (golden layer): {e}")
         return go.Figure().add_annotation(
-            text=f"Error: {str(e)}",
+            text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",
             x=0.5, y=0.5, showarrow=False
         )
@@ -1912,7 +1944,7 @@ def create_context_kpis_cards_golden(
         Bootstrap Row with 4 KPI cards
     """
     if alert_data.empty:
-        return dbc.Alert("No hay datos de contexto disponibles", color="info")
+        return dbc.Alert(t("alerts_tables.no_hay_datos_de_contexto_disponibles"), color="info")
     
     try:
         # Sort by time
@@ -1924,7 +1956,7 @@ def create_context_kpis_cards_golden(
         alert_point = alert_data.iloc[alert_idx]
         
         # KPI 1: Elevación
-        elevation_status = "➡️ Plano"
+        elevation_status = t("alerts_tables.plano")
         elevation_color = "secondary"
         
         if 'GPSElevation' in alert_data.columns:
@@ -1939,10 +1971,10 @@ def create_context_kpis_cards_golden(
                     gradient = (elevation_after - elevation_before) / 5
                     
                     if gradient > 0.05:
-                        elevation_status = "⬆️ Subiendo"
+                        elevation_status = t("alerts_tables.subiendo")
                         elevation_color = "info"
                     elif gradient < -0.05:
-                        elevation_status = "⬇️ Bajando"
+                        elevation_status = t("alerts_tables.bajando")
                         elevation_color = "warning"
         
         # KPI 2: Carga (Payload)
@@ -2014,7 +2046,7 @@ def create_context_kpis_cards_golden(
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H6("Elevación", className="text-muted mb-2 text-uppercase", 
+                            html.H6(t("alerts_charts.elevacion"), className="text-muted mb-2 text-uppercase", 
                                    style={'fontSize': '0.85rem'}),
                             html.H5(elevation_status, className=f"text-{elevation_color} mb-0")
                         ])
@@ -2027,7 +2059,7 @@ def create_context_kpis_cards_golden(
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H6("Carga", className="text-muted mb-2 text-uppercase",
+                            html.H6(t("alerts_charts.carga"), className="text-muted mb-2 text-uppercase",
                                    style={'fontSize': '0.85rem'}),
                             html.H5(payload_status, className=f"text-{payload_color} mb-0")
                         ])
@@ -2040,7 +2072,7 @@ def create_context_kpis_cards_golden(
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H6("Carga de Motor", className="text-muted mb-2 text-uppercase",
+                            html.H6(t("alerts_charts.carga_de_motor"), className="text-muted mb-2 text-uppercase",
                                    style={'fontSize': '0.85rem'}),
                             html.H5(engine_load, className=f"text-{load_color} mb-0")
                         ])
@@ -2053,7 +2085,7 @@ def create_context_kpis_cards_golden(
                 dbc.Col([
                     dbc.Card([
                         dbc.CardBody([
-                            html.H6("Velocidad Motor", className="text-muted mb-2 text-uppercase",
+                            html.H6(t("alerts_charts.velocidad_motor"), className="text-muted mb-2 text-uppercase",
                                    style={'fontSize': '0.85rem'}),
                             html.H5(engine_rpm, className=f"text-{rpm_color} mb-0")
                         ])
@@ -2064,4 +2096,4 @@ def create_context_kpis_cards_golden(
     
     except Exception as e:
         logger.error(f"Error creating context KPIs (golden): {e}")
-        return dbc.Alert(f"Error al crear KPIs de contexto: {str(e)}", color="danger")
+        return dbc.Alert(t("alerts_charts.error_al_crear_kpis_de_contexto", str_e=str(e)), color="danger")

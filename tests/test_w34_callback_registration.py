@@ -40,12 +40,11 @@ def test_all_w34_relevant_callback_modules_import_cleanly():
 def test_all_w34_relevant_layouts_build_without_error():
     from dashboard.tabs.tab_alerts_general import create_layout as alerts_general_layout
     from dashboard.tabs.tab_alerts_detail import create_layout as alerts_detail_layout
-    from dashboard.tabs.tab_data_freshness import create_layout as freshness_layout
     from dashboard.tabs.tab_overview_general import create_layout as overview_layout
     from dashboard.tabs.tab_telemetry_unit_detail import create_telemetry_unit_detail_layout
 
     for builder in (
-        alerts_general_layout, alerts_detail_layout, freshness_layout,
+        alerts_general_layout, alerts_detail_layout,
         overview_layout, create_telemetry_unit_detail_layout,
     ):
         builder()  # must not raise
@@ -134,8 +133,7 @@ def test_key_telemetry_callbacks_are_registered(registered_app):
 
 def test_key_predictive_and_freshness_callbacks_are_registered(registered_app):
     ids = _all_output_ids()
-    assert "data-freshness-table" in ids
-    assert "overview-oil-ranking-table" in ids
+    assert "overview-fleet-cards" in ids
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +196,6 @@ def _combined_layout_ids() -> set[str]:
     from dashboard.tabs.tab_alerts_general import create_layout as alerts_general_layout
     from dashboard.tabs.tab_alerts_detail import create_layout as alerts_detail_layout
     from dashboard.tabs.tab_alerts import create_layout as alerts_shell_layout
-    from dashboard.tabs.tab_data_freshness import create_layout as freshness_layout
     from dashboard.tabs.tab_overview_general import create_layout as overview_layout
     from dashboard.tabs.tab_telemetry_unit_detail import create_telemetry_unit_detail_layout
     from dashboard.tabs.tab_telemetry_fleet import create_telemetry_fleet_layout
@@ -212,7 +209,7 @@ def _combined_layout_ids() -> set[str]:
     found = set()
     for builder in (
         alerts_general_layout, alerts_detail_layout, alerts_shell_layout,
-        freshness_layout, overview_layout, create_telemetry_unit_detail_layout,
+        overview_layout, create_telemetry_unit_detail_layout,
         create_telemetry_fleet_layout,
     ):
         _collect_layout_ids(builder(), found)

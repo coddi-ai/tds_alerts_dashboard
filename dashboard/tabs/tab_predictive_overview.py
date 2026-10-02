@@ -3,12 +3,12 @@ Predictive Overview Tab - Fleet status, KPIs, priority cards, failure mode table
 Supports multi-component model: auto-discovers component CSVs (motor, transmision, etc.)
 """
 
+from src.i18n import t
 from dash import html, dcc
 import pandas as pd
 import re
 from functools import lru_cache
 from pathlib import Path
-from config.settings import get_settings
 from src.utils.logger import get_logger
 from dashboard.components.predictive_config import (
     get_failure_modes_dict,
@@ -16,17 +16,10 @@ from dashboard.components.predictive_config import (
 )
 from src.data import predictive_v2
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
-from dashboard.components.accumulated_curve import (
-    render_accumulated_section,
-    render_accumulated_section_from_curve,
-    build_accumulated_data,
-    build_accumulated_figure,
-    _empty_state as _accumulated_empty_state,
-)
+from dashboard.components.predictive_charts import create_fleet_scatter
 from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date
-from src.data.catalog import dashboard_data_root
 from src.data.fast_io import read_csv as fast_read_csv
-from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT
+from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT, status_label
 
 logger = get_logger(__name__)
 
@@ -231,15 +224,11 @@ def _status_colors(status: str) -> dict:
     }.get(status, {"border": "#888", "bg": "#f0f0f0", "text": "#444"})
 
 
-# Group order for priority cards: Anormal, then Alerta, then Normal (REQ-PR-07)
+# Status sort order: Anormal, then Alerta, then Normal (REQ-PR-07)
 _STATUS_RANK = {"Anormal": 0, "Alerta": 1, "Normal": 2}
 
-# Section header text above each status group (REQ-PR-11)
-_STATUS_GROUP_LABELS = {
-    "Anormal": "Unidades Anormales",
-    "Alerta": "Unidades Alerta",
-    "Normal": "Unidades Normales",
-}
+# Fleet scatter point colors by status (same palette Evidence used for it)
+_SCATTER_STATUS_COLORS = {"Anormal": "#e24b4a", "Alerta": "#ef9f27", "Normal": "#1d9e75"}
 
 
 def _normalize_unit_id(uid) -> str:
@@ -282,8 +271,10 @@ def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataF
     curve-derived, see module-level COMPUTE_STATUS comment) when that table
     exists for this client/component; falls back to
     analisis_inteligente.parquet's `estado` for components not yet migrated
-    (e.g. cda/transmision). Units with no row in either default to "Normal"
-    so only the three known labels ever appear (REQ-PR-05).
+    (e.g. cda/transmision). Units with no row in either show "Sin Datos"
+    (Confirmed §3.1, documentation/general/general_specs/00_implementation_guide.md) -
+    an absent/no-record unit must never be silently reported as a healthy
+    "Normal".
 
     When COMPUTE_STATUS is True (safety-net override, see module-level
     comment), the estado sources above are bypassed entirely and status is
@@ -316,7 +307,7 @@ def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataF
         estado_map = _estado_map(get_latest_analisis_inteligente(client, component))
 
     latest["status"] = latest["Unit"].apply(
-        lambda u: estado_map.get(_normalize_unit_id(u), "Normal")
+        lambda u: estado_map.get(_normalize_unit_id(u), "Sin Datos")
     )
     latest["_status_rank"] = latest["status"].map(_STATUS_RANK).fillna(3)
     return latest
@@ -340,81 +331,14 @@ def _score_cell_style(value) -> dict:
     return {"background": "#eaf3de", "text": "#3b6d11"}
 
 
-def _driver_bar_color(value: float) -> str:
-    if value >= 70:
-        return "#e24b4a"
-    if value >= 40:
-        return "#ef9f27"
-    return "#1d9e75"
-
-
 # ── Components ────────────────────────────────────────────────────────────────
 
-def _driver_bar(name: str, value: float):
-    pct = min(value, 100)
-    return html.Div([
-        html.Span(name, className="driver-name"),
-        html.Div(
-            html.Div(className="driver-fill",
-                     style={"width": f"{pct}%", "background": _driver_bar_color(value)}),
-            className="driver-bg"
-        ),
-        html.Span(f"{value:.0f}", className="driver-val"),
-    ], className="driver-row")
-
-
-def _priority_card(unit, score, acum_30d, delta, status, drivers, horometro_text="—"):
-    colors = _status_colors(status)
-
-    # W34-10: a unit with no computed ranking yet must not render the literal
-    # text "nan"/"+nan" — found during visual QA, same "missing is not zero"
-    # gap this improvement already closed in the failure-mode table.
-    acum_headline_text = f"{acum_30d:.0f}" if pd.notna(acum_30d) else "—"
-    score_recent_text = f"Reciente: {score:.1f}" if pd.notna(score) else "Reciente: —"
-
-    if pd.isna(delta):
-        delta_cls, delta_txt = "delta-badge delta-neu", "—"
-    elif delta > 1:
-        delta_cls, delta_txt = "delta-badge delta-pos", f"+{delta:.1f}"
-    elif delta < -1:
-        delta_cls, delta_txt = "delta-badge delta-neg", f"{delta:.1f}"
-    else:
-        delta_cls, delta_txt = "delta-badge delta-neu", f"{delta:+.1f}"
-
-    return html.Div([
-        html.Div([
-            html.Span(unit, className="pc-unit"),
-            html.Span(status, className="status-badge",
-                      style={"background": colors["bg"], "color": colors["text"]}),
-        ], className="pc-header"),
-        html.Div([
-            html.Span(acum_headline_text, className="pc-score"),
-        ], className="pc-score-row"),
-        html.Div([
-            html.Span([
-                html.Span(score_recent_text, className="pc-acum"),
-                html.Span(delta_txt, className=delta_cls, style={"marginLeft": "6px"}),
-            ], style={"display": "inline-flex", "alignItems": "center"}),
-            html.Span([
-                html.I(className="fas fa-clock", style={"fontSize": "10px", "marginRight": "4px", "opacity": "0.7"}),
-                horometro_text,
-            ], style={
-                "fontSize": "11px", "color": "#0891B2", "fontWeight": "600",
-                "display": "inline-flex", "alignItems": "center",
-            }),
-        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "8px"}),
-        html.Div("Factores principales", className="drivers-label"),
-        *[_driver_bar(name, val) for name, val in drivers],
-    ], className="priority-card",
-       style={"borderLeftColor": colors["border"]})
-
-
 # Ranking window options for the bottom table's single ranking column (REQ-PR-09)
-WINDOW_LABELS = {
-    "ranking": "Hoy",
-    "avg_ranking_30d": "Prom 30d",
-    "avg_ranking_60d": "Prom 60d",
-    "ranking_acum_90d": "Prom 90d",
+_WINDOW_LABEL_KEYS = {
+    "ranking": "predictive_overview.window_today",
+    "avg_ranking_30d": "predictive_overview.window_avg_30d",
+    "avg_ranking_60d": "predictive_overview.window_avg_60d",
+    "ranking_acum_90d": "predictive_overview.window_avg_90d",
 }
 WINDOW_SUFFIX = {
     "ranking": "",
@@ -448,7 +372,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
 
     ranking_active = sort_by == window
     ranking_th = html.Th(
-        _th_label(WINDOW_LABELS.get(window, "Prom 30d"), ranking_active),
+        _th_label(t(_WINDOW_LABEL_KEYS.get(window, "predictive_overview.window_avg_30d")), ranking_active),
         className="fm-th fm-th-active" if ranking_active else "fm-th",
     )
 
@@ -468,9 +392,9 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
         )
 
     header = html.Thead(html.Tr([
-        html.Th("Unidad", className="fm-th fm-th-unit"),
+        html.Th(t("alerts_general.filter_unit"), className="fm-th fm-th-unit"),
         ranking_th,
-        html.Th("Estado", className="fm-th"),  # W34-10: was "Status" (English)
+        html.Th(t("tab_telemetry_fleet.estado"), className="fm-th"),  # W34-10: was "Status" (English)
         *[_fm_th(lbl, key) for key, lbl in zip(fm_keys, fm_labels)],
     ]))
 
@@ -496,7 +420,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
                        "fontWeight": "600" if ranking_active else "500"},
             ),
             html.Td(
-                html.Span(status, className="status-badge",
+                html.Span(status_label(status), className="status-badge",
                           style={"background": colors["bg"], "color": colors["text"]}),
                 className="fm-td",
             ),
@@ -517,7 +441,11 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
                        "fontWeight": "600" if is_sort else "500"},
             ))
 
-        rows.append(html.Tr(cells, className="fm-tr"))
+        # Clicking the row opens that unit in Evidence (navigate_to_evidence_from_overview)
+        rows.append(html.Tr(
+            cells, className="fm-tr",
+            id={"type": "predictive-fm-row", "unit": r["Unit"]}, n_clicks=0,
+        ))
 
     return html.Div([
         html.Table([header, html.Tbody(rows)], className="fm-table"),
@@ -526,41 +454,6 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
 
 # ── Component Overview Renderer ───────────────────────────────────────────────
 
-def _load_component_hours_if_available(client: str):
-    """
-    Carga el parquet de horas de componente SOLO si el archivo existe para
-    este cliente, leyéndolo DIRECTAMENTE del disco (igual que el dashboard
-    antiguo) para garantizar que la curva reciba exactamente los mismos datos.
-
-    Ruta: data/oil/golden/<client>/cleaned_component_hours.parquet
-
-    Devuelve el DataFrame de horas, o None si el archivo no existe / no se puede
-    leer. None significa "este cliente no tiene datos de horas" → el overview
-    usa el hero clásico y omite la curva acumulada.
-    """
-    if not client:
-        return None
-    try:
-        settings = get_settings()
-        # Ruta directa al parquet, misma que usaba el dashboard antiguo.
-        hours_path = dashboard_data_root() / "oil" / "golden" / client.lower() / "cleaned_component_hours.parquet"
-        if not hours_path.exists():
-            return None
-
-        df_hours = pd.read_parquet(hours_path)
-        if df_hours is None or df_hours.empty:
-            return None
-
-        # La curva cruza por fecha; asegurar tipo datetime como en el antiguo.
-        if "sampleDate" in df_hours.columns:
-            df_hours["sampleDate"] = pd.to_datetime(df_hours["sampleDate"])
-
-        return df_hours
-    except Exception as exc:  # noqa: BLE001 - ante cualquier problema, sin curva
-        logger.warning(f"No se pudieron cargar horas de componente para {client}: {exc}")
-        return None
-
-
 def _render_component_overview(df_latest, prev_ranking, component: str,
                               client: str = None, df=None):
     """
@@ -568,15 +461,12 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
 
     Status (Anormal / Alerta / Normal) comes from `estado` - unit_status_summary
     when it exists for this client/component, else analisis_inteligente.parquet
-    (REQ-PR-04/05, Change 4) - there is a single hero regardless of whether
-    component-hours data is available. The accumulated-risk curve, when
-    buildable, is still shown as its own section further down the page; it
-    no longer drives the hero's counts.
+    (REQ-PR-04/05, Change 4). Three layers: KPI hero, the fleet-wide
+    ranking-today vs ranking-30d scatter, and the failure-mode table.
 
-    Args:
-        df: histórico completo del componente (Unit, Fecha, ranking, ...),
-            necesario para construir la curva acumulada (fallback legacy). Si
-            es None, se omite.
+    `prev_ranking` and `df` are no longer read (they fed the removed priority
+    cards and accumulated curve); they stay in the signature so the existing
+    callers don't change.
     """
     failure_modes = resolve_failure_modes(component, client)
 
@@ -591,149 +481,42 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     model_run_date = get_model_run_date(client, component) if client else None
     model_run_date_str = model_run_date.strftime("%d %b %Y") if model_run_date is not None else "—"
 
-    # ── Curva acumulada ──
-    # Change 6: prefiere `cumulative_risk_curve` (precomputada upstream,
-    # horas ya cruzadas) cuando existe para este cliente/componente -
-    # verificada de forma independiente de risk_scores/unit_status_summary,
-    # ya que puede faltar aunque esos dos existan (p.ej. cda/motor hoy). Si
-    # no existe, cae al pipeline cliente-side (join contra Oil) sin romper
-    # nada para los clientes/componentes que aún no la tienen.
-    accumulated = None
-    df_curve = None
-    if client:
-        try:
-            df_curve = predictive_v2.read_cumulative_risk_curve(client, component)
-        except Exception as exc:  # noqa: BLE001 - la curva nunca rompe el overview
-            logger.warning(f"No se pudo leer cumulative_risk_curve para {client}/{component}: {exc}")
-            df_curve = None
-
-    if df_curve is not None and not df_curve.empty:
-        accumulated = render_accumulated_section_from_curve(df_curve, component)
-
-    if accumulated is None:
-        # Requiere el histórico completo (df) y que exista el parquet de horas
-        # para este cliente; si algo falta, la sección se omite (no afecta el hero).
-        df_component_hours = _load_component_hours_if_available(client)
-        if df is not None and not df.empty and df_component_hours is not None:
-            try:
-                df_acum = build_accumulated_data(df, df_component_hours, component)
-                if not df_acum.empty:
-                    _fig, _resumen, _units_all, _color_map = build_accumulated_figure(df_acum, component=component)
-                    if _fig is not None:
-                        accumulated = render_accumulated_section(df, df_component_hours, component, client=client)
-            except Exception as exc:  # noqa: BLE001 - la curva nunca rompe el overview
-                logger.warning(f"No se pudo construir la curva acumulada para {client}/{component}: {exc}")
-                accumulated = None
-
     hero = html.Div([
         html.Div([
             html.Div([
                 html.I(className="fas fa-chart-bar me-2"),
-                f"Estado de Flota — {component.title()}"
+                t("tab_predictive_overview.estado_de_flota", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.Div(f"Resumen de riesgo operacional por unidad — componente {component}", className="page-subtitle"),
+            html.Div(t("tab_predictive_overview.resumen_de_riesgo_operacional_por_unidad", component=component), className="page-subtitle"),
         ], style={"marginBottom": "16px"}),
         create_kpi_row([
-            create_kpi_card(f"{avg_ranking:.1f}", "Ranking Flota", "fas fa-tachometer-alt", "primary", "promedio actual"),
-            create_kpi_card(n_anormal, "Unidades Anormales", "fas fa-exclamation-triangle", "danger"),
-            create_kpi_card(n_alert, "Unidades en Alerta", "fas fa-exclamation-circle", "warning"),
-            create_kpi_card(n_normal, "Unidades Normales", "fas fa-check-circle", "success"),
-            create_kpi_card(model_run_date_str, "Fecha Ejecución Modelo", "fas fa-calendar-check", "info"),
+            create_kpi_card(f"{avg_ranking:.1f}", t("tab_predictive_overview.ranking_flota"), "fas fa-tachometer-alt", "primary", t("tab_predictive_overview.promedio_actual")),
+            create_kpi_card(n_anormal, t("tab_predictive_overview.unidades_anormales"), "fas fa-exclamation-triangle", "danger"),
+            create_kpi_card(n_alert, t("tab_predictive_overview.unidades_en_alerta"), "fas fa-exclamation-circle", "warning"),
+            create_kpi_card(n_normal, t("tab_predictive_overview.unidades_normales"), "fas fa-check-circle", "success"),
+            create_kpi_card(model_run_date_str, t("tab_predictive_overview.fecha_ejecucion_modelo"), "fas fa-calendar-check", "info"),
         ])
     ])
 
-    # Priority cards — load horómetro data
-    import re as _re
-    horometro_map = {}
-    if client:
-        try:
-            from src.data.loaders import load_component_hours
-            settings = get_settings()
-            allowed = [c.upper() for c in settings.component_hours_allowed_clients]
-            if client.upper() in allowed:
-                comp_hours_file = settings.get_component_hours_path(client.lower())
-                if comp_hours_file.exists():
-                    all_hours = load_component_hours(comp_hours_file)
-                    if not all_hours.empty:
-                        def _norm_uid(uid):
-                            m = _re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
-                            return f"{m.group(1)}{m.group(2)}" if m else str(uid)
-
-                        hours_component_name = settings.get_component_hours_name(client, component)
-                        comp_hours = all_hours[all_hours['componentName'] == hours_component_name].copy()
-                        if not comp_hours.empty:
-                            comp_hours['_uid_norm'] = comp_hours['unitId'].apply(_norm_uid)
-                            idx = comp_hours.groupby('_uid_norm')['sampleDate'].idxmax()
-                            latest_hours = comp_hours.loc[idx]
-                            for _, row_h in latest_hours.iterrows():
-                                uid = row_h['_uid_norm']
-                                hrs = row_h['componentHours_cleaned']
-                                if pd.notna(hrs):
-                                    horometro_map[uid] = f"{hrs:,.0f} h"
-        except Exception as e:
-            logger.warning(f"Could not load component hours for overview cards: {e}")
-
-    def _norm_uid_simple(uid):
-        m = _re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
-        return f"{m.group(1)}{m.group(2)}" if m else str(uid)
-
-    cards_by_status = {"Anormal": [], "Alerta": [], "Normal": []}
-    for _, r in latest.sort_values(["_status_rank", "avg_ranking_30d"], ascending=[True, False]).iterrows():
-        score = r["ranking"]
-        delta = score - prev_ranking.get(r["Unit"], score)
-        drivers = sorted(
-            [(failure_modes[c], float(r[f"{c}_30d"])) for c in failure_modes
-             if f"{c}_30d" in r.index and pd.notna(r[f"{c}_30d"])],
-            key=lambda x: x[1], reverse=True,
-        )[:3]
-        unit_norm = _norm_uid_simple(r["Unit"])
-        horo_text = horometro_map.get(unit_norm, "—")
-        card = _priority_card(
-            unit=r["Unit"], score=score,
-            acum_30d=float(r["avg_ranking_30d"]),
-            delta=delta, status=r["status"], drivers=drivers,
-            horometro_text=horo_text,
-        )
-        cards_by_status.setdefault(r["status"], []).append(card)
-
-    # Section headers above each status group (REQ-PR-11) - groups with no
-    # units are skipped rather than shown empty. Any status outside the three
-    # known ones (shouldn't happen post attach_status, but don't silently
-    # drop cards if it does) is appended after, rather than lost.
-    known_statuses = ["Anormal", "Alerta", "Normal"]
-    extra_statuses = [s for s in cards_by_status if s not in known_statuses]
-    group_sections = []
-    for status in known_statuses + extra_statuses:
-        group_cards = cards_by_status.get(status, [])
-        if not group_cards:
-            continue
-        colors = _status_colors(status)
-        group_sections.append(html.Div([
-            html.Div([
-                html.Span(_STATUS_GROUP_LABELS.get(status, f"Unidades {status}"), style={
-                    "fontWeight": "700", "fontSize": "13px", "color": colors["text"],
-                    "textTransform": "uppercase", "letterSpacing": "0.04em",
-                }),
-                html.Span(f"({len(group_cards)})", style={
-                    "fontSize": "12px", "color": "var(--text-light)", "marginLeft": "6px",
-                }),
-            ], style={
-                "borderLeft": f"3px solid {colors['border']}",
-                "paddingLeft": "10px", "margin": "18px 0 10px",
-            }),
-            html.Div(group_cards, className="priority-grid"),
-        ]))
-
-    priority = html.Div([
+    # Layer 2: the fleet-wide scatter (one point per unit) that used to live in
+    # Evidence's "Comparación Flota" - same figure builder, same data, no unit
+    # highlighted since no unit is selected on this page.
+    scatter_fig = create_fleet_scatter(latest, None, _SCATTER_STATUS_COLORS)
+    risk_section = html.Div([
+        html.H4([
+            html.I(className="fas fa-shield-alt me-2"),
+            t("tab_predictive_overview.analisis_de_riesgo")
+        ], className="text-primary mb-3 mt-4"),
         html.Div([
-            html.H4([
-                html.I(className="fas fa-bullseye me-2"),
-                "Estado Flota — Prioridad"
-            ], className="text-primary mb-3 mt-4"),
-            html.P("Agrupadas por estado (Anormal, Alerta, Normal) y ordenadas por promedio de ranking de 30 días",
-                   className="text-muted mb-3"),
-        ]),
-        html.Div(group_sections),
+            html.Div([
+                html.Span([html.I(className="fas fa-dot-circle me-1"), t("tab_predictive_overview.posicion_en_la_flota")],
+                          className="card-subtitle fw-500"),
+                html.Span(t("tab_predictive_overview.ranking_actual_vs_riesgo_acumulado_30"),
+                          style={"fontSize": "11px", "color": "var(--text-light)"}),
+            ], style={"marginBottom": "8px"}),
+            # Clicking a point opens that unit in Evidence (navigate_to_evidence_from_overview)
+            dcc.Graph(id="predictive-fleet-scatter", figure=scatter_fig, config={"displayModeBar": False}),
+        ], className="card shadow-sm", style={"padding": "16px"}),
     ])
 
     # Failure mode table
@@ -747,18 +530,18 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
             html.Div([
                 html.H4([
                     html.I(className="fas fa-table me-2"),
-                    "Riesgo por Modo de Falla"
+                    t("tab_predictive_overview.riesgo_por_modo_de_falla")
                 ], className="text-primary mb-0"),
                 html.Div([
-                    html.Span("Ordenar por: ", className="text-muted me-2",
+                    html.Span(t("tab_predictive_overview.ordenar_por"), className="text-muted me-2",
                               style={"fontSize": "0.85rem", "fontWeight": "500"}),
                     dcc.Dropdown(
                         id="predictive-fm-sort-selector",
                         options=[
-                            {"label": "Hoy", "value": "ranking"},
-                            {"label": "30 días", "value": "avg_ranking_30d"},
-                            {"label": "60 días", "value": "avg_ranking_60d"},
-                            {"label": "90 días", "value": "ranking_acum_90d"},
+                            {"label": t("tab_predictive_overview.hoy"), "value": "ranking"},
+                            {"label": t("tab_telemetry_unit_detail.30_dias"), "value": "avg_ranking_30d"},
+                            {"label": t("tab_predictive_overview.60_dias"), "value": "avg_ranking_60d"},
+                            {"label": t("tab_predictive_overview.90_dias"), "value": "ranking_acum_90d"},
                         ],
                         value="avg_ranking_30d",
                         clearable=False,
@@ -770,7 +553,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                 "alignItems": "center", "borderBottom": "1px solid #dee2e6",
                 "paddingBottom": "12px", "marginBottom": "12px",
             }),
-            html.P("Vista de modos de falla por unidad — ordenado de mayor a menor riesgo",
+            html.P(t("tab_predictive_overview.vista_de_modos_de_falla_por"),
                    className="text-muted mb-3", style={"fontSize": "0.85rem"}),
         ]),
         html.Div(
@@ -782,32 +565,6 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
             data={"window": "avg_ranking_30d", "sort_by": "avg_ranking_30d", "ascending": False},
         ),
     ], className="card", style={"marginTop": "16px"})
-
-    curve_content = accumulated if accumulated is not None else _accumulated_empty_state(
-        "Curva acumulada no disponible: no hay datos de horómetro suficientes para este cliente/componente."
-    )
-
-    risk_section = html.Div([
-        html.H4([
-            html.I(className="fas fa-shield-alt me-2"),
-            "Análisis de Riesgo"
-        ], className="text-primary mb-3 mt-4"),
-        dcc.Tabs(
-            id='predictive-risk-view-selector',
-            value='prioridad',
-            children=[
-                dcc.Tab(label='  Riesgo Acumulado', value='acumulado',
-                        className='custom-tab', selected_className='custom-tab--selected'),
-                dcc.Tab(label='  Prioridad Actual', value='prioridad',
-                        className='custom-tab', selected_className='custom-tab--selected'),
-            ],
-            className='mb-3'
-        ),
-        html.Div(id='predictive-risk-curve-container', children=[curve_content],
-                 style={'display': 'none'}),
-        html.Div(id='predictive-risk-priority-container', children=[priority],
-                 style={'display': 'block'}),
-    ])
 
     children = [hero, risk_section, table_section]
     return html.Div(children)
@@ -836,9 +593,9 @@ def layout(client: str, component: str):
         return html.Div([
             html.Div([
                 html.I(className="fas fa-brain me-3"),
-                f"Predictivo — {component.title()} — Resumen"
+                t("tab_predictive_overview.predictivo_resumen", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.P(f"No hay datos predictivos disponibles para {component}.",
+            html.P(t("tab_predictive_component.no_hay_datos_predictivos_disponibles_para", component=component),
                    className="text-muted", style={"padding": "40px", "textAlign": "center"})
         ])
 
@@ -848,9 +605,9 @@ def layout(client: str, component: str):
         return html.Div([
             html.Div([
                 html.I(className="fas fa-brain me-3"),
-                f"Predictivo — {component.title()} — Resumen"
+                t("tab_predictive_overview.predictivo_resumen", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.P(f"No hay datos disponibles para {component}.",
+            html.P(t("tab_predictive_overview.no_hay_datos_disponibles_para", component=component),
                    className="text-muted", style={"padding": "40px", "textAlign": "center"})
         ])
 

@@ -1,5 +1,6 @@
 """Executive alerts overview layout."""
 
+from src.i18n import t, t_or
 from datetime import date, timedelta
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -38,7 +39,7 @@ def _build_source_legend() -> html.Div:
             ], className="d-inline-flex align-items-center me-3")
         )
     return html.Div(
-        [html.Small("Fuente: ", className="text-muted fw-bold me-2")] + swatches,
+        [html.Small(t("tab_alerts_general.fuente"), className="text-muted fw-bold me-2")] + swatches,
         className="d-flex flex-wrap align-items-center mt-2",
     )
 
@@ -55,7 +56,7 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Div([
                             html.I(className="fas fa-filter me-2"),
-                            html.Span("Filtro temporal", className="fw-bold"),
+                            html.Span(t("tab_alerts_general.filtro_temporal"), className="fw-bold"),
                         ], className="d-flex align-items-center mb-2"),
                     ], width="auto"),
                     dbc.Col([
@@ -64,15 +65,15 @@ def create_layout() -> html.Div:
                             start_date=start_date,
                             end_date=end_date,
                             display_format="DD/MM/YYYY",
-                            start_date_placeholder_text="Fecha inicio",
-                            end_date_placeholder_text="Fecha fin",
+                            start_date_placeholder_text=t("tab_lab_compliance.fecha_inicio"),
+                            end_date_placeholder_text=t("tab_lab_compliance.fecha_fin"),
                             clearable=False,
                             className="w-100",
                         ),
                     ], width="auto"),
                     dbc.Col([
                         dbc.Button(
-                            [html.I(className="fas fa-undo me-1"), "Restablecer últimas 4 semanas"],
+                            [html.I(className="fas fa-undo me-1"), t("tab_alerts_general.restablecer_ultimas_4_semanas")],
                             id="alerts-date-range-clear",
                             color="outline-secondary",
                             size="sm",
@@ -83,7 +84,7 @@ def create_layout() -> html.Div:
                 html.Div([
                     html.Div(id="alerts-general-active-filter-badges", className="d-flex flex-wrap align-items-center"),
                     dbc.Button(
-                        [html.I(className="fas fa-eraser me-1"), "Limpiar filtros"],
+                        [html.I(className="fas fa-eraser me-1"), t("tab_alerts_general.limpiar_filtros")],
                         id="alerts-general-filter-clear-all",
                         color="link",
                         size="sm",
@@ -93,15 +94,15 @@ def create_layout() -> html.Div:
                 ], className="mt-2 d-flex flex-wrap align-items-center"),
             ])
         ], className="shadow-sm mb-3"),
-        html.H4([html.I(className="fas fa-chart-bar me-2"), "Análisis semanal de alertas"], className="text-primary mb-3 mt-4"),
+        html.H4([html.I(className="fas fa-chart-bar me-2"), t("tab_alerts_general.analisis_semanal_de_alertas")], className="text-primary mb-3 mt-4"),
         html.P(
-            "Haga clic en una barra o segmento para filtrar el resto de la vista. Haga clic de nuevo para quitar el filtro.",
+            t("tab_alerts_general.haga_clic_en_una_barra_o"),
             className="small text-muted mb-3",
         ),
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(html.H5([html.I(className="fas fa-truck me-2"), "Distribución por unidad"], className="mb-0"), className="bg-light"),
+                    dbc.CardHeader(html.H5([html.I(className="fas fa-truck me-2"), t("tab_alerts_general.distribucion_por_unidad")], className="mb-0"), className="bg-light"),
                     dbc.CardBody(
                         dcc.Loading(
                             dcc.Graph(id="alerts-unit-distribution-chart", config={"displayModeBar": False}),
@@ -113,7 +114,7 @@ def create_layout() -> html.Div:
             ], lg=4),
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(html.H5([html.I(className="fas fa-calendar-week me-2"), "Evolución temporal"], className="mb-0"), className="bg-light"),
+                    dbc.CardHeader(html.H5([html.I(className="fas fa-calendar-week me-2"), t("tab_alerts_general.evolucion_temporal")], className="mb-0"), className="bg-light"),
                     dbc.CardBody(
                         dcc.Loading(dcc.Graph(id="alerts-month-distribution-chart", config={"displayModeBar": False}), type="circle"),
                         style={"height": f"{ALERTS_CHART_CARD_BODY_HEIGHT}px", "overflow": "hidden"},
@@ -122,7 +123,7 @@ def create_layout() -> html.Div:
             ], lg=4),
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(html.H5([html.I(className="fas fa-sitemap me-2"), "Distribución por sistema"], className="mb-0"), className="bg-light"),
+                    dbc.CardHeader(html.H5([html.I(className="fas fa-sitemap me-2"), t("tab_alerts_general.distribucion_por_sistema")], className="mb-0"), className="bg-light"),
                     dbc.CardBody(
                         dcc.Loading(dcc.Graph(id="alerts-system-distribution-chart", config={"displayModeBar": False}), type="circle"),
                         style={"height": f"{ALERTS_CHART_CARD_BODY_HEIGHT}px", "overflow": "hidden"},
@@ -130,11 +131,11 @@ def create_layout() -> html.Div:
                 ], className="shadow-sm mb-4", style={"height": f"{ALERTS_CHART_CARD_HEIGHT}px"}),
             ], lg=4),
         ], className="g-3"),
-        html.H4([html.I(className="fas fa-database me-2"), "Listado de alertas"], className="text-primary mb-3 mt-4"),
+        html.H4([html.I(className="fas fa-database me-2"), t("tab_alerts_general.listado_de_alertas")], className="text-primary mb-3 mt-4"),
         dbc.Card([
             dbc.CardHeader([
-                html.H5([html.I(className="fas fa-table me-2"), "Alertas del período"], className="mb-0"),
-                html.Small("Seleccione una fila para leer el resumen completo.", className="text-muted"),
+                html.H5([html.I(className="fas fa-table me-2"), t("tab_alerts_general.alertas_del_periodo")], className="mb-0"),
+                html.Small(t("tab_alerts_general.seleccione_una_fila_para_leer_el"), className="text-muted"),
                 _build_source_legend(),
             ], className="bg-light"),
             dbc.CardBody([
@@ -152,12 +153,12 @@ def create_summary_stats_display(total_alerts: int, total_units: int, telemetry_
     # drifted from the table's border color (#6f42c1).
     mixto_color = source_style("Mixto")[1]
     cards = [
-        ("Total de alertas", total_alerts, "fas fa-exclamation-triangle", "#355c7d", "#eef4f8"),
-        ("Unidades afectadas", total_units, "fas fa-truck", "#4f8a8b", "#edf7f6"),
-        ("Alertas multitécnicas", mixed_count, "fas fa-layer-group", mixto_color, light_tint(mixto_color)),
+        (t("tab_alerts_general.total_de_alertas"), total_alerts, "fas fa-exclamation-triangle", "#355c7d", "#eef4f8"),
+        (t("tab_alerts_general.unidades_afectadas"), total_units, "fas fa-truck", "#4f8a8b", "#edf7f6"),
+        (t("tab_alerts_general.alertas_multitecnicas"), mixed_count, "fas fa-layer-group", mixto_color, light_tint(mixto_color)),
     ]
     return html.Div([
-        html.H4([html.I(className="fas fa-chart-line me-2"), "Resumen ejecutivo"], className="text-primary mb-3"),
+        html.H4([html.I(className="fas fa-chart-line me-2"), t("tab_alerts_general.resumen_ejecutivo")], className="text-primary mb-3"),
         dbc.Row([
             dbc.Col(
                 dbc.Card(dbc.CardBody([
@@ -172,10 +173,11 @@ def create_summary_stats_display(total_alerts: int, total_units: int, telemetry_
     ])
 
 
-_ACTIVE_FILTER_LABELS = {
-    "unit": ("Unidad", "fas fa-truck"),
-    "week": ("Semana", "fas fa-calendar-week"),
-    "system": ("Sistema", "fas fa-cogs"),
+# Icon per cross-filter key; the label is looked up at render time so it follows the language.
+_ACTIVE_FILTER_ICONS = {
+    "unit": "fas fa-truck",
+    "week": "fas fa-calendar-week",
+    "system": "fas fa-cogs",
 }
 
 
@@ -201,7 +203,8 @@ def create_active_filter_badges(active_filters: dict | None) -> list:
     for key, value in active_filters.items():
         if not value:
             continue
-        label, icon = _ACTIVE_FILTER_LABELS.get(key, (key.title(), "fas fa-filter"))
+        label = t_or(f"alerts_general.filter_{key}", key.title())
+        icon = _ACTIVE_FILTER_ICONS.get(key, "fas fa-filter")
         chips.append(
             dbc.Badge(
                 [

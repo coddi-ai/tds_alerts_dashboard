@@ -5,6 +5,7 @@ Shows component operating hours evolution for each unit and component.
 Available for CDA and ENEX clients.
 """
 
+from src.i18n import t
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
@@ -24,11 +25,10 @@ def create_component_hours_tab() -> dbc.Container:
     return dbc.Container([
         html.H3([
             html.I(className="fas fa-clock me-2"),
-            "Horómetro de Componentes"
+            t("tab_component_hours.horometro_de_componentes")
         ], className="mt-4 mb-3"),
         html.P(
-            "Seguimiento de horas de operación de componentes a lo largo del tiempo. "
-            "Los valores limpiados interpolan lecturas faltantes.",
+            t("tab_component_hours.seguimiento_de_horas_de_operacion_de"),
             className="text-muted"
         ),
         html.Hr(),
@@ -36,15 +36,15 @@ def create_component_hours_tab() -> dbc.Container:
         # ========================================
         # SECTION 1: Summary Table - Latest hours per component
         # ========================================
-        html.H4("📊 Resumen de Horómetro por Equipo", className="mt-4 mb-3"),
+        html.H4(t("tab_component_hours.resumen_de_horometro_por_equipo"), className="mt-4 mb-3"),
         
         # Unit selector
         dbc.Row([
             dbc.Col([
-                html.Label("Seleccionar Equipo:", className="fw-bold"),
+                html.Label(t("tab_component_hours.seleccionar_equipo"), className="fw-bold"),
                 dcc.Dropdown(
                     id='comp-hours-unit-selector',
-                    placeholder='Seleccionar equipo...',
+                    placeholder=t("tab_component_hours.seleccionar_equipo_2"),
                     className="mb-3"
                 )
             ], width=4),
@@ -52,7 +52,7 @@ def create_component_hours_tab() -> dbc.Container:
         
         # Summary table
         dbc.Card([
-            dbc.CardHeader("Último Horómetro por Componente", className="fw-bold"),
+            dbc.CardHeader(t("tab_component_hours.ultimo_horometro_por_componente"), className="fw-bold"),
             dbc.CardBody(
                 html.Div(id='comp-hours-summary-table')
             )
@@ -61,15 +61,15 @@ def create_component_hours_tab() -> dbc.Container:
         # ========================================
         # SECTION 2: Time Series Chart
         # ========================================
-        html.H4("📈 Evolución de Horas de Componentes", className="mt-4 mb-3"),
+        html.H4(t("tab_component_hours.evolucion_de_horas_de_componentes"), className="mt-4 mb-3"),
         
         # Component multi-selector
         dbc.Row([
             dbc.Col([
-                html.Label("Seleccionar Componentes:", className="fw-bold"),
+                html.Label(t("tab_component_hours.seleccionar_componentes"), className="fw-bold"),
                 dcc.Dropdown(
                     id='comp-hours-component-selector',
-                    placeholder='Seleccionar componentes...',
+                    placeholder=t("tab_component_hours.seleccionar_componentes_2"),
                     multi=True,
                     className="mb-3"
                 )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.i18n import LazyLabels, t
 import logging
 import threading
 import time
@@ -91,7 +92,7 @@ def _new_conversation_state(session_id: str, company_id: str) -> tuple:
         session_id,
         [],
         company_id,
-        f"Listo · {company_id.upper()}",
+        t("callbacks.listo", company_id_upper=company_id.upper()),
         "success",
         None,
         # Ratings belong to the thread that was open; the new one has none.
@@ -245,18 +246,18 @@ def _failed_question(failure) -> str:
 def _status_label(exc: CampbellAPIClientError) -> str:
     """Badge text, distinguishing a dead service from a rejected request."""
     labels = {
-        "unreachable": "Servicio caído",
-        "timeout": "Tiempo excedido",
-        "credentials": "Mal configurado",
-        "not_configured": "Sin configurar",
-        "forbidden": "Sin acceso",
-        "unavailable": "Datos no disponibles",
-        "invalid_request": "Solicitud inválida",
-        "server_error": "Error del servicio",
+        "unreachable": t("callbacks.servicio_caido"),
+        "timeout": t("callbacks.tiempo_excedido"),
+        "credentials": t("callbacks.mal_configurado"),
+        "not_configured": t("callbacks.sin_configurar"),
+        "forbidden": t("callbacks.sin_acceso"),
+        "unavailable": t("callbacks.datos_no_disponibles"),
+        "invalid_request": t("callbacks.solicitud_invalida"),
+        "server_error": t("callbacks.error_del_servicio"),
         # Saturation is temporary and self-resolving; it is not a fault.
-        "busy": "Servicio ocupado",
+        "busy": t("callbacks.servicio_ocupado"),
     }
-    return labels.get(getattr(exc, "kind", ""), "No disponible")
+    return labels.get(getattr(exc, "kind", ""), t("tab_alerts_detail.no_disponible"))
 
 
 def _state_stamp(username: str | None) -> dict:
@@ -303,36 +304,24 @@ def _stored_session_company(session_company) -> str | None:
 
 
 # Status-badge text for a background answer that ended badly.
-_JOB_ERROR_LABELS = {
-    "busy": "Servicio ocupado",
-    "timeout": "Tiempo excedido",
-    "forbidden": "Sin acceso",
-    "unavailable": "Datos no disponibles",
-    "not_configured": "Sin configurar",
-    "server_error": "Error del servicio",
-}
+_JOB_ERROR_LABELS = LazyLabels({
+    "busy": "campbell_ai.job_label_busy",
+    "timeout": "campbell_ai.job_label_timeout",
+    "forbidden": "campbell_ai.job_label_forbidden",
+    "unavailable": "campbell_ai.job_label_unavailable",
+    "not_configured": "campbell_ai.job_label_not_configured",
+    "server_error": "campbell_ai.job_label_server_error",
+})
 
 # What the user can actually do about each. A timeout is the one worth spelling out:
 # repeating the identical question will hit the same budget, so the advice is to make
 # it smaller rather than to try again.
-_JOB_ERROR_GUIDANCE = {
-    "busy": (
-        "El asistente alcanzó su límite de consultas simultáneas. Espera unos segundos "
-        "y reintenta: tu consulta se conservó."
-    ),
-    "timeout": (
-        "La consulta superó el tiempo máximo. Acota el periodo o divídela en partes; "
-        "si la conversación es muy larga, inicia una nueva para reducir el contexto."
-    ),
-    "unavailable": (
-        "El servicio respondió pero no pudo atender la consulta, normalmente por datos "
-        "faltantes para esta empresa."
-    ),
-    "server_error": (
-        "El servicio falló procesando la consulta. Reintenta; si persiste, avisa al "
-        "equipo de plataforma."
-    ),
-}
+_JOB_ERROR_GUIDANCE = LazyLabels({
+    "busy": "campbell_ai.job_guidance_busy",
+    "timeout": "campbell_ai.job_guidance_timeout",
+    "unavailable": "campbell_ai.job_guidance_unavailable",
+    "server_error": "campbell_ai.job_guidance_server_error",
+})
 
 
 def _answers(history: list[dict] | None, question: str) -> bool:
@@ -377,7 +366,7 @@ def _recover_expired_job(client, username, company_id, job, history, question):
         return (
             restored,
             no_update,
-            f"Listo · {company_id.upper()}" if company_id else "Listo",
+            t("callbacks.listo", company_id_upper=company_id.upper()) if company_id else t("callbacks.listo_2"),
             "success",
             None,
             None,
@@ -388,12 +377,12 @@ def _recover_expired_job(client, username, company_id, job, history, question):
     return (
         restored or _strip_pending_messages(history),
         no_update,
-        "Consulta perdida",
+        t("callbacks.consulta_perdida"),
         "warning",
         _failure_state(
             "expired",
-            "El asistente perdió el seguimiento de esta consulta",
-            "No quedó registro de una respuesta. Vuelve a enviarla; se conservó abajo.",
+            t("callbacks.el_asistente_perdio_el_seguimiento_de"),
+            t("callbacks.no_quedo_registro_de_una_respuesta"),
             retryable=True,
             question=question,
         ),
@@ -462,9 +451,19 @@ _STATUS_NAMESPACE_JS = """(function () {
    * agregar una alla dejaria a este codigo creyendo que la inicializacion termino. */
   var state = { startedAt: 0, label: "", written: "" };
 
+  /* Textos de la interfaz en el idioma activo (window.appI18n lo define dashboard/assets/
+   * i18n_language.js; los mensajes los sirve /_i18n/messages.js). Sin eso, cae al espanol. */
+  function msg(key, fallback) {
+    var api = window.appI18n;
+    var text = api && api.t ? api.t(key, "") : "";
+    return text || fallback;
+  }
+
   /* El texto con que nace el badge en el layout. Es nuestro aunque no lo hayamos escrito
    * nosotros: es el estado con que arranca cada carga de pagina. */
   var INITIAL_TEXT = "Inicializando…";
+  /* En otro idioma el layout renderiza este mismo texto traducido (js.status_initializing). */
+  INITIAL_TEXT = msg("js.status_initializing", "Inicializando") + "…";
 
   /* Antes de esto no se muestra el contador: un arranque rapido no necesita cronometro, y
    * ponerlo desde el segundo cero convierte cualquier espera normal en algo que parece falla. */
@@ -476,7 +475,9 @@ _STATUS_NAMESPACE_JS = """(function () {
   var GIVE_UP_AFTER = 180;
 
   function labelFor(sessionId) {
-    return sessionId ? "Recuperando" : "Inicializando";
+    return sessionId
+      ? msg("js.status_recovering", "Recuperando")
+      : msg("js.status_initializing", "Inicializando");
   }
 
   /* Si el badge sigue mostrando lo ultimo que pusimos, la inicializacion sigue en curso.
@@ -527,7 +528,7 @@ _STATUS_NAMESPACE_JS = """(function () {
       if (elapsed >= GIVE_UP_AFTER) {
         /* Se deja de contar y de reclamar el badge: a partir de aca es un estado final. */
         state.written = "";
-        return ["Sin respuesta", "warning"];
+        return [msg("js.status_no_response", "Sin respuesta"), "warning"];
       }
       if (elapsed < COUNTER_AFTER) {
         return [write(label + "…"), nu];
@@ -639,12 +640,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                 session_id,
                 history or [],
                 no_update,
-                "Sesión expirada",
+                t("callbacks.sesion_expirada"),
                 "danger",
                 _failure_state(
                     "session",
-                    "Tu sesión del dashboard expiró",
-                    "Vuelve a iniciar sesión para seguir usando Campbell AI.",
+                    t("callbacks.tu_sesion_del_dashboard_expiro"),
+                    t("callbacks.vuelve_a_iniciar_sesion_para_seguir"),
                 ),
                 session_company,
                 None,
@@ -656,12 +657,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                 None,
                 [],
                 "",
-                "Sin empresa",
+                t("callbacks.sin_empresa"),
                 "warning",
                 _failure_state(
                     "no_company",
-                    "No hay empresa seleccionada",
-                    "Elige una empresa en el selector para iniciar Campbell AI.",
+                    t("callbacks.no_hay_empresa_seleccionada"),
+                    t("callbacks.elige_una_empresa_en_el_selector"),
                 ),
                 _updated_company_state(session_company, None),
                 None,
@@ -688,7 +689,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                     session_id,
                     optimistic,
                     no_update,
-                    "Reintentando…",
+                    t("callbacks.reintentando"),
                     "info",
                     None,
                     _updated_company_state(session_company, company_id),
@@ -727,10 +728,10 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                 if not suggested_question_text(triggered_id.get("question_id"), capabilities):
                     return (
                         session_id, history or [], no_update,
-                        "La fuente de esta pregunta ya no está disponible", "warning",
+                        t("callbacks.la_fuente_de_esta_pregunta_ya"), "warning",
                         _failure_state(
-                            "source_unavailable", "La pregunta sugerida ya no está disponible",
-                            "Las fuentes cambiaron. Revisa las sugerencias actualizadas.",
+                            "source_unavailable", t("callbacks.la_pregunta_sugerida_ya_no_esta"),
+                            t("callbacks.las_fuentes_cambiaron_revisa_las_sugerenci"),
                         ),
                         session_company, None, stored_session_company, stamp,
                     )
@@ -747,11 +748,11 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                         session_id,
                         history or [],
                         no_update,
-                        f"Listo · {company_id.upper()}",
+                        t("callbacks.listo", company_id_upper=company_id.upper()),
                         "success",
                         _failure_state(
                             "empty_message",
-                            "Escribe una consulta antes de enviarla",
+                            t("callbacks.escribe_una_consulta_antes_de_enviarla"),
                             "",
                         ),
                         _updated_company_state(session_company, company_id),
@@ -768,7 +769,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                     session_id,
                     optimistic_history,
                     "",
-                    "Pensando...",
+                    t("callbacks.pensando"),
                     "info",
                     None,
                     _updated_company_state(session_company, company_id),
@@ -811,7 +812,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                 resolved_session,
                 restored_history,
                 "",
-                f"Listo · {company_id.upper()}",
+                t("callbacks.listo", company_id_upper=company_id.upper()),
                 "success",
                 None,
                 _updated_company_state(session_company, company_id),
@@ -843,12 +844,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                 session_id,
                 history or [],
                 no_update,
-                "Error",
+                t("reports_callbacks.error"),
                 "danger",
                 _failure_state(
                     "unexpected",
-                    "Ocurrió un error inesperado al usar Campbell AI",
-                    "Reintenta la operación. Si persiste, avisa al equipo de plataforma.",
+                    t("callbacks.ocurrio_un_error_inesperado_al_usar"),
+                    t("callbacks.reintenta_la_operacion_si_persiste_avisa"),
                     retryable=True,
                 ),
                 session_company,
@@ -905,12 +906,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 session_id,
                 history or [],
-                "Sesión expirada",
+                t("callbacks.sesion_expirada"),
                 "danger",
                 _failure_state(
                     "session",
-                    "Tu sesión del dashboard expiró",
-                    "Vuelve a iniciar sesión para seguir usando Campbell AI.",
+                    t("callbacks.tu_sesion_del_dashboard_expiro"),
+                    t("callbacks.vuelve_a_iniciar_sesion_para_seguir"),
                     question=str(pending.get("message") or ""),
                 ),
                 None,
@@ -922,12 +923,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 None,
                 [],
-                "Sin empresa",
+                t("callbacks.sin_empresa"),
                 "warning",
                 _failure_state(
                     "no_company",
-                    "No hay empresa seleccionada",
-                    "Elige una empresa en el selector para iniciar Campbell AI.",
+                    t("callbacks.no_hay_empresa_seleccionada"),
+                    t("callbacks.elige_una_empresa_en_el_selector"),
                 ),
                 None,
                 _updated_company_state(session_company, None),
@@ -953,7 +954,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 submitted.get("session_id") or active_session_id,
                 no_update,
-                "Pensando...",
+                t("callbacks.pensando"),
                 "info",
                 None,
                 {
@@ -994,12 +995,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 session_id,
                 _strip_pending_messages(history),
-                "Error",
+                t("reports_callbacks.error"),
                 "danger",
                 _failure_state(
                     "unexpected",
-                    "Ocurrió un error inesperado al procesar la consulta",
-                    "Reintenta. Si persiste, avisa al equipo de plataforma.",
+                    t("callbacks.ocurrio_un_error_inesperado_al_procesar"),
+                    t("callbacks.reintenta_si_persiste_avisa_al_equipo"),
                     retryable=True,
                     question=question,
                 ),
@@ -1137,13 +1138,13 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 no_update,
                 no_update,
-                f"Pensando… {int(elapsed)}s",
+                t("js.status_thinking_elapsed", elapsed=int(elapsed)),
                 "info",
                 no_update,
                 no_update,
                 no_update,
                 show_panel,
-                f"La consulta lleva {int(elapsed)} segundos" if show_panel else "",
+                t("js.query_running_for", elapsed=int(elapsed)) if show_panel else "",
             )
 
         if state == "done":
@@ -1161,7 +1162,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 messages,
                 result.get("session_id") or job.get("session_id") or no_update,
-                f"Listo · {company_id.upper()}" if company_id else "Listo",
+                t("callbacks.listo", company_id_upper=company_id.upper()) if company_id else t("callbacks.listo_2"),
                 "success",
                 None,
                 None,
@@ -1174,12 +1175,12 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 _strip_pending_messages(history),
                 no_update,
-                "Cancelada",
+                t("callbacks.cancelada"),
                 "secondary",
                 _failure_state(
                     "cancelled",
-                    "Cancelaste la consulta",
-                    "Puedes reformularla de forma más acotada y volver a enviarla.",
+                    t("callbacks.cancelaste_la_consulta"),
+                    t("callbacks.puedes_reformularla_de_forma_mas_acotada"),
                     retryable=True,
                     question=question,
                 ),
@@ -1195,11 +1196,11 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         return (
             _strip_pending_messages(history),
             no_update,
-            _JOB_ERROR_LABELS.get(kind, "Error del servicio"),
+            _JOB_ERROR_LABELS.get(kind, t("campbell_ai.job_label_server_error")),
             "danger",
             _failure_state(
                 kind,
-                str(error.get("detail") or "Campbell AI no pudo completar la consulta"),
+                str(error.get("detail") or t("callbacks.campbell_ai_no_pudo_completar_la")),
                 _JOB_ERROR_GUIDANCE.get(kind, ""),
                 retryable=bool(error.get("retryable", True)),
                 question=question,
@@ -1282,7 +1283,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             None,
             None,
             _strip_pending_messages(history),
-            "Cancelada",
+            t("callbacks.cancelada"),
             "secondary",
             None,
             False,
@@ -1305,7 +1306,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         """
         hidden = {"display": "none"}
         if not isinstance(failure, dict) or not failure.get("title"):
-            return [], False, "danger", hidden, "Reintentar"
+            return [], False, "danger", hidden, t("layout.reintentar")
         # A missing company or an empty message is the user's next step, not a fault.
         color = "warning" if failure.get("kind") in {"no_company", "empty_message"} else "danger"
         pending_question = _failed_question(failure)
@@ -1319,7 +1320,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             True,
             color,
             {"display": "inline-block"} if retryable else hidden,
-            "Reintentar consulta" if pending_question else "Reintentar",
+            t("callbacks.reintentar_consulta") if pending_question else t("layout.reintentar"),
         )
 
     @app.callback(
@@ -1357,9 +1358,9 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         # dead is the exact state users described as the page being stuck.
         disabled = blocked or (in_flight and kind is None)
         placeholder = (
-            "Campbell AI no está disponible en este momento"
+            t("callbacks.campbell_ai_no_esta_disponible_en")
             if blocked
-            else "Pregúntame sobre mantenimiento o solicita un gráfico…"
+            else t("layout.preguntame_sobre_mantenimiento_o_solicita")
         )
         # Both ways into "nueva conversación", not just the header one: leaving the panel
         # button live let a thread be created while an answer was still on its way.
@@ -1604,11 +1605,11 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 no_update,
                 no_update,
-                f"Pensando… {elapsed}s",
+                t("js.status_thinking_elapsed", elapsed=elapsed),
                 "info",
                 no_update,
                 show_panel,
-                f"La consulta lleva {elapsed} segundos" if show_panel else "",
+                t("js.query_running_for", elapsed=elapsed) if show_panel else "",
             )
 
         if not result.get("ok"):
@@ -1642,7 +1643,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
                     return (
                         restored,
                         active_session,
-                        f"Listo · {company_id.upper()}",
+                        t("callbacks.listo", company_id_upper=company_id.upper()),
                         "success",
                         None,
                         False,
@@ -1654,7 +1655,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             return (
                 no_update,
                 no_update,
-                "Pensando...",
+                t("callbacks.pensando"),
                 "info",
                 {**pending, "stream": False},
                 False,
@@ -1667,7 +1668,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
         return (
             messages if messages else _strip_pending_messages(history),
             event.get("session_id") or session_id,
-            f"Listo · {company_id}" if company_id else "Listo",
+            t("callbacks.listo_3", company_id=company_id) if company_id else t("callbacks.listo_2"),
             "success",
             None,
             False,
@@ -1882,7 +1883,7 @@ def register_campbell_ai_callbacks(app: dash.Dash) -> None:
             payload.get("session_id") or session_id,
             payload.get("messages", []),
             company_id,
-            f"Listo · {company_id.upper()}",
+            t("callbacks.listo", company_id_upper=company_id.upper()),
             "success",
             None,
             # Ratings belong to the thread that was open; the reopened one has its own.

@@ -9,6 +9,7 @@ reload. This mirrors what the old section-content routing callback used to
 do for the 'predictive-{component}' sections.
 """
 
+from src.i18n import t, t_or
 from dash import Input, Output, State, html
 from dash.dependencies import ALL
 import dash
@@ -35,7 +36,7 @@ def _resolve_client(selected_client, user_data) -> str:
 def _render_component(client: str, component: str):
     if not is_service_enabled(client, f'predictive-{component}'):
         logger.warning(f"Predictive module accessed by client without access: {client}")
-        return create_placeholder_content('Predictivo (no disponible para este cliente)')
+        return create_placeholder_content(t("predictive.unavailable_for_client"))
 
     # Change 1: single shared discovery function - no more inline CSV-only
     # existence check. A component is available whether it's on the new
@@ -54,13 +55,13 @@ def _render_component(client: str, component: str):
             html.Div([
                 html.Div([
                     html.I(className="fas fa-database fa-3x mb-3 text-muted"),
-                    html.H4("Sin datos predictivos disponibles", className="text-muted"),
+                    html.H4(t("predictive.no_data_title"), className="text-muted"),
                     html.P(
-                        f"No se encontraron datos predictivos de {component.title()} para el cliente {client.upper()}.",
+                        t("predictive.no_data_body", component=t_or(f"nav.service.predictive-{component}.short", component.title()), client=client.upper()),
                         className="text-muted mb-2"
                     ),
                     html.P(
-                        "Los datos se generarán cuando exista historial suficiente de aceite y telemetría para este componente.",
+                        t("predictive.no_data_hint"),
                         className="text-muted small"
                     )
                 ], className="text-center py-5")
