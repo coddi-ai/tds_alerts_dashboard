@@ -367,9 +367,11 @@ def _predictive_sections(client: str, unit: str, components: list) -> list:
     directly (`create_fleet_scatter`/`create_comparative_bars`,
     dashboard/components/predictive_charts.py), not reimplemented - in place
     of the old raw failure-mode bar chart."""
-    from dashboard.components.predictive_charts import create_comparative_bars, create_fleet_scatter
+    from dashboard.components.predictive_charts import create_comparative_bars
     from dashboard.components.predictive_config import resolve_failure_modes
-    from dashboard.tabs.tab_predictive_overview import _discover_components, _load_component_data, attach_status
+    from dashboard.tabs.tab_predictive_overview import (
+        _discover_components, _load_component_data, attach_status, make_fleet_scatter,
+    )
     from src.data.loaders import get_model_run_date
 
     filepaths = _discover_components(client)
@@ -416,7 +418,7 @@ def _predictive_sections(client: str, unit: str, components: list) -> list:
                 if not row_match.empty:
                     row = row_match.iloc[0]
                     failure_modes = resolve_failure_modes(component, client)
-                    scatter_fig = create_fleet_scatter(latest, unit, _PREDICTIVE_STATUS_COLORS)
+                    scatter_fig = make_fleet_scatter(latest, client, component, unit, _PREDICTIVE_STATUS_COLORS)
                     bar_fig = create_comparative_bars(row, latest, failure_modes)
                     comparison = html.Div([
                         html.Div([

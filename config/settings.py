@@ -5,7 +5,7 @@ Uses Pydantic Settings for configuration management with environment variable su
 """
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from src.data.catalog import dashboard_data_root
@@ -93,6 +93,24 @@ class Settings(BaseSettings):
         """Resolve the componentName value in cleaned_component_hours.parquet for a predictive component key."""
         overrides = self.component_hours_name_overrides.get(str(client or "").upper(), {})
         return overrides.get(component, component)
+
+    # Predictivo > "Posición en la flota" scatter: (x, y) split of the quadrants,
+    # i.e. (ranking today, ranking 30d average), keyed client -> component.
+    # Backend-only (override via env FLEET_SCATTER_THRESHOLDS as JSON, never from
+    # the UI). There is deliberately no global fallback: a pair without an entry
+    # renders the scatter with no quadrants at all.
+    fleet_scatter_thresholds: Dict[str, Dict[str, Tuple[float, float]]] = Field(
+        default_factory=lambda: {
+            "CAPSTONE": {"motor": (50.0, 50.0)},
+            "CDA": {"motor": (16.0, 16.0), "transmision": (16.0, 16.0)},
+        },
+        description="Quadrant thresholds (x, y) of the fleet scatter per client and predictive component"
+    )
+
+    def get_fleet_scatter_threshold(self, client: str, component: str) -> Optional[Tuple[float, float]]:
+        """Configured (x, y) quadrant threshold for the pair, or None when it has no entry."""
+        by_component = self.fleet_scatter_thresholds.get(str(client or "").upper(), {})
+        return by_component.get(str(component or "").lower())
 
     # Laboratory Compliance - per-client threshold (days) for the compliance window
     lab_compliance_default_threshold_days: float = Field(

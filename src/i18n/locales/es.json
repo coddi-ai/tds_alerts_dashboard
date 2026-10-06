@@ -621,6 +621,7 @@
  "predictive_charts.critica_sostenida": "Crítica sostenida",
  "predictive_charts.desgaste_acumulado_ppm": "Desgaste acumulado (ppm)",
  "predictive_charts.empeoro_de_golpe": "Empeoró de golpe",
+ "predictive_charts.hover_component_meter": "<br>Horómetro: %{hovertext}",
  "predictive_charts.mejoro_recientemente": "Mejoró recientemente",
  "predictive_charts.promedio_flota": "Promedio flota",
  "predictive_charts.ranking_30_dias": "Ranking 30 días",

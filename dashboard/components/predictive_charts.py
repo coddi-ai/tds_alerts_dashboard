@@ -23,62 +23,94 @@ def _oil_date_col(df) -> str:
     return "Fecha"
 
 
-FLEET_SCATTER_THRESHOLD = 50.0  # splits both axes (ranking today / 30d average)
+# Zone fills/labels share a hue per zone (green healthy, orange mixed, red
+# critical); the fill is strong enough to tell the zones apart at a glance and
+# the label is a dark shade of the same hue so it stays legible on that fill.
+_ZONE_STYLE = {
+    "critical": ("rgba(226,75,74,0.22)", "#8a1f1e"),
+    "worsened": ("rgba(239,159,39,0.22)", "#7a4508"),
+    "improved": ("rgba(239,159,39,0.22)", "#7a4508"),
+    "healthy": ("rgba(29,158,117,0.22)", "#0b5a43"),
+}
 
 
-def create_fleet_scatter(df_latest, selected_unit, status_colors):
+def _axis_range(values, thresh, min_pad):
+    """Axis range around the data that always contains `thresh` (so no zone
+    collapses when the whole fleet sits on one side of it). Without a threshold
+    it is just the padded data range; with no finite data, a default window."""
+    finite = values[values.notna() & (values.abs() != float("inf"))]
+    lo, hi = (float(finite.min()), float(finite.max())) if not finite.empty else (None, None)
+    if lo is None:
+        return (0.0, 2 * thresh if thresh is not None else 100.0)
+    pad = max((hi - lo) * 0.12, min_pad)
+    lo, hi = max(0.0, lo - pad), hi + pad
+    if thresh is not None:
+        lo, hi = max(0.0, min(lo, thresh - 5)), max(hi, thresh + 5)
+    return (lo, hi)
+
+
+def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=None, meter_by_unit=None):
     """
     Crear scatter de ranking vs avg_ranking_30d con todos los equipos.
-    Destaca el equipo seleccionado. Ambos ejes se dividen en
-    FLEET_SCATTER_THRESHOLD para formar las cuatro regiones.
+    Destaca el equipo seleccionado.
+
+    `thresholds` es el (x, y) configurado para el cliente/componente
+    (Settings.get_fleet_scatter_threshold): divide los ejes en las cuatro
+    regiones. Con None no hay regiones, líneas ni etiquetas: scatter simple.
+    `meter_by_unit` ({Unit: horas}) agrega el horómetro al tooltip; None lo omite
+    y una unidad sin lectura muestra "—".
     """
     x_all = df_latest["ranking"].astype(float)
     y_all = df_latest["avg_ranking_30d"].astype(float)
 
-    x_thresh = y_thresh = FLEET_SCATTER_THRESHOLD
-
-    x_min, x_max = float(x_all.min()), float(x_all.max())
-    y_min, y_max = float(y_all.min()), float(y_all.max())
-    x_pad = max((x_max - x_min) * 0.12, 5)
-    y_pad = max((y_max - y_min) * 0.12, 2)
-    # The range always contains the threshold, so no region collapses when the
-    # whole fleet sits on one side of it.
-    x0, x1 = max(0, min(x_min - x_pad, x_thresh - 5)), max(x_max + x_pad, x_thresh + 5)
-    y0, y1 = max(0, min(y_min - y_pad, y_thresh - 5)), max(y_max + y_pad, y_thresh + 5)
+    x_thresh, y_thresh = thresholds if thresholds is not None else (None, None)
+    x0, x1 = _axis_range(x_all, x_thresh, 5)
+    y0, y1 = _axis_range(y_all, y_thresh, 2)
 
     fig = go.Figure()
 
-    # Quadrant fills
-    for (qx0, qy0, qx1, qy1), color in [
-        ((x_thresh, y_thresh, x1, y1), "rgba(226,75,74,0.05)"),
-        ((x_thresh, y0, x1, y_thresh), "rgba(239,159,39,0.05)"),
-        ((x0, y_thresh, x_thresh, y1), "rgba(239,159,39,0.05)"),
-        ((x0, y0, x_thresh, y_thresh), "rgba(29,158,117,0.05)"),
-    ]:
+    if thresholds is not None:
+        zones = {
+            "critical": (x_thresh, y_thresh, x1, y1, "predictive_charts.critica_sostenida"),
+            "worsened": (x_thresh, y0, x1, y_thresh, "predictive_charts.empeoro_de_golpe"),
+            "improved": (x0, y_thresh, x_thresh, y1, "predictive_charts.mejoro_recientemente"),
+            "healthy": (x0, y0, x_thresh, y_thresh, "predictive_charts.zona_saludable"),
+        }
+        for zone, (qx0, qy0, qx1, qy1, label_key) in zones.items():
+            fill, text_color = _ZONE_STYLE[zone]
+            fig.add_shape(
+                type="rect", x0=qx0, y0=qy0, x1=qx1, y1=qy1,
+                fillcolor=fill, line_width=0, layer="below"
+            )
+            fig.add_annotation(
+                x=(qx0 + qx1) / 2, y=(qy0 + qy1) / 2, text=_t(label_key),
+                showarrow=False, xanchor="center", yanchor="middle",
+                font=dict(size=11, color=text_color, family="DM Sans"),
+            )
+
+        # Dividers
         fig.add_shape(
-            type="rect", x0=qx0, y0=qy0, x1=qx1, y1=qy1,
-            fillcolor=color, line_width=0, layer="below"
+            type="line", x0=x_thresh, y0=y0, x1=x_thresh, y1=y1,
+            line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dot")
+        )
+        fig.add_shape(
+            type="line", x0=x0, y0=y_thresh, x1=x1, y1=y_thresh,
+            line=dict(color="rgba(0,0,0,0.3)", width=1, dash="dot")
         )
 
-    # Dividers
-    fig.add_shape(
-        type="line", x0=x_thresh, y0=y0, x1=x_thresh, y1=y1,
-        line=dict(color="rgba(0,0,0,0.12)", width=1, dash="dot")
-    )
-    fig.add_shape(
-        type="line", x0=x0, y0=y_thresh, x1=x1, y1=y_thresh,
-        line=dict(color="rgba(0,0,0,0.12)", width=1, dash="dot")
-    )
+    def _meter_hover(units):
+        """Per-point hovertext (the horómetro) and the template fragment that shows it."""
+        if meter_by_unit is None:
+            return None, ""
+        texts = []
+        for u in units:
+            hrs = meter_by_unit.get(u)
+            texts.append(f"{hrs:,.0f} hrs" if hrs is not None and pd.notna(hrs) else "—")
+        return texts, _t("predictive_charts.hover_component_meter")
 
-    # Quadrant labels
-    ql = dict(
-        showarrow=False, font=dict(size=9, color="rgba(0,0,0,0.2)"),
-        xanchor="center", yanchor="middle"
-    )
-    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y_thresh + y1) / 2, text=_t("predictive_charts.critica_sostenida"), **ql)
-    fig.add_annotation(x=(x_thresh + x1) / 2, y=(y0 + y_thresh) / 2, text=_t("predictive_charts.empeoro_de_golpe"), **ql)
-    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y_thresh + y1) / 2, text=_t("predictive_charts.mejoro_recientemente"), **ql)
-    fig.add_annotation(x=(x0 + x_thresh) / 2, y=(y0 + y_thresh) / 2, text=_t("predictive_charts.zona_saludable"), **ql)
+    def _hover_template(template, meter_line):
+        # The meter line goes right before the closing <extra> of the base tooltip.
+        return template.replace("<extra></extra>", meter_line + "<extra></extra>")
 
     # Fleet points (all units except selected)
     for st, color in status_colors.items():
@@ -86,6 +118,7 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors):
         subset = df_latest[mask]
         if subset.empty:
             continue
+        meter_text, meter_line = _meter_hover(subset["Unit"])
         fig.add_trace(go.Scatter(
             x=subset["ranking"].astype(float),
             y=subset["avg_ranking_30d"].astype(float),
@@ -99,12 +132,14 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors):
                 color=color, size=8,
                 line=dict(color="white", width=1.2), opacity=0.5
             ),
-            hovertemplate=_t("predictive_charts.b_b_br_ranking_br_prom"),
+            hovertext=meter_text,
+            hovertemplate=_hover_template(_t("predictive_charts.b_b_br_ranking_br_prom"), meter_line),
         ))
 
     # Selected unit — highlighted
     sel = df_latest[df_latest["Unit"] == selected_unit]
     if not sel.empty:
+        meter_text, meter_line = _meter_hover(sel["Unit"])
         fig.add_trace(go.Scatter(
             x=sel["ranking"].astype(float),
             y=sel["avg_ranking_30d"].astype(float),
@@ -118,7 +153,9 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors):
                 color="#2563EB", size=14,
                 line=dict(color="white", width=2), opacity=1.0
             ),
-            hovertemplate=_t("predictive_charts.b_b_br_ranking_br_prom_2", selected_unit=selected_unit),
+            hovertext=meter_text,
+            hovertemplate=_hover_template(
+                _t("predictive_charts.b_b_br_ranking_br_prom_2", selected_unit=selected_unit), meter_line),
         ))
 
     fig.update_layout(

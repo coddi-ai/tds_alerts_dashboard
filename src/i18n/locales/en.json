@@ -621,6 +621,7 @@
  "predictive_charts.critica_sostenida": "Sustained critical",
  "predictive_charts.desgaste_acumulado_ppm": "Accumulated wear (ppm)",
  "predictive_charts.empeoro_de_golpe": "Suddenly worsened",
+ "predictive_charts.hover_component_meter": "<br>Hour meter: %{hovertext}",
  "predictive_charts.mejoro_recientemente": "Recently improved",
  "predictive_charts.promedio_flota": "Fleet average",
  "predictive_charts.ranking_30_dias": "30-day ranking",

@@ -17,7 +17,8 @@ from dashboard.components.predictive_config import (
 from src.data import predictive_v2
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_charts import create_fleet_scatter
-from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date
+from config.settings import get_settings
+from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date, load_component_hours
 from src.data.fast_io import read_csv as fast_read_csv
 from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT, status_label
 
@@ -212,6 +213,52 @@ def _load_component_data(filepath: Path, component: str, client: str = "cda"):
     # The cached frames are treated as immutable by the presentation layer.
     # Avoid copying tens of MB when Resumen and Evidencia mount together.
     return result[0], result[1], result[2]
+
+
+def _norm_unit_id(uid) -> str:
+    """T_09 and T_9 are the same unit across sources."""
+    m = re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
+    return f"{m.group(1)}{m.group(2)}" if m else str(uid)
+
+
+@lru_cache(maxsize=16)
+def _latest_component_meter_cached(client: str, component: str, mtime_ns: int, size: int) -> dict:
+    settings = get_settings()
+    hours = load_component_hours(settings.get_component_hours_path(client.lower()))
+    if hours.empty:
+        return {}
+    hours = hours[
+        (hours["componentName"] == settings.get_component_hours_name(client, component))
+        & hours["componentHours_cleaned"].notna()
+    ]
+    latest = hours.sort_values("sampleDate").groupby("unitId").tail(1)
+    return {_norm_unit_id(u): float(h) for u, h in zip(latest["unitId"], latest["componentHours_cleaned"])}
+
+
+def load_latest_component_meter(client: str, component: str, units) -> dict | None:
+    """Latest `componentHours_cleaned` (horómetro) of each unit in `units` for this
+    predictive component, from `cleaned_component_hours` of the client's oil golden
+    layer ({Unit: hours}; a unit with no reading is absent). None when the client
+    has no such source, so callers can leave the meter out altogether."""
+    settings = get_settings()
+    if not client or str(client).upper() not in [c.upper() for c in settings.component_hours_allowed_clients]:
+        return None
+    path = settings.get_component_hours_path(client.lower())
+    if not path.exists():
+        return None
+    stat = path.stat()
+    by_norm = _latest_component_meter_cached(client, component, stat.st_mtime_ns, stat.st_size)
+    return {u: by_norm[_norm_unit_id(u)] for u in units if _norm_unit_id(u) in by_norm}
+
+
+def make_fleet_scatter(latest, client: str, component: str, selected_unit, status_colors):
+    """`create_fleet_scatter` with this client/component's configured quadrant
+    thresholds (None -> plain scatter) and each unit's horómetro in the tooltip."""
+    return create_fleet_scatter(
+        latest, selected_unit, status_colors,
+        thresholds=get_settings().get_fleet_scatter_threshold(client, component),
+        meter_by_unit=load_latest_component_meter(client, component, latest["Unit"]),
+    )
 
 
 # ── Color helpers ─────────────────────────────────────────────────────────────
@@ -501,7 +548,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     # Layer 2: the fleet-wide scatter (one point per unit) that used to live in
     # Evidence's "Comparación Flota" - same figure builder, same data, no unit
     # highlighted since no unit is selected on this page.
-    scatter_fig = create_fleet_scatter(latest, None, _SCATTER_STATUS_COLORS)
+    scatter_fig = make_fleet_scatter(latest, client, component, None, _SCATTER_STATUS_COLORS)
     risk_section = html.Div([
         html.H4([
             html.I(className="fas fa-shield-alt me-2"),
