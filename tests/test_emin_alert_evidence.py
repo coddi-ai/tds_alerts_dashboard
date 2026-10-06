@@ -149,6 +149,9 @@ def test_maintenance_detail_displays_the_evidence_used_for_classification(monkey
     monkeypatch.setattr(callbacks, "load_maintenance_week", lambda client, week: weekly)
     detail = callbacks.create_maintenance_evidence_section(pd.Series(_alert()), "emin")
     assert "Evidencia real del motor" in str(detail)
+    assert "28-2026" in str(detail)
+    assert "N/A" not in str(detail)
+    assert "Semana" not in weekly.columns
 
 
 def test_weekly_context_is_visible_even_when_tasks_are_for_another_system(monkeypatch):

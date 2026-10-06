@@ -1526,6 +1526,10 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_mantenimiento_para_2", alert_row_unitid=alert_row['UnitId']), color="warning")
             ])
+
+        if client.lower() == 'emin':
+            unit_maintenance = unit_maintenance.copy()
+            unit_maintenance['Semana'] = maintenance_week
         
         # Create maintenance display
         maintenance_card = create_maintenance_display(

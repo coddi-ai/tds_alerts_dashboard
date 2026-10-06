@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
+from itertools import count
 
 from fastapi.testclient import TestClient
 
@@ -253,7 +255,14 @@ def test_long_first_messages_are_truncated_for_the_sidebar():
     assert title.endswith("…")
 
 
-def test_the_listing_is_newest_first_and_scoped_to_the_active_company():
+def test_the_listing_is_newest_first_and_scoped_to_the_active_company(monkeypatch):
+    # Distinct update times exercise ordering without depending on clock resolution.
+    ticks = count()
+    reference = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "src.campbell_ai.persistence._utc_now",
+        lambda: (reference + timedelta(microseconds=next(ticks))).isoformat(),
+    )
     backend = MemoryBackend()
     archive = ConversationArchive([backend])
     other_company = DashboardPrincipal(

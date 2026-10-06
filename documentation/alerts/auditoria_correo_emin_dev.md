@@ -53,6 +53,8 @@ La clasificación, etiquetas, contador, resumen y detalle son coherentes.
 Se resuelve la evidencia fuera de la caché del CSV de alertas para que los
 cambios y borrados semanales se reflejen sin reiniciar. El detalle EMIN muestra
 actividades del equipo en todos los sistemas, igual que el contexto del resumen.
+La cabecera del detalle usa la semana validada de la alerta, sin exigir que el
+CSV semanal duplique una columna `Semana` ni modificar el archivo de origen.
 Los textos de datos fuente se conservan; se traduce únicamente la interfaz.
 
 ## Validación
@@ -63,17 +65,25 @@ sin instalar paquetes. `PYTHONPATH` dio prioridad al entorno del dashboard.
 
 | Comando exacto | Resultado |
 | --- | --- |
-| `git fetch --no-tags origin dev` | Correcto: referencia actualizada a 35ce333. |
+| `git fetch --no-tags origin dev` | Correcto: referencia actualizada a 35ce333 y nueva comprobación sin cambios remotos. |
 | `python -m pytest -q tests`, antes de editar | 936 pasan, 9 fallan, 10 omitidas. Registro local: `.coddi-local/validation-full.txt`. |
-| `python -m pytest -q tests`, después de corregir | 962 pasan, los mismos 9 fallan, 10 omitidas. Las 26 pruebas añadidas pasan. Registro: `.coddi-local/validation-final.txt`. |
+| `python -m pytest -q tests`, antes de esta auditoría | 962 pasan, los mismos 9 fallan, 10 omitidas. Las 26 pruebas añadidas pasan. Registro: `.coddi-local/validation-audit-start.txt`. |
+| `python -m pytest -q tests`, auditoría final | **971 pasan, 0 fallan, 10 omitidas**, 69 advertencias, salida 0. Registro: `.coddi-local/validation-audit-final.txt`. |
 | `Get-Content -Raw -Encoding UTF8 .coddi-local/check_promises.py \| python -`, con `DASHBOARD_DATA_ROOT` apuntando al directorio local del dashboard | Correcto: clasificación, contador, mensaje, resumen con contenido real, Pareto y cabecera/navegación por unidad. Resultado agregado: `.coddi-local/audit-behaviour.json`. |
 | `git diff --check` | Sin errores de espacios. |
 
-La suite global sigue sin estar aprobada: nueve fallos preexistentes de
-Campbell AI (cinco con fechas fijas fuera de la ventana actual, tres de gráficos
-sin el workbook de ensayos en este worktree, uno de orden de conversaciones).
-Un fallo introducido por el orden de claves de traducción fue corregido antes
-de la validación final.
+La auditoría corrigió los nueve fallos preexistentes de las pruebas de
+Campbell AI sin cambiar su comportamiento productivo ni debilitar las
+comprobaciones: cinco pruebas fijan el reloj de referencia para sus datos de
+julio; tres proveen un workbook temporal de grupos de ensayos y limpian su
+caché; el orden de conversaciones se prueba con marcas de tiempo distintas
+controladas. Ninguna prueba se deshabilitó. Se mantienen las diez omisiones
+que ya tenía el perfil offline; no equivalen a validar servicios externos o
+datos que no están disponibles en el worktree.
+
+También se corrigió la cabecera que mostraba «Semana N/A» en el detalle de
+mantenciones EMIN: ahora muestra la semana vinculada. Su prueba comprueba
+además que el DataFrame fuente permanece sin esa columna añadida.
 
 Comprobación con datos locales: 281 alertas, 100 Multitécnica, 181 Telemetría,
 0 con tribología. En julio de 2026 los Pareto muestran 2.956 acciones en 529
@@ -106,20 +116,23 @@ desde menciones IA o desde las horas agregadas de mantenciones.
 ## Handoff
 
 Trabajo terminado: descarga remota, cambios locales, auditoría antes/después,
-26 casos nuevos y comprobación funcional con los datos disponibles.
+26 casos nuevos, corrección de nueve pruebas preexistentes, perfil offline
+aprobado y comprobación funcional con los datos disponibles.
 Archivos cambiados: `src/data/emin_alert_evidence.py`, `src/data/loaders.py`,
 `dashboard/components/alerts_report.py`, `dashboard/components/alerts_tables.py`,
 `dashboard/callbacks/alerts_callbacks.py`, ambos catálogos de idioma,
-`tests/test_emin_alert_evidence.py` y este documento.
+`tests/test_emin_alert_evidence.py`, `tests/test_campbell_ai.py`,
+`tests/test_campbell_ai_chart_types.py`, `tests/test_campbell_ai_persistence.py`
+y este documento.
 Los commits locales se registran en el handoff de
 `tds-alerts-dashboard--codex--auditar-correo-emin-dev`.
 
-Riesgos y pendiente: suite global con los fallos descritos; asociación
+Riesgos y pendiente: asociación
 contextual equipo/semana que no demuestra causalidad; generación externa no
 auditada; ninguna comprobación de la versión desplegada.
 
-Siguiente acción: revisar el diff y los resultados, resolver o aceptar los
-fallos globales, previsualizar la integración con `ai.ps1 integrate` y gestionar
-integración/publicación bajo control humano. Revisar la plataforma después del
+Siguiente acción: solicitar autorización de publicación con el remoto y la
+rama explícitos según `AGENTS.md`. Los cambios permanecen locales en la rama
+de tarea; la publicación y el despliegue están pendientes. Revisar la plataforma después del
 despliegue. La evolución de evidencia de detenciones corresponde al productor
 que gestiona Claude; no se le enviaron mensajes desde esta tarea.

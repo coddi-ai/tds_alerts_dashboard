@@ -26,6 +26,16 @@ from src.campbell_ai.visualization import DashboardVisualizationService
 from src.campbell_ai.resources import FrameCache
 
 
+@pytest.fixture
+def alert_reference_date(monkeypatch):
+    """Keep July fixtures inside the relative window regardless of the run date."""
+    monkeypatch.setattr(
+        DashboardDataRepository,
+        "_today_timestamp",
+        lambda self: pd.Timestamp("2026-08-01"),
+    )
+
+
 def _write_alerts(data_root, client: str = "cda") -> None:
     target = data_root / "alerts" / "golden" / client
     target.mkdir(parents=True)
@@ -114,7 +124,7 @@ def test_dashboard_identity_rejects_unauthorized_company(monkeypatch):
         resolve_dashboard_principal("authorized", "EMIN")
 
 
-def test_repository_reads_existing_dashboard_data_in_place(tmp_path):
+def test_repository_reads_existing_dashboard_data_in_place(tmp_path, alert_reference_date):
     _write_alerts(tmp_path)
     repository = DashboardDataRepository(tmp_path)
 
@@ -358,7 +368,7 @@ def test_predictive_access_follows_the_dashboard_module_allowlist(tmp_path, monk
     assert "predictive_motor" not in repository.describe_catalog("EMIN")
 
 
-def test_unit_filter_matches_the_id_formats_used_across_techniques(tmp_path):
+def test_unit_filter_matches_the_id_formats_used_across_techniques(tmp_path, alert_reference_date):
     """Techniques write T_9, T_09 and T9 for the same equipment."""
     _write_alerts(tmp_path)
     target = tmp_path / "alerts" / "golden" / "cda" / "consolidated_alerts.csv"
@@ -497,7 +507,7 @@ def test_validation_reports_shape_without_counting_rows(tmp_path, monkeypatch):
     assert checked["rows"] is None, "validar sigue sin contar filas"
 
 
-def test_visualization_uses_dashboard_data_without_creating_files(tmp_path):
+def test_visualization_uses_dashboard_data_without_creating_files(tmp_path, alert_reference_date):
     target = tmp_path / "alerts" / "golden" / "cda"
     target.mkdir(parents=True)
     pd.DataFrame(
@@ -581,7 +591,7 @@ def test_alert_relative_window_uses_today_and_returns_latest_available_fallback(
     assert result["latest_available_window"]["by_system"] == {"Motor": 1, "Frenos": 1}
 
 
-def test_pareto_and_heatmap_are_generated_from_alert_dimensions(tmp_path):
+def test_pareto_and_heatmap_are_generated_from_alert_dimensions(tmp_path, alert_reference_date):
     target = tmp_path / "alerts" / "golden" / "cda"
     target.mkdir(parents=True)
     pd.DataFrame(
@@ -621,7 +631,7 @@ def test_pareto_and_heatmap_are_generated_from_alert_dimensions(tmp_path):
     assert all("×" in key for key in heatmap.summary["top"])
 
 
-def test_charts_use_the_dashboard_palette_and_spanish_labels(tmp_path):
+def test_charts_use_the_dashboard_palette_and_spanish_labels(tmp_path, alert_reference_date):
     """Campbell figures must be indistinguishable from the dashboard's own charts."""
     alerts = tmp_path / "alerts" / "golden" / "cda"
     alerts.mkdir(parents=True)
