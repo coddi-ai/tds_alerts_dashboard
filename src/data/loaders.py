@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from src.utils.logger import get_logger
 from src.utils.file_utils import list_excel_files, safe_read_excel, safe_read_parquet
 from src.utils.date_utils import to_utc_naive
+from src.data.emin_alert_evidence import enrich_emin_alert_evidence, maintenance_week
 from src.data.fast_io import (
     read_csv as fast_read_csv,
     read_csv_filtered as fast_read_csv_filtered,
@@ -544,9 +545,19 @@ def load_alerts_data(client: str) -> pd.DataFrame:
     if not file_path.exists():
         return pd.DataFrame()
     stat = file_path.stat()
-    return _load_alerts_data_cached(
+    df = _load_alerts_data_cached(
         (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size
     ).copy(deep=True)
+    if (client or '').lower() == 'emin' and not df.empty:
+        weeks = df.get('Semana_Resumen_Mantencion', pd.Series(dtype=object)).map(maintenance_week)
+        # Evidence is resolved outside the alerts cache so updated or deleted
+        # weekly files change the effective classification without a restart.
+        weekly_data = {
+            week: load_maintenance_week('emin', week)
+            for week in weeks.unique() if week
+        }
+        df = enrich_emin_alert_evidence(df, weekly_data)
+    return df
 
 
 def load_telemetry_values(client: str) -> pd.DataFrame:

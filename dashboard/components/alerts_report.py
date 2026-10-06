@@ -15,6 +15,7 @@ from dashboard.components.alerts_charts import FEATURE_NAMES_ES, translate_syste
 from dashboard.components.labels import translate_component_label, source_style
 from dashboard.components.alerts_tables import parse_ia_message_sections
 from src.utils.date_utils import format_local, to_utc_naive
+from src.data.emin_alert_evidence import evidence_label
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,15 +59,7 @@ def _message_sections(value: Any) -> dict:
 
 
 def _evidence_label(row: pd.Series) -> str:
-    telemetry = _bool(row.get("has_telemetry"))
-    tribology = _bool(row.get("has_tribology"))
-    if telemetry and tribology:
-        return t("alerts_report.telemetria_tribologia")
-    if telemetry:
-        return t("fleet_overview.technique_telemetry")
-    if tribology:
-        return t("fleet_overview.technique_oil")
-    return t("alerts_report.sin_evidencia")
+    return evidence_label(row)
 
 
 def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:

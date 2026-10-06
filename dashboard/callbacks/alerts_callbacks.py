@@ -13,6 +13,11 @@ import dash_bootstrap_components as dbc
 from datetime import date, datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
+from src.data.emin_alert_evidence import (
+    evidence_flag,
+    maintenance_evidence_row,
+    maintenance_week as normalize_maintenance_week,
+)
 
 from src.data.loaders import (
     load_alerts_data,
@@ -361,11 +366,33 @@ def render_selected_alert_summary(active_cell, table_data):
                 html.Strong(t("telemetry_callbacks.accion")),
                 row.get('accion_completa') or row.get('Acción', t("alerts_report.sin_accion_recomendada_registrada")),
             ], className='text-primary mt-2'),
+            _maintenance_context_summary(row),
             dbc.Button([
                 html.I(className='fas fa-arrow-right me-1'), t("alerts_callbacks.ver_detalle_de_la_alerta")
             ], id='general-nav-to-detail-button', color='primary', size='sm', className='mt-3'),
         ]),
     ], className='shadow-sm', style={'borderLeft': '4px solid #3498db'})
+
+
+def _maintenance_context_summary(row):
+    """Show the external evidence that supports the effective alert source."""
+    if not evidence_flag(row.get("has_maintenance")):
+        return html.Div()
+    summary = row.get("maintenance_summary", "")
+    tasks = row.get("maintenance_tasks", "")
+    return html.Div([
+        html.Hr(),
+        html.H6([
+            html.I(className="fas fa-tools me-2"),
+            t("alerts_callbacks.linked_maintenance_context", week=row.get("maintenance_week", "")),
+        ]),
+        html.P(summary, className="mb-2", style={"whiteSpace": "pre-wrap"}) if summary else None,
+        html.Details([
+            html.Summary(t("alerts_callbacks.reported_activities")),
+            html.Div(tasks, className="mt-2", style={"whiteSpace": "pre-wrap"}),
+        ]) if tasks else None,
+        html.Div(t("alerts_callbacks.detention_duration_unreported"), className="text-muted small"),
+    ], className="alert-maintenance-context mt-3")
 
 
 @callback(
@@ -843,6 +870,11 @@ def update_detail_view(dropdown_value, client, nav_data):
         show_telemetry = 'telemetria' in trigger_lower or 'mixto' in trigger_lower
         show_oil = 'tribologia' in trigger_lower or 'oil' in trigger_lower or 'mixto' in trigger_lower
         show_maintenance = pd.notna(alert_row.get('Semana_Resumen_Mantencion'))
+        if client.lower() == 'emin':
+            # Event + maintenance is Multitécnica without implying oil data.
+            show_telemetry = evidence_flag(alert_row.get('has_telemetry'))
+            show_oil = evidence_flag(alert_row.get('has_tribology'))
+            show_maintenance = evidence_flag(alert_row.get('has_maintenance'))
         
         logger.info(f"Trigger type: {trigger_type}, Evidence sections - Telemetry: {show_telemetry}, Oil: {show_oil}, Maintenance: {show_maintenance}")
         
@@ -1467,8 +1499,10 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
     try:
         # Get maintenance week
         maintenance_week = alert_row.get('Semana_Resumen_Mantencion')
+        if client.lower() == 'emin':
+            maintenance_week = normalize_maintenance_week(maintenance_week)
         
-        if pd.isna(maintenance_week):
+        if pd.isna(maintenance_week) or not maintenance_week:
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_referencia_de_semana_de"), color="info")
             ])
@@ -1482,21 +1516,22 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
             ])
         
         # Filter for this unit
-        unit_maintenance = maintenance_df[
-            maintenance_df['UnitId'] == alert_row['UnitId']
-        ]
-        
-        if unit_maintenance.empty:
+        if client.lower() == 'emin':
+            unit_maintenance = maintenance_evidence_row(maintenance_df, alert_row['UnitId'])
+        else:
+            matches = maintenance_df[maintenance_df['UnitId'] == alert_row['UnitId']]
+            unit_maintenance = None if matches.empty else matches.iloc[0]
+
+        if unit_maintenance is None:
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_mantenimiento_para_2", alert_row_unitid=alert_row['UnitId']), color="warning")
             ])
         
-        unit_maintenance = unit_maintenance.iloc[0]
-        
         # Create maintenance display
         maintenance_card = create_maintenance_display(
             maintenance_data=unit_maintenance,
-            alert_system=alert_row['sistema']
+            alert_system=alert_row['sistema'],
+            include_all_systems=client.lower() == 'emin',
         )
         
         # Build section
