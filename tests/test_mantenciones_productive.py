@@ -33,14 +33,14 @@ def test_component_view_mixed_offsets_follow_client_clock_contract(tmp_path):
     assert emin.loc[0, "event_ts"].month == 7
 
 
-def test_emin_large_pareto_retains_all_bars_with_readable_axis_labels():
+def test_emin_large_pareto_keeps_the_initial_80_percent_prefix_with_readable_axis_labels():
     from dashboard.tabs.tab_mantenciones_general import create_emin_hours_pareto_chart
     rows = pd.DataFrame({"equipment": [f"EQ-{i:03d}" for i in range(200)], "value": list(range(200, 0, -1))})
-    figure = create_emin_hours_pareto_chart(rows, show_all=True)
-    assert len(figure.data[0].x) == len(figure.data[1].x) == 200
+    figure = create_emin_hours_pareto_chart(rows)
+    assert len(figure.data[0].x) == len(figure.data[1].x) < 200
     assert len(figure.layout.xaxis.tickvals) <= 6
     assert figure.layout.xaxis.tickvals[0] == "EQ-000"
-    assert figure.layout.xaxis.tickvals[-1] == "EQ-199"
+    assert figure.layout.xaxis.tickvals[-1] == figure.data[0].x[-1]
 
 
 def _actions():
@@ -243,6 +243,58 @@ def _patch_emin_ten_views(monkeypatch):
     return frames
 
 
+def test_emin_global_system_filter_includes_general_and_scopes_attributed_metrics(monkeypatch):
+    frames = _patch_emin_ten_views(monkeypatch)
+    actions = frames[0].copy()
+    general_action = actions.iloc[[0]].copy()
+    general_action["action_id"] = "general-action"
+    general_action["record_id"] = "general-record"
+    general_action["action_system_name"] = "Equipo"
+    actions = pd.concat([actions, general_action], ignore_index=True)
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: actions.copy())
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+
+    all_systems = repo.get_monthly_payload("2026-01")
+    available = all_systems["meta"]["filter_systems"]
+    assert "Equipo" in available
+    assert all_systems["kpis"]["actions"] == 5
+    assert sum(row["value"] for row in all_systems["data"]["emin_hours_pareto"]) == 6.0
+
+    general_only = repo.get_monthly_payload("2026-01", systems=["Equipo"])
+    assert general_only["filters"]["systems"] == ["Equipo"]
+    assert general_only["kpis"]["actions"] == 1
+    assert {row["system_name"] for row in general_only["data"]["system_mix"]} == {"Equipo"}
+    assert general_only["kpis"]["downtime_est_hours"] is None
+    assert general_only["data"]["emin_hours_pareto"] == []
+    assert general_only["data"]["daily"]
+    assert all(row["hours_out_of_service"] is None for row in general_only["data"]["daily"])
+
+    without_general = [system for system in available if system != "Equipo"]
+    excluded = repo.get_monthly_payload("2026-01", systems=without_general)
+    assert excluded["kpis"]["actions"] == 4
+    assert "Equipo" not in {row["system_name"] for row in excluded["data"]["system_mix"]}
+    assert excluded["meta"]["pareto"]["system_filter_partial"] is True
+
+    from types import SimpleNamespace
+    from dashboard.callbacks import mantenciones_general_callbacks as callbacks
+
+    monkeypatch.setattr(callbacks, "get_repository", lambda **kwargs: repo)
+    monkeypatch.setattr(callbacks, "ctx", SimpleNamespace(triggered_id=None))
+    handlers = _capture_maintenance_callbacks()
+    metadata = handlers["load_maintenance_metadata"]("EMIN", None)
+    options, selection = metadata[-2:]
+    assert {option["value"] for option in options} == set(available)
+    assert set(selection) == set(available)
+    assert next(option["label"] for option in options if option["value"] == "Equipo") == "General del equipo (sin sistema técnico atribuido)"
+
+    payload, _ = handlers["load_monthly_payload"](
+        "EMIN", "2026-01", [], "__all__", ["Equipo"],
+        None, None, None, [], "actions", None,
+    )
+    assert payload["filters"]["systems"] == ["Equipo"]
+    assert payload["kpis"]["actions"] == 1
+
+
 def test_emin_ten_view_payload_reconciles_hours_and_scopes_pareto_independently(monkeypatch):
     _patch_emin_ten_views(monkeypatch)
     repo = MaintenanceRepository(mode="parquet", client="emin")
@@ -270,19 +322,24 @@ def test_emin_ten_view_payload_reconciles_hours_and_scopes_pareto_independently(
     assert action_detail["intervention_start"] == "2026-01-02 03:00"
     assert all_systems_hours["data"]["historical_failures"][0]["component_name"] == "Bomba"
 
-    # All, one, several and no systems are distinct Pareto states; only the
-    # Pareto changes, never the four reliability cards or other KPI values.
-    one_system = repo.get_monthly_payload("2026-01", pareto_systems=["Motor"])
+    # A partial system scope filters action views and makes system-unattributed
+    # time metrics unavailable. Selecting every system keeps total hours.
+    one_system = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
     several_systems = repo.get_monthly_payload(
-        "2026-01", pareto_systems=["Sistema de Motor", "Sistema Hidráulico"]
+        "2026-01", systems=["Sistema de Motor", "Sistema Hidráulico", "Sin sistema"]
     )
-    no_systems = repo.get_monthly_payload("2026-01", pareto_systems=[])
+    no_systems = repo.get_monthly_payload("2026-01", systems=[])
     assert one_system["meta"]["pareto"]["selected_systems"] == ["Sistema de Motor"]
-    assert one_system["meta"]["pareto"]["metric"] == "actions"
+    assert one_system["meta"]["pareto"]["system_filter_partial"] is True
+    assert one_system["meta"]["pareto"]["hours_available"] is False
+    assert one_system["kpis"]["actions"] == 2
+    assert one_system["kpis"]["downtime_est_hours"] is None
+    assert one_system["data"]["emin_hours_pareto"] == []
     assert next(row["count"] for row in one_system["data"]["pareto"] if row["equipment"] == "T_01") == 2
-    assert several_systems["meta"]["pareto"]["selected_systems"] == ["Sistema de Motor", "Sistema Hidráulico"]
-    assert no_systems["data"]["pareto"] == []
-    assert all_systems_hours["kpis"] == one_system["kpis"] == several_systems["kpis"] == no_systems["kpis"]
+    assert several_systems["meta"]["pareto"]["selected_systems"] == ["Sistema de Motor", "Sistema Hidráulico", "Sin sistema"]
+    assert several_systems["kpis"]["downtime_est_hours"] == 6.0
+    assert no_systems["kpis"] == all_systems_hours["kpis"]
+    assert no_systems["meta"]["pareto"]["selected_systems"] == all_systems_hours["meta"]["pareto"]["available_systems"]
 
     unit = repo.get_monthly_payload("2026-01", equipment=["T_01"])
     assert unit["kpis"]["downtime_est_hours"] == 5.0
@@ -290,11 +347,9 @@ def test_emin_ten_view_payload_reconciles_hours_and_scopes_pareto_independently(
     assert unit["meta"]["time_measure"]["source"] == "query_7_intervention_hours_daily.parquet"
     assert unit["meta"]["estimated_kpis"]["reconciliation"]["status"] == "consistent"
 
-    partial_hours = repo.get_monthly_payload(
-        "2026-01", pareto_systems=["Motor"], pareto_metric="hours"
-    )
-    assert partial_hours["meta"]["pareto"]["metric"] == "actions"
-    assert "no están atribuidas por sistema" in partial_hours["meta"]["pareto"]["reason"]
+    partial_hours = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
+    assert partial_hours["meta"]["pareto"]["hours_available"] is False
+    assert "no se atribuyen a sistemas" in partial_hours["meta"]["pareto"]["reason"]
 
     monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: pd.DataFrame())
     no_actions_repo = MaintenanceRepository(mode="parquet", client="emin")
@@ -936,6 +991,8 @@ def test_emin_responsive_shell_rules_are_scoped_to_reliability_view():
     assert not _maintenance_root_class("CDA").endswith("maintenance-emin")
     assert "#dashboard-shell:has(#maintenance-view-root.maintenance-emin)" in css
     assert "mobile-nav-open" in css
+    assert '#maintenance-view-root.maintenance-emin .text-warning[role="status"]' in css
+    assert "color: #854d0e !important" in css
 
 
 def test_executive_kpi_label_sits_above_value_not_below():
@@ -1072,8 +1129,10 @@ def test_layout_keeps_future_views_mounted_but_hides_monthly_reliability_section
     assert "(proxy)" not in rendered
     assert "maintenance-source-alert" in rendered
     assert "maintenance-view-root" in rendered
-    assert "maintenance-system-mix-note" in rendered
-    assert "maintenance-chart-equipment-note" in rendered
+    assert "maintenance-system-mix-note" not in rendered
+    assert "maintenance-chart-equipment-note" not in rendered
+    assert "maintenance-summary-systems" in rendered
+    assert "Mostrar todos" not in rendered
     assert "maintenance-context-kpi-note" in rendered
     assert "Indicadores de Interés" in rendered
     assert "'display': 'none'" in rendered or "display: none" in rendered
@@ -1232,7 +1291,7 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     register_mantenciones_general_callbacks(app)
 
     output_keys = list(app.callback_map)
-    assert len(output_keys) == 10
+    assert len(output_keys) == 9
     assert any("maintenance-monthly-store" in key for key in output_keys)
     assert any("maintenance-summary-detail-table" in key for key in output_keys)
     monthly_callback = next(entry for key, entry in app.callback_map.items() if "maintenance-monthly-store" in key)
@@ -1483,26 +1542,28 @@ def test_monthly_downtime_clips_month_and_unions_overlapping_equipment_intervals
         ([79, 21], 2),                  # Crossing occurs at the last unit.
     ],
 )
-def test_emin_pareto_initial_prefix_and_show_all(values, expected):
+def test_emin_pareto_initial_prefix_without_expand_control(values, expected):
     from dashboard.tabs.tab_mantenciones_general import pareto_visible_equipment
 
     rows = pd.DataFrame({"equipment": [f"EQ-{i}" for i in range(len(values))], "value": values})
     initial = pareto_visible_equipment(rows)
     assert len(initial) == expected
     assert list(initial["value"]) == sorted(values, reverse=True)[:expected]
-    assert len(pareto_visible_equipment(rows, show_all=True)) == len(values)
     assert initial.iloc[-1]["cumulative_pct"] <= 100
 
 
 def test_emin_pareto_actions_are_unique_and_hours_stay_independent(monkeypatch):
     _patch_emin_ten_views(monkeypatch)
     repo = MaintenanceRepository(mode="parquet", client="emin")
-    payload = repo.get_monthly_payload("2026-01", pareto_systems=["Sistema de Motor"])
+    payload = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
     actions = payload["data"]["emin_action_systems"]
     assert sum(row["count"] for row in actions) == 2  # a1 is duplicated in the source.
     assert {row["equipment"] for row in actions} == {"T_01"}
-    assert sum(row["value"] for row in payload["data"]["emin_hours_pareto"]) == 6.0
-    assert payload["kpis"]["actions"] == 4
+    assert payload["data"]["emin_hours_pareto"] == []
+    assert payload["kpis"]["actions"] == 2
+    all_systems = repo.get_monthly_payload("2026-01")
+    assert sum(row["value"] for row in all_systems["data"]["emin_hours_pareto"]) == 6.0
+    assert all_systems["kpis"]["actions"] == 4
 
 
 def test_emin_pareto_charts_show_system_legend_and_lines_without_markers():
@@ -1523,7 +1584,6 @@ def test_emin_pareto_charts_show_system_legend_and_lines_without_markers():
 
 
 def test_emin_reset_controls_preserve_month_and_fleet(monkeypatch):
-    from types import SimpleNamespace
     from dashboard.callbacks import mantenciones_general_callbacks as callbacks
 
     class App:
@@ -1538,16 +1598,11 @@ def test_emin_reset_controls_preserve_month_and_fleet(monkeypatch):
 
     app = App()
     callbacks.register_mantenciones_general_callbacks(app)
-    trigger = SimpleNamespace(triggered_id="maintenance-pareto-actions-show-all")
-    monkeypatch.setattr(callbacks, "ctx", trigger)
-    view = app.handlers["update_emin_pareto_view"](1, None, "2026-01", ["Camiones"], "T_01", ["Sistema de Motor"], "EMIN", {"actions": False, "hours": False})
-    assert view == {"actions": True, "hours": False}
-    trigger.triggered_id = "maintenance-pareto-hours-show-all"
-    view = app.handlers["update_emin_pareto_view"](1, 1, "2026-01", ["Camiones"], "T_01", ["Sistema de Motor"], "EMIN", view)
-    assert view == {"actions": True, "hours": True}
+    assert "update_emin_pareto_view" not in app.handlers
 
     class Repo:
-        def get_available_equipment(self, fleets=None):
+        def get_available_equipment(self, systems=None, fleets=None):
+            assert systems is None
             assert fleets == ["Camiones"]
             return ["T_01", "T_02"]
 
@@ -1555,20 +1610,27 @@ def test_emin_reset_controls_preserve_month_and_fleet(monkeypatch):
             assert month == "2026-01"
             assert kwargs["fleets"] == ["Camiones"]
             assert kwargs["equipment"] is None
+            assert kwargs["systems"] == ["Sistema de Motor"]
             return {"status": "ok"}
 
     monkeypatch.setattr(callbacks, "get_repository", lambda **kwargs: Repo())
-    trigger.triggered_id = "maintenance-reset-unit"
-    options, unit = app.handlers["update_summary_equipment_options"](["Camiones"], "EMIN", [0], 1, [{"equipment": "T_01"}], "T_01")
+    monkeypatch.setattr(callbacks, "ctx", type("Trigger", (), {"triggered_id": "maintenance-reset-unit"})())
+    options, unit = app.handlers["update_summary_equipment_options"](
+        ["Camiones"], "EMIN", [0], 1, ["Sistema de Motor"],
+        [{"equipment": "T_01"}], "T_01", {"filter_systems": ["Sistema de Motor"]},
+    )
     assert unit == "__all__"
     assert options[0]["value"] == "__all__"
-    trigger.triggered_id = "maintenance-unit-navigation-table"
-    _, unchanged = app.handlers["update_summary_equipment_options"](["Camiones"], "EMIN", [], 1, [{"equipment": "T_01"}], "__all__")
+    callbacks.ctx.triggered_id = "maintenance-unit-navigation-table"
+    _, unchanged = app.handlers["update_summary_equipment_options"](
+        ["Camiones"], "EMIN", [], 1, ["Sistema de Motor"],
+        [{"equipment": "T_01"}], "__all__", {"filter_systems": ["Sistema de Motor"]},
+    )
     assert unchanged is callbacks.no_update
-    app.handlers["load_monthly_payload"]("EMIN", "2026-01", ["Camiones"], unit, None, None, None, ["Sistema de Motor"], "actions", None)
-
-    trigger.triggered_id = "maintenance-month"
-    assert app.handlers["update_emin_pareto_view"](1, 1, "2026-02", ["Camiones"], unit, ["Sistema de Motor"], "EMIN", view) == {"actions": False, "hours": False}
+    app.handlers["load_monthly_payload"](
+        "EMIN", "2026-01", ["Camiones"], unit, ["Sistema de Motor"],
+        None, None, None, [], "actions", None,
+    )
 
 
 def _capture_maintenance_callbacks():
@@ -1587,7 +1649,107 @@ def _capture_maintenance_callbacks():
     return handlers
 
 
-def test_emin_show_all_expands_both_figures_without_changing_cards_or_payload():
+@pytest.mark.parametrize("client", ["cda", "capstone"])
+def test_activity_system_filter_does_not_narrow_other_clients_pareto(monkeypatch, client):
+    _patch_emin_ten_views(monkeypatch)
+    repo = MaintenanceRepository(mode="parquet", client=client)
+    payload = repo.get_monthly_payload(
+        "2026-01", systems=["Sistema de Motor"],
+        pareto_systems=["Sistema Hidráulico"],
+    )
+    assert payload["kpis"]["actions"] == 2
+    assert sum(row["value"] for row in payload["data"]["pareto"]) == 1
+
+
+def test_emin_unattributed_actions_count_as_a_system_and_have_consistent_detail(monkeypatch):
+    frames = _patch_emin_ten_views(monkeypatch)
+    actions = frames[0].copy()
+    actions.loc[actions["action_id"].eq("a4"), "action_system_name"] = "   "
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: actions.copy())
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+    payload = repo.get_monthly_payload("2026-01", systems=["Sin sistema"])
+    assert payload["kpis"]["actions"] == 1
+    assert payload["kpis"]["systems"] == 1
+    assert {row["system_name"] for row in payload["data"]["detail"]} == {"Sin sistema"}
+    null_actions = frames[0].copy()
+    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: null_actions.copy())
+    null_payload = MaintenanceRepository(mode="parquet", client="emin").get_monthly_payload("2026-01", systems=["Sin sistema"])
+    assert null_payload["kpis"]["systems"] == 1
+
+
+def test_emin_hidden_activity_filters_do_not_leak_into_global_scope(monkeypatch):
+    from dashboard.callbacks import mantenciones_general_callbacks as callbacks
+    _patch_emin_ten_views(monkeypatch)
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+    monkeypatch.setattr(callbacks, "get_repository", lambda **kwargs: repo)
+    payload, _ = _capture_maintenance_callbacks()["load_monthly_payload"](
+        "EMIN", "2026-01", [], "__all__", [],
+        ["Sistema de Motor"], ["Lubricación"], ["T_01"], [], "hours", None,
+    )
+    assert payload["kpis"]["actions"] == 4
+    assert payload["filters"]["subsystems"] == []
+    assert sum(row["value"] for row in payload["data"]["emin_hours_pareto"]) == 6
+
+
+def test_emin_empty_fleet_unit_intersection_does_not_restore_fleet_reliability(monkeypatch):
+    _patch_emin_ten_views(monkeypatch)
+    monkeypatch.setattr(repository_module, "load_oil_classified", lambda client: pd.DataFrame([
+        {"unitId": "T_01", "machineName": "Camiones"},
+        {"unitId": "T_02", "machineName": "Excavadoras"},
+    ]))
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+    for fleets, equipment in [(["Camiones"], ["T_02"]), (["Flota inexistente"], None)]:
+        payload = repo.get_monthly_payload("2026-01", fleets=fleets, equipment=equipment)
+        assert payload["kpis"]["actions"] == 0
+        for metric in ("availability_est_pct", "downtime_est_hours", "mtbf_est_hours", "mttr_est_hours"):
+            assert payload["kpis"][metric] is None
+        assert payload["data"]["emin_hours_pareto"] == []
+
+
+def test_emin_mobile_unavailable_notice_and_small_equipment_counts_remain_readable(monkeypatch):
+    from dashboard.tabs.tab_mantenciones_general import create_daily_equipment_chart
+    _patch_emin_ten_views(monkeypatch)
+    repo = MaintenanceRepository(mode="parquet", client="emin")
+    payload = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
+    rendered = _capture_maintenance_callbacks()["render_monthly_payload"](payload)
+    assert "<br>" in rendered[11].layout.annotations[0].text
+    assert "<br>" in rendered[14].layout.annotations[0].text
+    assert rendered[12].layout.yaxis.dtick == 1
+    one_day = create_daily_equipment_chart(pd.DataFrame([
+        {"date": "2026-01-02", "equipment_count": 1},
+    ]), integer_ticks=True)
+    assert one_day.layout.xaxis.tickvals == ("2026-01-02",)
+    assert one_day.layout.xaxis.tickformat == "%d/%m/%Y"
+
+
+def test_emin_system_colors_survive_unit_and_system_filter_changes():
+    from dashboard.callbacks.mantenciones_general_callbacks import _empty_contract
+    render = _capture_maintenance_callbacks()["render_monthly_payload"]
+    payload = _empty_contract()
+    payload["status"] = "ok"
+    payload["meta"].update({"client": "EMIN", "filter_systems": ["Sistema de Motor", "Sistema Eléctrico", "Estación del Operador - Cabina"]})
+    rows = [
+        {"machine_code": "T_01", "system_name": "Sistema de Motor", "count": 3},
+        {"machine_code": "T_01", "system_name": "Estación del Operador - Cabina", "count": 2},
+        {"machine_code": "T_02", "system_name": "Sistema Eléctrico", "count": 1},
+    ]
+    def charts(selected_rows):
+        payload["data"]["equipment_system_mix"] = selected_rows
+        payload["data"]["system_mix"] = [{"system_name": row["system_name"], "count": row["count"]} for row in selected_rows]
+        payload["data"]["emin_action_systems"] = [{"equipment": row["machine_code"], "system_name": row["system_name"], "count": row["count"]} for row in selected_rows]
+        result = render(payload)
+        return (
+            dict(zip(result[15].data[0].x, result[15].data[0].marker.color)),
+            {trace.name: trace.marker.color for trace in result[16].data},
+            {trace.name: trace.marker.color for trace in result[13].data if trace.type == "bar"},
+        )
+    all_colors = charts(rows)
+    filtered_colors = charts(rows[-1:])
+    for original, filtered in zip(all_colors, filtered_colors):
+        assert original["Sistema Eléctrico"] == filtered["Sistema Eléctrico"]
+
+
+def test_emin_pareto_always_keeps_initial_prefix_without_an_expand_control():
     from copy import deepcopy
     from dashboard.callbacks.mantenciones_general_callbacks import _empty_contract
 
@@ -1606,15 +1768,15 @@ def test_emin_show_all_expands_both_figures_without_changing_cards_or_payload():
     ]
     original = deepcopy(payload)
     render = _capture_maintenance_callbacks()["render_monthly_payload"]
-    initial = render(payload, {"actions": False, "hours": False})
-    expanded = render(payload, {"actions": True, "hours": True})
+    initial = render(payload)
     for index in (13, 14):
         assert len(initial[index].data[0].x) == 7
         assert initial[index].data[0].y[-1] == pytest.approx(91)
-        assert len(expanded[index].data[0].x) == 12
-        assert expanded[index].data[0].y[-1] == 100
-    assert initial[:10] == expanded[:10]
     assert payload == original
+    rendered_layout = str(layout_mantenciones_general())
+    assert "Mostrar todos" not in rendered_layout
+    assert "maintenance-pareto-actions-show-all" not in rendered_layout
+    assert "maintenance-pareto-hours-show-all" not in rendered_layout
 
 
 def test_emin_visible_messages_hide_internal_sources_and_ranking_disclaimer(monkeypatch):
@@ -1631,9 +1793,15 @@ def test_emin_visible_messages_hide_internal_sources_and_ranking_disclaimer(monk
     rendered = handlers["render_monthly_payload"](payload)
     detail = handlers["render_unit_detail"](payload, "T_01")
     visible_notes = str(rendered[10]) + str(rendered[22]) + str(rendered[25]) + str(detail)
-    for forbidden in ("query", ".parquet", "Cobertura de fuente", "no es estado de hoy", "Registros largos", "histórico acumulado", "no se limita al mes"):
+    for forbidden in (
+        "query", ".parquet", "Cobertura de fuente", "no es estado de hoy",
+        "Registros largos", "histórico acumulado", "no se limita al mes",
+        "2026-05-25", "2026-08-07", "el último período disponible",
+        "cobertura: días observados del mes", "intervenciones anormalmente largas",
+        "las horas no se truncaron",
+    ):
         assert forbidden.lower() not in visible_notes.lower()
-    assert rendered[25] == ""
+    assert "Días según fecha operacional" in rendered[25]
     assert "estimaciones" in str(rendered[10])
     payload["data"]["historical_failures"] = []
     assert "No se dispone de esta información momentáneamente" in str(handlers["render_unit_detail"](payload, "T_01"))
@@ -1647,7 +1815,7 @@ def test_other_clients_keep_the_existing_pareto_rendering(client):
     payload["status"] = "ok"
     payload["meta"].update({"client": client, "period_label": "2026-01", "reliability_kpis": {"rows": 2}})
     payload["data"]["pareto"] = [{"equipment": f"EQ-{i:02d}", "value": 100 - i} for i in range(12)]
-    rendered = _capture_maintenance_callbacks()["render_monthly_payload"](payload, {"actions": False, "hours": False})
+    rendered = _capture_maintenance_callbacks()["render_monthly_payload"](payload)
     assert len(rendered[13].data[0].x) == 12
     assert rendered[13].data[0].type == "bar"
     assert "Query 5" in str(rendered[10])
@@ -1655,7 +1823,11 @@ def test_other_clients_keep_the_existing_pareto_rendering(client):
 
 
 def test_emin_actions_pareto_shares_the_equipment_legend_palette():
-    from dashboard.tabs.tab_mantenciones_general import create_equipment_activity_chart, create_emin_actions_pareto_chart
+    from dashboard.tabs.tab_mantenciones_general import (
+        create_equipment_activity_chart,
+        create_emin_actions_pareto_chart,
+        create_system_activity_chart,
+    )
 
     rows = pd.DataFrame([
         {"equipment": "T_01", "system_name": "General del equipo", "count": 4},
@@ -1663,6 +1835,15 @@ def test_emin_actions_pareto_shares_the_equipment_legend_palette():
         {"equipment": "T_02", "system_name": "Otro sistema", "count": 1},
     ])
     equipment = create_equipment_activity_chart(rows.rename(columns={"equipment": "machine_code"}), include_all_systems=True, compact=True)
+    pareto = create_emin_actions_pareto_chart(rows, palette_systems=rows["system_name"])
     filtered = create_emin_actions_pareto_chart(rows[rows["system_name"].eq("Otro sistema")], palette_systems=rows["system_name"])
-    expected = next(trace.marker.color for trace in equipment.data if trace.name == "Otro sistema")
-    assert filtered.data[1].marker.color == expected
+    mix = create_system_activity_chart(rows, include_all_systems=True)
+    equipment_colors = {trace.name: trace.marker.color for trace in equipment.data}
+    action_colors = {trace.name: trace.marker.color for trace in pareto.data if trace.type == "bar"}
+    mix_colors = dict(zip(mix.data[0].x, mix.data[0].marker.color))
+    assert equipment.layout.showlegend is False
+    assert all(system in trace.hovertemplate for system, trace in zip(equipment_colors, equipment.data))
+    for system, color in equipment_colors.items():
+        assert action_colors[system] == color
+        assert mix_colors[system] == color
+    assert filtered.data[1].marker.color == equipment_colors["Otro sistema"]

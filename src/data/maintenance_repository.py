@@ -88,6 +88,12 @@ def _normalize_unit_key(value) -> Optional[str]:
     return code
 
 
+def _emin_system_values(values: pd.Series) -> pd.Series:
+    """Give EMIN actions without a technical-system value a selectable label."""
+    normalized = values.fillna("Sin sistema").astype(str).str.strip()
+    return normalized.mask(normalized.eq(""), "Sin sistema")
+
+
 UNKNOWN_FLEET = "otros"
 
 
@@ -554,7 +560,12 @@ class MaintenanceRepository:
             return df
 
         if systems:
-            df = df[df["action_system_name"].isin(systems)]
+            system_values = (
+                _emin_system_values(df["action_system_name"])
+                if self.client == "emin"
+                else df["action_system_name"]
+            )
+            df = df[system_values.isin(systems)]
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
         if fleets:
@@ -599,8 +610,13 @@ class MaintenanceRepository:
         df_actions = self._get_parquet_data()["actions"]
         if df_actions.empty:
             return set()
+        system_values = (
+            _emin_system_values(df_actions["action_system_name"])
+            if self.client == "emin"
+            else df_actions["action_system_name"]
+        )
         return set(
-            df_actions.loc[df_actions["action_system_name"].isin(systems), "machine_code"]
+            df_actions.loc[system_values.isin(systems), "machine_code"]
             .dropna()
             .unique()
         )
@@ -663,7 +679,12 @@ class MaintenanceRepository:
             if systems:
                 if actions.empty:
                     return []
-                actions = actions[actions["action_system_name"].isin(systems)]
+                system_values = (
+                    _emin_system_values(actions["action_system_name"])
+                    if self.client == "emin"
+                    else actions["action_system_name"]
+                )
+                actions = actions[system_values.isin(systems)]
                 machines = actions["machine_code"]
             else:
                 status = data.get("equipment_status", pd.DataFrame())
@@ -1038,7 +1059,7 @@ class MaintenanceRepository:
             str(value) for value in (equipment or [])
             if value not in (None, "", "__all__")
         ]
-        if selected_equipment:
+        if selected_equipment or self.client == "emin" and equipment is not None:
             frame = frame[frame["machine_code"].astype(str).isin(selected_equipment)]
 
         meta = {
@@ -1708,7 +1729,11 @@ class MaintenanceRepository:
         equipment: Optional[List[str]],
     ) -> dict:
         options = self._pareto_system_options()
-        selected = self._default_pareto_systems(options) if requested_systems is None else self._resolve_pareto_systems(options, requested_systems)
+        selected = (
+            self._default_pareto_systems(options)
+            if requested_systems is None or self.client == "emin" and not requested_systems
+            else self._resolve_pareto_systems(options, requested_systems)
+        )
         hours = self._get_parquet_data().get("hours_monthly", pd.DataFrame())
         required = {"machine_code", "year_month", "intervention_hours"}
         if not hours.empty and "source_system" in hours.columns:
@@ -1776,6 +1801,20 @@ class MaintenanceRepository:
         months = self.get_available_months()
         selected = period or (months[-1] if months else None)
         empty = self._empty_month_data()
+        filter_systems = self._pareto_system_options() if self.client == "emin" else self.get_available_systems()
+        system_filter_partial = (
+            self.client == "emin"
+            and bool(systems)
+            and set(systems) != set(filter_systems)
+        )
+        effective_systems = (
+            None
+            if self.client == "emin" and not system_filter_partial
+            else systems
+        )
+        reported_systems = (
+            filter_systems if self.client == "emin" and not systems else systems
+        )
         base = self._get_parquet_data()["actions"] if self.mode == "parquet" else pd.DataFrame()
         source_status, source_error = ("ok", None)
         if self.mode == "parquet" and base.empty:
@@ -1857,7 +1896,7 @@ class MaintenanceRepository:
 
         start, end = self._month_bounds(selected)
         df = self._filtered_actions(
-            systems=systems,
+            systems=effective_systems,
             equipment=equipment,
             subsystems=subsystems,
             date_start=start.isoformat(),
@@ -1882,6 +1921,15 @@ class MaintenanceRepository:
                 unit_status = unit_status[
                     unit_status["machine_code"].map(self._fleet_for_machine_code).isin(fleets)
                 ]
+            if system_filter_partial and "machine_code" in unit_status.columns:
+                eligible_units = set(
+                    self.get_available_equipment(systems=effective_systems, fleets=fleets or None)
+                )
+                if equipment_filter is not None:
+                    eligible_units.intersection_update(str(value) for value in equipment_filter)
+                unit_status = unit_status[
+                    unit_status["machine_code"].astype(str).isin(eligible_units)
+                ]
             status_columns = [
                 "machine_code", "equipment_status", "has_open_intervention",
                 "last_action_date", "days_since_last_maintenance", "reference_date",
@@ -1900,8 +1948,19 @@ class MaintenanceRepository:
                 ).fillna("Sin dato")
             unit_status = unit_status.sort_values("equipment", kind="mergesort")
         pareto_meta = self._pareto_metadata(
-            pareto_systems, pareto_metric, selected, equipment_filter
+            reported_systems if self.client == "emin" else pareto_systems,
+            pareto_metric,
+            selected,
+            equipment_filter,
         )
+        pareto_meta["system_filter_partial"] = system_filter_partial
+        if system_filter_partial:
+            pareto_meta["hours_available"] = False
+            pareto_meta["reason"] = "Las horas no se atribuyen a sistemas técnicos."
+            pareto_meta["metric_options"] = [
+                {"label": "Acciones", "value": "actions", "disabled": False},
+                {"label": "Horas", "value": "hours", "disabled": True},
+            ]
 
         def _monthly_reliability_cards() -> dict:
             return self.get_reliability_kpis(selected, equipment=equipment_filter)
@@ -1909,15 +1968,22 @@ class MaintenanceRepository:
         if df.empty:
             reliability_cards = _monthly_reliability_cards()
             if self.client == "emin":
-                time_kpis, time_meta = self._calculate_calendar_time_kpis(
-                    selected, equipment=equipment_filter
-                )
-                daily, daily_time_source = self._canonical_daily_intervention_hours(
-                    selected, equipment=equipment_filter
-                )
-                if not daily.empty:
-                    daily["count"] = 0
-                    daily = daily.rename(columns={"date": "date"})
+                if system_filter_partial:
+                    time_kpis = _empty_estimated_kpis()
+                    time_meta = _estimated_kpi_meta(
+                        selected,
+                        reason="Las horas no se atribuyen a sistemas técnicos.",
+                    )
+                    daily, daily_time_source = pd.DataFrame(), None
+                else:
+                    time_kpis, time_meta = self._calculate_calendar_time_kpis(
+                        selected, equipment=equipment_filter
+                    )
+                    daily, daily_time_source = self._canonical_daily_intervention_hours(
+                        selected, equipment=equipment_filter
+                    )
+                    if not daily.empty:
+                        daily["count"] = 0
             else:
                 time_kpis, time_meta = _empty_estimated_kpis(), _estimated_kpi_meta(
                     selected, reason="No hay acciones para los filtros seleccionados."
@@ -1933,6 +1999,8 @@ class MaintenanceRepository:
                 **time_kpis,
                 **reliability_cards["values"],
             }
+            if system_filter_partial:
+                empty_kpis.update(_empty_estimated_kpis())
             empty.update({
                 "daily": self._json_records(daily) if not daily.empty else [],
                 "pareto": [],
@@ -1940,7 +2008,11 @@ class MaintenanceRepository:
             })
             if self.client == "emin":
                 empty["emin_action_systems"] = []
-                empty["emin_hours_pareto"] = self._json_records(self._emin_hours_pareto(selected, equipment_filter))
+                empty["emin_hours_pareto"] = (
+                    []
+                    if system_filter_partial
+                    else self._json_records(self._emin_hours_pareto(selected, equipment_filter))
+                )
             return {
                 "status": "ok",
                 "meta": {
@@ -1955,6 +2027,7 @@ class MaintenanceRepository:
                     "detail_total": 0,
                     "pareto_scope": self._pareto_scope(),
                     "pareto": pareto_meta,
+                    "filter_systems": filter_systems,
                     "estimated_kpis": time_meta,
                     "reliability_kpis": reliability_cards["meta"],
                     "time_measure": {"source": daily_time_source, "unit": "h-equipo"},
@@ -1972,7 +2045,11 @@ class MaintenanceRepository:
             "equipment": int(df["machine_code"].nunique()),
             "actions": total_actions,
             "records": int(df["record_id"].nunique()),
-            "systems": int(df["action_system_name"].dropna().nunique()),
+            "systems": int(
+                _emin_system_values(df["action_system_name"]).nunique()
+                if self.client == "emin"
+                else df["action_system_name"].dropna().nunique()
+            ),
             "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
@@ -1985,14 +2062,14 @@ class MaintenanceRepository:
         )
         canonical_monthly, canonical_monthly_source = (
             self._canonical_monthly_hours(selected, equipment=equipment_filter)
-            if not systems and not subsystems else (pd.DataFrame(), None)
+            if not effective_systems and not subsystems else (pd.DataFrame(), None)
         )
         canonical_daily, canonical_daily_source = (
             self._canonical_daily_intervention_hours(selected, equipment=equipment_filter)
-            if self.client == "emin" or not systems and not subsystems
+            if self.client == "emin" or not effective_systems and not subsystems
             else (pd.DataFrame(), None)
         )
-        if canonical_daily_source:
+        if canonical_daily_source and not system_filter_partial:
             daily_hours = canonical_daily[["date", "hours_out_of_service"]].copy()
             daily_time_source = canonical_daily_source
             daily = canonical_daily.merge(
@@ -2023,16 +2100,24 @@ class MaintenanceRepository:
         ).round(3)
         daily = daily.sort_values("date").reset_index(drop=True)
         if self.client == "emin":
-            time_kpis, time_meta = self._calculate_calendar_time_kpis(
-                selected, equipment=equipment_filter
-            )
-            daily_time_source = (
-                "query_9_fleet_intervention_daily.parquet"
-                if not equipment_filter and not canonical_daily.empty
-                else "query_7_intervention_hours_daily.parquet"
-                if not canonical_daily.empty
-                else None
-            )
+            if system_filter_partial:
+                time_kpis = _empty_estimated_kpis()
+                time_meta = _estimated_kpi_meta(
+                    selected,
+                    reason="Las horas no se atribuyen a sistemas técnicos.",
+                )
+                daily_time_source = None
+            else:
+                time_kpis, time_meta = self._calculate_calendar_time_kpis(
+                    selected, equipment=equipment_filter
+                )
+                daily_time_source = (
+                    "query_9_fleet_intervention_daily.parquet"
+                    if not equipment_filter and not canonical_daily.empty
+                    else "query_7_intervention_hours_daily.parquet"
+                    if not canonical_daily.empty
+                    else None
+                )
         elif canonical_monthly_source:
             time_kpis, time_meta = self._calculate_canonical_monthly_time_kpis(
                 canonical_monthly,
@@ -2052,9 +2137,16 @@ class MaintenanceRepository:
         kpis.update(time_kpis)
         reliability_cards = _monthly_reliability_cards()
         kpis.update(reliability_cards["values"])
+        if system_filter_partial:
+            kpis.update(_empty_estimated_kpis())
 
+        system_values = (
+            _emin_system_values(df["action_system_name"])
+            if self.client == "emin"
+            else df["action_system_name"].fillna("Sin sistema")
+        )
         system_mix = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            df.assign(system_name=system_values)
             .groupby("system_name", as_index=False)["action_id"]
             .nunique()
             .rename(columns={"action_id": "count"})
@@ -2062,7 +2154,7 @@ class MaintenanceRepository:
             .reset_index(drop=True)
         )
         system_mix_detail = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            df.assign(system_name=system_values)
             .groupby(["system_name", "machine_code"], as_index=False)["action_id"]
             .nunique()
             .rename(columns={"machine_code": "equipment", "action_id": "count"})
@@ -2091,8 +2183,13 @@ class MaintenanceRepository:
             return result
 
         def _system_pareto(system_frame: pd.DataFrame) -> pd.DataFrame:
+            system_values = (
+                _emin_system_values(system_frame["action_system_name"])
+                if self.client == "emin"
+                else system_frame["action_system_name"].fillna("Sin sistema")
+            )
             result = (
-                system_frame.assign(system_name=system_frame["action_system_name"].fillna("Sin sistema"))
+                system_frame.assign(system_name=system_values)
                 .groupby("system_name", as_index=False)["action_id"]
                 .nunique()
                 .rename(columns={"action_id": "count"})
@@ -2109,6 +2206,7 @@ class MaintenanceRepository:
             return result
 
         pareto_base = self._filtered_actions(
+            systems=effective_systems if self.client == "emin" else None,
             equipment=equipment,
             date_start=start.isoformat(),
             date_end=(end - timedelta(days=1)).date().isoformat(),
@@ -2118,9 +2216,14 @@ class MaintenanceRepository:
         if pareto_base.empty or not pareto_sources:
             selected_actions = pareto_base.iloc[0:0].copy()
         else:
-            system_values = pareto_base["action_system_name"].fillna("Sin sistema").astype(str).str.strip()
-            system_values = system_values.mask(system_values.eq(""), "Sin sistema")
-            selected_actions = pareto_base.loc[system_values.isin(pareto_sources)].copy()
+            pareto_system_values = (
+                _emin_system_values(pareto_base["action_system_name"])
+                if self.client == "emin"
+                else pareto_base["action_system_name"].fillna("Sin sistema").astype(str).str.strip()
+            )
+            if self.client != "emin":
+                pareto_system_values = pareto_system_values.mask(pareto_system_values.eq(""), "Sin sistema")
+            selected_actions = pareto_base.loc[pareto_system_values.isin(pareto_sources)].copy()
         all_systems_mode = self.client in ALL_SYSTEMS_CLIENTS
         if pareto_meta["metric"] == "hours":
             monthly = self._get_parquet_data().get("hours_monthly", pd.DataFrame()).copy()
@@ -2156,7 +2259,7 @@ class MaintenanceRepository:
             # rows repeat the same action or assign more than one system.
             unique_actions = (
                 selected_actions.dropna(subset=["action_id"])
-                .assign(system_name=lambda rows: rows["action_system_name"].fillna("Sin sistema"))
+                .assign(system_name=lambda rows: _emin_system_values(rows["action_system_name"]))
                 .sort_values(["machine_code", "action_id", "system_name"], kind="mergesort")
                 .drop_duplicates(["machine_code", "action_id"])
             )
@@ -2165,7 +2268,8 @@ class MaintenanceRepository:
                 .nunique()
                 .rename(columns={"machine_code": "equipment", "action_id": "count"})
             )
-            emin_hours_pareto = self._emin_hours_pareto(selected, equipment_filter)
+            if not system_filter_partial:
+                emin_hours_pareto = self._emin_hours_pareto(selected, equipment_filter)
         system_pareto = _system_pareto(df) if all_systems_mode else pd.DataFrame()
         train_force_df = df[self._is_train_force_system(df["action_system_name"])].copy()
         train_force_pareto = _equipment_pareto(train_force_df)
@@ -2177,7 +2281,7 @@ class MaintenanceRepository:
             .sort_values(["count", "machine_code"], ascending=[False, True])
         )
         equipment_system = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            df.assign(system_name=system_values)
             .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
             .nunique()
             .rename(columns={"action_id": "system_count"})
@@ -2187,7 +2291,7 @@ class MaintenanceRepository:
         )
         equipment_df = equipment_df.merge(equipment_system[["machine_code", "primary_system"]], on="machine_code", how="left")
         matrix_df = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            df.assign(system_name=system_values)
             .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
             .nunique()
             .rename(columns={"action_id": "count"})
@@ -2195,7 +2299,7 @@ class MaintenanceRepository:
         # Keep the full equipment × system breakdown so the Summary chart can
         # retain every equipment row while using involved systems as colors.
         equipment_system_mix = (
-            df.assign(system_name=df["action_system_name"].fillna("Sin sistema"))
+            df.assign(system_name=system_values)
             .groupby(["machine_code", "system_name"], as_index=False)["action_id"]
             .nunique()
             .rename(columns={"machine_code": "machine_code", "action_id": "count"})
@@ -2249,7 +2353,11 @@ class MaintenanceRepository:
                 "action_detail_clean": "detail",
             }
         )
-        detail["system_name"] = detail["system_name"].fillna("Sin sistema")
+        detail["system_name"] = (
+            _emin_system_values(detail["system_name"])
+            if self.client == "emin"
+            else detail["system_name"].fillna("Sin sistema")
+        )
         detail["subsystem_name"] = detail["subsystem_name"].fillna("Sin subsistema")
         detail["detail"] = detail["detail"].fillna("Sin detalle")
         detail = detail.sort_values(["change_date", "event_ts"], ascending=False).head(detail_limit)
@@ -2269,6 +2377,7 @@ class MaintenanceRepository:
                 "detail_total": detail_total,
                 "pareto_scope": self._pareto_scope(),
                 "pareto": pareto_meta,
+                "filter_systems": filter_systems,
                 "estimated_kpis": time_meta,
                 "reliability_kpis": reliability_cards["meta"],
                 "time_measure": {

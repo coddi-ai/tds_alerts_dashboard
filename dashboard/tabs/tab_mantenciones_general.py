@@ -10,6 +10,7 @@ from src.i18n import t
 import colorsys
 import hashlib
 import math
+import textwrap
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -63,6 +64,7 @@ SYSTEM_COLOR_ORDER = (
     "Sistema de Frenado",
     "Sistema de Dirección",
     "Sin sistema",
+    "General del equipo",
 )
 
 # Generic source labels that are not actionable maintenance systems in the
@@ -259,10 +261,7 @@ def layout_mantenciones_general():
                         _card(
                             t("tab_mantenciones_general.mix_de_actividad_por_sistema"),
                             html.Div(
-                                [
-                                    dcc.Graph(id="maintenance-chart-system-mix", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "340px"}),
-                                    html.Div(id="maintenance-system-mix-note", className="small text-muted px-2 pb-2", role="note"),
-                                ]
+                                dcc.Graph(id="maintenance-chart-system-mix", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "340px"})
                             ),
                             "fa-sitemap",
                         ),
@@ -272,15 +271,7 @@ def layout_mantenciones_general():
                         _card(
                             t("tab_mantenciones_general.equipos_con_mayor_actividad"),
                             html.Div(
-                                [
-                                    dcc.Graph(id="maintenance-chart-equipment", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "320px"}),
-                                    html.P(
-                                        "EMIN muestra las 15 unidades con más acciones, de mayor a menor; los KPIs conservan la población completa filtrada.",
-                                        id="maintenance-chart-equipment-note",
-                                        className="small text-muted px-2 pb-2 mb-0",
-                                        role="note",
-                                    ),
-                                ]
+                                dcc.Graph(id="maintenance-chart-equipment", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "320px"})
                             ),
                             "fa-truck-loading",
                         ),
@@ -300,14 +291,16 @@ def layout_mantenciones_general():
                                         [
                                             dbc.Col(
                                                 [
-                                                    html.Label("Sistemas incluidos en este Pareto", className="small text-muted mb-1"),
+                                                    html.Label("Sistemas incluidos en este Pareto", className="small text-muted mb-1 maintenance-non-emin-only"),
                                                     dcc.Dropdown(
                                                         id="maintenance-pareto-systems",
                                                         multi=True,
                                                         placeholder="Todos los sistemas",
+                                                        className="maintenance-non-emin-only",
                                                     ),
                                                 ],
                                                 md=8,
+                                                className="maintenance-non-emin-only",
                                             ),
                                             dbc.Col(
                                                 [
@@ -329,14 +322,13 @@ def layout_mantenciones_general():
                                     ),
                                     html.Div(id="maintenance-pareto-status", className="small text-muted mb-1", role="status"),
                                     dcc.Graph(id="maintenance-chart-pareto", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "340px"}),
-                                    dbc.Button("Mostrar todos", id="maintenance-pareto-actions-show-all", color="link", size="sm", className="maintenance-emin-only"),
                                 ]
                             ),
                             "fa-chart-bar",
                         ),
                         md=6,
                     ),
-                    dbc.Col(_card(html.Span(t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_tren"), id="maintenance-chart-pareto-tren-fuerza-title"), html.Div([dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "340px"}), dbc.Button("Mostrar todos", id="maintenance-pareto-hours-show-all", color="link", size="sm", className="maintenance-emin-only")]), "fa-chart-bar"), md=6),
+                    dbc.Col(_card(html.Span(t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_tren"), id="maintenance-chart-pareto-tren-fuerza-title"), dcc.Graph(id="maintenance-chart-pareto-tren-fuerza", figure=create_empty_figure("Esperando datos de confiabilidad"), config={"displayModeBar": False}, style={"height": "340px"}), "fa-chart-bar"), md=6),
                 ],
                 className="g-3 mb-4",
             ),
@@ -482,20 +474,20 @@ def layout_mantenciones_general():
             dbc.Row(
                 [
                     dbc.Col([html.Label(t("tab_mantenciones_general.mes_de_analisis"), className="small text-muted"), dcc.Dropdown(id="maintenance-month", clearable=False, placeholder=t("tab_mantenciones_general.seleccione_un_mes"))], md=4),
-                    dbc.Col([html.Label(t("tab_mantenciones_general.flota_tipo_de_equipo"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder=t("tab_mantenciones_general.todas_las_flotas")), html.Small(t("tab_mantenciones_general.catalogo_de_tribologia_sin_coincidencia_ot"), className="text-muted")], md=4),
+                    dbc.Col([html.Label(t("tab_mantenciones_general.flota_tipo_de_equipo"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-fleet", multi=True, value=[], placeholder=t("tab_mantenciones_general.todas_las_flotas")), html.Small(t("tab_mantenciones_general.catalogo_de_tribologia_sin_coincidencia_ot"), className="text-muted maintenance-non-emin-only")], md=4),
                     dbc.Col([html.Label(t("alerts_general.filter_unit"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-equipment", clearable=False, options=[{"label": t("tab_health_index.todas"), "value": "__all__"}], value="__all__", placeholder=t("tab_health_index.todas"))], md=4),
+                    dbc.Col([html.Label(t("alerts_general.filter_system"), className="small text-muted"), dcc.Dropdown(id="maintenance-summary-systems", multi=True, placeholder="Todos los sistemas")], md=4, className="maintenance-emin-only"),
                     # The weekly selector remains mounted for its disabled tab's
                     # callback contract, but is intentionally not exposed while
                     # Evidencia semanal is hidden from the product shell.
                     dbc.Col([html.Label(t("tab_mantenciones_general.semana_de_evidencia"), className="small text-muted"), dcc.Dropdown(id="maintenance-week", clearable=False, placeholder=t("tab_mantenciones_general.seleccione_una_semana"))], md=6, style={"display": "none"}),
                 ],
-                className="g-3 mb-4",
+                className="g-3 mb-4 maintenance-global-filters",
             ),
             dcc.Store(id="maintenance-metadata-store"),
             dcc.Store(id="maintenance-monthly-store"),
             dcc.Store(id="maintenance-weekly-store"),
             dcc.Store(id="maintenance-load-timestamp"),
-            dcc.Store(id="maintenance-emin-pareto-view", data={"actions": False, "hours": False}),
             dcc.Tabs(
                 id="maintenance-tabs",
                 value="summary",
@@ -528,9 +520,11 @@ def layout_mantenciones_general():
     )
 
 
-def create_empty_figure(message: str | None = None) -> go.Figure:
+def create_empty_figure(message: str | None = None, wrap_width: int | None = None) -> go.Figure:
     if message is None:
         message = t("mantenciones.no_data_for_period")
+    if wrap_width:
+        message = "<br>".join(textwrap.wrap(message, width=wrap_width))
     fig = go.Figure()
     fig.add_annotation(text=message, x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font={"size": 14, "color": "#6c757d"})
     fig.update_layout(template="plotly_white", xaxis={"visible": False}, yaxis={"visible": False}, margin={"l": 20, "r": 20, "t": 20, "b": 20})
@@ -577,7 +571,7 @@ def create_daily_intervention_hours_chart(df: pd.DataFrame, unavailable_message:
     return fig
 
 
-def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
+def create_daily_equipment_chart(df: pd.DataFrame, integer_ticks: bool = False) -> go.Figure:
     """Render the daily count of distinct equipment with an intervention."""
     if df.empty:
         return create_empty_figure(t("tab_mantenciones_general.sin_equipos_intervenidos_por_dia"))
@@ -600,10 +594,15 @@ def create_daily_equipment_chart(df: pd.DataFrame) -> go.Figure:
         template="plotly_white",
         xaxis_title=t("tab_mantenciones_general.fecha_operacional_2"),
         yaxis_title=t("tab_mantenciones_general.equipos_intervenidos"),
-        yaxis={"rangemode": "tozero", "tick0": 0, "dtick": 5},
+        yaxis={"rangemode": "tozero", "tick0": 0, "dtick": max(1, math.ceil(pd.to_numeric(df["equipment_count"], errors="coerce").fillna(0).max() / 5)) if integer_ticks else 5},
         margin={"l": 55, "r": 25, "t": 25, "b": 48},
         showlegend=False,
     )
+    if integer_ticks:
+        fig.update_xaxes(tickformat="%d/%m/%Y")
+        dates = df["date"].dropna().unique().tolist()
+        if len(dates) == 1:
+            fig.update_xaxes(tickmode="array", tickvals=dates)
     return fig
 
 
@@ -731,7 +730,7 @@ def create_equipment_pareto_chart(
 create_system_pareto_chart = create_equipment_pareto_chart
 
 
-def pareto_visible_equipment(totals: pd.DataFrame, show_all: bool = False) -> pd.DataFrame:
+def pareto_visible_equipment(totals: pd.DataFrame) -> pd.DataFrame:
     """Rank all equipment, then show the first crossing 80% plus three more."""
     if totals.empty:
         return totals.copy()
@@ -742,7 +741,7 @@ def pareto_visible_equipment(totals: pd.DataFrame, show_all: bool = False) -> pd
     ranked["cumulative_pct"] = ranked["value"].cumsum() / total * 100 if total > 0 else 0.0
     if total > 0:
         ranked.loc[ranked.index[-1], "cumulative_pct"] = 100.0
-    if show_all or total <= 0:
+    if total <= 0:
         return ranked
     crossing = next((i for i, value in enumerate(ranked["cumulative_pct"]) if value >= 80 - 1e-9), len(ranked) - 1)
     return ranked.head(min(len(ranked), crossing + 4))
@@ -771,13 +770,13 @@ def _emin_pareto_base(ranked: pd.DataFrame, metric: str) -> go.Figure:
     return fig
 
 
-def create_emin_actions_pareto_chart(rows: pd.DataFrame, show_all: bool = False, palette_systems=None) -> go.Figure:
+def create_emin_actions_pareto_chart(rows: pd.DataFrame, palette_systems=None) -> go.Figure:
     if rows.empty:
         return create_empty_figure("Sin acciones para los sistemas seleccionados")
     detail = rows.copy()
     detail["count"] = pd.to_numeric(detail["count"], errors="coerce").fillna(0)
     totals = detail.groupby("equipment", as_index=False)["count"].sum().rename(columns={"count": "value"})
-    ranked = pareto_visible_equipment(totals, show_all)
+    ranked = pareto_visible_equipment(totals)
     pivot = detail.pivot_table(index="equipment", columns="system_name", values="count", aggfunc="sum", fill_value=0)
     palette = _system_color_map(pivot.columns if palette_systems is None else set(palette_systems) | set(pivot.columns))
     fig = _emin_pareto_base(ranked, "actions")
@@ -787,16 +786,16 @@ def create_emin_actions_pareto_chart(rows: pd.DataFrame, show_all: bool = False,
     return fig
 
 
-def create_emin_hours_pareto_chart(rows: pd.DataFrame, show_all: bool = False) -> go.Figure:
+def create_emin_hours_pareto_chart(rows: pd.DataFrame) -> go.Figure:
     if rows.empty:
         return create_empty_figure("Sin horas intervenidas para el período")
-    ranked = pareto_visible_equipment(rows[["equipment", "value"]], show_all)
+    ranked = pareto_visible_equipment(rows[["equipment", "value"]])
     fig = _emin_pareto_base(ranked, "hours")
     fig.add_trace(go.Bar(x=ranked["equipment"], y=ranked["value"], name="Horas-equipo", marker_color=PARETO_BAR_COLOR, hovertemplate="<b>%{x}</b><br>Horas-equipo: %{y:,.1f} h<extra></extra>"), secondary_y=False)
     return fig
 
 
-def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = False) -> go.Figure:
+def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = False, palette_systems=None) -> go.Figure:
     """Render recorded action volume by system, not failure frequency."""
     if df.empty:
         return create_empty_figure(t("tab_mantenciones_general.sin_actividad_por_sistema"))
@@ -811,7 +810,7 @@ def create_system_activity_chart(df: pd.DataFrame, include_all_systems: bool = F
         .sort_values(["count", "system_name"], ascending=[False, True], kind="mergesort")
         .reset_index(drop=True)
     )
-    palette = _system_color_map(data["system_name"])
+    palette = _system_color_map(data["system_name"] if palette_systems is None else set(palette_systems) | set(data["system_name"]))
     fig = go.Figure(
         go.Bar(
             x=data["system_name"],
@@ -840,6 +839,7 @@ def create_equipment_activity_chart(
     df: pd.DataFrame,
     include_all_systems: bool = False,
     compact: bool = False,
+    palette_systems=None,
 ) -> go.Figure:
     if df.empty:
         return create_empty_figure(t("tab_mantenciones_general.sin_actividad_por_equipo"))
@@ -872,7 +872,7 @@ def create_equipment_activity_chart(
         pivot = eligible.pivot_table(
             index="machine_code", columns="system_name", values="count", aggfunc="sum", fill_value=0
         ).reindex(index=equipment, columns=systems, fill_value=0).fillna(0)
-        palette = _system_color_map(systems)
+        palette = _system_color_map(systems if palette_systems is None else set(palette_systems) | set(systems))
         fig = go.Figure()
         for index, system in enumerate(systems):
             values = pivot[system].astype(int)
@@ -896,8 +896,9 @@ def create_equipment_activity_chart(
             barmode="stack",
             xaxis_title=t("tab_mantenciones_general.acciones_unicas") if compact else t("tab_mantenciones_general.equipo"),
             yaxis_title=t("tab_mantenciones_general.equipo") if compact else t("tab_mantenciones_general.acciones"),
-            margin={"l": 90, "r": 20, "t": 42, "b": 45} if compact else {"l": 55, "r": 30, "t": 45, "b": 90},
+            margin={"l": 90, "r": 20, "t": 18 if compact else 42, "b": 45} if compact else {"l": 55, "r": 30, "t": 45, "b": 90},
             legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+            showlegend=not compact,
         )
         if compact:
             fig.update_yaxes(
@@ -919,7 +920,7 @@ def create_equipment_activity_chart(
     data["machine_code"] = data["machine_code"].astype(str)
     data = data.sort_values(["count", "machine_code"], ascending=[False, True], kind="mergesort").reset_index(drop=True)
     systems = data.get("primary_system", pd.Series("Sin sistema", index=data.index)).fillna("Sin sistema").astype(str)
-    palette = _system_color_map(systems)
+    palette = _system_color_map(systems if palette_systems is None else set(palette_systems) | set(systems))
     fig = go.Figure(
         go.Bar(
             x=data["machine_code"],
