@@ -2,6 +2,11 @@
 
 Fecha: 2026-10-06. Tarea: `tds-alerts-dashboard--codex--confiabilidad-emin-filtros`.
 
+**Actualización de publicación:** el resultado final tras incorporar los commits
+recientes de `origin/dev` es **983 pruebas aprobadas, 6 omitidas y ningún fallo**.
+Los nueve fallos de Campbell AI descritos abajo corresponden a la base anterior.
+El detalle de esta actualización aparece al final del informe.
+
 ## Objetivo, alcance y resultado
 
 Auditar y corregir el selector global de sistemas, los indicadores y gráficos
@@ -128,3 +133,31 @@ No hubo integración, publicación remota ni cambios de fuentes reales.
 Siguiente acción: revisar este diff, asignar las reparaciones de Campbell AI y
 la conciliación con datos reales; repetir el perfil completo tras integrar.
 La tarea queda en handoff, sin declararla completa globalmente.
+
+## Actualización tras la solicitud de publicación
+
+La persona usuaria solicitó publicar estos cambios en `origin/dev`.
+Se consultó el remoto `https://github.com/coddi-ai/tds_alerts_dashboard.git`.
+La referencia remota estaba en `64cb7f6b9146034e1635e15eb74cde05f64530a1`,
+dos commits por delante de la base original. Incluyen reparaciones de las
+pruebas de Campbell AI que fallaban en la auditoría inicial.
+
+- Commit de cambios EMIN: `335cfd78a34d5068a99bb1ed6b9760984f8301be`.
+- Previsualización: `.\ai.ps1 integrate -TaskId tds-alerts-dashboard--codex--confiabilidad-emin-filtros -Target origin/dev`.
+- Incorporación de la referencia remota en la rama asignada, sin conflictos:
+  `7d858546adc1d3e5fb02c3d68e1d1c0d97cdbece`. No se cambió la rama del
+  checkout principal ni se editaron otros worktrees.
+- `git merge-base --is-ancestor origin/dev HEAD`: salida 0; la historia remota
+  se conserva. El diff frente a `origin/dev` contiene solo los seis archivos
+  de esta tarea.
+
+Validación del código combinado, ejecutada antes de publicar:
+
+```powershell
+& $auditPython -m pytest -q tests --basetemp '.coddi-local/publish-offline-tmp' -p no:cacheprovider --tb=short --disable-warnings --junitxml='.coddi-local/publish-offline.xml'
+```
+
+Resultado: **983 passed, 6 skipped, 72 warnings**, 34,40 s, salida 0.
+Las seis omisiones siguen sin representar pruebas ejecutadas. Los problemas
+de coordinación del meta-repo y la validación con datos reales/despliegue
+descritos en la auditoría inicial permanecen fuera de esta publicación.
