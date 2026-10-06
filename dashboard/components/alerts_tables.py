@@ -15,6 +15,7 @@ from typing import List, Optional, Dict
 
 from src.utils.logger import get_logger
 from src.utils.date_utils import format_local
+from src.data.emin_alert_evidence import evidence_label
 from dashboard.components.alerts_charts import FEATURE_NAMES_ES
 from dashboard.components.labels import translate_component_label, source_style, SOURCE_STYLE
 
@@ -305,14 +306,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             # labels.py), instead of an inline dict duplicating the one in
             # alerts_report.py's translate_alert_source.
             source, _source_color = source_style(row.get("Trigger_type", ""))
-            if bool(row.get("has_telemetry")) and bool(row.get("has_tribology")):
-                evidence = t("alerts_report.telemetria_tribologia")
-            elif bool(row.get("has_telemetry")):
-                evidence = t("alert_evidence.telemetry")
-            elif bool(row.get("has_tribology")):
-                evidence = t("alert_evidence.tribology")
-            else:
-                evidence = t("alerts_report.sin_evidencia")
+            evidence = evidence_label(row)
             rows.append({
                 "ID": row.get("FusionID", "-"),
                 # W34-06: local wall-clock time (Timestamp is already
@@ -328,6 +322,10 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 "causa_completa": sections.get("causa_probable", t("alerts_report.sin_causa_probable_registrada")),
                 "accion_completa": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
                 "Evidencia": evidence,
+                "has_maintenance": bool(row.get("has_maintenance", False)),
+                "maintenance_week": row.get("Semana_Resumen_Mantencion", ""),
+                "maintenance_summary": row.get("maintenance_evidence_summary", ""),
+                "maintenance_tasks": row.get("maintenance_evidence_tasks", ""),
                 "Acción": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
             })
         table = dash_table.DataTable(
@@ -613,7 +611,9 @@ def create_context_kpis_cards(
         return dbc.Alert(t("alerts_tables.error_al_mostrar_kpis", str_e=str(e)), color="danger")
 
 
-def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -> dbc.Card:
+def create_maintenance_display(
+    maintenance_data: pd.Series, alert_system: str, include_all_systems: bool = False
+) -> dbc.Card:
     """
     Create card displaying maintenance information.
     
@@ -629,6 +629,10 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
     
     try:
         import json
+        tasks_heading = (
+            t("alerts_callbacks.reported_activities") if include_all_systems
+            else t("alerts_tables.actividades_relacionadas_con", alert_system=alert_system)
+        )
         
         card_content = dbc.Card([
             dbc.CardHeader([
@@ -658,7 +662,7 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                 
                 # Tasks filtered by system
                 html.Div([
-                    html.H6(t("alerts_tables.actividades_relacionadas_con", alert_system=alert_system), className="text-primary mb-2"),
+                    html.H6(tasks_heading, className="text-primary mb-2"),
                     html.Div(id='maintenance-tasks-list')
                 ]) if pd.notna(maintenance_data.get('Tasks_List')) else html.Div([
                     dbc.Alert(t("alerts_tables.no_hay_lista_de_tareas_disponible"), color="info")
@@ -670,19 +674,26 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
         if pd.notna(maintenance_data.get('Tasks_List')):
             try:
                 tasks_dict = json.loads(maintenance_data['Tasks_List'])
+                if not isinstance(tasks_dict, dict):
+                    tasks_dict = {}
                 tasks_elements = []
                 
                 found_tasks = False
                 for date, systems in tasks_dict.items():
-                    # Compare systems case-insensitively (maintenance CSV uses uppercase)
-                    if alert_system.upper() in [s.upper() for s in systems.keys()]:
-                        # Find the original key in systems dict (case-insensitive match)
-                        matching_key = next(k for k in systems.keys() if k.upper() == alert_system.upper())
+                    if not isinstance(systems, dict):
+                        continue
+                    for system, tasks in systems.items():
+                        if not include_all_systems and system.upper() != alert_system.upper():
+                            continue
+                        if not isinstance(tasks, list):
+                            continue
+                        activities = [task for task in tasks if isinstance(task, str) and task.strip()]
+                        if not activities:
+                            continue
                         found_tasks = True
-                        tasks_elements.append(html.H6(f"📆 {date}:", className="mt-2"))
-                        
-                        for task in systems[matching_key]:
-                            tasks_elements.append(html.Li(task, className="mb-1"))
+                        title = f"📆 {date} · {system}" if include_all_systems else f"📆 {date}:"
+                        tasks_elements.append(html.H6(title, className="mt-2"))
+                        tasks_elements.extend(html.Li(task, className="mb-1") for task in activities)
                 
                 if not found_tasks:
                     tasks_elements = [dbc.Alert(
@@ -722,7 +733,7 @@ def create_maintenance_display(maintenance_data: pd.Series, alert_system: str) -
                         html.Hr(),
                         
                         html.Div([
-                            html.H6(t("alerts_tables.actividades_relacionadas_con", alert_system=alert_system), className="text-primary mb-2"),
+                            html.H6(tasks_heading, className="text-primary mb-2"),
                             html.Ul(tasks_elements, className="mb-0")
                         ])
                     ])
