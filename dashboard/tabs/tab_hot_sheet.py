@@ -5,6 +5,7 @@ This tab provides a quick status overview of all units with traffic light indica
 combining alerts and tribology status.
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -27,10 +28,10 @@ def create_layout() -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-th me-3"),
-                    "Hot Sheet - Estado de Unidades"
+                    t("tab_hot_sheet.hot_sheet_estado_de_unidades")
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Vista rápida del estado de todas las unidades basado en telemetría y tribología",
+                    t("tab_hot_sheet.vista_rapida_del_estado_de_todas"),
                     className="text-muted"
                 )
             ])
@@ -43,7 +44,7 @@ def create_layout() -> html.Div:
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-table me-2"),
-                            "Estado por Unidad"
+                            t("tab_hot_sheet.estado_por_unidad")
                         ], className="mb-0")
                     ], className="bg-light"),
                     dbc.CardBody([

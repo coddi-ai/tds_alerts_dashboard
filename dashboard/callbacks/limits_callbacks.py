@@ -2,6 +2,7 @@
 Stewart Limits tab callbacks for Multi-Technical-Alerts dashboard.
 """
 
+from src.i18n import t
 from dash import Input, Output, State, html
 from dash.exceptions import PreventUpdate
 import pandas as pd
@@ -93,7 +94,7 @@ def register_limits_callbacks(app):
     def update_limits_table(client, machine, component, search_text):
         """Update limits table based on filters."""
         if not client:
-            return html.Div("Please select a client to view limits", className="text-muted p-3")
+            return html.Div(t("limits_callbacks.please_select_a_client_to_view"), className="text-muted p-3")
         
         settings = get_settings()
         
@@ -101,7 +102,7 @@ def register_limits_callbacks(app):
         limits_file = settings.get_stewart_limits_four_path(client)
         
         if not limits_file.exists():
-            return html.Div("No limits data available", className="text-warning p-3")
+            return html.Div(t("tables.no_limits_data_available"), className="text-warning p-3")
         
         try:
             df = safe_read_parquet(limits_file)
@@ -119,9 +120,9 @@ def register_limits_callbacks(app):
                 df = df[df['essay'].str.contains(search_text, case=False, na=False)]
             
             if df.empty:
-                return html.Div("No limits found matching the current filters", className="text-muted p-3")
+                return html.Div(t("limits_callbacks.no_limits_found_matching_the_current"), className="text-muted p-3")
             
             return create_limits_table(df)
             
         except Exception as e:
-            return html.Div(f"Error loading limits: {str(e)}", className="text-danger p-3")
+            return html.Div(t("limits_callbacks.error_loading_limits", str_e=str(e)), className="text-danger p-3")

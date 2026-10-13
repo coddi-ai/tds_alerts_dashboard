@@ -25,7 +25,7 @@ status for exactly that case). `classify_predictive_status` was removed as
 dead code once both call sites switched to `attach_status`; defect #1 above
 is superseded by that newer design, not covered here anymore. Defects #2 and
 #3 are independent of where `status` comes from and remain fully in scope —
-re-applied on top of `dev`'s rewritten `_failure_table`/`_priority_card`
+re-applied on top of `dev`'s rewritten `_failure_table`
 (new signature: `_failure_table(sorted_df, window, sort_by, ascending,
 failure_modes)`, one ranking column instead of four, click-to-sort headers).
 """
@@ -35,7 +35,6 @@ import pytest
 
 from dashboard.tabs.tab_predictive_overview import (
     _failure_table,
-    _priority_card,
     _score_cell_style,
 )
 
@@ -74,36 +73,6 @@ def test_score_cell_style_none_is_neutral_not_green():
 
 def test_score_cell_style_nan_float_is_also_neutral():
     assert _score_cell_style(float("nan")) == _score_cell_style(None)
-
-
-def test_priority_card_renders_dash_for_missing_score_not_the_text_nan():
-    """Found during W34 visual QA: a unit with no computed ranking yet still
-    rendered the literal text "nan" / "+nan" in the fleet-priority card,
-    because _priority_card formats score/acum_30d/delta with plain f-strings
-    with no NaN guard — the same defect class _failure_table and
-    _score_cell_style already fix, in a sibling component that was missed."""
-    card = _priority_card(
-        "U1", score=float("nan"), acum_30d=float("nan"), delta=float("nan"),
-        status="Normal", drivers=[],
-    )
-    rendered = str(card)
-    assert "nan" not in rendered.lower()
-    assert "—" in rendered
-
-
-def test_priority_card_keeps_real_values_and_delta_sign_intact():
-    """dev's layout shows acum_30d as the headline score (.0f) and score
-    ("Reciente") as the secondary line (.1f) — the reverse of the emphasis
-    this project's own tests originally assumed, reconciled after merging
-    origin/dev's redesign of this card."""
-    card = _priority_card(
-        "U1", score=87.3, acum_30d=78.0, delta=4.5, status="Anormal", drivers=[],
-    )
-    rendered = str(card)
-    assert "78" in rendered  # acum_30d headline
-    assert "87.3" in rendered  # score, "Reciente" line
-    assert "+4.5" in rendered
-    assert "nan" not in rendered.lower()
 
 
 def test_failure_table_renders_dash_for_missing_ranking_not_the_text_nan():

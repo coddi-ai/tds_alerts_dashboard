@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.i18n import t, t_or
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,15 @@ class SuggestedQuestion:
     requires: tuple[str, ...]
     # Grouping label for the heading above the buttons.
     domain: str
+
+    @property
+    def display_text(self) -> str:
+        """The question in the current language; `text` holds the Spanish source."""
+        return t_or(f"campbell_ai.question_{self.question_id.replace('-', '_')}", self.text)
+
+    @property
+    def domain_label(self) -> str:
+        return t_or(f"campbell_ai.domain_{self.domain}", self.domain)
 
 
 # Offered questions, keyed by the capability that answers them rather than a fixed alert list.
@@ -204,7 +214,7 @@ def suggested_question_text(question_id: Any, capabilities: Any) -> str | None:
         return None
     if not available_capability_keys(capabilities).issuperset(question.requires):
         return None
-    return question.text
+    return question.display_text
 
 
 def suggested_questions_block(capabilities: Any) -> list:
@@ -223,9 +233,7 @@ def suggested_questions_block(capabilities: Any) -> list:
                 [
                     html.I(className="fas fa-circle-info me-2", style={"color": ACCENT}),
                     html.Span(
-                        "No hay preguntas sugeridas para esta empresa: no tiene fuentes "
-                        "habilitadas que puedan responderlas. Puedes preguntar directamente "
-                        "y te indicaré qué análisis están disponibles.",
+                        t("layout.no_hay_preguntas_sugeridas_para_esta"),
                     ),
                 ],
                 className="mb-2",
@@ -235,11 +243,11 @@ def suggested_questions_block(capabilities: Any) -> list:
                 },
             )
         ]
-    domains = list(dict.fromkeys(question.domain for question in questions))
+    domains = list(dict.fromkeys(question.domain_label for question in questions))
     heading = (
-        f"Preguntas sugeridas sobre {domains[0]}"
+        t("layout.preguntas_sugeridas_sobre", domains_0=domains[0])
         if len(domains) == 1
-        else "Preguntas sugeridas para esta empresa"
+        else t("layout.preguntas_sugeridas_para_esta_empresa")
     )
     return [
         html.Div(
@@ -251,7 +259,7 @@ def suggested_questions_block(capabilities: Any) -> list:
         ),
         dbc.Row(
             [
-                _suggested_question_button(question.question_id, question.text)
+                _suggested_question_button(question.question_id, question.display_text)
                 for question in questions
             ],
             className="g-2",
@@ -298,7 +306,7 @@ def service_error_content(
         body.append(
             html.P(
                 [
-                    html.Span("Tu consulta se conservó: ", className="text-muted"),
+                    html.Span(t("layout.tu_consulta_se_conservo"), className="text-muted"),
                     html.Em(f"“{pending_question[:160]}”"),
                 ],
                 className="mb-0 mt-2",
@@ -317,7 +325,7 @@ def _retry_button() -> dbc.Button:
     return dbc.Button(
         [
             html.I(className="fas fa-rotate-right me-2"),
-            html.Span("Reintentar", id="campbell-ai-retry-label"),
+            html.Span(t("layout.reintentar"), id="campbell-ai-retry-label"),
         ],
         id="campbell-ai-retry",
         color="danger",
@@ -348,8 +356,7 @@ def _waiting_panel() -> dbc.Alert:
                 className="d-flex align-items-center",
             ),
             html.P(
-                "La consulta sigue procesándose en el servidor. Puedes esperar, o "
-                "cancelarla y reformularla de forma más acotada.",
+                t("layout.la_consulta_sigue_procesandose_en_el"),
                 className="mb-0 mt-2",
                 style={
                     "fontSize": CAMPBELL_AI_AUX_FONT_SIZE,
@@ -361,7 +368,7 @@ def _waiting_panel() -> dbc.Alert:
                     dbc.Button(
                         [
                             html.I(className="fas fa-hourglass-half me-2"),
-                            "Seguir esperando",
+                            t("layout.seguir_esperando"),
                         ],
                         id="campbell-ai-keep-waiting",
                         color="info",
@@ -370,7 +377,7 @@ def _waiting_panel() -> dbc.Alert:
                         n_clicks=0,
                     ),
                     dbc.Button(
-                        [html.I(className="fas fa-xmark me-2"), "Cancelar consulta"],
+                        [html.I(className="fas fa-xmark me-2"), t("layout.cancelar_consulta")],
                         id="campbell-ai-cancel-job",
                         color="secondary",
                         outline=True,
@@ -397,12 +404,12 @@ def unavailable_placeholder(title: str) -> html.Div:
                 style={"fontSize": "2rem", "color": BRAND_MUTED},
             ),
             html.P(
-                title or "Campbell AI no está disponible",
+                title or t("layout.campbell_ai_no_esta_disponible"),
                 className="mb-1",
                 style={"fontWeight": "600", "color": BRAND_TITLE},
             ),
             html.P(
-                "El resto del dashboard sigue funcionando con normalidad.",
+                t("layout.el_resto_del_dashboard_sigue_funcionando"),
                 className="text-muted mb-0",
                 style={"fontSize": CAMPBELL_AI_AUX_FONT_SIZE},
             ),
@@ -428,7 +435,7 @@ def _suggested_question_button(question_id: str, question: str) -> dbc.Col:
             n_clicks=0,
             color="light",
             className="text-start w-100 h-100",
-            title="Enviar esta pregunta",
+            title=t("layout.enviar_esta_pregunta"),
             style={
                 "border": f"1px solid {ACCENT_BORDER}",
                 "borderRadius": "10px",
@@ -452,7 +459,7 @@ def _conversation_history_sidebar() -> list:
     trigger = dbc.Button(
         [
             html.I(className="fas fa-clock-rotate-left me-2"),
-            "Conversaciones anteriores",
+            t("layout.conversaciones_anteriores"),
         ],
         id="campbell-ai-history-toggle",
         color="light",
@@ -471,14 +478,14 @@ def _conversation_history_sidebar() -> list:
                 [
                     # Same wording as the header button: one name for one action.
                     dbc.Button(
-                        [html.I(className="fas fa-plus me-2"), "Nueva conversación"],
+                        [html.I(className="fas fa-plus me-2"), t("layout.nueva_conversacion")],
                         id="campbell-ai-new-conversation",
                         color="link",
                         size="sm",
                         n_clicks=0,
                         className="text-decoration-none",
                         title=(
-                            "Iniciar una conversación nueva; la anterior queda en el historial"
+                            t("layout.iniciar_una_conversacion_nueva_la_anterior")
                         ),
                     ),
                     dbc.Button(
@@ -488,7 +495,7 @@ def _conversation_history_sidebar() -> list:
                         size="sm",
                         n_clicks=0,
                         className="text-muted text-decoration-none",
-                        title="Actualizar la lista",
+                        title=t("layout.actualizar_la_lista"),
                     ),
                 ],
                 className="d-flex align-items-center gap-1 mb-3",
@@ -496,7 +503,7 @@ def _conversation_history_sidebar() -> list:
             html.Div(id="campbell-ai-conversation-list"),
         ],
         id="campbell-ai-history-offcanvas",
-        title="Conversaciones anteriores",
+        title=t("layout.conversaciones_anteriores"),
         is_open=False,
         placement="end",
     )
@@ -516,7 +523,7 @@ def render_conversation_list(
     if not items:
         return [
             html.P(
-                "Aún no hay conversaciones respaldadas para esta empresa.",
+                t("layout.aun_no_hay_conversaciones_respaldadas_para"),
                 className="text-muted mb-0",
                 style={"fontSize": CAMPBELL_AI_META_FONT_SIZE},
             )
@@ -549,7 +556,7 @@ def render_conversation_list(
                             html.Span(" · ", className="mx-1"),
                             f"{int(item.get('message_count', 0) or 0)} mensajes",
                             html.Span(
-                                " · en curso" if is_active else "",
+                                t("layout.en_curso") if is_active else "",
                                 style={"color": ACCENT, "fontWeight": "600"},
                             ),
                         ],
@@ -580,7 +587,7 @@ def _short_timestamp(value: str) -> str:
     """Render an ISO timestamp as date and time, without inventing a timezone."""
     text = str(value or "").strip()
     if len(text) < 16 or "T" not in text:
-        return text or "sin fecha"
+        return text or t("layout.sin_fecha")
     date_part, time_part = text.split("T", 1)
     return f"{date_part} {time_part[:5]}"
 
@@ -699,13 +706,13 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                                     className="fas fa-robot me-3",
                                                     style={"color": ACCENT},
                                                 ),
-                                                "Campbell AI",
+                                                t("nav.service.agents-campbell-ai"),
                                             ],
                                             className="mb-1",
                                             style={"fontWeight": "700", "color": BRAND_DARK},
                                         ),
                                         html.P(
-                                            "Asistente de mantenimiento basado en agentes",
+                                            t("layout.asistente_de_mantenimiento_basado_en_agent"),
                                             className="text-muted mb-0",
                                             style={
                                                 "fontSize": CAMPBELL_AI_AUX_FONT_SIZE,
@@ -715,7 +722,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                     ]
                                 ),
                                 dbc.Badge(
-                                    "Inicializando…",
+                                    t("js.status_initializing") + "…",
                                     id="campbell-ai-status",
                                     color="secondary",
                                     pill=True,
@@ -742,7 +749,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                             html.Span(
                                                 [
                                                     html.I(className="fas fa-comment-dots me-2"),
-                                                    "Conversación",
+                                                    t("layout.conversacion"),
                                                 ],
                                                 style={"fontWeight": "600"},
                                             ),
@@ -754,7 +761,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                             dbc.Button(
                                                 [
                                                     html.I(className="fas fa-plus me-2"),
-                                                    "Nueva conversación",
+                                                    t("layout.nueva_conversacion"),
                                                 ],
                                                 id="campbell-ai-new-conversation-main",
                                                 color="link",
@@ -762,8 +769,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                                 className="text-muted text-decoration-none",
                                                 n_clicks=0,
                                                 title=(
-                                                    "Iniciar una conversación nueva; la "
-                                                    "anterior queda en el historial"
+                                                    t("layout.iniciar_una_conversacion_nueva_la_anterior")
                                                 ),
                                             ),
                                         ],
@@ -810,7 +816,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                         [
                                             dbc.Textarea(
                                                 id="campbell-ai-input",
-                                                placeholder="Pregúntame sobre mantenimiento o solicita un gráfico…",
+                                                placeholder=t("layout.preguntame_sobre_mantenimiento_o_solicita"),
                                                 rows=2,
                                                 maxLength=4000,
                                                 submit_on_enter=True,
@@ -824,7 +830,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                             dbc.Button(
                                                 [
                                                     html.I(className="fas fa-paper-plane me-2"),
-                                                    "Enviar",
+                                                    t("layout.enviar"),
                                                 ],
                                                 id="campbell-ai-send",
                                                 color="primary",
@@ -845,7 +851,7 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                             style={"borderRadius": "14px", "overflow": "hidden"},
                         ),
                         html.P(
-                            f"Campbell AI v{CAMPBELL_AI_VERSION}",
+                            t("layout.campbell_ai_v", CAMPBELL_AI_VERSION=CAMPBELL_AI_VERSION),
                             className="text-muted text-center mt-3 mb-0",
                             style={"fontSize": "0.75rem"},
                         ),
@@ -882,8 +888,7 @@ def _render_visualizations(message: dict) -> list[html.Div]:
                             style={"color": BRAND_MUTED},
                         ),
                         html.Span(
-                            "El gráfico de este mensaje no se conservó al archivar la "
-                            "conversación. Vuelve a pedirlo si lo necesitas.",
+                            t("layout.el_grafico_de_este_mensaje_no"),
                             style={
                                 "fontSize": CAMPBELL_AI_AUX_FONT_SIZE,
                                 "color": BRAND_MUTED,
@@ -951,15 +956,15 @@ def _feedback_comment_box(message_id: str, rating: str, submitted: bool) -> html
         return html.Div(
             [
                 html.I(className="fas fa-check me-2", style={"color": ACCENT}),
-                "Gracias, registramos tu comentario.",
+                t("layout.gracias_registramos_tu_comentario"),
             ],
             className="text-muted mt-2",
             style={"fontSize": CAMPBELL_AI_META_FONT_SIZE},
         )
     prompt = (
-        "¿Qué faltó o qué estuvo mal? (opcional)"
+        t("layout.que_falto_o_que_estuvo_mal")
         if rating == "negative"
-        else "¿Qué te resultó útil? (opcional)"
+        else t("layout.que_te_resulto_util_opcional")
     )
     return html.Div(
         [
@@ -976,7 +981,7 @@ def _feedback_comment_box(message_id: str, rating: str, submitted: bool) -> html
                 },
             ),
             dbc.Button(
-                [html.I(className="fas fa-paper-plane me-2"), "Enviar comentario"],
+                [html.I(className="fas fa-paper-plane me-2"), t("layout.enviar_comentario")],
                 id={
                     "type": "campbell-ai-feedback-comment-send",
                     "message_id": message_id,
@@ -1003,7 +1008,7 @@ def _feedback_controls(message_id: str, entry=None) -> html.Div:
     controls = html.Div(
         [
             html.Span(
-                "¿Te sirvió esta respuesta?",
+                t("layout.te_sirvio_esta_respuesta"),
                 className="text-muted me-2",
                 style={"fontSize": CAMPBELL_AI_META_FONT_SIZE},
             ),
@@ -1020,7 +1025,7 @@ def _feedback_controls(message_id: str, entry=None) -> html.Div:
                 outline=selected != "positive",
                 disabled=disabled,
                 className="me-1",
-                title="Respuesta útil",
+                title=t("layout.respuesta_util"),
             ),
             dbc.Button(
                 html.I(className="fas fa-thumbs-down"),
@@ -1034,7 +1039,7 @@ def _feedback_controls(message_id: str, entry=None) -> html.Div:
                 color="danger",
                 outline=selected != "negative",
                 disabled=disabled,
-                title="Respuesta no útil",
+                title=t("layout.respuesta_no_util"),
             ),
         ],
         className="d-flex align-items-center mt-3",
@@ -1059,8 +1064,7 @@ def render_chat_history(
                         style={"fontSize": "2rem", "color": ACCENT},
                     ),
                     html.P(
-                        "La sesión está lista. Puedes consultar las últimas alertas o solicitar "
-                        "un gráfico.",
+                        t("layout.la_sesion_esta_lista_puedes_consultar"),
                         className="text-muted mb-0",
                     ),
                 ],
@@ -1079,7 +1083,7 @@ def render_chat_history(
         message_id = str(message.get("message_id", ""))
         content: list = [
             html.Div(
-                "Tú" if is_user else "Campbell AI",
+                t("layout.tu") if is_user else t("nav.service.agents-campbell-ai"),
                 style={
                     "fontSize": "0.75rem",
                     "fontWeight": "700",
@@ -1137,7 +1141,7 @@ def _streaming_placeholder() -> html.Div:
     return html.Div(
         [
             html.Div(
-                "Campbell AI",
+                t("nav.service.agents-campbell-ai"),
                 style={
                     "fontSize": "0.75rem",
                     "fontWeight": "700",
@@ -1151,7 +1155,7 @@ def _streaming_placeholder() -> html.Div:
                         className="fas fa-circle-notch fa-spin me-2",
                         style={"color": ACCENT},
                     ),
-                    html.Span("Pensando…"),
+                    html.Span(t("layout.pensando")),
                 ],
                 id="campbell-ai-stream-placeholder",
                 style={

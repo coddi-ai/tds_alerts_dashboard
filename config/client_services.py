@@ -55,7 +55,6 @@ CONFIG_PATH = Path(__file__).parent / "client_services.json"
 # instead of all-or-nothing.
 KNOWN_SERVICE_IDS: List[str] = [
     "overview-general",
-    "overview-data-freshness",
     "monitoring-alerts",
     "monitoring-telemetry",
     "monitoring-oil",

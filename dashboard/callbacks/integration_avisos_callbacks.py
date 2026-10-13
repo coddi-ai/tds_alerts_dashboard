@@ -44,21 +44,31 @@ from src.data.erp_schemas import (
     SYSTEM_LABELS,
     WarningStatus,
 )
+from src.i18n import t, LazyLabels
 from src.data.erp_write_operations import MAX_TITLE_LENGTH, approve_and_send, can_approve, reject
 
 logger = logging.getLogger(__name__)
 
 # design-system semantic colors (ui_notes.md palette): Alerta=warning (caution), Anormal=danger
-_LABEL_COLOR = {"Alerta": "#ffc107", "Anormal": "#dc3545"}
+def _label_color() -> dict:
+    """Color per condition label. Keyed by the *displayed* (translated) label, because the
+    chart colours its series by display name."""
+    return {
+        CONDITION_LABEL_LABELS[ConditionLabel.alerta]: "#ffc107",
+        CONDITION_LABEL_LABELS[ConditionLabel.anormal]: "#dc3545",
+    }
+
+
 # pending-list sort priority (1.1): Anormal before Alerta before anything else, ties broken newest-first
 _CRITICALITY_PRIORITY = {"anormal": 0, "alerta": 1, "normal": 2}
 # validation-rate trend outcome labels (raw WarningStatus values, not the full STATUS_LABELS set —
 # only "sent"/"rejected" ever appear here since validation_rate_trend restricts to terminal states)
-_OUTCOME_LABELS = {"sent": "Enviado", "rejected": "Rechazado"}
+_OUTCOME_LABELS = LazyLabels({"sent": "erp.status.sent", "rejected": "erp.status.rejected"})
 # Sólo los avisos en estado terminal abren el detalle de fila del Registro de Avisos.
-_ROW_DETAIL_STATUS_LABELS = frozenset(
-    {STATUS_LABELS[WarningStatus.sent], STATUS_LABELS[WarningStatus.rejected]}
-)
+def _row_detail_status_labels() -> frozenset:
+    """Computed per call, not at import: the table shows the translated label, so the
+    comparison must use the label of the language being served."""
+    return frozenset({STATUS_LABELS[WarningStatus.sent], STATUS_LABELS[WarningStatus.rejected]})
 # Registro de Avisos (2.2): las columnas categóricas se muestran con las etiquetas
 # declaradas en erp_schemas — las mismas del filtro y de los gráficos de arriba.
 # Los valores almacenados mezclan idiomas (`inspections`, `medium`, `pending`),
@@ -131,7 +141,7 @@ def _refresh_pending_list(selected_client, user_data, selected_warning_id):
     pending = erp_warning_store.read_warnings(client_id, "pending")
     logger.info("client=%s pending_count=%d", client_id, len(pending))
     if not pending:
-        return html.P("No hay avisos pendientes.", className="text-muted p-2")
+        return html.P(t("integration_avisos_callbacks.no_hay_avisos_pendientes"), className="text-muted p-2")
     pending = sorted(
         pending,
         key=lambda w: (
@@ -161,11 +171,11 @@ def _select_pending(_n_clicks):
 )
 def _render_detail(warning_id):
     if not warning_id:
-        return create_detail_placeholder("Seleccione un aviso pendiente.")
+        return create_detail_placeholder(t("tab_integration_validacion_avisos.seleccione_un_aviso_pendiente"))
     found = erp_warning_store.find_by_id_any_client(warning_id)
     if found is None:
         logger.warning("warning_id=%s not found (no longer pending?)", warning_id)
-        return create_detail_placeholder("El aviso ya no está pendiente.")
+        return create_detail_placeholder(t("integration_avisos_callbacks.el_aviso_ya_no_esta_pendiente"))
     warning, _client_id, _state = found
     return create_detail_form(warning)
 
@@ -251,7 +261,7 @@ def _handle_action(
     found = erp_warning_store.find_by_id_any_client(warning_id)
     if found is None:
         logger.warning("warning_id=%s not found for action (no longer pending?)", warning_id)
-        return "", False, "El aviso ya no está disponible.", True, None, "", ""
+        return "", False, t("integration_avisos_callbacks.el_aviso_ya_no_esta_disponible"), True, None, "", ""
 
     _warning, client_id, _state = found
     operator_id = (operator_name or "").strip()
@@ -261,10 +271,10 @@ def _handle_action(
         return (
             "",
             False,
-            "Debe indicar el nombre del operador.",
+            t("integration_avisos_callbacks.debe_indicar_el_nombre_del_operador"),
             True,
             dash.no_update,
-            "Debe indicar el nombre del operador.",
+            t("integration_avisos_callbacks.debe_indicar_el_nombre_del_operador"),
             "is-invalid",
         )
 
@@ -275,7 +285,7 @@ def _handle_action(
             logger.warning(
                 "client=%s warning_id=%s approve blocked: missing required field(s)", client_id, warning_id
             )
-            return "", False, "Título, asset y acción recomendada son obligatorios.", True, dash.no_update, "", ""
+            return "", False, t("integration_avisos_callbacks.titulo_asset_y_accion_recomendada_son"), True, dash.no_update, "", ""
         if len(title) > MAX_TITLE_LENGTH:
             logger.warning(
                 "client=%s warning_id=%s approve blocked: title exceeds %d chars",
@@ -286,7 +296,7 @@ def _handle_action(
             return (
                 "",
                 False,
-                f"El título excede {MAX_TITLE_LENGTH} caracteres.",
+                t("integration_avisos_callbacks.el_titulo_excede_caracteres", MAX_TITLE_LENGTH=MAX_TITLE_LENGTH),
                 True,
                 dash.no_update,
                 "",
@@ -313,7 +323,7 @@ def _handle_action(
                 result.erp_reference,
             )
             return (
-                ["Aviso enviado al ERP correctamente. Referencia SAP: ", html.Strong(result.erp_reference)],
+                [t("integration_avisos_callbacks.aviso_enviado_al_erp_correctamente_referen"), html.Strong(result.erp_reference)],
                 True,
                 "",
                 False,
@@ -324,17 +334,17 @@ def _handle_action(
         logger.error(
             "client=%s warning_id=%s ERP push failed: %s", client_id, warning_id, result.operator_notes
         )
-        return "", False, f"Error al enviar al ERP: {result.operator_notes}", True, None, "", ""
+        return "", False, t("integration_avisos_callbacks.error_al_enviar_al_erp", result_operator_no=result.operator_notes), True, None, "", ""
 
     if triggered == "erp-validator-btn-confirm-reject":
         if not reject_reason:
             logger.warning("client=%s warning_id=%s reject blocked: no reason given", client_id, warning_id)
-            return "", False, "Debe indicar un motivo de rechazo.", True, dash.no_update, "", ""
+            return "", False, t("integration_avisos_callbacks.debe_indicar_un_motivo_de_rechazo"), True, dash.no_update, "", ""
         reject(client_id, warning_id, operator_id=operator_id, reason=reject_reason)
         logger.info(
             "client=%s warning_id=%s operator=%s rejected reason=%r", client_id, warning_id, operator_id, reject_reason
         )
-        return "Aviso rechazado.", True, "", False, None, "", ""
+        return t("integration_avisos_callbacks.aviso_rechazado"), True, "", False, None, "", ""
 
     raise dash.exceptions.PreventUpdate
 
@@ -434,53 +444,53 @@ def _refresh(selected_client, user_data, source, system, condition_label, severi
         y="count",
         color="condition_label_label",
         title=None,
-        color_discrete_map=_LABEL_COLOR,
-        labels={"source_label": "Fuente", "condition_label_label": "Clasificación", "count": "Cantidad de avisos"},
+        color_discrete_map=_label_color(),
+        labels={"source_label": t("tab_integration_validacion_avisos.fuente"), "condition_label_label": t("tab_integration_validacion_avisos.clasificacion"), "count": t("integration_avisos_callbacks.cantidad_de_avisos")},
     )
     by_label.update_traces(
-        hovertemplate="<b>Clasificación: %{fullData.name}</b><br>Fuente: %{x}<br>Cantidad de avisos: %{y}<extra></extra>"
+        hovertemplate=t("integration_avisos_callbacks.b_clasificacion_b_br_fuente_br")
     )
     by_severity = px.pie(
         display.groupby("severity_label").size().reset_index(name="count"),
         names="severity_label",
         values="count",
-        labels={"severity_label": "Severidad", "count": "Cantidad de avisos"},
+        labels={"severity_label": t("tab_integration_seguimiento_avisos.severidad"), "count": t("integration_avisos_callbacks.cantidad_de_avisos")},
     )
     by_severity.update_traces(
-        hovertemplate="<b>%{label}</b><br>Cantidad de avisos: %{value}<br>Porcentaje: %{percent}<extra></extra>"
+        hovertemplate=t("integration_avisos_callbacks.b_b_br_cantidad_de_avisos")
     )
     by_system = px.pie(
         display.groupby("system_label").size().reset_index(name="count"),
         names="system_label",
         values="count",
         color_discrete_sequence=_SYSTEM_COLOR_SEQUENCE,
-        labels={"system_label": "Sistema", "count": "Cantidad de avisos"},
+        labels={"system_label": t("alerts_general.filter_system"), "count": t("integration_avisos_callbacks.cantidad_de_avisos")},
     )
     by_system.update_traces(
-        hovertemplate="<b>%{label}</b><br>Cantidad de avisos: %{value}<br>Porcentaje: %{percent}<extra></extra>"
+        hovertemplate=t("integration_avisos_callbacks.b_b_br_cantidad_de_avisos")
     )
     over_time = (
         filtered.assign(day=filtered["generated_at"].dt.date).groupby("day").size().reset_index(name="count")
     )
     over_time_fig = px.line(
-        over_time, x="day", y="count", markers=True, labels={"day": "Fecha", "count": "Cantidad de avisos"}
+        over_time, x="day", y="count", markers=True, labels={"day": t("tab_mantenciones_general.fecha"), "count": t("integration_avisos_callbacks.cantidad_de_avisos")}
     )
     over_time_fig.update_traces(
-        hovertemplate="<b>Fecha:</b> %{x|%d/%m/%Y}<br>Cantidad de avisos: %{y}<extra></extra>"
+        hovertemplate=t("integration_avisos_callbacks.b_fecha_b_br_cantidad_de")
     )
 
     trend = erp_warning_store.validation_rate_trend(filtered)
     if not trend.empty:
-        trend = trend.assign(outcome=trend["outcome"].map(_OUTCOME_LABELS).fillna(trend["outcome"]))
+        trend = trend.assign(outcome=trend["outcome"].map(lambda value: _OUTCOME_LABELS.get(value, value)))
         validation_fig = px.line(
             trend,
             x="day",
             y="rate",
             color="outcome",
-            labels={"day": "Fecha", "rate": "Tasa de Validación (%)", "outcome": "Estado"},
+            labels={"day": t("tab_mantenciones_general.fecha"), "rate": t("integration_avisos_callbacks.tasa_de_validacion"), "outcome": t("fleet_overview.col_status")},
         )
         validation_fig.update_traces(
-            hovertemplate="<b>%{fullData.name}</b><br>Fecha: %{x|%d/%m/%Y}<br>Tasa: %{y:.1f}%<extra></extra>"
+            hovertemplate=t("integration_avisos_callbacks.b_b_br_fecha_br_tasa")
         )
     else:
         validation_fig = px.line()
@@ -517,7 +527,7 @@ def _row_detail(active_cell, table_data):
     row = table_data[active_cell["row"]]
     # La tabla muestra el estado ya traducido, así que la comparación va contra
     # las mismas etiquetas y no contra los valores crudos del store.
-    if row.get("status") not in _ROW_DETAIL_STATUS_LABELS:
+    if row.get("status") not in _row_detail_status_labels():
         return ""
     logger.info("row detail opened warning_id=%s status=%s", row.get("warning_id"), row.get("status"))
     return dbc.Card(dbc.CardBody(html.Pre(str(row))), className="shadow-sm mt-3")

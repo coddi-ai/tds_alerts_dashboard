@@ -5,6 +5,7 @@ Handles data loading and visualization for the component hours tab.
 Available for CDA and ENEX clients.
 """
 
+from src.i18n import t
 from dash import Input, Output, State, html, dash_table
 from dash.exceptions import PreventUpdate
 import pandas as pd
@@ -86,7 +87,7 @@ def register_component_hours_callbacks(app):
         """
         if not unit_id or not client:
             return (
-                html.P("Seleccione un equipo para ver el horómetro", className="text-muted"),
+                html.P(t("component_hours_callbacks.seleccione_un_equipo_para_ver_el"), className="text-muted"),
                 [],
                 []
             )
@@ -96,7 +97,7 @@ def register_component_hours_callbacks(app):
         
         if not comp_hours_file.exists():
             return (
-                html.P("No hay datos de horómetro disponibles", className="text-muted"),
+                html.P(t("component_hours_callbacks.no_hay_datos_de_horometro_disponibles"), className="text-muted"),
                 [],
                 []
             )
@@ -105,7 +106,7 @@ def register_component_hours_callbacks(app):
             df = load_component_hours(comp_hours_file)
             if df.empty:
                 return (
-                    html.P("Datos de horómetro vacíos", className="text-muted"),
+                    html.P(t("component_hours_callbacks.datos_de_horometro_vacios"), className="text-muted"),
                     [],
                     []
                 )
@@ -115,7 +116,7 @@ def register_component_hours_callbacks(app):
             
             if unit_df.empty:
                 return (
-                    html.P(f"No hay datos de horómetro para {unit_id}", className="text-muted"),
+                    html.P(t("component_hours_callbacks.no_hay_datos_de_horometro_para", unit_id=unit_id), className="text-muted"),
                     [],
                     []
                 )
@@ -142,11 +143,11 @@ def register_component_hours_callbacks(app):
             # Create table
             table = dash_table.DataTable(
                 columns=[
-                    {'name': 'Componente', 'id': 'componente'},
-                    {'name': 'Horómetro (hrs)', 'id': 'horas_limpio'},
-                    {'name': 'Horas Original', 'id': 'horas_original'},
-                    {'name': 'Última Muestra', 'id': 'fecha'},
-                    {'name': 'Total Muestras', 'id': 'muestras'},
+                    {'name': t("tab_mantenciones_general.componente"), 'id': 'componente'},
+                    {'name': t("component_hours_callbacks.horometro_hrs"), 'id': 'horas_limpio'},
+                    {'name': t("component_hours_callbacks.horas_original"), 'id': 'horas_original'},
+                    {'name': t("component_hours_callbacks.ultima_muestra"), 'id': 'fecha'},
+                    {'name': t("tab_lab_compliance.total_muestras"), 'id': 'muestras'},
                 ],
                 data=latest[['componente', 'horas_limpio', 'horas_original', 'fecha', 'muestras']].to_dict('records'),
                 style_table={'overflowX': 'auto'},
@@ -184,7 +185,7 @@ def register_component_hours_callbacks(app):
         except Exception as e:
             logger.exception(f"Error in component hours summary: {e}")
             return (
-                html.P(f"Error: {str(e)}", className="text-danger"),
+                html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger"),
                 [],
                 []
             )
@@ -249,10 +250,7 @@ def register_component_hours_callbacks(app):
                     line=dict(color=color, width=2),
                     marker=dict(size=5),
                     hovertemplate=(
-                        f'<b>{component.title()}</b><br>'
-                        'Fecha: %{x|%Y-%m-%d}<br>'
-                        'Horómetro: %{y:,.0f} hrs<br>'
-                        '<extra></extra>'
+                        t("component_hours_callbacks.b_b_br_fecha_br_horometro", component_title=component.title())
                     )
                 ))
                 
@@ -263,7 +261,7 @@ def register_component_hours_callbacks(app):
                         x=has_original['sampleDate'],
                         y=has_original['componentHours_cleaned'],
                         mode='markers',
-                        name=f'{component.title()} (interpolado)',
+                        name=t("component_hours_callbacks.interpolado", component_title=component.title()),
                         marker=dict(
                             color=color,
                             size=10,
@@ -271,19 +269,16 @@ def register_component_hours_callbacks(app):
                             line=dict(width=2)
                         ),
                         hovertemplate=(
-                            f'<b>{component.title()} (interpolado)</b><br>'
-                            'Fecha: %{x|%Y-%m-%d}<br>'
-                            'Horómetro estimado: %{y:,.0f} hrs<br>'
-                            '<extra></extra>'
+                            t("component_hours_callbacks.b_interpolado_b_br_fecha_br", component_title=component.title())
                         ),
                         showlegend=True
                     ))
             
             # Update layout
             fig.update_layout(
-                title=f"Evolución del Horómetro — {unit_id}",
-                xaxis_title="Fecha de Muestra",
-                yaxis_title="Horas de Componente",
+                title=t("component_hours_callbacks.evolucion_del_horometro", unit_id=unit_id),
+                xaxis_title=t("component_hours_callbacks.fecha_de_muestra"),
+                yaxis_title=t("component_hours_callbacks.horas_de_componente"),
                 hovermode='x unified',
                 showlegend=True,
                 legend=dict(

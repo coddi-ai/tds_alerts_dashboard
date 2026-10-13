@@ -1,16 +1,17 @@
 """W34-02 — Mejorar Look&Feel Estado de Datos.
 
 Before: three independently hand-picked icon/color palettes for the same
-three statuses (Ok/Atención/Preocupante) — one in
-`tab_data_freshness.py::_build_legend`, one baked into
-`FRESHNESS_CRITERIA`'s tuples, one hardcoded across 8 `style_data_conditional`
-rules in the table (repeated once per column). They happened to roughly
-agree; nothing enforced it.
+three statuses (Ok/Atención/Preocupante) — one in the (now retired) Data
+Summary tab's legend, one baked into `FRESHNESS_CRITERIA`'s tuples, one
+hardcoded across 8 `style_data_conditional` rules in the table (repeated once
+per column). They happened to roughly agree; nothing enforced it.
 
 After: `FRESHNESS_STATUS_STYLE` is the single source (icon, accent, bg,
-text) all three consume — `bg`/`text` reuse the app-wide :root design
-tokens from `predictive_styles.css` (loaded globally via assets/) instead of
-a fourth hardcoded palette.
+text). Phase 1 (documentation/general/general_specs/01_fleet_overview_unified_view.md)
+retired the standalone Data Summary tab and moved both dicts to
+config/freshness_thresholds.py, covering all 5 techniques now instead of
+just Telemetria/Tribologia - dashboard/callbacks/data_freshness_callbacks.py
+re-exports the same names for backward compatibility.
 
 Explicitly NOT touched (per the plan's "no cambia el cálculo de frescura"):
 the threshold values inside FRESHNESS_CRITERIA, and calculate_freshness_status's
@@ -26,7 +27,6 @@ from dashboard.callbacks.data_freshness_callbacks import (
     FRESHNESS_STATUS_STYLE,
     calculate_freshness_status,
 )
-from dashboard.tabs.tab_data_freshness import _build_legend
 
 
 # ---------------------------------------------------------------------------
@@ -127,32 +127,16 @@ def test_style_reuses_root_design_tokens_not_new_hardcoded_hex():
 
 
 # ---------------------------------------------------------------------------
-# 4. Legend reads the same source the table does
+# 4. Phase 1 additions — Alertas/Predictivo/Mantenciones now have thresholds
+#    too (documentation/general/general_specs/00_implementation_guide.md §3.2)
 # ---------------------------------------------------------------------------
 
-def test_legend_uses_the_shared_style_map_not_its_own_palette():
-    legend_str = str(_build_legend())
-    for label in ('Ok', 'Atención', 'Preocupante'):
-        style = FRESHNESS_STATUS_STYLE[label]
-        assert style['icon'] in legend_str
-        assert style['accent'] in legend_str
+def test_alertas_and_predictivo_share_the_same_1_3_week_shape():
+    for key in ('Alertas', 'Predictivo'):
+        thresholds = [t for t, _, _ in FRESHNESS_CRITERIA[key]]
+        assert thresholds == [timedelta(weeks=1), timedelta(weeks=3), timedelta(weeks=3)]
 
 
-def test_legend_and_table_agree_when_the_shared_style_changes(monkeypatch):
-    """Strongest form of the guarantee: patch one entry and confirm the
-    legend picks it up — proving there is exactly one definition, not two
-    that happen to currently match."""
-    import dashboard.callbacks.data_freshness_callbacks as freshness_module
-
-    patched = dict(FRESHNESS_STATUS_STYLE)
-    patched['Ok'] = {**patched['Ok'], 'accent': '#123456', 'icon': '✅'}
-    monkeypatch.setattr(freshness_module, 'FRESHNESS_STATUS_STYLE', patched)
-
-    # tab_data_freshness imported the name directly, so patch it there too —
-    # this mirrors how a real edit to the single dict would propagate
-    # (both modules hold the same dict object in production).
-    import dashboard.tabs.tab_data_freshness as tab_module
-    monkeypatch.setattr(tab_module, 'FRESHNESS_STATUS_STYLE', patched)
-
-    legend_str = str(tab_module._build_legend())
-    assert '#123456' in legend_str
+def test_mantenciones_uses_the_2_4_week_shape():
+    thresholds = [t for t, _, _ in FRESHNESS_CRITERIA['Mantenciones']]
+    assert thresholds == [timedelta(weeks=2), timedelta(weeks=4), timedelta(weeks=4)]

@@ -283,8 +283,10 @@ Cada modo de falla tiene una descripción de **qué se analiza y por qué**:
 ## 6. Gráficos Disponibles
 
 ### 6.1 Fleet Scatter (`create_fleet_scatter`)
-- **Ejes**: Ranking actual (X) vs Ranking acumulado 90d (Y)
+- **Ejes**: Ranking actual (X) vs Ranking 30d (Y)
 - **Cuadrantes**: Crítica sostenida | Empeoró de golpe | Mejoró recientemente | Zona saludable
+- **Umbral de cuadrantes**: configurado en backend por (cliente, componente) en `Settings.fleet_scatter_thresholds` (`config/settings.py`; override por env `FLEET_SCATTER_THRESHOLDS` en JSON). Defaults: capstone/motor (50, 50); cda/motor y cda/transmision (16, 16). Un par sin entrada se dibuja sin cuadrantes, líneas ni etiquetas (no hay umbral global por defecto). No es editable desde la UI.
+- **Tooltip**: Ranking, Prom 30d y horómetro (`componentHours_cleaned` de la última muestra de `data/oil/golden/{client}/cleaned_component_hours.parquet`, componente según `get_component_hours_name`; "—" si la unidad no tiene lectura; se omite si el cliente no tiene esa fuente).
 - **Destaca**: La unidad seleccionada en azul
 
 ### 6.2 Barras Comparativas (`create_comparative_bars`)

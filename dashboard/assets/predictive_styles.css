@@ -234,7 +234,7 @@
 .fm-th-unit { min-width: 80px; }
 .fm-th-ranking { min-width: 80px; }
 
-.fm-tr { transition: background 0.1s; }
+.fm-tr { transition: background 0.1s; cursor: pointer; }
 .fm-tr:hover td { background: var(--surface-2) !important; }
 .fm-tr:last-child td { border-bottom: none; }
 

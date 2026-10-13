@@ -23,6 +23,33 @@ from src.campbell_ai.visualization import (
 from src.charts import ALL_CHART_KINDS, CHART_KINDS, REGISTRY_ONLY_KINDS
 
 
+@pytest.fixture
+def oil_groups_workbook(tmp_path, monkeypatch):
+    """Provide the reference groups required by these offline oil charts."""
+    from src.campbell_ai.oil_limits import clear_oil_element_groups
+
+    workbook = tmp_path / "data" / "oil" / "essays_elements.xlsx"
+    workbook.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            ("Hierro", "Desgaste"),
+            ("Cobre", "Desgaste"),
+            ("Aluminio", "Desgaste"),
+            ("Silicio", "Contaminante"),
+            ("Calcio", "Aditivo"),
+            ("Zinc", "Aditivo"),
+            ("Fósforo", "Aditivo"),
+        ],
+        columns=["ElementNameSpanish", "GroupElement"],
+    ).to_excel(workbook, index=False)
+    monkeypatch.chdir(tmp_path)
+    clear_oil_element_groups()
+    try:
+        yield
+    finally:
+        clear_oil_element_groups()
+
+
 def _oil_repository(tmp_path) -> DashboardDataRepository:
     oil = tmp_path / "oil" / "golden" / "cda"
     oil.mkdir(parents=True)
@@ -427,7 +454,7 @@ def test_row_level_types_are_declared_so_labels_stay_honest():
 # ------------------------------------------------------------- named registry
 
 
-def test_group_radar_pins_each_threshold_to_a_fixed_radius(tmp_path):
+def test_group_radar_pins_each_threshold_to_a_fixed_radius(tmp_path, oil_groups_workbook):
     """Rings must be circles, which is why the scale is 0-100 and not a ratio.
 
     Normalizing by one threshold cannot do this: on production data LSC/LSM spans 1.0 to
@@ -456,7 +483,7 @@ def test_group_radar_pins_each_threshold_to_a_fixed_radius(tmp_path):
     assert hierro["LIC"] is None
 
 
-def test_group_radar_splits_by_element_group(tmp_path):
+def test_group_radar_splits_by_element_group(tmp_path, oil_groups_workbook):
     """Wear, contaminant and additive answer different questions and never share axes."""
     registry = DashboardChartRegistry(_oil_four_limit_repository(tmp_path))
 
@@ -547,7 +574,7 @@ def test_every_chart_declares_context_and_a_dashboard_destination():
 # ------------------------------------------------- historial de aceite y contexto de alerta
 
 
-def test_history_panels_pair_the_essays_that_are_read_together(tmp_path):
+def test_history_panels_pair_the_essays_that_are_read_together(tmp_path, oil_groups_workbook):
     """The pairs are diagnostic, not the element groups.
 
     Iron with the particle index, silicon with aluminium: splitting those by GroupElement

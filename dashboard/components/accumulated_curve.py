@@ -1005,7 +1005,24 @@ def _x_axis_upper_bound(df_plot, hours_col="componentHours_filled"):
     return float(math.ceil(x_max / 100.0) * 100.0)
 
 
-def _zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper):
+def _y_axis_upper_bound(df_plot, y_col):
+    """Limite superior del eje Y: ranking acumulado maximo de las unidades
+    VISIBLES (mismo criterio que _x_axis_upper_bound para el eje X),
+    redondeado hacia arriba al centenar. Se recalcula en cada seleccion, a
+    partir SOLO de los datos reales de curva (`df_plot`) - las lineas de
+    referencia (media de flota, umbral) quedan afuera de este calculo a
+    proposito: si su valor supera el rango de datos visible, se renderizan
+    recortadas por el propio eje en vez de inflar el rango para acomodarlas.
+    """
+    if df_plot is None or df_plot.empty:
+        return 100.0
+    y_max = float(df_plot[y_col].max())
+    if not np.isfinite(y_max) or y_max <= 0:
+        return 100.0
+    return float(math.ceil(y_max / 100.0) * 100.0)
+
+
+def _zone_annotations(grid_v, media_v, hi_v, y_axis_upper, x_axis_upper):
     """Rotulos de texto de cada zona de riesgo, anclados dentro de su propia
     banda de color - reemplaza la entrada de leyenda 'Zonas de riesgo' (que
     se retira por completo).
@@ -1016,11 +1033,22 @@ def _zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper):
     del origen y casi ninguna curva ha subido todavia), "Alerta" a la derecha
     a media altura de su propia banda en ese punto, "Normal" abajo a la
     derecha dentro de su banda. Las tres coordenadas se recalculan siempre
-    contra `hi_v`/`media_v` (banda de referencia) y `x_axis_upper` (eje X
-    dinamico), nunca hardcodeadas, para seguir cayendo dentro del color
-    correcto sin importar el rango de horas de la seleccion vigente.
+    contra `hi_v`/`media_v` (banda de referencia), `x_axis_upper` (eje X
+    dinamico) y `y_axis_upper` (eje Y dinamico), nunca hardcodeadas, para
+    seguir cayendo dentro del color correcto sin importar el rango de horas
+    ni el rango de ranking acumulado de la seleccion vigente.
+
+    `y_axis_upper` es el limite REAL del eje (rango visible), no el techo
+    interno usado para dibujar el poligono de fondo "Anormal" (ese sigue
+    cubriendo todo el universo de unidades para no dejar un hueco blanco
+    sobre el rango visible cuando la seleccion es un subconjunto chico). El
+    resultado se recorta a [0, y_axis_upper] para que el rotulo nunca quede
+    fuera del area visible del grafico, aunque la banda de referencia en ese
+    punto exceda el rango de datos seleccionado.
     """
     if grid_v is None or len(grid_v) == 0 or not np.isfinite(x_axis_upper) or x_axis_upper <= 0:
+        return []
+    if not np.isfinite(y_axis_upper) or y_axis_upper <= 0:
         return []
 
     x_max = min(float(x_axis_upper), float(grid_v[-1]))
@@ -1034,12 +1062,16 @@ def _zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper):
 
     specs = [
         # Arriba-izquierda: bien adentro de la banda Anormal (entre su
-        # umbral inferior en ese x y el techo del grafico).
-        ("Anormal", x_anormal, hi_at_anormal + (y_top - hi_at_anormal) * 0.65, "#a32d2d"),
+        # umbral inferior en ese x y el techo visible del grafico).
+        ("Anormal", x_anormal, hi_at_anormal + (y_axis_upper - hi_at_anormal) * 0.65, "#a32d2d"),
         # Derecha, a media altura de la banda Alerta en ese x.
         ("Alerta", x_derecha, (media_at_derecha + hi_at_derecha) / 2, "#b9790f"),
         # Abajo-derecha, bien adentro de la banda Normal en ese x.
         ("Normal", x_derecha, media_at_derecha * 0.25, "#1d9e75"),
+    ]
+    specs = [
+        (label, x, float(np.clip(y, 0.0, y_axis_upper)), color)
+        for label, x, y, color in specs
     ]
     return [
         dict(
@@ -1394,6 +1426,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA, selected_uni
         ))
 
     x_axis_upper = _x_axis_upper_bound(df_plot)
+    y_axis_upper = _y_axis_upper_bound(df_plot, y_col="ranking_acumulado")
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1406,7 +1439,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA, selected_uni
         # margen para no pisar la leyenda.
         margin=dict(l=64, r=100, t=16, b=52),
         hovermode="closest",
-        annotations=_zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper),
+        annotations=_zone_annotations(grid_v, media_v, hi_v, y_axis_upper, x_axis_upper),
         legend=dict(
             # Titulo global "Máquina": la banda de riesgo ya no vive en la
             # leyenda (retirada a texto de fondo, ver _zone_annotations), asi
@@ -1431,6 +1464,7 @@ def build_accumulated_figure(df_acum, component="motor", k=K_SIGMA, selected_uni
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10),
             rangemode="tozero",
+            range=[0, y_axis_upper],
         ),
     )
 
@@ -1807,12 +1841,13 @@ def build_accumulated_figure_from_curve(df_curve, component="motor", selected_un
     )
 
     x_axis_upper = _x_axis_upper_bound(df_plot)
+    y_axis_upper = _y_axis_upper_bound(df_plot, y_col="ranking_acumulado_ajustado")
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="DM Sans, Inter, sans-serif", size=11, color="#6C7280"),
         height=460, margin=dict(l=64, r=100, t=16, b=52), hovermode="closest",
-        annotations=_zone_annotations(grid_v, media_v, hi_v, y_top, x_axis_upper),
+        annotations=_zone_annotations(grid_v, media_v, hi_v, y_axis_upper, x_axis_upper),
         legend=dict(
             title=dict(text="Máquina", font=dict(size=11)),
             orientation="v",
@@ -1829,6 +1864,7 @@ def build_accumulated_figure_from_curve(df_curve, component="motor", selected_un
             title=dict(text="Ranking acumulado", font=dict(size=11)),
             showgrid=True, gridcolor="rgba(0,0,0,0.05)", zeroline=False,
             tickfont=dict(size=10), rangemode="tozero",
+            range=[0, y_axis_upper],
         ),
     )
 

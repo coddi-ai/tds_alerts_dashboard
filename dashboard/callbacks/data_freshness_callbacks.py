@@ -1,33 +1,24 @@
 """
-Callbacks for Data Freshness monitoring tab.
-Handles data loading and visualization for data update status monitoring.
+Data freshness loading + calculation helpers, shared by the Fleet Overview
+(dashboard/components/fleet_overview.py) for the Telemetria/Tribologia rows,
+whose per-unit freshness still comes from Data_Date_Last_Update.csv.
+
+The Data Summary tab this module used to back was retired in Phase 1
+(documentation/general/general_specs/01_fleet_overview_unified_view.md) -
+its freshness rows now live inside each unit's Fleet Overview card instead of
+a separate page, and its two-technique threshold table moved to
+config/freshness_thresholds.py (covers all 5 techniques now).
 """
 
-from dash import callback, Output, Input, html
-from dash.exceptions import PreventUpdate
 import pandas as pd
-from datetime import datetime, timedelta
-from pathlib import Path
-import logging
 import pytz
 from functools import lru_cache
 
 from src.utils.logger import get_logger
-from dashboard.components.labels import NO_DATA_ICON, NO_DATA_BG, NO_DATA_TEXT
 from src.data.catalog import resolve_data_file
-from dashboard.components.source_status import render_service_source_status
+from config.freshness_thresholds import FRESHNESS_CRITERIA, FRESHNESS_STATUS_STYLE
 
 logger = get_logger(__name__)
-
-
-@callback(
-    Output('data-freshness-source-status', 'children'),
-    Input('client-selector', 'value'),
-)
-def update_data_freshness_source_status(selected_client):
-    if not selected_client:
-        return html.Div()
-    return render_service_source_status(selected_client, "overview-data-freshness")
 
 
 @lru_cache(maxsize=16)
@@ -128,54 +119,6 @@ def convert_utc_to_chile(utc_datetime):
     return chile_datetime
 
 
-# ========================================
-# W34-02 — single style source for freshness status
-# ========================================
-# The legend (tab_data_freshness.py::_build_legend) and this table's
-# style_data_conditional each used to hand-pick their own icon/color values
-# for the same three statuses — a third, independent palette from the one
-# below. All three now read from here. `bg`/`text` reuse the app-wide
-# :root design tokens (predictive_styles.css, loaded globally via assets/
-# on every page) instead of a fourth set of hardcoded hex values, so this
-# tab's palette is visually consistent with the rest of the dashboard
-# rather than its own island — `accent` stays a literal hex because it also
-# feeds FRESHNESS_CRITERIA's threshold tuples below, unchanged in value.
-FRESHNESS_STATUS_STYLE: dict[str, dict[str, str]] = {
-    'Ok':          {'icon': '🟢', 'accent': '#28a745', 'bg': 'var(--green-light)', 'text': 'var(--green-text)'},
-    'Atención':    {'icon': '🟡', 'accent': '#ffc107', 'bg': 'var(--amber-light)', 'text': 'var(--amber-text)'},
-    'Preocupante': {'icon': '🔴', 'accent': '#dc3545', 'bg': 'var(--red-light)',   'text': 'var(--red-text)'},
-    # W34-13 terminology: a unit with no record for this data type, distinct
-    # from a resolved Ok/Atención/Preocupante status. icon/bg/text come from
-    # labels.py's NO_DATA_* constants — the same "no data" identity Estado x
-    # Unidad and Predictivo use, not a third independently hand-picked one
-    # kept in sync only by a comment (quality-review follow-up).
-    'Sin Datos':   {'icon': NO_DATA_ICON, 'accent': '#808080', 'bg': NO_DATA_BG, 'text': NO_DATA_TEXT},
-}
-
-
-# ========================================
-# FRESHNESS CRITERIA CONFIGURATION
-# ========================================
-# Modular criteria for data freshness status.
-# Each data type defines thresholds and labels.
-# Format: list of (max_timedelta, label, color) in order of priority (best to worst).
-# The last entry is the fallback (worst status). Thresholds themselves are
-# W34's "don't touch the freshness calculation" boundary — only the `color`
-# values were consolidated (W34-02) to trace to FRESHNESS_STATUS_STYLE.
-FRESHNESS_CRITERIA = {
-    'Telemetria': [
-        (timedelta(hours=2),  'Ok',          FRESHNESS_STATUS_STYLE['Ok']['accent']),
-        (timedelta(hours=24), 'Atención',    FRESHNESS_STATUS_STYLE['Atención']['accent']),
-        (timedelta(hours=24), 'Preocupante', FRESHNESS_STATUS_STYLE['Preocupante']['accent']),
-    ],
-    'Tribologia': [
-        (timedelta(days=20),  'Ok',          FRESHNESS_STATUS_STYLE['Ok']['accent']),
-        (timedelta(days=40),  'Atención',    FRESHNESS_STATUS_STYLE['Atención']['accent']),
-        (timedelta(days=40),  'Preocupante', FRESHNESS_STATUS_STYLE['Preocupante']['accent']),
-    ],
-}
-
-
 def calculate_freshness_status(last_update, data_type, current_time_chile):
     """
     Calculate freshness status based on time elapsed since last update.
@@ -222,184 +165,3 @@ def calculate_freshness_status(last_update, data_type, current_time_chile):
     # Exceeded all thresholds → return worst status
     _, worst_label, worst_color = criteria[-1]
     return worst_label, worst_color, time_diff_str
-
-
-def process_freshness_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Process data freshness and calculate status for each unit.
-    
-    Args:
-        df: Raw data freshness DataFrame
-        
-    Returns:
-        Processed DataFrame with status and colors
-    """
-    if df.empty:
-        return pd.DataFrame()
-    
-    # Get current time in Chile timezone
-    utc_now = datetime.now(pytz.UTC)
-    chile_tz = pytz.timezone('America/Santiago')
-    current_time_chile = utc_now.astimezone(chile_tz)
-    
-    # Convert UTC timestamps to Chile timezone
-    df['Ultima_Fecha_Chile'] = df['Ultima Fecha de Actualizacion'].apply(convert_utc_to_chile)
-    
-    # Calculate status for each row
-    df[['Status', 'Color', 'Tiempo_Transcurrido']] = df.apply(
-        lambda row: pd.Series(calculate_freshness_status(
-            row['Ultima_Fecha_Chile'],
-            row['Data'],
-            current_time_chile
-        )),
-        axis=1
-    )
-    
-    # Pivot to have Telemetria and Tribologia as columns
-    pivot_data = []
-    
-    for unit_id in df['Unit_Id'].unique():
-        unit_data = df[df['Unit_Id'] == unit_id]
-        
-        telem_data = unit_data[unit_data['Data'] == 'Telemetria']
-        tribo_data = unit_data[unit_data['Data'] == 'Tribologia']
-        
-        row = {
-            'Unidad': unit_id,
-        }
-        
-        # Telemetry data - Combined format "Estado - Hace"
-        if not telem_data.empty:
-            telem_row = telem_data.iloc[0]
-            row['Telemetría'] = f"{telem_row['Status']} - {telem_row['Tiempo_Transcurrido']}"
-            row['Telemetría_Status'] = telem_row['Status']
-            row['Telemetría_Tiempo'] = telem_row['Tiempo_Transcurrido']
-            row['Telemetría_Color'] = telem_row['Color']
-        else:
-            row['Telemetría'] = 'Sin Datos - N/A'
-            row['Telemetría_Status'] = 'Sin Datos'
-            row['Telemetría_Tiempo'] = 'N/A'
-            row['Telemetría_Color'] = '#808080'
-        
-        # Tribology data - Combined format "Estado - Hace"
-        if not tribo_data.empty:
-            tribo_row = tribo_data.iloc[0]
-            row['Tribología'] = f"{tribo_row['Status']} - {tribo_row['Tiempo_Transcurrido']}"
-            row['Tribología_Status'] = tribo_row['Status']
-            row['Tribología_Tiempo'] = tribo_row['Tiempo_Transcurrido']
-            row['Tribología_Color'] = tribo_row['Color']
-        else:
-            row['Tribología'] = 'Sin Datos - N/A'
-            row['Tribología_Status'] = 'Sin Datos'
-            row['Tribología_Tiempo'] = 'N/A'
-            row['Tribología_Color'] = '#808080'
-        
-        pivot_data.append(row)
-    
-    result_df = pd.DataFrame(pivot_data)
-    
-    # Sort by Unit ID
-    result_df = result_df.sort_values('Unidad')
-    
-    return result_df
-
-
-@callback(
-    Output('data-freshness-table', 'children'),
-    Input('data-freshness-table', 'id'),
-    Input('client-selector', 'value')
-)
-def update_data_freshness(_, selected_client):
-    """
-    Update data freshness table.
-    
-    Args:
-        _: Dummy input to trigger callback
-        selected_client: Currently selected client from dropdown
-        
-    Returns:
-        DataTable with freshness information
-    """
-    try:
-        # Get client from selector
-        client = (selected_client or 'cda').lower()
-        
-        # Load and process data
-        df_raw = load_data_freshness(client)
-        
-        if df_raw.empty:
-            return html.Div([
-                html.I(className="fas fa-info-circle fa-3x text-muted mb-3"),
-                html.H4("Datos no disponibles", className="text-muted"),
-                html.P(
-                    f"No se encontraron datos de estado de actualización para el cliente '{client.upper()}'.",
-                    className="text-muted"
-                ),
-                html.P(
-                    "Esta funcionalidad estará disponible próximamente.",
-                    className="text-muted small"
-                )
-            ], className="text-center p-5")
-        
-        df_processed = process_freshness_data(df_raw)
-        
-        if df_processed.empty:
-            return html.Div("Error procesando datos", className="text-center text-muted p-4")
-        
-        def make_status_badge(status: str, elapsed: str, data_type: str) -> html.Div:
-            """Render freshness using General's compact status-pill language."""
-            style_info = FRESHNESS_STATUS_STYLE.get(status, FRESHNESS_STATUS_STYLE['Sin Datos'])
-            label = f"{status} - {elapsed}"
-            return html.Div(
-                html.Span(
-                    f"{style_info['icon']} {label}",
-                    title=f"{data_type}: {label}",
-                    style={
-                        'backgroundColor': style_info['bg'],
-                        'color': style_info['text'],
-                        'padding': '2px 8px',
-                        'borderRadius': '4px',
-                        'fontWeight': 'normal' if status == 'Sin Datos' else 'bold',
-                        'fontSize': '11px',
-                        'cursor': 'help',
-                        'display': 'inline-block',
-                        'whiteSpace': 'nowrap',
-                    },
-                ),
-                style={'textAlign': 'center'},
-            )
-
-        table_rows = []
-        for _, row in df_processed.iterrows():
-            table_rows.append(html.Tr([
-                html.Td(row['Unidad'], style={
-                    'fontWeight': 'bold', 'fontSize': '13px', 'padding': '6px 12px'
-                }),
-                html.Td(make_status_badge(
-                    row['Telemetría_Status'], row['Telemetría_Tiempo'], 'Telemetría'
-                )),
-                html.Td(make_status_badge(
-                    row['Tribología_Status'], row['Tribología_Tiempo'], 'Tribología'
-                )),
-            ]))
-
-        table = html.Table([
-            html.Thead(html.Tr([
-                html.Th(col, style={
-                    'backgroundColor': '#f8f9fa', 'fontWeight': 'bold',
-                    'textAlign': 'center', 'fontSize': '12px', 'padding': '8px',
-                    'borderBottom': '2px solid #dee2e6',
-                    'position': 'sticky', 'top': '0', 'zIndex': '1',
-                })
-                for col in ['Unidad', 'Telemetría', 'Tribología']
-            ])),
-            html.Tbody(table_rows),
-        ], style={
-            'width': '100%', 'borderCollapse': 'collapse', 'fontSize': '13px'
-        })
-
-        return html.Div(table, style={'overflowX': 'auto'})
-        
-    except Exception as e:
-        logger.error(f"Error in update_data_freshness: {e}", exc_info=True)
-        return html.Div(f"Error: {str(e)}", className="text-center text-danger p-4")

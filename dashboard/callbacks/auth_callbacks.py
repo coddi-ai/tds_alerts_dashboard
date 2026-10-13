@@ -2,6 +2,7 @@
 Authentication callbacks for Multi-Technical-Alerts dashboard.
 """
 
+from src.i18n import t
 from dash import Input, Output, State, html
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
@@ -52,7 +53,7 @@ def register_auth_callbacks(app):
         
         if not username or not password:
             logger.warning("Login attempt with empty username or password")
-            return None, "Por favor ingrese usuario y contraseña", True
+            return None, t("login.error_empty"), True
         
         user = authenticate_user(username, password)
         
@@ -65,7 +66,7 @@ def register_auth_callbacks(app):
         else:
             logger.warning(f"Login failed for user: {username}")
             flask_session.pop("dashboard_user", None)
-            return None, "Usuario o contraseña inválidos", True
+            return None, t("login.error_invalid"), True
     
     
     @app.callback(

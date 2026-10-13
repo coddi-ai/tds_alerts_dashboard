@@ -90,6 +90,8 @@ logs/
 # that shifted underneath. The vocabulary index is the opposite case and stays ignored - it
 # lives under logs/ because it is derived from data that changes every half hour.
 !src/campbell_ai/schema/dataset_columns.json
+# UI translation catalogs (es.json / en.json): source code, not data - must ship with the code.
+!src/i18n/locales/*.json
 # Docker
 *.pid
 *.seed
@@ -107,6 +109,7 @@ IMPLEMENTATION_SUMMARY.md
 dataDev/*
 dataDev2/*
 dataDep/*
+dataDep/
 
 new_dashboard/*
 migration_dashboard/*

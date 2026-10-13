@@ -1,4 +1,4 @@
-# Vista productiva de Mantenciones
+# Informe de confiabilidad · vista productiva de Mantenciones
 
 La ruta protegida `/monitoring/mantenciones` se controla con
 `monitoring-mantenciones` en `config/client_services.json`. Actualmente está
@@ -6,7 +6,21 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
 
 ## Vistas y fuentes
 
-- **Resumen**: selector mensual, filtro de flota/tipo de equipo según el catálogo
+La pestaña consume las vistas materializadas nuevas del pipeline de
+Mantenciones. `query_3_actions_all_equipment` sigue aportando el detalle de
+actividad; las horas ya no se reconstruyen desde acciones ni desde jobs.
+
+| Necesidad del informe | Fuente principal |
+| --- | --- |
+| KPIs mensuales por equipo | `query_4_business_kpis.parquet` |
+| Horas intervenidas por equipo-mes | `query_8_intervention_hours_monthly.parquet` |
+| Horas intervenidas por equipo-día | `query_7_intervention_hours_daily.parquet` |
+| Horas y equipos intervenidos por día de flota | `query_9_fleet_intervention_daily.parquet` |
+| Estado puntual del equipo | `query_10_equipment_status.parquet` |
+| MTBF / MTTR | `query_5_reliability_monthly.parquet` |
+| Ranking de componentes en fallas | `query_6_component_failure_ranking.parquet` |
+
+- **Informe de confiabilidad**: selector mensual, filtro de flota/tipo de equipo según el catálogo
   de Tribología (los equipos sin coincidencia quedan en ``otros``) y selector ejecutivo de unidad (``Todas`` o una unidad), cobertura/frescura, equipos con actividad,
   acciones, registros, sistemas intervenidos, días con actividad y
   participación de acciones Motor; KPIs de tiempo respaldados por la fuente
@@ -14,14 +28,15 @@ habilitada para CDA, EMIN y CAPSTONE; ENEX permanece sin acceso.
   fuera de servicio, mix de actividad por
   sistema sin desglose por unidad, ranking de equipos y Paretos de actividad,
   seguido de una tabla con el detalle de las actividades realizadas. CDA conserva sus Paretos
-  enfocados en Motor y Tren de Fuerza; EMIN y CAPSTONE muestran todos los
-  sistemas tanto por equipo como por sistema.
+  enfocados en Motor y Tren de Fuerza; CAPSTONE muestra acciones por equipo y
+  por sistema. EMIN muestra acciones por unidad, apiladas por sistema, y horas
+  intervenidas por unidad en un segundo Pareto independiente.
 - **Actividad**: filtros dependientes de sistema, subsistema y equipo; matriz
   equipo × sistema y detalle paginado.
 - **Evidencia semanal**: selector de semana y equipo, resumen por unidad y
   tareas agrupadas por día y sistema.
 
-En el shell productivo actual solo se muestra **Resumen**. **Actividad** y
+En el shell productivo actual solo se muestra **Informe de confiabilidad**. **Actividad** y
 **Evidencia semanal** permanecen montadas y deshabilitadas para conservar sus
 callbacks y contratos de componentes, listas para una futura reactivación.
 
@@ -30,7 +45,7 @@ mensual, el filtro de flota y el selector ejecutivo de unidad. El selector seman
 montado dentro del contrato de Evidencia semanal, pero no se muestra en la
 cabecera ejecutiva.
 
-La jerarquía ejecutiva de **Resumen** sigue la lectura de los reportes de
+La jerarquía ejecutiva de **Informe de confiabilidad** sigue la lectura de los reportes de
 referencia: cabecera y filtros, cuatro KPIs críticos, tendencias diarias
 separadas de horas-equipo fuera de servicio y equipos intervenidos, mix por sistema y
 ranking de equipos, y finalmente los Paretos de actividad. Los agregados de
@@ -70,12 +85,16 @@ unidad seleccionados:
   convierten en cero ni se interpolan. `low_confidence` se conserva en la
   metadata del payload para auditoría.
 
-Disponibilidad y downtime usan los mismos intervalos operacionales de la
-tendencia diaria: `query_2_unit_records_actions.parquet` (con fallback a
-`query_3`). Se recortan al mes evaluado y se unen los solapes por equipo y día,
-por lo que la card y el gráfico diario quedan reconciliados. Si no hay
-intervalos fuente utilizables, ambos valores quedan sin dato. `query_4` se
-conserva como fuente de referencia, pero ya no alimenta estas dos cards.
+Disponibilidad y downtime usan `query_8_intervention_hours_monthly.parquet`.
+La vista ya entrega la unión deduplicada de intervalos, el reparto por día y
+el denominador de horas calendario. Para la tendencia diaria, la flota usa
+`query_9_fleet_intervention_daily.parquet`; cuando se selecciona una unidad o
+una flota, la serie se agrega desde `query_7_intervention_hours_daily.parquet`.
+Las cuatro vistas comparten el mismo núcleo de cálculo, por lo que no se
+reconstruyen horas desde acciones ni desde jobs. `query_4` queda como respaldo
+de las horas mensuales cuando `query_8` no está disponible, siempre que
+contenga las columnas del contrato nuevo; las columnas históricas `*_70d` no
+se usan.
 Si se filtra por sistema o subsistema, MTBF y MTTR siguen quedando sin dato
 porque query 5 no contiene ese desglose. `query_6_component_failure_ranking`
 continúa disponible como fuente de repositorio para futuras vistas, pero ya no
@@ -109,37 +128,34 @@ indicadores del Resumen:
   `action_system_name` coincide con `Motor`, `Sistema Motor` o `Sistema de
   Motor`.
 
-La tendencia diaria calcula horas-equipo fuera de servicio a partir de
-`first_event_ts` y `last_event_ts` de `query_2_unit_records_actions.parquet`,
-distribuyendo cada intervalo por día UTC y recortándolo al mes seleccionado.
-Los intervalos superpuestos se unen por equipo y día antes de sumar la flota.
-Si `query_2` no está disponible, se usa el mínimo/máximo `event_ts` por
-`record_id` de `query_3` como compatibilidad. El total de una flota puede
-superar 24 h en un día porque suma horas de varios equipos; con un equipo
-seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
+La tendencia diaria lee `intervention_hours` y el conteo de equipos de
+`query_9` para la flota completa. Con una unidad o flota seleccionada, agrupa
+`query_7` por fecha y cuenta equipos distintos. Las vistas ya reparten cada
+record por límites de día calendario y unen solapes; no se interpretan los
+sufijos de offset de los timestamps de detalle como zonas horarias. El total
+de una flota puede superar 24 h en un día porque suma horas de varios equipos;
+con un equipo seleccionado el máximo físico diario es 24 h. El mix por sistema agrega por
 sistema y no expone series o leyenda por unidad; el ranking
 de equipos conserva las unidades y los sistemas involucrados. Ambos usan la
 misma métrica de acciones únicas. Los
 Paretos ordenan por cantidad descendente y muestran acciones junto a la línea
 de porcentaje acumulado; no representan frecuencia de fallas. CDA mantiene el
-foco en Motor y Tren de Fuerza. EMIN y CAPSTONE no aplican una lista permitida
-de sistemas: muestran un Pareto total por equipo y otro Pareto por todos los
-sistemas, incluidos Equipo/Cabina cuando aparezcan en la fuente.
+foco en Motor y Tren de Fuerza. CAPSTONE conserva acciones por equipo y por
+sistema. EMIN no excluye sistemas de origen: el primer Pareto desglosa acciones
+por unidad y sistema; el segundo usa horas por unidad sin atribuirlas a sistemas.
 
 Los informes de referencia también muestran disponibilidad, indisponibilidad,
 MTBF, MTTR, horas de reparación, backlog, metas y relaciones programado vs.
-imprevisto. En esta iteración las cards de tiempo usan los límites temporales
-de cada registro (`query_2`, con fallback a `query_3`) y no se infieren horas a
-partir del conteo de acciones.
+imprevisto. En esta iteración las cards de tiempo usan las horas canónicas de
+`query_8` y no se infieren horas a partir del conteo de acciones.
 
 #### Metodología de los KPIs de tiempo
 
-Downtime y disponibilidad se calculan para el mes seleccionado a partir del
-contrato de intervalos:
+Downtime y disponibilidad se leen para el mes seleccionado desde el contrato
+mensual de horas:
 
-- `downtime_est_hours = sum(hours_out_of_service)` después de recortar al mes
-  y unir solapes por equipo/día.
-- `calendar_hours = días_del_mes × 24 × equipos_cubiertos`.
+- `downtime_est_hours = sum(intervention_hours)`.
+- `calendar_hours = sum(calendar_hours_month)` de los equipos cubiertos.
 - `availability_est_pct = (calendar_hours − downtime_est_hours) /
   calendar_hours × 100`.
 
@@ -151,7 +167,8 @@ está ausente o incompleta, el valor correspondiente queda `null` con estado
 Cada payload expone en `meta.estimated_kpis` la fuente, columnas, unidad,
 cobertura e hipótesis. Si faltan las columnas de tiempo se devuelve `null` y
 un estado `unavailable`, nunca cero. La aplicación respeta la definición de
-intervalos y el calendario del mes seleccionado.
+intervalos y el calendario del mes seleccionado. La pestaña no mezcla el
+conteo de equipos intervenidos de `query_9` con el total de horas-equipo.
 
 La comparación se realizó contra el catálogo de patrones y los informes
 `Informe de Confiabilidad semanal W19.pdf` e `Informe Mensual Confiabilidad
@@ -161,13 +178,32 @@ Paretos de frecuencia/tiempo de reparación. Esta primera iteración conserva la
 jerarquía visual, pero reemplaza los indicadores no respaldados por actividad
 registrada auditable.
 
-La actividad mensual usa `query_3_actions_all_equipment.parquet`. Los timestamps
-se normalizan a UTC, pero las agregaciones se agrupan por `change_date`, la
+La actividad mensual usa `query_3_actions_all_equipment.parquet`. En EMIN, el
+Pareto principal ofrece un selector multiselección de sistemas que afecta solo
+a ese gráfico; comienza con todos los sistemas y cuenta `action_id` únicos por
+equipo. El segundo Pareto muestra horas desde `query_8`, independientemente
+del filtro de sistemas. El selector de métrica anterior se oculta en EMIN.
+La categoría fuente `Equipo` se presenta como
+“General del equipo (sin sistema técnico atribuido)” en el filtro y como
+“General del equipo” en las visualizaciones, sin alterar los datos ni excluirla
+de los totales. El ranking EMIN muestra las quince unidades con mayor actividad
+en barras horizontales de mayor a menor; las cards siguen usando toda la
+población filtrada. Cada Pareto comienza con el prefijo hasta el primer equipo
+que alcanza el 80%, más tres siguientes. El denominador de la curva conserva
+la población completa; el último equipo visible no se fuerza a 100%.
+«Mostrar todos» expande solo su gráfico. Mes, flota, unidad o cliente reinician
+ambos; sistemas reinicia solo acciones. «Restablecer unidad» conserva mes y flota.
+Se limitan rótulos de ejes sin eliminar barras del conjunto visible.
+El shell de Informe de confiabilidad EMIN también
+pliega la navegación en anchos estrechos y permite abrirla como panel superpuesto.
+
+Los timestamps de CDA/Capstone se normalizan a UTC; EMIN conserva su reloj
+escrito según el contrato de ingesta. Las agregaciones se agrupan por `change_date`, la
 fecha operacional. Los Paretos usan `action_id` únicos y `machine_code` para
 los cortes por equipo. En CDA el primer Pareto se filtra por Motor (acepta
 `Motor`, `Sistema Motor` y `Sistema de Motor`) y el segundo por Tren de Fuerza.
-En EMIN y CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
-segundo agrupa las acciones por sistema, sin excluir categorías de origen. Los
+En CAPSTONE el primer Pareto incluye todos los sistemas por equipo y el
+segundo agrupa las acciones por sistema. EMIN usa acciones y horas por unidad. Los
 títulos y `meta.pareto_scope` declaran el modo aplicado.
 El detalle se limita a 250 filas por respuesta para no transferir la fuente
 completa al navegador. En Resumen se presenta después de **Indicadores de

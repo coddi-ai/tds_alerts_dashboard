@@ -1,3 +1,4 @@
+from src.i18n import page_title
 import dash
 from dashboard.campbell_ai.layout import create_campbell_ai_layout
 
@@ -9,4 +10,4 @@ def layout(**kwargs):
     return create_campbell_ai_layout()
 
 
-dash.register_page(__name__, path="/agents/campbell-ai", title="Campbell AI | Multi-Technical Alerts", layout=layout)
+dash.register_page(__name__, path="/agents/campbell-ai", title=page_title("page.title.agents_campbell_ai"), layout=layout)

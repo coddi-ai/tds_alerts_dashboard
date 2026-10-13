@@ -3,6 +3,7 @@ Predictive Evidence Tab - Per-unit detailed evidence with oil and telemetry.
 Supports multi-component model: auto-discovers component CSVs (motor, transmision, etc.)
 """
 
+from src.i18n import t
 from dash import html, dcc
 import pandas as pd
 import re
@@ -14,6 +15,7 @@ from dashboard.components.predictive_config import (
     get_oil_variables_for_mode,
     get_telemetry_signals_for_mode,
     resolve_failure_modes,
+    resolve_failure_mode_options,
     humanize_mode_key,
     OIL_LABELS,
     TELEMETRY_LABELS,
@@ -22,8 +24,9 @@ from dashboard.components.predictive_config import (
 )
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_charts import (
-    create_fleet_scatter,
     create_comparative_bars,
+    create_mode_status_calendar,
+    create_accumulated_wear_chart,
     create_oil_timeseries_90d,
     create_telemetry_signal_chart,
     create_telemetry_signal_chart_from_long,
@@ -41,6 +44,14 @@ from dashboard.tabs.tab_predictive_overview import (
 from src.charts.signals import SIGNAL_LABELS
 
 logger = get_logger(__name__)
+
+# Scored like any other mode (it lives in risk_scores/modos_ordenados), but its
+# evidence is the cumulative wear curve from oil_meter_history rather than the
+# oil/telemetry charts, so render_detailed_evidence routes it separately.
+ACCUMULATED_WEAR_MODE = "accumulated_wear_risk"
+
+# Window, in days, of Comparación Modo de Falla's calendar chart
+CALENDAR_DAYS = 90
 
 
 # ── Client-scoped label/threshold resolution ──────────────────────────────────
@@ -163,31 +174,31 @@ def _analyze_oil_observations(df_unit, oil_vars, df_latest, oil_labels, oil_limi
                 observations.append({
                     "type": "critical",
                     "icon": "fas fa-exclamation-triangle",
-                    "text": f"{label} está en **{current_val:.1f}**, superando el límite superior condenatorio ({essay_limits['LSC']:.0f})"
+                    "text": t("tab_predictive_evidence.esta_en_superando_el_limite_superior", label=label, current_val=current_val, essay_limits_lsc=essay_limits['LSC'])
                 })
             elif status == 'Superior Marginal':
                 observations.append({
                     "type": "warning",
                     "icon": "fas fa-exclamation-circle",
-                    "text": f"{label} está en **{current_val:.1f}**, en zona de alerta (límite superior marginal: {essay_limits['LSM']:.0f})"
+                    "text": t("tab_predictive_evidence.esta_en_en_zona_de_alerta", label=label, current_val=current_val, essay_limits_lsm=essay_limits['LSM'])
                 })
             elif status == 'Inferior Condenatorio':
                 observations.append({
                     "type": "critical",
                     "icon": "fas fa-exclamation-triangle",
-                    "text": f"{label} está en **{current_val:.1f}**, por debajo del límite inferior condenatorio ({essay_limits['LIC']:.0f})"
+                    "text": t("tab_predictive_evidence.esta_en_por_debajo_del_limite", label=label, current_val=current_val, essay_limits_lic=essay_limits['LIC'])
                 })
             elif status == 'Inferior Marginal':
                 observations.append({
                     "type": "warning",
                     "icon": "fas fa-exclamation-circle",
-                    "text": f"{label} está en **{current_val:.1f}**, en zona de alerta (límite inferior marginal: {essay_limits['LIM']:.0f})"
+                    "text": t("tab_predictive_evidence.esta_en_en_zona_de_alerta_2", label=label, current_val=current_val, essay_limits_lim=essay_limits['LIM'])
                 })
             elif status == 'Normal':
                 observations.append({
                     "type": "ok",
                     "icon": "fas fa-check-circle",
-                    "text": f"{label} está en **{current_val:.1f}**, dentro de rango normal"
+                    "text": t("tab_predictive_evidence.esta_en_dentro_de_rango_normal", label=label, current_val=current_val)
                 })
 
         # 2. Trend analysis (unique oil samples)
@@ -203,13 +214,13 @@ def _analyze_oil_observations(df_unit, oil_vars, df_latest, oil_labels, oil_limi
                     observations.append({
                         "type": "warning",
                         "icon": "fas fa-arrow-up",
-                        "text": f"{label} muestra tendencia al alza (**{change_pct:+.0f}%** en las últimas {n_samples} muestras)"
+                        "text": t("tab_predictive_evidence.muestra_tendencia_al_alza_en_las", label=label, change_pct=change_pct, n_samples=n_samples)
                     })
                 elif change_pct < -25:
                     observations.append({
                         "type": "ok",
                         "icon": "fas fa-arrow-down",
-                        "text": f"{label} muestra tendencia a la baja (**{change_pct:+.0f}%** en las últimas {n_samples} muestras)"
+                        "text": t("tab_predictive_evidence.muestra_tendencia_a_la_baja_en", label=label, change_pct=change_pct, n_samples=n_samples)
                     })
 
         # 3. Fleet comparison
@@ -221,7 +232,7 @@ def _analyze_oil_observations(df_unit, oil_vars, df_latest, oil_labels, oil_limi
                     observations.append({
                         "type": "warning",
                         "icon": "fas fa-users",
-                        "text": f"{label} está un **{ratio:.0f}%** por encima del promedio de la flota ({fleet_avg:.1f})"
+                        "text": t("tab_predictive_evidence.esta_un_por_encima_del_promedio", label=label, ratio=ratio, fleet_avg=fleet_avg)
                     })
 
     return observations
@@ -252,13 +263,13 @@ def _analyze_telemetry_observations(df_unit, telem_vars, telem_labels, days=90):
                 observations.append({
                     "type": "critical",
                     "icon": "fas fa-exclamation-triangle",
-                    "text": f"{signal_label} presenta tasa crítica promedio de **{avg_critic:.1%}** en los últimos {days} días"
+                    "text": t("tab_predictive_evidence.presenta_tasa_critica_promedio_de_en", signal_label=signal_label, avg_critic=avg_critic, days=days)
                 })
             elif avg_critic > 0.05:
                 observations.append({
                     "type": "warning",
                     "icon": "fas fa-exclamation-circle",
-                    "text": f"{signal_label} presenta tasa crítica de **{avg_critic:.1%}** en los últimos {days} días"
+                    "text": t("tab_predictive_evidence.presenta_tasa_critica_de_en_los", signal_label=signal_label, avg_critic=avg_critic, days=days)
                 })
 
             # Recent spike detection (last 7 days vs prior)
@@ -271,7 +282,7 @@ def _analyze_telemetry_observations(df_unit, telem_vars, telem_labels, days=90):
                     observations.append({
                         "type": "critical",
                         "icon": "fas fa-bolt",
-                        "text": f"{signal_label} muestra un **aumento reciente** en tasa crítica (última semana vs promedio previo)"
+                        "text": t("tab_predictive_evidence.muestra_un_aumento_reciente_en_tasa", signal_label=signal_label)
                     })
 
         # Alert rate analysis
@@ -281,7 +292,7 @@ def _analyze_telemetry_observations(df_unit, telem_vars, telem_labels, days=90):
                 observations.append({
                     "type": "warning",
                     "icon": "fas fa-bell",
-                    "text": f"{signal_label} presenta tasa de alerta promedio de **{avg_alert:.1%}** en los últimos {days} días"
+                    "text": t("tab_predictive_evidence.presenta_tasa_de_alerta_promedio_de", signal_label=signal_label, avg_alert=avg_alert, days=days)
                 })
 
         # If no alerts at all → positive observation
@@ -291,7 +302,7 @@ def _analyze_telemetry_observations(df_unit, telem_vars, telem_labels, days=90):
                 observations.append({
                     "type": "ok",
                     "icon": "fas fa-check-circle",
-                    "text": f"{signal_label} sin alertas significativas en los últimos {days} días"
+                    "text": t("tab_predictive_evidence.sin_alertas_significativas_en_los_ultimos", signal_label=signal_label, days=days)
                 })
 
     return observations
@@ -342,7 +353,7 @@ def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="mo
             observations.insert(0, {
                 "type": "warning",
                 "icon": "fas fa-chart-line",
-                "text": f"El puntaje de esta unidad (**{score:.0f}**) está por encima del percentil 80 de la flota ({fleet_p80:.0f})"
+                "text": t("tab_predictive_evidence.el_puntaje_de_esta_unidad_esta", score=score, fleet_p80=fleet_p80)
             })
     else:
         fleet_avg = 0.0
@@ -400,11 +411,11 @@ def _build_insight_panel(insight):
 
     # Score styling
     if score >= 70:
-        score_color, score_level = "#e24b4a", "alto"
+        score_color, score_level = "#e24b4a", t("predictive_evidence.risk_level_high")
     elif score >= 40:
-        score_color, score_level = "#ef9f27", "medio"
+        score_color, score_level = "#ef9f27", t("predictive_evidence.risk_level_medium")
     else:
-        score_color, score_level = "#1d9e75", "bajo"
+        score_color, score_level = "#1d9e75", t("predictive_evidence.risk_level_low")
 
     vars_text = ", ".join(var_names) if var_names else "—"
 
@@ -434,7 +445,7 @@ def _build_insight_panel(insight):
             html.I(className="fas fa-check-circle", style={
                 "color": "#3b6d11", "fontSize": "12px", "marginTop": "2px", "flexShrink": "0"
             }),
-            html.Span("No se detectaron anomalías significativas para este modo de falla.",
+            html.Span(t("tab_predictive_evidence.no_se_detectaron_anomalias_significativas"),
                        style={"fontSize": "12px", "color": "#374151"}),
         ], className="insight-obs-item", style={
             "background": "#eaf3de", "borderLeft": "3px solid #1d9e75",
@@ -447,7 +458,7 @@ def _build_insight_panel(insight):
                 html.I(className="fas fa-robot", style={"fontSize": "18px", "color": "#7C3AED"}),
             ], className="insight-icon-wrapper"),
             html.Div([
-                html.Span("Análisis Inteligente", style={
+                html.Span(t("tab_predictive_evidence.analisis_inteligente"), style={
                     "fontSize": "14px", "fontWeight": "600", "color": "#374151"
                 }),
                 html.Span(f" — {label}", style={
@@ -460,11 +471,11 @@ def _build_insight_panel(insight):
         html.Div([
             html.Div([
                 html.I(className="fas fa-search", style={"color": "#7C3AED", "fontSize": "11px"}),
-                html.Span("¿Qué se analiza?", className="insight-section-label",
+                html.Span(t("tab_predictive_evidence.que_se_analiza"), className="insight-section-label",
                            style={"color": "#7C3AED"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "6px"}),
             html.P([
-                f"Este modo de falla se detecta monitoreando: ",
+                t("tab_predictive_evidence.este_modo_de_falla_se_detecta"),
                 html.Strong(vars_text), "."
             ], style={"fontSize": "12px", "color": "#4B5563", "lineHeight": "1.5", "margin": "0 0 4px 0"}),
             html.P(methodology, style={
@@ -479,15 +490,15 @@ def _build_insight_panel(insight):
         html.Div([
             html.Div([
                 html.I(className="fas fa-gauge-high", style={"color": score_color, "fontSize": "11px"}),
-                html.Span("Resultado", className="insight-section-label",
+                html.Span(t("tab_predictive_evidence.resultado"), className="insight-section-label",
                            style={"color": score_color}),
             ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "6px"}),
             html.P([
-                "La unidad ",
+                t("tab_predictive_evidence.la_unidad"),
                 html.Strong(unit),
-                " tiene un puntaje de ",
+                t("tab_predictive_evidence.tiene_un_puntaje_de"),
                 html.Strong(f"{score:.1f}/100", style={"color": score_color}),
-                f" (riesgo {score_level}) para {label}."
+                t("tab_predictive_evidence.riesgo_para", score_level=score_level, label=label)
             ], style={"fontSize": "12px", "color": "#374151", "lineHeight": "1.5", "margin": "0"}),
         ], className="insight-section", style={
             "background": "#F9FAFB", "borderLeft": f"3px solid {score_color}"
@@ -497,7 +508,7 @@ def _build_insight_panel(insight):
         html.Div([
             html.Div([
                 html.I(className="fas fa-clipboard-list", style={"color": "#374151", "fontSize": "11px"}),
-                html.Span(f"Observaciones — últimos {n_days} días", className="insight-section-label",
+                html.Span(t("tab_predictive_evidence.observaciones_ultimos_dias", n_days=n_days), className="insight-section-label",
                            style={"color": "#374151"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "10px"}),
             html.Div(obs_items),
@@ -517,14 +528,12 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # never disagrees with the priority cards for the same unit.
     latest = attach_status(df_latest, client, component)
 
-    STATUS_COLORS = {"Anormal": "#e24b4a", "Alerta": "#ef9f27", "Normal": "#1d9e75"}
-
     if not unit or unit not in df["Unit"].values:
-        return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+        return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
 
     row = latest[latest["Unit"] == unit]
     if row.empty:
-        return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+        return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
     row = row.iloc[0]
 
     # Dominant failure mode (use 30d averages for consistency)
@@ -545,14 +554,18 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # subview (dashboard/callbacks/predictive_callbacks.py's
     # update_unit_banner) — not repeated here as a KPI.
     kpis = [
-        _kpi_card("Ranking actual", f"{ranking_val:.0f}", _ranking_color(ranking_val), "escala 0-100"),
-        _kpi_card("Riesgo acum. 30d", f"{ranking_30d_val:.1f}", _ranking_color(ranking_30d_val), "índice histórico"),
-        _kpi_card("Modo dominante", dominant_label, "#7C3AED", f"Score: {fm_scores[dominant_mode]:.1f}"),
-        _kpi_card("Última evidencia", last_date_str, "#6B7280", "fecha más reciente"),
+        _kpi_card(t("tab_predictive_evidence.ranking_actual"), f"{ranking_val:.0f}", _ranking_color(ranking_val), t("tab_predictive_evidence.escala_0_100")),
+        _kpi_card(t("tab_predictive_evidence.riesgo_acum_30d"), f"{ranking_30d_val:.1f}", _ranking_color(ranking_30d_val), t("tab_predictive_evidence.indice_historico")),
+        _kpi_card(t("tab_predictive_evidence.modo_dominante"), dominant_label, "#7C3AED", t("tab_predictive_evidence.score", fm_scores_dominant=fm_scores[dominant_mode])),
+        _kpi_card(t("tab_predictive_evidence.ultima_evidencia"), last_date_str, "#6B7280", t("tab_predictive_evidence.fecha_mas_reciente")),
     ]
 
     # Fleet charts
-    scatter_fig = create_fleet_scatter(latest, unit, STATUS_COLORS, 30.0)
+    # Left: daily status calendar of every mode this unit has data for
+    # (`failure_modes` is data-driven). The window ends at the component's
+    # latest date, not the unit's, so a unit that stopped reporting shows
+    # trailing "Sin datos" instead of looking current.
+    calendar_fig = create_mode_status_calendar(df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
     # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
@@ -579,18 +592,18 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
             ai_section = html.Div(
                 create_ai_analysis_panel(
                     None,
-                    "El analisis para este modo no pudo generarse esta semana.",
+                    t("tab_predictive_evidence.el_analisis_para_este_modo_no"),
                     None,
                 ),
                 style={"marginBottom": "1.5rem"},
             )
         else:
-            header_text = "Analisis Inteligente"
+            header_text = t("tab_predictive_evidence.analisis_inteligente_2")
             if analysis_status == "fallback_rules":
                 # Model was unavailable upstream and this came from fixed
                 # rules instead - flag it visually so it doesn't read as more
                 # precise than it is.
-                header_text = "Analisis Inteligente (basado en reglas)"
+                header_text = t("tab_predictive_evidence.analisis_inteligente_basado_en_reglas")
             ai_section = html.Div(
                 create_ai_analysis_panel(
                     diag_row.get("diagnostico"),
@@ -640,9 +653,9 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
         # KPIs
         html.Div([
             html.Div([
-                html.H4([html.I(className="fas fa-tachometer-alt me-2"), "Resumen de Condición"],
+                html.H4([html.I(className="fas fa-tachometer-alt me-2"), t("tab_predictive_evidence.resumen_de_condicion")],
                         className="text-primary mb-2"),
-                html.P(f"Indicadores principales de riesgo de la unidad {unit}", className="text-muted mb-3"),
+                html.P(t("tab_predictive_evidence.indicadores_principales_de_riesgo_de_la", unit=unit), className="text-muted mb-3"),
             ]),
             html.Div(kpis, className="kpi-row"),
         ], className="card shadow-sm", style={"marginBottom": "1.5rem"}),
@@ -650,33 +663,67 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
         # AI analysis
         ai_section,
 
-        # Fleet comparison
+        # Failure mode comparison
         html.Div([
             html.Div([
-                html.H4([html.I(className="fas fa-chart-line me-2"), "Comparación Flota"],
+                html.H4([html.I(className="fas fa-chart-line me-2"), t("tab_predictive_evidence.comparacion_modo_de_falla")],
                         className="text-primary mb-3 mt-4 pb-2 border-bottom"),
-                html.P("Análisis de posición de la unidad respecto al resto de equipos", className="text-muted mb-3"),
+                html.P(t("tab_predictive_evidence.estado_de_cada_modo_de_falla_de"), className="text-muted mb-3"),
             ]),
             html.Div([
                 html.Div([
                     html.Div([
-                        html.Span([html.I(className="fas fa-dot-circle me-1"), "Posición en la flota"],
+                        html.Span([html.I(className="fas fa-calendar-alt me-1"), t("tab_predictive_evidence.calendario_de_estado")],
                                   className="card-subtitle fw-500"),
-                        html.Span("Ranking actual vs riesgo acumulado 30 días",
+                        html.Span(t("tab_predictive_evidence.estado_diario_por_modo_de_falla", days=CALENDAR_DAYS),
                                   style={"fontSize": "11px", "color": "var(--text-light)"}),
                     ], style={"marginBottom": "8px"}),
-                    dcc.Graph(figure=scatter_fig, config={"displayModeBar": False}),
+                    dcc.Graph(figure=calendar_fig, config={"displayModeBar": False})
+                    if calendar_fig is not None else
+                    html.P(t("tab_predictive_evidence.no_hay_datos_de_riesgo_para_esta_unidad"),
+                           className="text-muted text-center", style={"padding": "40px"}),
                 ], className="card shadow-sm", style={"padding": "16px"}),
                 html.Div([
                     html.Div([
-                        html.Span([html.I(className="fas fa-chart-bar me-1"), "Perfil de riesgo"],
+                        html.Span([html.I(className="fas fa-chart-bar me-1"), t("tab_predictive_evidence.perfil_de_riesgo")],
                                   className="card-subtitle fw-500"),
-                        html.Span("Comparación por modo de falla vs promedio de la flota",
+                        html.Span(t("tab_predictive_evidence.comparacion_por_modo_de_falla_vs"),
                                   style={"fontSize": "11px", "color": "var(--text-light)"}),
                     ], style={"marginBottom": "8px"}),
                     dcc.Graph(figure=bar_fig, config={"displayModeBar": False}),
                 ], className="card shadow-sm", style={"padding": "16px"}),
             ], className="ev-two-col"),
+        ], className="card shadow-sm", style={"marginBottom": "1.5rem", "padding": "20px"}),
+    ])
+
+
+def _render_accumulated_wear_evidence(unit, label, score, component, client):
+    """Evidence panel for `accumulated_wear_risk`: the cumulative wear-metal
+    curves from `oil_meter_history`, per component life (`ciclo_motor`). None
+    of the oil/telemetry sections apply to this mode, so none are rendered."""
+    df_meter = predictive_v2.load_latest_cycle_oil_meter_history(client, component, unit) if client else pd.DataFrame()
+    fig = create_accumulated_wear_chart(df_meter, predictive_v2.WEAR_METAL_SUFFIX)
+
+    if fig is not None:
+        body = dcc.Graph(figure=fig, config={"displayModeBar": False})
+    else:
+        body = html.P(t("tab_predictive_evidence.no_hay_historial_de_desgaste_acumulado"),
+                      className="text-muted text-center", style={"padding": "40px"})
+
+    score_text = (t("tab_predictive_evidence.puntaje_actual", score=f"{score:.1f}") if score is not None
+                  else t("tab_predictive_evidence.puntaje_actual_sin_datos"))
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.H4([html.I(className="fas fa-chart-line me-2"), t("tab_predictive_evidence.evidencia_de_desgaste_acumulado")],
+                        className="text-primary mb-3 mt-4 pb-2 border-bottom"),
+                html.P(f"{label} — {score_text}", className="text-muted mb-2"),
+            ]),
+            html.Div([
+                html.I(className="fas fa-info-circle me-1"),
+                t("tab_predictive_evidence.totales_acumulados_de_metales_de_desgaste"),
+            ], className="text-muted", style={"fontSize": "11px", "fontStyle": "italic", "marginBottom": "12px"}),
+            body,
         ], className="card shadow-sm", style={"marginBottom": "1.5rem", "padding": "20px"}),
     ])
 
@@ -687,13 +734,17 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
     failure_modes = resolve_failure_modes(component, client)
 
     if not failure_mode or failure_mode not in failure_modes:
-        return html.Div(html.P("Seleccione un modo de falla válido.", className="text-muted text-center", style={"padding": "40px"}))
+        return html.Div(html.P(t("tab_predictive_evidence.seleccione_un_modo_de_falla_valido"), className="text-muted text-center", style={"padding": "40px"}))
 
     selected_label = failure_modes[failure_mode]
     row = df_latest[df_latest["Unit"] == unit]
     if row.empty:
-        return html.Div(html.P("No hay datos disponibles.", className="text-muted text-center", style={"padding": "40px"}))
+        return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
     row = row.iloc[0]
+
+    if failure_mode == ACCUMULATED_WEAR_MODE:
+        score = float(row[failure_mode]) if failure_mode in row.index and pd.notna(row[failure_mode]) else None
+        return _render_accumulated_wear_evidence(unit, selected_label, score, component, client)
 
     fm_keys = list(failure_modes.keys())
     fm_scores = {k: float(row[k]) if k in row.index and pd.notna(row[k]) else 0.0 for k in fm_keys}
@@ -702,7 +753,7 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
 
     # Oil evidence
     oil_vars = get_oil_variables_for_mode(failure_mode, component, client)
-    oil_subtitle = f"Variables asociadas a {selected_label}"
+    oil_subtitle = t("tab_predictive_evidence.variables_asociadas_a", selected_label=selected_label)
 
     # df_unit is the risk-scores-derived wide frame shared with Predictivo >
     # Resumen: components still on the legacy CSV format carry forward-filled
@@ -736,13 +787,13 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
 
     # Telemetry evidence
     telem_signals = get_telemetry_signals_for_mode(failure_mode, component, client)
-    telem_subtitle = f"Alertas operacionales asociadas a {selected_label}"
+    telem_subtitle = t("tab_predictive_evidence.alertas_operacionales_asociadas_a", selected_label=selected_label)
 
     if not df_unit.empty:
         fecha_fin = df_unit["Fecha"].max()
         fecha_inicio = fecha_fin - pd.Timedelta(days=90)
         df_unit_90d = df_unit[df_unit["Fecha"] >= fecha_inicio]
-        window_text = f"⏱️ Ventana: {fecha_inicio.strftime('%d %b %Y')} – {fecha_fin.strftime('%d %b %Y')}"
+        window_text = t("tab_predictive_evidence.ventana", fecha_inicio_strft=fecha_inicio.strftime('%d %b %Y'), fecha_fin_strftime=fecha_fin.strftime('%d %b %Y'))
     else:
         df_unit_90d = df_unit
         window_text = ""
@@ -775,9 +826,9 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
             if fig:
                 charts.append(html.Div([dcc.Graph(figure=fig, config={"displayModeBar": False})], style={"marginBottom": "20px"}))
         telem_charts = html.Div(charts) if charts else html.P(
-            "No hay alertas registradas en los últimos 90 días.", style={"color": "var(--text-muted)", "fontSize": "13px"})
+            t("tab_predictive_evidence.no_hay_alertas_registradas_en_los"), style={"color": "var(--text-muted)", "fontSize": "13px"})
     else:
-        telem_charts = html.P("Este modo de falla no tiene señales de telemetría asociadas.",
+        telem_charts = html.P(t("tab_predictive_evidence.este_modo_de_falla_no_tiene"),
                               style={"color": "var(--text-muted)", "fontSize": "13px"})
         window_text = ""
 
@@ -791,7 +842,7 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
         # Oil evidence
         html.Div([
             html.Div([
-                html.H4([html.I(className="fas fa-oil-can me-2"), "Evidencia Tribológica"],
+                html.H4([html.I(className="fas fa-oil-can me-2"), t("tab_alerts_detail.evidencia_tribologica")],
                         className="text-primary mb-3 mt-4 pb-2 border-bottom"),
                 html.P(oil_subtitle, className="text-muted mb-3"),
             ]),
@@ -799,30 +850,30 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
             html.Div([
                 html.Div([
                     html.I(className="fas fa-filter me-2", style={"color": "#0891B2"}),
-                    html.Span("Variables de aceite:", className="fw-500", style={"fontSize": "13px"}),
+                    html.Span(t("tab_predictive_evidence.variables_de_aceite"), className="fw-500", style={"fontSize": "13px"}),
                 ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
                 dcc.Dropdown(
                     id="predictive-oil-var-selector",
                     options=oil_var_options,
                     value=oil_var_defaults,
                     multi=True,
-                    placeholder="Seleccionar variables de aceite...",
+                    placeholder=t("tab_predictive_evidence.seleccionar_variables_de_aceite"),
                     className="mb-3",
                     style={"fontSize": "13px"},
                 ),
                 html.P([
                     html.I(className="fas fa-info-circle me-1"),
-                    "Si seleccionas 1 sola variable, se muestran sus límites disponibles."
+                    t("tab_predictive_evidence.si_seleccionas_1_sola_variable_se")
                 ], className="text-muted", style={"fontSize": "11px", "fontStyle": "italic", "marginBottom": "12px"}),
             ], style={"marginBottom": "8px"}),
             # Hidden stores for oil chart callback
             dcc.Store(id="predictive-oil-range-store", data=oil_range_val),
-            html.Span([html.I(className="fas fa-calendar-alt me-1"), "Ventana: últimos 90 días"],
+            html.Span([html.I(className="fas fa-calendar-alt me-1"), t("tab_predictive_evidence.ventana_ultimos_90_dias")],
                       className="text-muted", style={"fontSize": "11px", "display": "inline-block", "marginBottom": "8px"}),
             # Dynamic oil chart (updated by callback)
             html.Div(id="predictive-oil-chart-container", style={"marginBottom": "24px"}),
             html.Div([
-                html.Span([html.I(className="fas fa-table me-1"), "Resumen de variables"],
+                html.Span([html.I(className="fas fa-table me-1"), t("tab_predictive_evidence.resumen_de_variables")],
                           className="fw-500", style={"fontSize": "13px", "display": "block", "marginBottom": "8px"}),
                 oil_table,
             ]),
@@ -831,7 +882,7 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
         # Telemetry evidence
         html.Div([
             html.Div([
-                html.H4([html.I(className="fas fa-signal me-2"), "Evidencia de Telemetría"],
+                html.H4([html.I(className="fas fa-signal me-2"), t("tab_alerts_detail.evidencia_de_telemetria")],
                         className="text-primary mb-3 mt-4 pb-2 border-bottom"),
                 html.P(telem_subtitle, className="text-muted mb-2"),
             ]),
@@ -839,7 +890,7 @@ def render_detailed_evidence(unit, df, df_latest, failure_mode, component="motor
                 html.Div(window_text, style={"fontSize": "11px", "color": "var(--text-muted)", "marginBottom": "4px"}),
                 html.Div([
                     html.I(className="fas fa-info-circle me-1"),
-                    "Las tasas representan el porcentaje del tiempo en alerta dentro de cada estado operacional"
+                    t("tab_predictive_evidence.las_tasas_representan_el_porcentaje_del")
                 ], className="text-muted", style={"fontSize": "11px", "fontStyle": "italic", "marginBottom": "12px"}),
             ]),
             telem_charts,
@@ -861,25 +912,25 @@ def layout(client: str, component: str):
         return html.Div([
             html.Div([
                 html.I(className="fas fa-microscope me-3"),
-                f"Predictivo — {component.title()} — Evidencia"
+                t("tab_predictive_evidence.predictivo_evidencia", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.P(f"No hay datos predictivos disponibles para {component}.",
+            html.P(t("tab_predictive_component.no_hay_datos_predictivos_disponibles_para", component=component),
                    className="text-muted", style={"padding": "40px", "textAlign": "center"})
         ])
 
     # Load component data
     df, df_latest = _load_component_data(filepath, component, client)
     units = sorted(df["Unit"].unique()) if df is not None else []
-    failure_mode_options = get_failure_mode_options(component, client)
+    failure_mode_options = resolve_failure_mode_options(component, client)
 
     return html.Div([
         # Page header
         html.Div([
             html.Div([
                 html.I(className="fas fa-microscope me-2"),
-                f"Evidencia por Unidad — {component.title()}"
+                t("tab_predictive_evidence.evidencia_por_unidad", component_title=component.title())
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.Div(f"Análisis detallado de riesgo, aceite y telemetría — {component}", className="page-subtitle"),
+            html.Div(t("tab_predictive_evidence.analisis_detallado_de_riesgo_aceite_y", component=component), className="page-subtitle"),
         ], style={"marginBottom": "16px"}),
 
         # Header with unit selector
@@ -904,8 +955,8 @@ def layout(client: str, component: str):
         # Failure mode selector
         html.Div([
             html.Div([
-                html.H5([html.I(className="fas fa-cogs me-2"), "Seleccionar Modo de Falla"], className="mb-2"),
-                html.P("Elige un modo de falla para ver evidencia detallada de aceite y telemetría",
+                html.H5([html.I(className="fas fa-cogs me-2"), t("tab_predictive_component.seleccionar_modo_de_falla")], className="mb-2"),
+                html.P(t("tab_predictive_component.elige_un_modo_de_falla_para"),
                        className="text-muted mb-2", style={"fontSize": "12px"}),
             ]),
             dcc.Dropdown(

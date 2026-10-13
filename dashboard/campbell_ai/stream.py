@@ -11,6 +11,7 @@ intact:
 
 from __future__ import annotations
 
+from src.i18n import t
 import json
 import logging
 import os
@@ -50,7 +51,7 @@ def stream(_prefix: str = "") -> Response:
     """Relay the API's event stream to the browser under the Dash session."""
     if not streaming_enabled():
         return Response(
-            _sse("error", {"type": "error", "detail": "Streaming deshabilitado"}),
+            _sse("error", {"type": "error", "detail": t("stream.streaming_deshabilitado")}),
             mimetype="text/event-stream",
             status=200,
         )
@@ -58,7 +59,7 @@ def stream(_prefix: str = "") -> Response:
     username = resolve_authenticated_username()
     if not username:
         return Response(
-            _sse("error", {"type": "error", "detail": "Sesión expirada"}),
+            _sse("error", {"type": "error", "detail": t("callbacks.sesion_expirada")}),
             mimetype="text/event-stream",
             status=200,
         )
@@ -69,7 +70,7 @@ def stream(_prefix: str = "") -> Response:
     message = str(body.get("message", "")).strip()
     if not (company_id and session_id and message):
         return Response(
-            _sse("error", {"type": "error", "detail": "Solicitud incompleta"}),
+            _sse("error", {"type": "error", "detail": t("stream.solicitud_incompleta")}),
             mimetype="text/event-stream",
             status=200,
         )
@@ -81,7 +82,7 @@ def stream(_prefix: str = "") -> Response:
         return Response(
             _sse(
                 "error",
-                {"type": "error", "detail": "Campbell AI no tiene credencial interna"},
+                {"type": "error", "detail": t("stream.campbell_ai_no_tiene_credencial_interna")},
             ),
             mimetype="text/event-stream",
             status=200,
@@ -114,7 +115,7 @@ def stream(_prefix: str = "") -> Response:
                     line = raw.decode("utf-8", errors="replace")
                     yield line
         except HTTPError as exc:
-            detail = "Campbell AI rechazó la solicitud de streaming"
+            detail = t("stream.campbell_ai_rechazo_la_solicitud_de")
             try:
                 detail = json.loads(exc.read().decode("utf-8")).get("detail", detail)
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
@@ -125,7 +126,7 @@ def stream(_prefix: str = "") -> Response:
             logger.warning("Campbell AI stream unreachable: %s", exc)
             yield _sse(
                 "error",
-                {"type": "error", "detail": "No fue posible conectar con Campbell AI"},
+                {"type": "error", "detail": t("stream.no_fue_posible_conectar_con_campbell")},
             )
 
     return Response(

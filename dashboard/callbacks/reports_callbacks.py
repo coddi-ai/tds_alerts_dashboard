@@ -4,6 +4,7 @@ Reports Detail tab callbacks for Multi-Technical-Alerts dashboard.
 Complete refactored implementation with 4-level hierarchy and auto-loading.
 """
 
+from src.i18n import t, vocab
 from dash import Input, Output, State, html, dash_table
 from dash.exceptions import PreventUpdate
 import pandas as pd
@@ -431,8 +432,8 @@ def register_reports_callbacks(app):
         
         if not all([sample_date, component, equipo, familia, client]):
             logger.warning(f"Missing parameters in update_report_display")
-            return (html.Div(), html.P("Seleccionar filtros"), html.Div(), 
-                   html.P("Sin datos"), [], None, html.Div())
+            return (html.Div(), html.P(t("reports_callbacks.seleccionar_filtros")), html.Div(), 
+                   html.P(t("oil_machine_detail.sin_datos")), [], None, html.Div())
         
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
@@ -442,8 +443,8 @@ def register_reports_callbacks(app):
 
         if not reports_file.exists():
             logger.error(f"Reports file not found: {reports_file}")
-            return (html.Div(), html.P("Sin datos"), html.Div(),
-                   html.P("Sin datos"), [], None, html.Div())
+            return (html.Div(), html.P(t("oil_machine_detail.sin_datos")), html.Div(),
+                   html.P(t("oil_machine_detail.sin_datos")), [], None, html.Div())
 
         try:
             df = load_oil_classified(client)
@@ -465,8 +466,8 @@ def register_reports_callbacks(app):
             
             if sample_df.empty:
                 logger.warning(f"No sample found after filtering")
-                return (html.Div(), html.P("No se encontró muestra"), html.Div(),
-                       html.P("Sin datos"), [], None, html.Div())
+                return (html.Div(), html.P(t("reports_callbacks.no_se_encontro_muestra")), html.Div(),
+                       html.P(t("oil_machine_detail.sin_datos")), [], None, html.Div())
             
             sample = sample_df.iloc[0]
             logger.info(f"Sample found: {sample.get('sampleNumber', 'N/A')}")
@@ -503,8 +504,8 @@ def register_reports_callbacks(app):
             
         except Exception as e:
             logger.exception(f"Error in update_report_display: {e}")
-            return (html.Div(), f"Error: {str(e)}", html.Div(),
-                   "Error", [], None, html.Div())
+            return (html.Div(), t("component_hours_callbacks.error", str_e=str(e)), html.Div(),
+                   t("reports_callbacks.error"), [], None, html.Div())
     
     
     # Time series callback - Create subplot for each essay
@@ -551,7 +552,7 @@ def register_reports_callbacks(app):
                 cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.05,
-                subplot_titles=[f"{essay}" for essay in essays]
+                subplot_titles=[vocab(essay) for essay in essays]
             )
             
             # Get limits for this component (use normalized name for lookup)
@@ -578,7 +579,7 @@ def register_reports_callbacks(app):
                         x=essay_dates,
                         y=essay_values,
                         mode='lines+markers',
-                        name=essay,
+                        name=vocab(essay),
                         line=dict(color='#1f77b4', width=2),
                         marker=dict(size=6),
                         showlegend=False
@@ -623,12 +624,12 @@ def register_reports_callbacks(app):
                 fig.update_yaxes(title_text="ppm", row=idx, col=1)
             
             # Update x-axis label (only last one)
-            fig.update_xaxes(title_text="Fecha", row=len(essays), col=1)
+            fig.update_xaxes(title_text=t("tab_mantenciones_general.fecha"), row=len(essays), col=1)
             
             # Update layout
             fig.update_layout(
                 height=300 * len(essays),
-                title_text="Análisis de Series Temporales",
+                title_text=t("reports_callbacks.analisis_de_series_temporales"),
                 hovermode='x unified',
                 showlegend=True,
                 legend=dict(
@@ -667,14 +668,14 @@ def register_reports_callbacks(app):
         LIC (lower) only for essays where the four-limit contract provides it.
         """
         if not all([component, equipo, client]):
-            return html.P("Seleccione equipo y componente para ver tendencias", className="text-muted")
+            return html.P(t("reports_callbacks.seleccione_equipo_y_componente_para_ver"), className="text-muted")
 
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
         if not reports_file.exists():
-            return html.P("No hay datos disponibles", className="text-muted")
+            return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
 
         try:
             df = load_oil_classified(client)
@@ -683,7 +684,7 @@ def register_reports_callbacks(app):
             # Filter to equipment + component
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
             if history.empty:
-                return html.P("Sin historial para este equipo/componente", className="text-muted")
+                return html.P(t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
 
             history['sampleDate'] = pd.to_datetime(history['sampleDate'])
             history = history.sort_values('sampleDate')
@@ -695,7 +696,7 @@ def register_reports_callbacks(app):
                 history = history[history['sampleDate'] <= pd.to_datetime(end_date)]
 
             if history.empty:
-                return html.P("Sin datos en el rango seleccionado", className="text-muted")
+                return html.P(t("reports_callbacks.sin_datos_en_el_rango_seleccionado"), className="text-muted")
 
             # Get limits for this component
             familia = history.iloc[0].get('machineName', '')
@@ -710,7 +711,7 @@ def register_reports_callbacks(app):
 
         except Exception as e:
             logger.exception(f"Error in update_time_series_grid: {e}")
-            return html.P(f"Error: {str(e)}", className="text-danger")
+            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
 
     # ========================================
     # Tendencia / Último Ensayo view toggle
@@ -744,14 +745,14 @@ def register_reports_callbacks(app):
     def update_oil_radar_view(sample_date, component, equipo, familia, client):
         """Build the grouped radar-chart + table view for the currently selected sample."""
         if not all([sample_date, component, equipo, familia, client]):
-            return html.P("Seleccionar filtros para ver el último ensayo", className="text-muted")
+            return html.P(t("reports_callbacks.seleccionar_filtros_para_ver_el_ultimo"), className="text-muted")
 
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
 
         if not reports_file.exists():
-            return html.P("No hay datos disponibles", className="text-muted")
+            return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
 
         try:
             df = load_oil_classified(client)
@@ -766,13 +767,13 @@ def register_reports_callbacks(app):
                           (df['sampleDate_str'] == sample_date_only)]
 
             if sample_df.empty:
-                return html.P("No se encontró muestra", className="text-muted")
+                return html.P(t("reports_callbacks.no_se_encontro_muestra"), className="text-muted")
 
             sample = sample_df.iloc[0]
 
             essays_file = _data_path("oil", "essays_elements.xlsx")
             if not essays_file.exists():
-                return html.P("Archivo essays_elements.xlsx no encontrado", className="text-muted")
+                return html.P(t("reports_callbacks.archivo_essays_elements_xlsx_no_encontrado"), className="text-muted")
             essays_df = load_essays_mapping(essays_file)
 
             component_normalized = sample.get('componentNameNormalized', component)
@@ -780,7 +781,7 @@ def register_reports_callbacks(app):
             if limits:
                 comp_limits = limits.get(client, {}).get(familia, {}).get(component_normalized, {})
             if not comp_limits:
-                return html.P(f"Límites no disponibles para {familia}/{component_normalized}", className="text-muted")
+                return html.P(t("reports_callbacks.limites_no_disponibles_para", familia=familia, component_normalized=component_normalized), className="text-muted")
 
             oil_hour_range = sample.get('oilHourRange', 'UNKNOWN')
 
@@ -788,7 +789,7 @@ def register_reports_callbacks(app):
 
         except Exception as e:
             logger.exception(f"Error in update_oil_radar_view: {e}")
-            return html.P(f"Error: {str(e)}", className="text-danger")
+            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
 
     # ========================================
     # Comment History Table
@@ -803,19 +804,19 @@ def register_reports_callbacks(app):
     def update_comment_history(component, equipo, client):
         """Show historical comments/recommendations for the selected unit/component."""
         if not all([component, equipo, client]):
-            return html.P("Seleccione equipo y componente para ver el historial de comentarios.",
+            return html.P(t("reports_callbacks.seleccione_equipo_y_componente_para_ver_2"),
                           className="text-muted")
 
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         if not reports_file.exists():
-            return html.P("Sin datos", className="text-muted")
+            return html.P(t("oil_machine_detail.sin_datos"), className="text-muted")
 
         try:
             df = load_oil_classified(client)
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
             if history.empty:
-                return html.P("Sin historial para este equipo/componente", className="text-muted")
+                return html.P(t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
 
             history['sampleDate'] = pd.to_datetime(history['sampleDate'])
             history = history.sort_values('sampleDate', ascending=False)
@@ -836,7 +837,7 @@ def register_reports_callbacks(app):
                 })
 
             if not table_rows:
-                return html.P("Sin comentarios disponibles", className="text-muted")
+                return html.P(t("reports_callbacks.sin_comentarios_disponibles"), className="text-muted")
 
             # Color map for status column
             status_styles = []
@@ -848,11 +849,11 @@ def register_reports_callbacks(app):
 
             return dash_table.DataTable(
                 columns=[
-                    {'name': 'ID Reporte', 'id': 'reportId'},
-                    {'name': 'Fecha', 'id': 'date'},
-                    {'name': 'Estado', 'id': 'status'},
-                    {'name': 'Anomalía', 'id': 'anomalyType'},
-                    {'name': 'Comentario / Recomendación', 'id': 'comment'},
+                    {'name': t("reports_callbacks.id_reporte"), 'id': 'reportId'},
+                    {'name': t("tab_mantenciones_general.fecha"), 'id': 'date'},
+                    {'name': t("fleet_overview.col_status"), 'id': 'status'},
+                    {'name': t("oil_machine_detail.anomalia"), 'id': 'anomalyType'},
+                    {'name': t("reports_callbacks.comentario_recomendacion"), 'id': 'comment'},
                 ],
                 data=table_rows,
                 style_table={'overflowX': 'auto'},
@@ -878,7 +879,7 @@ def register_reports_callbacks(app):
 
         except Exception as e:
             logger.exception(f"Error in comment history: {e}")
-            return html.P(f"Error: {str(e)}", className="text-danger")
+            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
 
     # ========================================
     # Advanced Analytics - Variable Options
@@ -944,7 +945,7 @@ def register_reports_callbacks(app):
         limits_file = settings.get_stewart_limits_four_path(client)
 
         if not reports_file.exists():
-            return html.P("Sin datos", className="text-muted")
+            return html.P(t("oil_machine_detail.sin_datos"), className="text-muted")
 
         try:
             df = load_oil_classified(client)
@@ -952,7 +953,7 @@ def register_reports_callbacks(app):
 
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
             if history.empty:
-                return html.P("Sin historial", className="text-muted")
+                return html.P(t("reports_callbacks.sin_historial"), className="text-muted")
 
             history['sampleDate'] = pd.to_datetime(history['sampleDate'])
             history = history.sort_values('sampleDate')
@@ -963,7 +964,7 @@ def register_reports_callbacks(app):
                 history = history[history['sampleDate'] <= pd.to_datetime(end_date)]
 
             if history.empty:
-                return html.P("Sin datos en el rango seleccionado", className="text-muted")
+                return html.P(t("reports_callbacks.sin_datos_en_el_rango_seleccionado"), className="text-muted")
 
             # Limits
             comp_limits = {}
@@ -988,7 +989,7 @@ def register_reports_callbacks(app):
                 color = colors_cycle[idx % len(colors_cycle)]
 
                 fig.add_trace(go.Scatter(
-                    x=dates, y=vals, mode='lines+markers', name=var,
+                    x=dates, y=vals, mode='lines+markers', name=vocab(var),
                     line=dict(color=color, width=2), marker=dict(size=5)
                 ))
 
@@ -1014,7 +1015,7 @@ def register_reports_callbacks(app):
                 )
 
             fig.update_layout(
-                title="Analítica Avanzada - Tendencia Personalizada",
+                title=t("reports_callbacks.analitica_avanzada_tendencia_personalizada"),
                 height=400,
                 margin=dict(l=50, r=20, t=50, b=40),
                 hovermode='x unified',
@@ -1028,7 +1029,7 @@ def register_reports_callbacks(app):
 
         except Exception as e:
             logger.exception(f"Error in advanced analytics: {e}")
-            return html.P(f"Error: {str(e)}", className="text-danger")
+            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
 
 
 # Helper functions
@@ -1047,28 +1048,28 @@ def create_sample_info_card(sample):
     
     return dbc.Card([
         dbc.CardBody([
-            html.H5(f"Sample: {sample.get('sampleNumber', 'N/A')}", className="mb-3"),
+            html.H5(t("reports_callbacks.sample", sample_get_samplen=sample.get('sampleNumber', 'N/A')), className="mb-3"),
             dbc.Row([
                 dbc.Col([
                     html.P([
-                        html.Strong("Client: "), f"{sample.get('client', 'N/A')}", html.Br(),
-                        html.Strong("Familia: "), f"{familia_display}", html.Br(),
-                        html.Strong("Equipo: "), f"{equipo_display}", html.Br(),
-                        html.Strong("Component: "), f"{component_display}", html.Br(),
+                        html.Strong(t("reports_callbacks.client")), f"{sample.get('client', 'N/A')}", html.Br(),
+                        html.Strong(t("reports_callbacks.familia")), f"{familia_display}", html.Br(),
+                        html.Strong(t("reports_callbacks.equipo")), f"{equipo_display}", html.Br(),
+                        html.Strong(t("reports_callbacks.component")), f"{component_display}", html.Br(),
                     ])
                 ], width=6),
                 dbc.Col([
                     html.P([
-                        html.Strong("Sample Date: "), 
+                        html.Strong(t("reports_callbacks.sample_date")), 
                         f"{pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'}", 
                         html.Br(),
-                        html.Strong("Status: "), 
+                        html.Strong(t("reports_callbacks.status")), 
                         html.Span(
                             sample.get('report_status', 'N/A'),
                             className=f"badge bg-{status_class} ms-2"
                         ), html.Br(),
-                        html.Strong("Severity Score: "), f"{sample.get('severity_score', 0)}", html.Br(),
-                        html.Strong("Essays Broken: "), f"{sample.get('essays_broken', 0)}"
+                        html.Strong(t("reports_callbacks.severity_score")), f"{sample.get('severity_score', 0)}", html.Br(),
+                        html.Strong(t("reports_callbacks.essays_broken")), f"{sample.get('essays_broken', 0)}"
                     ])
                 ], width=6)
             ])
@@ -1082,7 +1083,7 @@ def create_historical_comparison(sample, df, equipo, component):
     history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate', ascending=False)
     
     if len(history) < 2:
-        return dbc.Alert("Need at least 2 reports for comparison", color="info")
+        return dbc.Alert(t("reports_callbacks.need_at_least_2_reports_for"), color="info")
     
     # Get current and previous report
     current = history.iloc[0]
@@ -1140,7 +1141,7 @@ def create_historical_comparison(sample, df, equipo, component):
                 continue
     
     if not comparison_data:
-        return html.P("No comparison data available", className="text-muted")
+        return html.P(t("reports_callbacks.no_comparison_data_available"), className="text-muted")
     
     # Sort by absolute change percentage (descending)
     comparison_data.sort(key=lambda x: abs(x['change_pct']), reverse=True)
@@ -1151,18 +1152,18 @@ def create_historical_comparison(sample, df, equipo, component):
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("Current Report", className="text-muted mb-1"),
+                    html.H6(t("reports_callbacks.current_report"), className="text-muted mb-1"),
                     html.H5(current_date),
-                    html.P(f"Status: {current.get('report_status', 'N/A')}", className="mb-0")
+                    html.P(t("reports_callbacks.status_2", current_get_report=current.get('report_status', 'N/A')), className="mb-0")
                 ])
             ])
         ], width=6),
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("Previous Report", className="text-muted mb-1"),
+                    html.H6(t("reports_callbacks.previous_report"), className="text-muted mb-1"),
                     html.H5(previous_date),
-                    html.P(f"Status: {previous.get('report_status', 'N/A')}", className="mb-0")
+                    html.P(t("reports_callbacks.status_3", previous_get_repor=previous.get('report_status', 'N/A')), className="mb-0")
                 ])
             ])
         ], width=6)
@@ -1171,12 +1172,12 @@ def create_historical_comparison(sample, df, equipo, component):
     # Create comparison table
     table = dash_table.DataTable(
         columns=[
-            {'name': 'Essay', 'id': 'essay'},
-            {'name': 'Current', 'id': 'current', 'type': 'numeric'},
-            {'name': 'Previous', 'id': 'previous', 'type': 'numeric'},
-            {'name': 'Change', 'id': 'change', 'type': 'numeric'},
+            {'name': t("tables.essay"), 'id': 'essay'},
+            {'name': t("reports_callbacks.current"), 'id': 'current', 'type': 'numeric'},
+            {'name': t("reports_callbacks.previous"), 'id': 'previous', 'type': 'numeric'},
+            {'name': t("reports_callbacks.change"), 'id': 'change', 'type': 'numeric'},
             {'name': 'Change %', 'id': 'change_pct', 'type': 'numeric'},
-            {'name': 'Trend', 'id': 'trend'}
+            {'name': t("reports_callbacks.trend"), 'id': 'trend'}
         ],
         data=[{k: v for k, v in item.items() if k != '_color'} for item in comparison_data],
         style_cell={'textAlign': 'center', 'padding': '8px', 'fontSize': '12px'},
@@ -1200,7 +1201,7 @@ def create_historical_comparison(sample, df, equipo, component):
 
 def create_ai_recommendation_display(sample):
     """DEPRECATED: Use create_ai_diagnosis_and_action instead."""
-    ai_rec = sample.get('ai_recommendation', 'No AI recommendation available for this sample.')
+    ai_rec = sample.get('ai_recommendation', t("reports_callbacks.no_ai_recommendation_available_for_this"))
     
     status_color = {
         'Anormal': 'danger',
@@ -1209,7 +1210,7 @@ def create_ai_recommendation_display(sample):
     }.get(sample.get('report_status', 'Normal'), 'light')
     
     return dbc.Alert([
-        html.H6("🤖 AI Analysis:", className="alert-heading"),
+        html.H6(t("reports_callbacks.ai_analysis"), className="alert-heading"),
         html.Hr(),
         html.P(ai_rec, style={'whiteSpace': 'pre-wrap'})
     ], color=status_color)
@@ -1261,37 +1262,37 @@ def create_report_identity_display(sample):
     return dbc.Row([
         dbc.Col([
             html.Div([
-                html.Small("Cliente", className="text-muted d-block"),
+                html.Small(t("reports_callbacks.cliente"), className="text-muted d-block"),
                 html.Strong(str(sample.get('client', 'N/A')).upper())
             ])
         ], width=2),
         dbc.Col([
             html.Div([
-                html.Small("Equipo", className="text-muted d-block"),
+                html.Small(t("tab_mantenciones_general.equipo"), className="text-muted d-block"),
                 html.Strong(str(sample.get('unitId', 'N/A')).upper())
             ])
         ], width=2),
         dbc.Col([
             html.Div([
-                html.Small("Componente", className="text-muted d-block"),
+                html.Small(t("tab_mantenciones_general.componente"), className="text-muted d-block"),
                 html.Strong(str(sample.get('componentName', 'N/A')).title())
             ])
         ], width=2),
         dbc.Col([
             html.Div([
-                html.Small("Horómetro Comp.", className="text-muted d-block"),
+                html.Small(t("reports_callbacks.horometro_comp"), className="text-muted d-block"),
                 html.Strong(comp_hours_display, style={'color': '#17a2b8'})
             ])
         ], width=1),
         dbc.Col([
             html.Div([
-                html.Small("Fecha de Muestra", className="text-muted d-block"),
+                html.Small(t("component_hours_callbacks.fecha_de_muestra"), className="text-muted d-block"),
                 html.Strong(pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A')
             ])
         ], width=2),
         dbc.Col([
             html.Div([
-                html.Small("Estado", className="text-muted d-block"),
+                html.Small(t("fleet_overview.col_status"), className="text-muted d-block"),
                 html.Span(sample.get('report_status', 'N/A'), className=f"badge bg-{status_color}")
             ])
         ], width=3)
@@ -1305,7 +1306,7 @@ def create_decision_summary(sample, limits, client, machine, component):
     Simplified to show: Report Status | Essays Broken | Breached Essays
     """
     if sample is None or len(sample) == 0:
-        return html.P("No hay datos disponibles", className="text-muted")
+        return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
     
     status_color = {
         'Anormal': 'danger',
@@ -1330,7 +1331,7 @@ def create_decision_summary(sample, limits, client, machine, component):
         # Only warn if we have essays_broken > 0 but can't show any breached essays at all
         data_quality_warning = (essays_broken_count > 0 and len(breached_essays) == 0)
     
-    breached_text = ", ".join(breached_essays) if breached_essays else "Ninguno"
+    breached_text = ", ".join(breached_essays) if breached_essays else t("tab_alerts_detail.ninguno")
     
     # Previous sample context
     prev_date = "N/A"
@@ -1344,7 +1345,7 @@ def create_decision_summary(sample, limits, client, machine, component):
     
     days_prev = sample.get('daysSincePrevious')
     if has_previous and days_prev is not None and not (isinstance(days_prev, float) and pd.isna(days_prev)):
-        days_since = f"{int(days_prev)} d\u00edas"
+        days_since = t("reports_callbacks.dias", int_days_prev=int(days_prev))
     
     main_summary = dbc.Row([
         # Simplified metrics: Status | Anomaly | Essays Broken | Breached Essays
@@ -1352,25 +1353,25 @@ def create_decision_summary(sample, limits, client, machine, component):
             dbc.Card([
                 dbc.CardBody([
                     html.Div([
-                        html.H5("\ud83c\udfaf Resultado del Reporte", className="mb-2 d-inline-block"),
+                        html.H5(t("reports_callbacks.resultado_del_reporte"), className="mb-2 d-inline-block"),
                         html.Div([
-                            html.Small("ID Reporte: ", className="text-muted me-1"),
+                            html.Small(t("reports_callbacks.id_reporte_2"), className="text-muted me-1"),
                             html.Strong(str(sample.get('sampleNumber', 'N/A')), className="me-3"),
-                            html.Small("Horómetro Aceite: ", className="text-muted me-1"),
+                            html.Small(t("reports_callbacks.horometro_aceite"), className="text-muted me-1"),
                             html.Strong(f"{float(sample.get('oilMeter', 0)):.1f} hrs" if sample.get('oilMeter') is not None and not (isinstance(sample.get('oilMeter'), float) and pd.isna(sample.get('oilMeter'))) else 'N/A')
                         ], className="d-inline-block float-end", style={'fontSize': '0.85rem'})
                     ], className="mb-3 clearfix"),
                     dbc.Row([
                         dbc.Col([
                             html.Div([
-                                html.Small("Estado del Reporte", className="text-muted d-block mb-1"),
+                                html.Small(t("reports_callbacks.estado_del_reporte"), className="text-muted d-block mb-1"),
                                 html.H4(html.Span(sample.get('report_status', 'N/A'), 
                                        className=f"badge bg-{status_color}"))
                             ])
                         ], width=3),
                         dbc.Col([
                             html.Div([
-                                html.Small("Anomalía Detectada", className="text-muted d-block mb-1"),
+                                html.Small(t("reports_callbacks.anomalia_detectada"), className="text-muted d-block mb-1"),
                                 html.P(
                                     _format_anomaly_type(sample.get('anomalyType')),
                                     className="mb-0 fw-bold",
@@ -1380,14 +1381,14 @@ def create_decision_summary(sample, limits, client, machine, component):
                         ], width=3),
                         dbc.Col([
                             html.Div([
-                                html.Small("Ensayos Fuera de L\u00edmite", className="text-muted d-block mb-1"),
+                                html.Small(t("reports_callbacks.ensayos_fuera_de_limite"), className="text-muted d-block mb-1"),
                                 html.H3(f"{essays_broken_count}", 
                                        className=f"text-{status_color}")
                             ])
                         ], width=3),
                         dbc.Col([
                             html.Div([
-                                html.Small("Ensayos Cr\u00edticos", className="text-muted d-block mb-1"),
+                                html.Small(t("reports_callbacks.ensayos_criticos"), className="text-muted d-block mb-1"),
                                 html.P(breached_text, className="mb-0", 
                                       style={'fontSize': '0.9rem', 'fontWeight': 'bold'})
                             ])
@@ -1400,13 +1401,13 @@ def create_decision_summary(sample, limits, client, machine, component):
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("\ud83d\udcc5 Contexto de Muestra Anterior", className="mb-3"),
+                    html.H6(t("reports_callbacks.contexto_de_muestra_anterior"), className="mb-3"),
                     html.Div([
-                        html.Small("Fecha de Muestra Anterior", className="text-muted d-block"),
+                        html.Small(t("reports_callbacks.fecha_de_muestra_anterior"), className="text-muted d-block"),
                         html.Strong(prev_date, className="d-block mb-2")
                     ]),
                     html.Div([
-                        html.Small("D\u00edas Desde Anterior", className="text-muted d-block"),
+                        html.Small(t("reports_callbacks.dias_desde_anterior"), className="text-muted d-block"),
                         html.Strong(days_since, className="d-block")
                     ])
                 ])
@@ -1418,9 +1419,9 @@ def create_decision_summary(sample, limits, client, machine, component):
         return html.Div([
             main_summary,
             dbc.Alert([
-                html.Strong("\u26a0\ufe0f Aviso de Calidad de Datos: "),
-                f"El conteo de ensayos fuera de l\u00edmite ({essays_broken_count}) no coincide con la lista de ensayos cr\u00edticos. ",
-                "Mostrando ensayos cr\u00edticos calculados din\u00e1micamente basados en valores reales y umbrales."
+                html.Strong(t("reports_callbacks.aviso_de_calidad_de_datos")),
+                t("reports_callbacks.el_conteo_de_ensayos_fuera_de", essays_broken_count=essays_broken_count),
+                t("reports_callbacks.mostrando_ensayos_criticos_calculados_dina")
             ], color="warning", className="mb-0")
         ])
     else:
@@ -1443,7 +1444,7 @@ def create_evidence_tables(sample, limits, df):
     # Load essays_elements to get GroupElement mapping
     essays_file = _data_path("oil", "essays_elements.xlsx")
     if not essays_file.exists():
-        return html.P("essays_elements.xlsx not found", className="text-muted")
+        return html.P(t("reports_callbacks.essays_elements_xlsx_not_found"), className="text-muted")
     
     try:
         essays_df = load_essays_mapping(essays_file)
@@ -1469,7 +1470,7 @@ def create_evidence_tables(sample, limits, df):
         client = sample.get('client', '')
         
         if not (limits and client in limits and machine in limits[client] and component_normalized in limits[client][machine]):
-            return html.P("No hay límites disponibles para tablas de evidencia", className="text-muted")
+            return html.P(t("reports_callbacks.no_hay_limites_disponibles_para_tablas"), className="text-muted")
         
         comp_limits = limits[client][machine][component_normalized]
         
@@ -1532,13 +1533,13 @@ def create_evidence_tables(sample, limits, df):
             # Create table
             group_table = dash_table.DataTable(
                 columns=[
-                    {'name': 'Ensayo', 'id': 'essay'},
-                    {'name': 'Valor Actual (ppm)', 'id': 'value', 'type': 'numeric'},
+                    {'name': t("reports_callbacks.ensayo"), 'id': 'essay'},
+                    {'name': t("reports_callbacks.valor_actual_ppm"), 'id': 'value', 'type': 'numeric'},
                     {'name': 'LIC', 'id': 'lic'},
                     {'name': 'LIM', 'id': 'lim'},
                     {'name': 'LSM', 'id': 'lsm'},
                     {'name': 'LSC', 'id': 'lsc'},
-                    {'name': 'Estado', 'id': 'status'}
+                    {'name': t("fleet_overview.col_status"), 'id': 'status'}
                 ],
                 data=[{k: v for k, v in item.items() if k != '_color'} for item in table_data],
                 style_cell={
@@ -1573,11 +1574,11 @@ def create_evidence_tables(sample, limits, df):
                 ], className="mb-4")
             )
         
-        return html.Div(tables) if tables else html.P("No hay datos de evidencia disponibles", className="text-muted")
+        return html.Div(tables) if tables else html.P(t("reports_callbacks.no_hay_datos_de_evidencia_disponibles"), className="text-muted")
         
     except Exception as e:
         logger.exception(f"Error creating evidence tables: {e}")
-        return html.P(f"Error: {str(e)}", className="text-danger")
+        return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
 
 
 # Alias: tables-only evidence (radar removed July 2026)
@@ -1630,7 +1631,7 @@ def create_ai_diagnosis_and_action(sample):
 
     # Handle NaN, None, or empty string
     if ai_rec is None or (isinstance(ai_rec, float) and pd.isna(ai_rec)) or ai_rec == '' or not isinstance(ai_rec, str):
-        return html.P("No hay recomendación de IA disponible para este reporte.", className="text-muted"), html.Div()
+        return html.P(t("reports_callbacks.no_hay_recomendacion_de_ia_disponible"), className="text-muted"), html.Div()
 
     sections = _parse_oil_ai_sections(ai_rec)
 
@@ -1638,7 +1639,7 @@ def create_ai_diagnosis_and_action(sample):
         return dbc.Col([
             html.Div([
                 html.H6([html.I(className=f'fas {icon} me-2'), title], className='text-dark mb-2'),
-                html.P(text or 'No disponible', className='mb-0', style={
+                html.P(text or t("tab_alerts_detail.no_disponible"), className='mb-0', style={
                     'whiteSpace': 'pre-wrap',
                     'fontSize': '1rem',
                     'lineHeight': '1.6',
@@ -1648,8 +1649,8 @@ def create_ai_diagnosis_and_action(sample):
         ], md=6)
 
     recommendation = dbc.Row([
-        _section_box('Diagnóstico', 'fa-search', sections['diagnostico']),
-        _section_box('Acción', 'fa-wrench', sections['accion']),
+        _section_box(t("reports_callbacks.diagnostico"), 'fa-search', sections['diagnostico']),
+        _section_box(t("reports_callbacks.accion"), 'fa-wrench', sections['accion']),
     ], className='g-3')
 
     return recommendation, html.Div()
@@ -1672,7 +1673,7 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
     history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate', ascending=False)
     
     if len(history) < 2:
-        return dbc.Alert("Se necesitan al menos 2 reportes para comparación. Este es el primer reporte para este componente.", 
+        return dbc.Alert(t("reports_callbacks.se_necesitan_al_menos_2_reportes"), 
                         color="info", className="mb-0")
     
     # Get current and previous report
@@ -1708,16 +1709,16 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("📊 Resumen de Comparación", className="mb-3"),
+                    html.H6(t("reports_callbacks.resumen_de_comparacion"), className="mb-3"),
                     dbc.Row([
                         dbc.Col([
-                            html.Small("Reporte Actual", className="text-muted d-block"),
+                            html.Small(t("reports_callbacks.reporte_actual"), className="text-muted d-block"),
                             html.Strong(current_date, className="d-block"),
                             html.Span(current_status, 
                                      className=f"badge bg-{current_badge_color}")
                         ], width=6),
                         dbc.Col([
-                            html.Small("Reporte Anterior", className="text-muted d-block"),
+                            html.Small(t("reports_callbacks.reporte_anterior"), className="text-muted d-block"),
                             html.Strong(previous_date, className="d-block"),
                             html.Span(previous_status,
                                      className=f"badge bg-{previous_badge_color}")
@@ -1730,9 +1731,9 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("⬆️ Empeorando", className="mb-2 text-danger"),
-                    html.P(f"{len(new_breaches)} nuevos ensayos críticos", className="mb-1", style={'fontSize': '0.9rem'}),
-                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in new_breaches[:5]]) if new_breaches else html.P("Ninguno", className="text-muted mb-0", style={'fontSize': '0.9rem'})
+                    html.H6(t("reports_callbacks.empeorando"), className="mb-2 text-danger"),
+                    html.P(t("reports_callbacks.nuevos_ensayos_criticos", len_new_breaches=len(new_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
+                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in new_breaches[:5]]) if new_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])
             ], color="light")
         ], width=4),
@@ -1740,9 +1741,9 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6("⬇️ Mejorando", className="mb-2 text-success"),
-                    html.P(f"{len(resolved_breaches)} ensayos resueltos", className="mb-1", style={'fontSize': '0.9rem'}),
-                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in resolved_breaches[:5]]) if resolved_breaches else html.P("Ninguno", className="text-muted mb-0", style={'fontSize': '0.9rem'})
+                    html.H6(t("reports_callbacks.mejorando"), className="mb-2 text-success"),
+                    html.P(t("reports_callbacks.ensayos_resueltos", len_resolved_breac=len(resolved_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
+                    html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in resolved_breaches[:5]]) if resolved_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])
             ], color="light")
         ], width=4)

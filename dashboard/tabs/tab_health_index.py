@@ -6,6 +6,7 @@ Proporciona visualización completa del Health Index por sistema:
 - Métricas generales, gráficos temporales, heatmaps, alertas
 """
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from src.utils.logger import get_logger
@@ -28,10 +29,10 @@ def create_layout() -> html.Div:
             dbc.Col([
                 html.H2([
                     html.I(className="fas fa-heartbeat me-3"),
-                    "Health Index - Estado de Salud de Equipos"
+                    t("tab_health_index.health_index_estado_de_salud_de")
                 ], className="text-primary mb-1"),
                 html.P(
-                    "Monitoreo del índice de salud por sistema y unidad",
+                    t("tab_health_index.monitoreo_del_indice_de_salud_por"),
                     className="text-muted"
                 )
             ])
@@ -43,7 +44,7 @@ def create_layout() -> html.Div:
             children=[
                 dbc.Alert([
                     html.I(className="fas fa-info-circle me-2"),
-                    "Este módulo está disponible únicamente para el cliente CDA"
+                    t("tab_health_index.este_modulo_esta_disponible_unicamente_par")
                 ], color="info", className="mb-4")
             ]
         ),
@@ -57,29 +58,29 @@ def create_layout() -> html.Div:
             dbc.CardBody([
                 html.H5([
                     html.I(className="fas fa-filter me-2"),
-                    "Filtros Globales"
+                    t("tab_health_index.filtros_globales")
                 ], className="mb-3"),
                 
                 dbc.Row([
                     # Rango de fechas
                     dbc.Col([
-                        html.Label("Rango de Fechas:", className="fw-bold mb-2"),
+                        html.Label(t("tab_health_index.rango_de_fechas"), className="fw-bold mb-2"),
                         dcc.DatePickerRange(
                             id='health-index-date-range',
                             display_format='DD/MM/YYYY',
-                            start_date_placeholder_text='Fecha Inicio',
-                            end_date_placeholder_text='Fecha Fin',
+                            start_date_placeholder_text=t("tab_health_index.fecha_inicio"),
+                            end_date_placeholder_text=t("tab_health_index.fecha_fin"),
                             className='w-100'
                         )
                     ], md=3),
                     
                     # Filtro por Modelo
                     dbc.Col([
-                        html.Label("Modelo:", className="fw-bold mb-2"),
+                        html.Label(t("tab_health_index.modelo"), className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='health-index-model-filter',
                             options=[
-                                {'label': 'Todos', 'value': 'all'},
+                                {'label': t("tab_alerts_detail.todos"), 'value': 'all'},
                                 {'label': 'CAT 789C', 'value': 'CAT 789C'},
                                 {'label': 'CAT 789D', 'value': 'CAT 789D'}
                             ],
@@ -91,10 +92,10 @@ def create_layout() -> html.Div:
                     
                     # Filtro por Unidad
                     dbc.Col([
-                        html.Label("Unidad:", className="fw-bold mb-2"),
+                        html.Label(t("tab_health_index.unidad"), className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='health-index-unit-filter',
-                            options=[{'label': 'Todas', 'value': 'all'}],
+                            options=[{'label': t("tab_health_index.todas"), 'value': 'all'}],
                             value='all',
                             multi=True,
                             className='dash-bootstrap'
@@ -103,14 +104,14 @@ def create_layout() -> html.Div:
                     
                     # Filtro por Rango de HI
                     dbc.Col([
-                        html.Label("Rango Health Index:", className="fw-bold mb-2"),
+                        html.Label(t("tab_health_index.rango_health_index"), className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='health-index-range-filter',
                             options=[
-                                {'label': 'Todos', 'value': 'all'},
-                                {'label': '🔴 Crítico (< 0.5)', 'value': 'critical'},
-                                {'label': '🟡 Precaución (0.5-0.8)', 'value': 'warning'},
-                                {'label': '🟢 Saludable (≥ 0.8)', 'value': 'healthy'}
+                                {'label': t("tab_alerts_detail.todos"), 'value': 'all'},
+                                {'label': t("tab_health_index.critico_0_5"), 'value': 'critical'},
+                                {'label': t("tab_health_index.precaucion_0_5_0_8"), 'value': 'warning'},
+                                {'label': t("tab_health_index.saludable_0_8"), 'value': 'healthy'}
                             ],
                             value='all',
                             clearable=False,
@@ -122,7 +123,7 @@ def create_layout() -> html.Div:
                     dbc.Col([
                         html.Label("\u00A0", className="fw-bold mb-2 d-block"),
                         dbc.Button(
-                            [html.I(className="fas fa-sync-alt me-2"), "Actualizar"],
+                            [html.I(className="fas fa-sync-alt me-2"), t("tab_health_index.actualizar")],
                             id='health-index-refresh-button',
                             color='primary',
                             className='w-100'
@@ -143,7 +144,7 @@ def create_layout() -> html.Div:
             dbc.CardHeader([
                 html.H5([
                     html.I(className="fas fa-chart-line me-2"),
-                    "Análisis por Sistema"
+                    t("tab_health_index.analisis_por_sistema")
                 ], className="mb-0")
             ]),
             dbc.CardBody([
@@ -152,31 +153,31 @@ def create_layout() -> html.Div:
                     value='all-systems',
                     children=[
                         dcc.Tab(
-                            label='Vista General',
+                            label=t("tab_alerts.vista_general"),
                             value='all-systems',
                             className='custom-tab',
                             selected_className='custom-tab--selected'
                         ),
                         dcc.Tab(
-                            label='Dirección',
+                            label=t("tab_health_index.direccion"),
                             value='Direccion',
                             className='custom-tab',
                             selected_className='custom-tab--selected'
                         ),
                         dcc.Tab(
-                            label='Frenos',
+                            label=t("tab_health_index.frenos"),
                             value='Frenos',
                             className='custom-tab',
                             selected_className='custom-tab--selected'
                         ),
                         dcc.Tab(
-                            label='Motor',
+                            label=t("label.component.engine"),
                             value='Motor',
                             className='custom-tab',
                             selected_className='custom-tab--selected'
                         ),
                         dcc.Tab(
-                            label='Tren de Fuerza',
+                            label=t("tab_health_index.tren_de_fuerza"),
                             value='Tren de fuerza',
                             className='custom-tab',
                             selected_className='custom-tab--selected'
@@ -194,7 +195,7 @@ def create_layout() -> html.Div:
             dbc.ModalHeader(dbc.ModalTitle(id='health-index-modal-title')),
             dbc.ModalBody(id='health-index-modal-body'),
             dbc.ModalFooter(
-                dbc.Button("Cerrar", id='health-index-modal-close', className="ms-auto")
+                dbc.Button(t("tab_health_index.cerrar"), id='health-index-modal-close', className="ms-auto")
             )
         ], id='health-index-detail-modal', size='xl', is_open=False),
 
@@ -225,7 +226,7 @@ def create_general_view_content() -> html.Div:
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-table me-2"),
-                            "Estado de Salud por Unidad y Sistema"
+                            t("tab_health_index.estado_de_salud_por_unidad_y")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -243,7 +244,7 @@ def create_general_view_content() -> html.Div:
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-chart-pie me-2"),
-                            "Distribución por Estado"
+                            t("tab_health_index.distribucion_por_estado")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -266,7 +267,7 @@ def create_general_view_content() -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-chart-line me-2"),
-                            "Evolución Temporal del Health Index por Unidad"
+                            t("tab_health_index.evolucion_temporal_del_health_index_por")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -283,7 +284,7 @@ def create_general_view_content() -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-th me-2"),
-                            "Heatmap: Health Index por Unidad y Sistema"
+                            t("tab_health_index.heatmap_health_index_por_unidad_y")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -298,7 +299,7 @@ def create_general_view_content() -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-bar-chart me-2"),
-                            "Health Index Actual por Unidad"
+                            t("tab_health_index.health_index_actual_por_unidad")
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -312,7 +313,7 @@ def create_general_view_content() -> html.Div:
         dbc.Row([
             dbc.Col([
                 dbc.Button(
-                    [html.I(className="fas fa-download me-2"), "Descargar CSV"],
+                    [html.I(className="fas fa-download me-2"), t("tab_health_index.descargar_csv")],
                     id='health-index-download-button',
                     color='success',
                     size='sm',
@@ -349,7 +350,7 @@ def create_system_view_content(system_name: str) -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-chart-area me-2"),
-                            f"Evolución Temporal - {system_name}"
+                            t("tab_health_index.evolucion_temporal", system_name=system_name)
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -365,7 +366,7 @@ def create_system_view_content(system_name: str) -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-chart-bar me-2"),
-                            f"Distribución por Unidad - {system_name}"
+                            t("tab_health_index.distribucion_por_unidad", system_name=system_name)
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -379,7 +380,7 @@ def create_system_view_content(system_name: str) -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-chart-pie me-2"),
-                            f"Estado del Sistema - {system_name}"
+                            t("tab_health_index.estado_del_sistema", system_name=system_name)
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([
@@ -396,7 +397,7 @@ def create_system_view_content(system_name: str) -> html.Div:
                     dbc.CardHeader([
                         html.H6([
                             html.I(className="fas fa-exclamation-triangle me-2"),
-                            f"Unidades con Atención Prioritaria - {system_name}"
+                            t("tab_health_index.unidades_con_atencion_prioritaria", system_name=system_name)
                         ], className="mb-0")
                     ]),
                     dbc.CardBody([

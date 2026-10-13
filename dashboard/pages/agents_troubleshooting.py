@@ -1,3 +1,4 @@
+from src.i18n import page_title, t
 import dash
 from dash import html
 
@@ -10,10 +11,10 @@ def layout(**kwargs):
         html.Div([
             html.H3([
                 html.I(className="fas fa-screwdriver-wrench me-2"),
-                "Agente de Troubleshooting",
+                t("troubleshooting_page.heading"),
             ], className="text-primary mb-2"),
             html.P(
-                "Consulta de manuales y códigos de falla con el corpus documental de tu cliente.",
+                t("troubleshooting_page.subtitle"),
                 className="text-muted",
             ),
         ], className="mb-4"),
@@ -24,6 +25,6 @@ def layout(**kwargs):
 dash.register_page(
     __name__,
     path="/agents/troubleshooting",
-    title="Troubleshooting | Multi-Technical Alerts",
+    title=page_title("page.title.agents_troubleshooting"),
     layout=layout,
 )

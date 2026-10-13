@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from src.i18n import t, t_or
+
 
 _COMPONENT_LABELS = {
     "engine": "Motor",
@@ -19,6 +21,21 @@ _COMPONENT_LABELS = {
     "lubricacion": "Lubricación",
     "lubricación": "Lubricación",
 }
+
+
+# Alias -> canonical id, so one catalog entry serves every spelling of a component.
+_COMPONENT_ALIASES = {
+    "motor": "engine",
+    "posterior_al_motor": "post_engine",
+    "carter": "crankcase",
+    "cárter": "crankcase",
+    "lubricacion": "lubrication",
+    "lubricación": "lubrication",
+}
+
+
+def _normalized_component_key(key: str) -> str:
+    return _COMPONENT_ALIASES.get(key, key)
 
 
 def translate_component_label(value: Any) -> str:
@@ -39,7 +56,7 @@ def translate_component_label(value: Any) -> str:
     """
     label = str(value or "").strip()
     if not label:
-        return "Sin componente"
+        return t("labels.no_component")
 
     key = re.sub(r"[\s-]+", "_", label.casefold())
     # Critical-review follow-up: check key presence, not truthiness — a
@@ -48,8 +65,59 @@ def translate_component_label(value: Any) -> str:
     # of this diff is careful about elsewhere, e.g. tab_predictive_overview's
     # _score_cell_style).
     if key in _COMPONENT_LABELS:
-        return _COMPONENT_LABELS[key]
+        # `_COMPONENT_LABELS` holds the Spanish source text; the catalog entry
+        # (label.component.<normalized key>) carries the translation.
+        return t_or(f"label.component.{_normalized_component_key(key)}", _COMPONENT_LABELS[key])
     return label.replace("_", " ").replace("-", " ").strip().title()
+
+
+# Status vocabulary produced by the data pipeline (raw values are Spanish and are
+# also what filters, sorting and styling key off). `status_label` is display-only:
+# it translates the text a user reads without ever touching the raw value.
+_STATUS_KEYS = {
+    "normal": "normal",
+    "alerta": "alert",
+    "anormal": "abnormal",
+    "sin datos": "no_data",
+    "sin fuente": "no_source",
+    "insufficientdata": "insufficient_data",
+    "crítico": "critical",
+    "critico": "critical",
+    "condenatorio": "condemnatory",
+    "marginal": "marginal",
+    "precaución": "caution",
+    "saludable": "healthy",
+    "sano": "operational",
+    "detenido": "stopped",
+    "ok": "ok",
+    "atención": "attention",
+    "preocupante": "concerning",
+    "inferior marginal": "lower_marginal",
+    "superior marginal": "upper_marginal",
+    "inferior condenatorio": "lower_condemnatory",
+    "superior condenatorio": "upper_condemnatory",
+}
+
+
+def status_label(value: Any) -> str:
+    """Display text for a raw status value; unknown values are returned unchanged."""
+    raw = "" if value is None else str(value)
+    key = _STATUS_KEYS.get(raw.strip().casefold())
+    if key is None:
+        return raw
+    return t_or(f"status.{key}", raw)
+
+
+def localize_elapsed(text: Any) -> str:
+    """Translate an elapsed-time string produced by the freshness helpers ("3 días",
+    "1 día", "5h", "12m", "N/A"). Those helpers emit Spanish text and their results are
+    cached/shared, so the text is localized here, at display time."""
+    raw = "" if text is None else str(text)
+    return re.sub(
+        r"(\d+) día(s?)\b",
+        lambda m: t("labels.elapsed_days", count=m.group(1)) if m.group(2) else t("labels.elapsed_day", count=m.group(1)),
+        raw,
+    )
 
 
 # W34-04 — single source of truth for a Trigger_type's (label, color), so the
@@ -76,6 +144,13 @@ SOURCE_STYLE: dict[str, tuple[str, str]] = {
     "Mixto": ("Multitécnica", "#6f42c1"),
 }
 _DEFAULT_SOURCE_COLOR = "#95a5a6"
+_SOURCE_CANONICAL = {
+    "Telemetria": "telemetry",
+    "Telemetría": "telemetry",
+    "Tribologia": "tribology",
+    "Tribología": "tribology",
+    "Mixto": "multi",
+}
 
 
 def source_style(value: Any) -> tuple[str, str]:
@@ -87,8 +162,12 @@ def source_style(value: Any) -> tuple[str, str]:
     """
     raw = str(value).strip() if value is not None else ""
     if not raw:
-        return "Sin fuente", _DEFAULT_SOURCE_COLOR
-    return SOURCE_STYLE.get(raw, (raw, _DEFAULT_SOURCE_COLOR))
+        return t("labels.no_source"), _DEFAULT_SOURCE_COLOR
+    if raw in SOURCE_STYLE:
+        label, color = SOURCE_STYLE[raw]
+        # SOURCE_STYLE holds the Spanish source text; the catalog carries the translation.
+        return t_or(f"label.source.{_SOURCE_CANONICAL.get(raw, raw)}", label), color
+    return raw, _DEFAULT_SOURCE_COLOR
 
 
 def source_color(value: Any) -> str:

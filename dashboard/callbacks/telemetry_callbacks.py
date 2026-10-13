@@ -1,5 +1,7 @@
 """Callbacks for the reportable telemetry fleet and unit views."""
 
+from src.i18n import t
+from dashboard.components.labels import status_label
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +17,7 @@ from dashboard.components.telemetry_charts import (
     build_fleet_heatmap,
     build_heatmap_insights,
     build_signal_timeseries_card,
+    translate_system,
 )
 from dashboard.components.telemetry_report import (
     build_fleet_matrix_rows,
@@ -47,7 +50,7 @@ def update_telemetry_availability(client):
             source_status,
             dbc.Alert([
                 html.I(className="fas fa-info-circle me-2"),
-                f"No hay datos de Telemetría disponibles para el cliente {str(client).upper()}."
+                t("telemetry_callbacks.no_hay_datos_de_telemetria_disponibles", str_client_upper=str(client).upper())
             ], color="info"),
         ])
     return source_status
@@ -63,14 +66,14 @@ def update_reference_date(active_tab, client):
         raise PreventUpdate
     manifest = client_facing_manifest(load_telemetry_snapshot(client).manifest)
     if not manifest:
-        return html.Small("Sin datos de referencia", className="text-muted")
+        return html.Small(t("telemetry_callbacks.sin_datos_de_referencia"), className="text-muted")
     week = manifest.get('evaluation_week', '?')
     year = manifest.get('evaluation_year', '?')
     timestamp = str(manifest.get('execution_timestamp', ''))
     date_str = timestamp[:10] if timestamp else ''
     return html.Div([
-        html.Small([html.I(className="fas fa-calendar-alt me-1"), f"Semana {week}/{year}"], className="d-block text-muted"),
-        html.Small([html.I(className="fas fa-sync-alt me-1"), f"Actualizado: {date_str}"], className="d-block text-muted") if date_str else html.Span(),
+        html.Small([html.I(className="fas fa-calendar-alt me-1"), t("telemetry_callbacks.semana", week=week, year=year)], className="d-block text-muted"),
+        html.Small([html.I(className="fas fa-sync-alt me-1"), t("telemetry_callbacks.actualizado", date_str=date_str)], className="d-block text-muted") if date_str else html.Span(),
     ])
 
 
@@ -80,7 +83,7 @@ def render_telemetry_health_tab(active_tab):
         return create_telemetry_fleet_layout()
     if active_tab == 'unit-detail':
         return create_telemetry_unit_detail_layout()
-    return html.Div("Selección inválida")
+    return html.Div(t("telemetry_callbacks.seleccion_invalida"))
 
 
 @callback(
@@ -92,11 +95,18 @@ def populate_fleet_filters(active_tab, client):
         raise PreventUpdate
     snapshot = load_telemetry_snapshot(client)
     models = sorted(set(snapshot.equipment_models.values()))
-    systems = sorted({str(v) for v in snapshot.system_health.get('system', pd.Series(dtype=str)).map(lambda x: {
-        'Engine': 'Motor', 'Transmission': 'Transmisión', 'Brakes': 'Frenos', 'Steering': 'Dirección'
-    }.get(x, x)).dropna()})
+    systems = sorted({str(v) for v in snapshot.system_health.get('system', pd.Series(dtype=str)).map(translate_system).dropna()})
     options = [{'label': system, 'value': system} for system in systems]
     return ([{'label': model, 'value': model} for model in models], options, systems)
+
+
+def _with_status_labels(rows: list[dict], columns) -> list[dict]:
+    """Copy of `rows` whose status cells hold the display text. Tables show - and their style
+    rules match - the translated label; the raw status stays in the callbacks' own data."""
+    return [
+        {**row, **{col: status_label(row[col]) for col in columns if isinstance(row.get(col), str)}}
+        for row in rows
+    ]
 
 
 def _kpi_card(label: str, value, icon: str, color: str, bg_color: str) -> dbc.Col:
@@ -115,16 +125,16 @@ def _kpi_card(label: str, value, icon: str, color: str, bg_color: str) -> dbc.Co
 
 def _priority_table(rows: list[dict]):
     if not rows:
-        return dbc.Alert("No hay unidades para los filtros seleccionados.", color="info")
+        return dbc.Alert(t("telemetry_callbacks.no_hay_unidades_para_los_filtros"), color="info")
     columns = [
-        {'name': 'Unidad', 'id': 'unit'},
-        {'name': 'Modelo', 'id': 'model'},
-        {'name': 'Estado', 'id': 'overall_status'},
-        {'name': 'Sistemas afectados', 'id': 'systems_in_alert', 'type': 'numeric'},
-        {'name': 'Sistema principal', 'id': 'top_system'},
-        {'name': 'Señal principal', 'id': 'top_signal_display'},
-        {'name': 'Urgencia', 'id': 'urgency_display'},
-        {'name': 'Acción recomendada', 'id': 'recommended_action'},
+        {'name': t("alerts_general.filter_unit"), 'id': 'unit'},
+        {'name': t("health_index_callbacks.modelo"), 'id': 'model'},
+        {'name': t("fleet_overview.col_status"), 'id': 'overall_status'},
+        {'name': t("telemetry_callbacks.sistemas_afectados"), 'id': 'systems_in_alert', 'type': 'numeric'},
+        {'name': t("telemetry_callbacks.sistema_principal"), 'id': 'top_system'},
+        {'name': t("tab_telemetry_unit_detail.senal_principal"), 'id': 'top_signal_display'},
+        {'name': t("telemetry_callbacks.urgencia"), 'id': 'urgency_display'},
+        {'name': t("telemetry_callbacks.accion_recomendada"), 'id': 'recommended_action'},
         {'name': 'top_system_raw', 'id': 'top_system_raw'},
         {'name': 'top_signal', 'id': 'top_signal'},
     ]
@@ -181,18 +191,19 @@ _OVERALL_STATUS_FG = {'Normal': '#ffffff', 'Alerta': '#000000', 'Anormal': '#fff
 def _fleet_status_table(rows: list[dict], systems: list[str]):
     """Render one fleet matrix with a system action tooltip per cell."""
     if not rows:
-        return dbc.Alert("No hay unidades para los filtros seleccionados.", color="info")
+        return dbc.Alert(t("telemetry_callbacks.no_hay_unidades_para_los_filtros"), color="info")
+    rows = _with_status_labels(rows, [*systems, "overall_status"])
     columns = [
-        {"name": "Unidad", "id": "unit"},
-        {"name": "Modelo", "id": "model"},
+        {"name": t("alerts_general.filter_unit"), "id": "unit"},
+        {"name": t("health_index_callbacks.modelo"), "id": "model"},
         *[{"name": system, "id": system} for system in systems],
-        {"name": "Estado", "id": "overall_status"},
+        {"name": t("fleet_overview.col_status"), "id": "overall_status"},
     ]
     tooltip_data = []
     for row in rows:
         tooltip_data.append({
             system: {
-                "value": f"**Estado:** {row.get(system, 'InsufficientData')}  \n**Acción:** {row.get('_system_actions', {}).get(system, 'Sin acción recomendada registrada.')} ",
+                "value": t("telemetry_callbacks.estado_accion", row_get_system_ins=row.get(system) or status_label('InsufficientData'), row_get__system_ac=row.get('_system_actions', {}).get(system, t("telemetry_report.sin_accion_recomendada_registrada"))),
                 "type": "markdown",
             }
             for system in systems
@@ -206,7 +217,7 @@ def _fleet_status_table(rows: list[dict], systems: list[str]):
     for column_id in systems:
         for state, background in _SYSTEM_STATUS_BG.items():
             data_conditional.append({
-                "if": {"filter_query": f'{{{column_id}}} = "{state}"', "column_id": column_id},
+                "if": {"filter_query": f'{{{column_id}}} = "{status_label(state)}"', "column_id": column_id},
                 "backgroundColor": background,
                 "color": _SYSTEM_STATUS_FG[state],
                 "fontWeight": "bold",
@@ -214,7 +225,7 @@ def _fleet_status_table(rows: list[dict], systems: list[str]):
             })
     for state, background in _OVERALL_STATUS_BG.items():
         data_conditional.append({
-            "if": {"filter_query": f'{{overall_status}} = "{state}"', "column_id": "overall_status"},
+            "if": {"filter_query": f'{{overall_status}} = "{status_label(state)}"', "column_id": "overall_status"},
             "backgroundColor": background,
             "color": _OVERALL_STATUS_FG[state],
             "fontWeight": "bold",
@@ -261,9 +272,7 @@ def update_fleet_overview(active_tab, client, model, statuses, systems):
         snapshot = load_telemetry_snapshot(client)
         if model and model not in set(snapshot.equipment_models.values()):
             model = None
-        valid_systems = set(snapshot.system_health.get('system', pd.Series(dtype=str)).map(lambda x: {
-            'Engine': 'Motor', 'Transmission': 'Transmisión', 'Brakes': 'Frenos', 'Steering': 'Dirección'
-        }.get(x, x)).dropna())
+        valid_systems = set(snapshot.system_health.get('system', pd.Series(dtype=str)).map(translate_system).dropna())
         systems = [system for system in (systems or []) if system in valid_systems]
         unit_health, _ = filter_fleet_snapshot(snapshot, model, statuses, systems)
         # Keep the complete system snapshot for main-system navigation; the
@@ -273,31 +282,31 @@ def update_fleet_overview(active_tab, client, model, statuses, systems):
         rows, visible = build_fleet_matrix_rows(snapshot, unit_health, all_system_health, systems)
         return _fleet_status_table(rows, visible)
         if unit_health.empty:
-            empty = dbc.Alert("No hay unidades para los filtros seleccionados.", color="info")
+            empty = dbc.Alert(t("telemetry_callbacks.no_hay_unidades_para_los_filtros"), color="info")
             return empty
 
         counts = unit_health.get('overall_status', pd.Series(dtype=str)).value_counts()
         kpi = dbc.Row([
-            _kpi_card("Total", len(unit_health), "fas fa-truck", "info", "#f0f8ff"),
-            _kpi_card("Normal", int(counts.get('Normal', 0)), "fas fa-check-circle", "success", "#f0fff4"),
-            _kpi_card("Alerta", int(counts.get('Alerta', 0)), "fas fa-exclamation-circle", "warning", "#fffcf0"),
-            _kpi_card("Anormal", int(counts.get('Anormal', 0)), "fas fa-times-circle", "danger", "#fff5f5"),
-            _kpi_card("Sin evidencia", int(counts.get('InsufficientData', 0)), "fas fa-question-circle", "secondary", "#f3f4f5"),
+            _kpi_card(t("telemetry_callbacks.total"), len(unit_health), "fas fa-truck", "info", "#f0f8ff"),
+            _kpi_card(t("erp.condition.normal"), int(counts.get('Normal', 0)), "fas fa-check-circle", "success", "#f0fff4"),
+            _kpi_card(t("erp.condition.alerta"), int(counts.get('Alerta', 0)), "fas fa-exclamation-circle", "warning", "#fffcf0"),
+            _kpi_card(t("erp.condition.anormal"), int(counts.get('Anormal', 0)), "fas fa-times-circle", "danger", "#fff5f5"),
+            _kpi_card(t("alerts_report.sin_evidencia"), int(counts.get('InsufficientData', 0)), "fas fa-question-circle", "secondary", "#f3f4f5"),
         ], className="g-3 mb-4 justify-content-center")
 
         heatmap = build_fleet_heatmap(system_health, unit_health)
         insights = build_heatmap_insights(system_health, unit_health)
         insight_row = dbc.Row([
-            dbc.Col([html.Small("Unidad más riesgosa", className="text-muted d-block"), html.Strong(insights['most_risky_unit'])], className="text-center", md=4),
-            dbc.Col([html.Small("Sistema con mayor riesgo", className="text-muted d-block"), html.Strong(insights['most_critical_system'])], className="text-center", md=4),
-            dbc.Col([html.Small("Estado más crítico", className="text-muted d-block"), html.Strong(insights.get('most_critical_status', '-'), className="text-danger")], className="text-center", md=4),
+            dbc.Col([html.Small(t("telemetry_callbacks.unidad_mas_riesgosa"), className="text-muted d-block"), html.Strong(insights['most_risky_unit'])], className="text-center", md=4),
+            dbc.Col([html.Small(t("telemetry_callbacks.sistema_con_mayor_riesgo"), className="text-muted d-block"), html.Strong(insights['most_critical_system'])], className="text-center", md=4),
+            dbc.Col([html.Small(t("telemetry_callbacks.estado_mas_critico"), className="text-muted d-block"), html.Strong(insights.get('most_critical_status', '-'), className="text-danger")], className="text-center", md=4),
         ], className="g-2 py-2 border rounded bg-light")
         rows = build_fleet_priority_rows(snapshot, unit_health, system_health)
         rows, visible = build_fleet_matrix_rows(snapshot, unit_health, system_health, systems)
         return _fleet_status_table(rows, visible)
     except Exception as exc:
         logger.exception("Error en Vista de Flota: %s", exc)
-        error = dbc.Alert(f"Error cargando datos de telemetría: {exc}", color="danger")
+        error = dbc.Alert(t("telemetry_callbacks.error_cargando_datos_de_telemetria", exc=exc), color="danger")
         return error
 
 
@@ -319,13 +328,13 @@ def update_selected_fleet_unit(selected_rows, client, model, statuses, systems, 
         return html.Div()
     row = table_data[selected_rows[0]]
     return dbc.Card([
-        dbc.CardHeader([html.I(className="fas fa-robot me-2"), f"Resumen de {row.get('unit', '-')}"]),
+        dbc.CardHeader([html.I(className="fas fa-robot me-2"), t("telemetry_callbacks.resumen_de", row_get_unit=row.get('unit', '-'))]),
         dbc.CardBody([
-            html.P(row.get('description') or "Sin descripción IA disponible.", className="mb-1"),
+            html.P(row.get('description') or t("telemetry_callbacks.sin_descripcion_ia_disponible"), className="mb-1"),
             html.P(row.get('explaining') or "", className="text-muted mb-1", style={'whiteSpace': 'pre-wrap'}),
             html.Div([
                 html.I(className="fas fa-wrench me-1"),
-                html.Strong("Acción: "), row.get('recommended_action') or "Sin acción recomendada disponible."
+                html.Strong(t("telemetry_callbacks.accion")), row.get('recommended_action') or t("telemetry_callbacks.sin_accion_recomendada_disponible")
             ], className="text-primary")
         ])
     ], className="shadow-sm mb-4", style={'borderLeft': '4px solid #3498db'})
@@ -384,22 +393,22 @@ def _identity_display(snapshot, unit: str) -> html.Div:
     if not unit:
         return html.Div()
     return html.Div([
-        html.Span(f"Unidad: {unit}", className="me-3"),
-        html.Span(f"Modelo: {snapshot.equipment_models.get(unit, 'N/D')}", className="me-3"),
-        html.Span(f"Evaluación: semana {manifest.get('evaluation_week', '?')}/{manifest.get('evaluation_year', '?')}", className="me-3"),
-        html.Span(f"Ejecución: {str(manifest.get('execution_timestamp', ''))[:10]}")
+        html.Span(t("telemetry_callbacks.unidad", unit=unit), className="me-3"),
+        html.Span(t("telemetry_callbacks.modelo", snapshot_equipment=snapshot.equipment_models.get(unit, 'N/D')), className="me-3"),
+        html.Span(t("telemetry_callbacks.evaluacion_semana", manifest_get_evalu=manifest.get('evaluation_week', '?'), manifest_get_evalu2=manifest.get('evaluation_year', '?')), className="me-3"),
+        html.Span(t("telemetry_callbacks.ejecucion", str_manifest_get_e=str(manifest.get('execution_timestamp', ''))[:10]))
     ])
 
 
 def _decision_summary(snapshot, unit: str, system_rows: list[dict]) -> html.Div:
     unit_row = snapshot.unit_health[snapshot.unit_health.get('unit', pd.Series(dtype=str)) == unit]
     if unit_row.empty:
-        return dbc.Alert("No hay datos para la unidad seleccionada.", color="info")
+        return dbc.Alert(t("telemetry_callbacks.no_hay_datos_para_la_unidad"), color="info")
     row = unit_row.iloc[0]
     top = system_rows[0] if system_rows else {}
     unit_comment = snapshot.unit_comments[snapshot.unit_comments.get('unit', pd.Series(dtype=str)) == unit] if not snapshot.unit_comments.empty else pd.DataFrame()
     comment = unit_comment.iloc[0] if not unit_comment.empty else None
-    description = client_facing_text(_text_value(comment, 'description', 'comment') or _text_value(row, 'executive_summary'), snapshot.signal_registry) or 'Operando dentro de parámetros normales.'
+    description = client_facing_text(_text_value(comment, 'description', 'comment') or _text_value(row, 'executive_summary'), snapshot.signal_registry) or t("telemetry_callbacks.operando_dentro_de_parametros_normales")
     explaining = client_facing_text(_text_value(comment, 'explaining'), snapshot.signal_registry)
     action = client_facing_text(_text_value(comment, 'recommended_action'), snapshot.signal_registry)
     urgency = format_urgency(_text_value(comment, 'urgency'))
@@ -410,22 +419,22 @@ def _decision_summary(snapshot, unit: str, system_rows: list[dict]) -> html.Div:
         _text_value(comment, 'description', 'comment')
         or _text_value(row, 'executive_summary')
     ):
-        description = 'Análisis IA no disponible para esta evaluación.'
+        description = t("telemetry_callbacks.analisis_ia_no_disponible_para_esta")
     color = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger', 'InsufficientData': 'secondary'}.get(status, 'secondary')
-    title = "Por qué está en alerta" if status in {'Alerta', 'Anormal'} else "Resumen de la unidad"
+    title = t("telemetry_callbacks.por_que_esta_en_alerta") if status in {'Alerta', 'Anormal'} else t("tab_telemetry_unit_detail.resumen_de_la_unidad")
     return dbc.Card([
         dbc.CardHeader([html.I(className="fas fa-bullseye me-2"), title]),
         dbc.CardBody([
             dbc.Row([
-                dbc.Col([html.Small("Estado", className="text-muted d-block"), dbc.Badge(status, color=color, pill=True)], md=2),
-                dbc.Col([html.Small("Sistemas afectados", className="text-muted d-block"), html.Strong(str(int(row.get('n_anormal_systems', 0) or 0) + int(row.get('n_alerta_systems', 0) or 0)))], md=2),
-                dbc.Col([html.Small("Sistema principal", className="text-muted d-block"), html.Strong(top.get('system', '-'))], md=3),
-                dbc.Col([html.Small("Señal principal", className="text-muted d-block"), html.Strong(top.get('top_signal_display', '-'))], md=3),
-                dbc.Col([html.Small("Urgencia", className="text-muted d-block"), html.Strong(urgency)], md=2),
+                dbc.Col([html.Small(t("fleet_overview.col_status"), className="text-muted d-block"), dbc.Badge(status_label(status), color=color, pill=True)], md=2),
+                dbc.Col([html.Small(t("telemetry_callbacks.sistemas_afectados"), className="text-muted d-block"), html.Strong(str(int(row.get('n_anormal_systems', 0) or 0) + int(row.get('n_alerta_systems', 0) or 0)))], md=2),
+                dbc.Col([html.Small(t("telemetry_callbacks.sistema_principal"), className="text-muted d-block"), html.Strong(top.get('system', '-'))], md=3),
+                dbc.Col([html.Small(t("tab_telemetry_unit_detail.senal_principal"), className="text-muted d-block"), html.Strong(top.get('top_signal_display', '-'))], md=3),
+                dbc.Col([html.Small(t("telemetry_callbacks.urgencia"), className="text-muted d-block"), html.Strong(urgency)], md=2),
             ], className="mb-3"),
             html.Strong(description, className="d-block"),
             html.P(explaining or top.get('explaining') or top.get('description') or "", className="text-muted mb-1", style={'whiteSpace': 'pre-wrap'}),
-            html.Div([html.I(className="fas fa-wrench me-1"), html.Strong("Acción: "), action or top.get('recommended_action') or "Sin acción recomendada disponible."], className="text-primary")
+            html.Div([html.I(className="fas fa-wrench me-1"), html.Strong(t("telemetry_callbacks.accion")), action or top.get('recommended_action') or t("telemetry_callbacks.sin_accion_recomendada_disponible")], className="text-primary")
         ])
     ], className="shadow-sm mb-4", style={'borderLeft': f"4px solid {STATUS_COLORS.get(status, '#95a5a6')}"})
 
@@ -433,23 +442,23 @@ def _decision_summary(snapshot, unit: str, system_rows: list[dict]) -> html.Div:
 def _system_analysis_card(system_row: dict | None) -> html.Div:
     """Render the materialized system-level IA explanation before signals."""
     if not system_row:
-        return dbc.Alert("No hay un sistema seleccionado para mostrar su evaluación.", color="info")
+        return dbc.Alert(t("telemetry_callbacks.no_hay_un_sistema_seleccionado_para"), color="info")
     status = system_row.get('system_status', 'InsufficientData')
     color = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger', 'InsufficientData': 'secondary'}.get(status, 'secondary')
-    description = system_row.get('description') or "Sin evaluación IA disponible para este sistema."
+    description = system_row.get('description') or t("telemetry_callbacks.sin_evaluacion_ia_disponible_para_este")
     explaining = system_row.get('explaining') or ""
-    action = system_row.get('recommended_action') or "Sin acción recomendada disponible."
+    action = system_row.get('recommended_action') or t("telemetry_callbacks.sin_accion_recomendada_disponible")
     return dbc.Card([
         dbc.CardBody([
             dbc.Row([
-                dbc.Col([html.Small("Sistema", className="text-muted d-block"), html.Strong(system_row.get('system', '-'))], md=3),
-                dbc.Col([html.Small("Estado", className="text-muted d-block"), dbc.Badge(status, color=color, pill=True)], md=2),
-                dbc.Col([html.Small("Señales con hallazgo", className="text-muted d-block"), html.Strong(str(system_row.get('signals_in_alert', 0)))], md=2),
-                dbc.Col([html.Small("Señal principal", className="text-muted d-block"), html.Strong(system_row.get('top_signal_display', '-'))], md=5),
+                dbc.Col([html.Small(t("alerts_general.filter_system"), className="text-muted d-block"), html.Strong(system_row.get('system', '-'))], md=3),
+                dbc.Col([html.Small(t("fleet_overview.col_status"), className="text-muted d-block"), dbc.Badge(status_label(status), color=color, pill=True)], md=2),
+                dbc.Col([html.Small(t("telemetry_callbacks.senales_con_hallazgo"), className="text-muted d-block"), html.Strong(str(system_row.get('signals_in_alert', 0)))], md=2),
+                dbc.Col([html.Small(t("tab_telemetry_unit_detail.senal_principal"), className="text-muted d-block"), html.Strong(system_row.get('top_signal_display', '-'))], md=5),
             ], className="mb-3"),
             html.Strong(description, className="d-block"),
             html.P(explaining, className="text-muted mb-2", style={'whiteSpace': 'pre-wrap'}) if explaining else html.Span(),
-            html.Div([html.I(className="fas fa-wrench me-1"), html.Strong("Acción: "), action], className="text-primary"),
+            html.Div([html.I(className="fas fa-wrench me-1"), html.Strong(t("telemetry_callbacks.accion")), action], className="text-primary"),
         ])
     ], className="shadow-sm mb-4", style={'borderLeft': f"4px solid {STATUS_COLORS.get(status, '#95a5a6')}"})
 
@@ -488,10 +497,10 @@ def update_unit_detail_header(unit, client, navigation_state):
         requested_system = (navigation_state or {}).get('system') if (navigation_state or {}).get('unit') == unit else None
         selected_system = requested_system if requested_system in [item['value'] for item in options] else (options[0]['value'] if options else None)
         selected_index = [next((idx for idx, row in enumerate(system_rows) if row.get('system') == selected_system), 0)] if system_rows else []
-        return _decision_summary(snapshot, unit, system_rows), system_rows, selected_index, options, selected_system
+        return _decision_summary(snapshot, unit, system_rows), _with_status_labels(system_rows, ('system_status',)), selected_index, options, selected_system
     except Exception as exc:
         logger.exception("Error actualizando detalle de unidad: %s", exc)
-        return dbc.Alert(f"Error cargando la unidad: {exc}", color="danger"), [], [], [], None
+        return dbc.Alert(t("telemetry_callbacks.error_cargando_la_unidad", exc=exc), color="danger"), [], [], [], None
 
 
 @callback(
@@ -537,11 +546,11 @@ def update_signal_section(system, unit, client, navigation_state):
     try:
         snapshot = load_telemetry_snapshot(client, include_detail=True)
         rows = build_signal_rows(snapshot, unit, system)
-        options = [{'label': f"{row['signal']} ({row['status']})", 'value': row['signal_raw']} for row in rows]
+        options = [{'label': f"{row['signal']} ({status_label(row['status'])})", 'value': row['signal_raw']} for row in rows]
         requested = (navigation_state or {}).get('signal') if (navigation_state or {}).get('unit') == unit else None
         selected = requested if requested in [item['value'] for item in options] else (options[0]['value'] if options else None)
         selected_rows = [next((idx for idx, row in enumerate(rows) if row['signal_raw'] == selected), 0)] if rows else []
-        return rows, selected_rows, options
+        return _with_status_labels(rows, ('status',)), selected_rows, options
     except Exception as exc:
         logger.exception("Error actualizando señales: %s", exc)
         return [], [], []
@@ -629,13 +638,13 @@ def _load_recent_telemetry_signal_cached(
 
 def _signal_kpi_table(row: dict) -> html.Table:
     values = [
-        ("Total eventos", row.get('total_events', 0)),
-        ("Warnings", row.get('warnings', 0)),
-        ("Episodio máximo", f"{row.get('longest_episode', 0)} min"),
-        ("Tendencia", row.get('trend_detected', 'No')),
-        ("Dirección de tendencia", row.get('trend_direction', '-')),
-        ("Fórmula", row.get('trend_formula', '-')),
-        ("Fuera de rango", f"{row.get('abnormal_pct', 0):.2f}%"),
+        (t("telemetry_callbacks.total_eventos"), row.get('total_events', 0)),
+        (t("telemetry_callbacks.warnings"), row.get('warnings', 0)),
+        (t("telemetry_callbacks.episodio_maximo"), f"{row.get('longest_episode', 0)} min"),
+        (t("tab_telemetry_unit_detail.tendencia"), row.get('trend_detected', 'No')),
+        (t("telemetry_callbacks.direccion_de_tendencia"), row.get('trend_direction', '-')),
+        (t("telemetry_callbacks.formula"), row.get('trend_formula', '-')),
+        (t("tab_telemetry_unit_detail.fuera_de_rango"), f"{row.get('abnormal_pct', 0):.2f}%"),
     ]
     return html.Table([
         html.Tbody([html.Tr([html.Td(label, className="fw-bold"), html.Td(str(value), className="text-end")]) for label, value in values])
@@ -657,13 +666,13 @@ def _signal_kpi_table(row: dict) -> html.Table:
 )
 def update_signal_cards(signal, system, unit, client, window_days):
     if not signal or not system or not unit or not client:
-        return dbc.Alert("Seleccione una unidad, sistema y señal para ver evidencia.", color="info")
+        return dbc.Alert(t("telemetry_callbacks.seleccione_una_unidad_sistema_y_senal"), color="info")
     try:
         snapshot = load_telemetry_snapshot(client, include_detail=True)
         rows = build_signal_rows(snapshot, unit, system)
         row = next((item for item in rows if item['signal_raw'] == signal), None)
         if row is None:
-            return dbc.Alert("No hay evidencia para la señal seleccionada.", color="info")
+            return dbc.Alert(t("telemetry_callbacks.no_hay_evidencia_para_la_senal"), color="info")
         raw = _load_recent_telemetry_signal_cached(client.lower(), unit, signal, snapshot.cache_key)
         numeric_values = (
             pd.to_numeric(raw[signal], errors='coerce').dropna()
@@ -688,35 +697,35 @@ def update_signal_cards(signal, system, unit, client, window_days):
         coverage_notice = None
         if not has_valid_series:
             coverage_notice = dbc.Alert([
-                html.Strong("Sin datos válidos para esta señal. "),
-                f"La columna técnica {signal} no contiene observaciones numéricas para {unit} en la ventana evaluada. ",
-                "No se sustituye por otra señal para evitar crear evidencia que no corresponde al sensor seleccionado. ",
-                f"El estado materializado ({row.get('status', 'InsufficientData')}) y los eventos se conservan solo como referencia del pipeline.",
+                html.Strong(t("telemetry_callbacks.sin_datos_validos_para_esta_senal")),
+                t("telemetry_callbacks.la_columna_tecnica_no_contiene_observacion", signal=signal, unit=unit),
+                t("telemetry_callbacks.no_se_sustituye_por_otra_senal"),
+                t("telemetry_callbacks.el_estado_materializado_y_los_eventos", row_get_status_ins=row.get('status', 'InsufficientData')),
             ], color="secondary", className="small mb-3")
         if has_valid_series and not event_df.empty and 'end_time' in event_df.columns and 'Fecha' in raw.columns:
             classified_until = pd.to_datetime(event_df['end_time'], errors='coerce').max()
             observed_until = pd.to_datetime(raw['Fecha'], errors='coerce').max()
             if pd.notna(classified_until) and pd.notna(observed_until) and classified_until < observed_until:
                 coverage_notice = dbc.Alert(
-                    f"Eventos clasificados hasta {classified_until.strftime('%d/%m/%Y')}; los datos posteriores se muestran sin clasificación de eventos.",
+                    t("telemetry_callbacks.eventos_clasificados_hasta_los_datos_poste", classified_until_s=classified_until.strftime('%d/%m/%Y')),
                     color="light", className="small mb-3",
                 )
         status_color = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger', 'InsufficientData': 'secondary'}.get(row['status'], 'secondary')
-        badge_label = row['status'] if has_valid_series else 'Sin datos'
+        badge_label = status_label(row['status']) if has_valid_series else t("oil_machine_detail.sin_datos")
         card_border_color = STATUS_COLORS.get(row['status'], '#95a5a6') if has_valid_series else STATUS_COLORS.get('InsufficientData', '#95a5a6')
         card = dbc.Card([
             dbc.CardHeader([
                     html.Strong(row['signal']),
                     dbc.Badge(badge_label, color=status_color if has_valid_series else 'secondary', pill=True, className="ms-2"),
-                    html.Small(f"Estado materializado: {row['status']}", className="text-muted ms-2") if not has_valid_series else html.Span()
+                    html.Small(t("telemetry_callbacks.estado_materializado", row_status=status_label(row['status'])), className="text-muted ms-2") if not has_valid_series else html.Span()
                 ], className="bg-light"),
                 dbc.CardBody([
                     coverage_notice or html.Span(),
                     dbc.Row([
                         dbc.Col([
-                        html.Div([html.Small("Nombre técnico", className="text-muted d-block"), html.Strong(row.get('signal_raw', '-') or '-')], className="mb-2"),
-                        html.Div([html.Small("Unidad de medida", className="text-muted d-block"), html.Strong(metadata.get('unit', '-') or '-')], className="mb-2"),
-                        html.Div([html.Small("Diagnóstico IA", className="text-muted d-block"), html.Strong(row.get('description', ''))], className="mb-1"),
+                        html.Div([html.Small(t("telemetry_callbacks.nombre_tecnico"), className="text-muted d-block"), html.Strong(row.get('signal_raw', '-') or '-')], className="mb-2"),
+                        html.Div([html.Small(t("telemetry_callbacks.unidad_de_medida"), className="text-muted d-block"), html.Strong(metadata.get('unit', '-') or '-')], className="mb-2"),
+                        html.Div([html.Small(t("telemetry_callbacks.diagnostico_ia"), className="text-muted d-block"), html.Strong(row.get('description', ''))], className="mb-1"),
                         html.P(row.get('explaining') or "", className="text-muted", style={'whiteSpace': 'pre-wrap'}),
                         _signal_kpi_table(row),
                     ], lg=4),
@@ -733,4 +742,4 @@ def update_signal_cards(signal, system, unit, client, window_days):
         return card
     except Exception as exc:
         logger.exception("Error construyendo evidencia de señal: %s", exc)
-        return dbc.Alert(f"Error cargando evidencia: {exc}", color="danger")
+        return dbc.Alert(t("telemetry_callbacks.error_cargando_evidencia", exc=exc), color="danger")

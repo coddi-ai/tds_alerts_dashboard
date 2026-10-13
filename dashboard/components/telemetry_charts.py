@@ -10,6 +10,8 @@ import yaml
 from pathlib import Path
 from typing import Optional, Dict
 from functools import lru_cache
+from src.i18n import load_catalog, t
+from dashboard.components.labels import status_label
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -26,6 +28,8 @@ STATUS_COLORS = {
 # importers (translate_signal() below).
 from src.charts.signals import SIGNAL_LABELS as SIGNAL_TRANSLATION
 
+# Materialized trend interpretation -> display text (Spanish source text; the catalog
+# entry `telemetry.trend_<key>` carries the translation).
 TREND_TRANSLATION = {
     'worsening': 'En deterioro',
     'improving': 'Mejorando',
@@ -33,7 +37,8 @@ TREND_TRANSLATION = {
     'stable': 'Estable',
 }
 
-# English → Spanish system name translation
+# Raw (English) system id -> Spanish source label; `telemetry.system_<id>` in the catalog
+# carries the translation.
 SYSTEM_TRANSLATION = {
     'Engine': 'Motor',
     'Transmission': 'Transmisión',
@@ -43,8 +48,19 @@ SYSTEM_TRANSLATION = {
 
 
 def translate_system(name: str) -> str:
-    """Translate system name from English to Spanish."""
-    return SYSTEM_TRANSLATION.get(name, name)
+    """Display name of a raw system id in the current language."""
+    if name in SYSTEM_TRANSLATION:
+        return t(f"telemetry.system_{name.lower()}")
+    return name
+
+
+def untranslate_system(label: str) -> str:
+    """Raw system id for a displayed system label (any supported language)."""
+    for raw, spanish in SYSTEM_TRANSLATION.items():
+        key = f"telemetry.system_{raw.lower()}"
+        if label in (raw, spanish) or any(load_catalog(lang).get(key) == label for lang in ("es", "en")):
+            return raw
+    return label
 
 
 def translate_signal(name: str, fallback: Optional[str] = None) -> str:
@@ -54,7 +70,9 @@ def translate_signal(name: str, fallback: Optional[str] = None) -> str:
 
 def translate_trend(name: str) -> str:
     """Translate materialized trend interpretations for the report UI."""
-    return TREND_TRANSLATION.get(str(name), str(name or '-'))
+    if str(name) in TREND_TRANSLATION:
+        return t(f"telemetry.trend_{name}")
+    return str(name or '-')
 
 
 @lru_cache(maxsize=1)
@@ -93,7 +111,7 @@ def build_fleet_heatmap(system_health_df: pd.DataFrame, unit_health_df: pd.DataF
     Sorted by priority score (worst at top). Includes overall_status as last column.
     """
     if system_health_df.empty:
-        return _empty_figure("Sin datos de sistemas disponibles")
+        return _empty_figure(t("telemetry_charts.sin_datos_de_sistemas_disponibles"))
 
     # Join priority and status for sorting
     priority_map = {}
@@ -133,11 +151,11 @@ def build_fleet_heatmap(system_health_df: pd.DataFrame, unit_health_df: pd.DataF
         for sys in pivot.columns:
             if sys == 'Estado':
                 unit_status = status_map_units.get(unit, 'Normal')
-                row_hover.append(f"<b>{unit}</b><br>Estado General: {unit_status}")
+                row_hover.append(t("telemetry_charts.b_b_br_estado_general", unit=unit, unit_status=status_label(unit_status)))
             else:
                 status = status_map_sys.loc[unit, sys] if unit in status_map_sys.index and sys in status_map_sys.columns else ''
                 row_hover.append(
-                    f"<b>{unit}</b> — {sys}<br>Estado: {status}"
+                    t("telemetry_charts.b_b_br_estado", unit=unit, sys=sys, status=status_label(status))
                     if pd.notna(pivot.loc[unit, sys]) else ""
                 )
         hover_text.append(row_hover)
@@ -169,11 +187,11 @@ def build_fleet_heatmap(system_health_df: pd.DataFrame, unit_health_df: pd.DataF
         xgap=2,
         ygap=2,
         colorbar=dict(
-            title=dict(text="Estado", font=dict(size=11)),
+            title=dict(text=t("fleet_overview.col_status"), font=dict(size=11)),
             thickness=12,
             len=0.9,
             tickvals=[0, 1, 2, 3],
-            ticktext=["Sin evidencia", "Normal", "Alerta", "Anormal"],
+            ticktext=[t("alerts_report.sin_evidencia"), t("erp.condition.normal"), t("erp.condition.alerta"), t("erp.condition.anormal")],
             tickfont=dict(size=10),
         )
     ))
@@ -257,17 +275,17 @@ def build_signal_timeseries_card(
             path only runs if a future caller opts in with True.
     """
     if raw_df.empty or signal_name not in raw_df.columns:
-        return _empty_figure(f"Sin datos para {signal_name}")
+        return _empty_figure(t("telemetry_charts.sin_datos_para", signal_name=signal_name))
 
     required = [col for col in ('Fecha', signal_name) if col in raw_df.columns]
     if len(required) < 2:
-        return _empty_figure(f"Sin datos para {signal_name}")
+        return _empty_figure(t("telemetry_charts.sin_datos_para", signal_name=signal_name))
     df = raw_df[required].dropna(subset=[signal_name]).copy()
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
     df = df.dropna(subset=['Fecha']).sort_values('Fecha')
 
     if df.empty:
-        return _empty_figure(f"Sin datos válidos para {signal_name}")
+        return _empty_figure(t("telemetry_charts.sin_datos_validos_para", signal_name=signal_name))
 
     # Calculate on the full materialized series, then thin only plotted points
     # to keep the browser responsive for the multi-week silver window.
@@ -287,10 +305,10 @@ def build_signal_timeseries_card(
         x=plot_df['Fecha'],
         y=plot_df[signal_name],
         mode='lines',
-        name='Valor de la señal',
+        name=t("telemetry_charts.valor_de_la_senal"),
         line=dict(color='#8c9aa6', width=1),
         opacity=0.55,
-        hovertemplate='%{x}<br>Valor: %{y:.2f}<extra></extra>'
+        hovertemplate=t("telemetry_charts.br_valor_extra_extra")
     ))
 
     # Main signal line (rolling mean)
@@ -298,12 +316,12 @@ def build_signal_timeseries_card(
         x=plot_df['Fecha'],
         y=plot_df['rolling_mean'],
         mode='lines',
-        name='Media móvil 30min',
+        name=t("telemetry_charts.media_movil_30min"),
         line=dict(color='#2c3e50', width=1.5),
-        hovertemplate='%{x}<br>Valor: %{y:.2f}<extra></extra>'
+        hovertemplate=t("telemetry_charts.br_valor_extra_extra")
     ))
 
-    fig.data[-1].name = 'Media móvil 120 min'
+    fig.data[-1].name = t("telemetry_charts.media_movil_120_min")
 
     # W34-09: the simplified view (show_events=False, the default) skips
     # event/anomaly overlays entirely \u2014 no shapes, no marker traces. Counts
@@ -321,8 +339,8 @@ def build_signal_timeseries_card(
             if window['end'] >= raw_start and window['start'] <= raw_end
         ]
         event_colors = {
-            'anomaly': ('#c1121f', 'Anomal\u00eda'),
-            'event': ('#f59e0b', 'Evento'),
+            'anomaly': ('#c1121f', t("oil_machine_detail.anomalia")),
+            'event': ('#f59e0b', t("telemetry_charts.evento")),
         }
         # Build all event windows in one layout update. Calling add_vrect once per
         # window causes Plotly to revalidate the complete figure hundreds of times
@@ -376,7 +394,7 @@ def build_signal_timeseries_card(
                 fig.add_trace(go.Scatter(
                     x=point_df['Fecha'], y=point_df['value'], mode='markers', name=label,
                     marker=dict(size=6, color=color, symbol='square', line=dict(width=0.5, color='white')),
-                    hovertemplate=f'{label}<br>%{{x}}<br>Valor: %{{y:.2f}}<extra></extra>',
+                    hovertemplate=t("telemetry_charts.br_br_valor_extra_extra", label=label),
                 ))
 
     latest_observed = df['Fecha'].max()
@@ -428,7 +446,7 @@ def build_signal_timeseries_card(
             if 'P95' in bl_row.index and pd.notna(bl_row['P95']):
                 fig.add_trace(go.Scatter(
                     x=x_range, y=[bl_row['P95']] * 2,
-                    mode='lines', name='Límite superior marginal',
+                    mode='lines', name=t("telemetry_charts.limite_superior_marginal"),
                     line=dict(color='#9bbbd0', dash='dash', width=1),
                     legendrank=3,
                     showlegend=True
@@ -436,7 +454,7 @@ def build_signal_timeseries_card(
             if 'P98' in bl_row.index and pd.notna(bl_row['P98']):
                 fig.add_trace(go.Scatter(
                     x=x_range, y=[bl_row['P98']] * 2,
-                    mode='lines', name='Límite superior condenatorio',
+                    mode='lines', name=t("telemetry_charts.limite_superior_condenatorio"),
                     line=dict(color='#527d9c', dash='dash', width=1),
                     legendrank=4,
                     showlegend=True
@@ -444,7 +462,7 @@ def build_signal_timeseries_card(
             if 'P5' in bl_row.index and pd.notna(bl_row['P5']):
                 fig.add_trace(go.Scatter(
                     x=x_range, y=[bl_row['P5']] * 2,
-                    mode='lines', name='Límite inferior marginal',
+                    mode='lines', name=t("telemetry_charts.limite_inferior_marginal"),
                     line=dict(color='#b8cad8', dash='dash', width=1),
                     legendrank=2,
                     showlegend=True
@@ -452,7 +470,7 @@ def build_signal_timeseries_card(
             if 'P2' in bl_row.index and pd.notna(bl_row['P2']):
                 fig.add_trace(go.Scatter(
                     x=x_range, y=[bl_row['P2']] * 2,
-                    mode='lines', name='Límite inferior condenatorio',
+                    mode='lines', name=t("telemetry_charts.limite_inferior_condenatorio"),
                     line=dict(color='#789bb5', dash='dash', width=1),
                     legendrank=1,
                     showlegend=True
@@ -479,7 +497,7 @@ def build_signal_timeseries_card(
                 fig.add_trace(go.Scatter(
                     x=x_trend, y=y_trend,
                     mode='lines',
-                    name=f'Tendencia ({translate_trend(interp)})',
+                    name=t("telemetry_charts.tendencia", translate_trend_in=translate_trend(interp)),
                     line=dict(color=color, dash='dot', width=2)
                 ))
 
@@ -513,14 +531,14 @@ def build_signal_timeseries_card(
             # One control, one source of truth, per the plan's own
             # "rangeselector isn't observable from a callback test" note.
         ),
-        yaxis_title="Valor",
+        yaxis_title=t("alerts_charts.valor"),
         yaxis=dict(range=y_range, autorange=y_range is None),
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
         hovermode='x unified'
     )
     overlay_summary = (
-        f"Anomalías: {anomaly_count} · Eventos: {event_count}"
-        if anomaly_count or event_count else "Sin anomalías ni eventos registrados"
+        t("telemetry_charts.anomalias_eventos", anomaly_count=anomaly_count, event_count=event_count)
+        if anomaly_count or event_count else t("telemetry_charts.sin_anomalias_ni_eventos_registrados")
     )
     fig.add_annotation(
         xref='paper', yref='paper', x=0, y=1.22,

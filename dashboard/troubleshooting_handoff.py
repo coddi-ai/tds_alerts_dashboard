@@ -33,6 +33,7 @@ la variable en los dos entornos.
 
 from __future__ import annotations
 
+from src.i18n import t
 import json
 import logging
 import os
@@ -169,15 +170,15 @@ def handoff_response(app_root: str):
     user_clients = {normalize_client_id(c) for c in user.get("clients", [])}
     if not client or client not in user_clients:
         logger.warning(f"Handoff troubleshooting denegado: cliente '{client}' ajeno al usuario '{username}'")
-        return _deny(403, "No tienes acceso a este cliente.")
+        return _deny(403, t("troubleshooting_handoff.no_tienes_acceso_a_este_cliente"))
 
     if not is_service_enabled(client, SERVICE_ID) or is_service_dummy(client, SERVICE_ID):
         logger.warning(f"Handoff troubleshooting denegado: servicio no habilitado para '{client}' (usuario '{username}')")
-        return _deny(403, "El agente de troubleshooting no está habilitado para este cliente.")
+        return _deny(403, t("troubleshooting_callbacks.el_agente_de_troubleshooting_no_esta_2"))
 
     agent_url = get_agent_url()
     if not agent_url:
-        return _deny(503, "El agente de troubleshooting no está disponible en este entorno.")
+        return _deny(503, t("troubleshooting_callbacks.el_agente_de_troubleshooting_no_esta"))
 
     secret = get_sso_secret(current_app.secret_key)
     if not secret:

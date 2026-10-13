@@ -6,13 +6,15 @@ Heatmap requires fleet selection when multiple fleets exist.
 Default components: all with ≥1 sample for the selected fleet.
 """
 
+from src.i18n import t
+from dashboard.components.labels import status_label
 from dash import Input, Output, State, html, dcc, dash_table, ctx, no_update
 from dash.exceptions import PreventUpdate
 import pandas as pd
 from config.settings import get_settings
-from src.data.loaders import get_latest_component_hours, load_oil_classified, load_machine_status_for_client
+from src.data.loaders import load_oil_classified, load_machine_status_for_client
 from src.utils.logger import get_logger
-from dashboard.components.tables import create_machine_detail_table
+from dashboard.components.oil_machine_detail import build_machine_detail
 import dash_bootstrap_components as dbc
 
 logger = get_logger(__name__)
@@ -197,17 +199,17 @@ def register_machines_callbacks(app):
     )
     def update_fleet_heatmap_table(client, site, fleet, statuses, selected_components):
         if not client:
-            return html.P("Seleccione un cliente", className="text-muted"), ""
+            return html.P(t("fleet_overview.select_client"), className="text-muted"), ""
         if not fleet:
             return html.P(
-                "Seleccione una flota para ver el mapa de estado por componente.",
+                t("machines_callbacks.seleccione_una_flota_para_ver_el"),
                 className="text-muted text-center py-4"
             ), ""
 
         settings = get_settings()
         path = settings.get_classified_reports_path(client.lower())
         if not path.exists():
-            return html.P("Sin datos disponibles", className="text-muted"), ""
+            return html.P(t("lab_compliance_callbacks.sin_datos_disponibles"), className="text-muted"), ""
 
         try:
             df = load_oil_classified(client)
@@ -215,7 +217,7 @@ def register_machines_callbacks(app):
                 df = df[df['site'] == site]
             df = df[df['machineName'] == fleet]
             if df.empty:
-                return html.P("Sin datos para la flota seleccionada", className="text-muted"), ""
+                return html.P(t("machines_callbacks.sin_datos_para_la_flota_seleccionada"), className="text-muted"), ""
 
             df['sampleDate'] = pd.to_datetime(df['sampleDate'])
             latest = df.loc[df.groupby(['unitId', 'componentName'])['sampleDate'].idxmax()]
@@ -237,7 +239,7 @@ def register_machines_callbacks(app):
             if statuses:
                 pivot = pivot[pivot['__machine_status__'].isin(statuses)]
             if pivot.empty:
-                return html.P("Sin datos para los filtros seleccionados", className="text-muted"), ""
+                return html.P(t("machines_callbacks.sin_datos_para_los_filtros_seleccionados"), className="text-muted"), ""
 
             # Sort by criticality
             order = {'Anormal': 0, 'Alerta': 1, 'Normal': 2}
@@ -254,10 +256,10 @@ def register_machines_callbacks(app):
             )
 
             # Build table
-            columns = [{'name': 'Unidad', 'id': 'unit_id'}]
+            columns = [{'name': t("alerts_general.filter_unit"), 'id': 'unit_id'}]
             for col in display_cols:
                 columns.append({'name': col.title(), 'id': col})
-            columns.append({'name': 'ESTADO MÁQUINA', 'id': 'machine_status'})
+            columns.append({'name': t("machines_callbacks.estado_maquina"), 'id': 'machine_status'})
 
             # Build recommendation pivot for tooltips
             rec_pivot = None
@@ -278,9 +280,9 @@ def register_machines_callbacks(app):
                         # Format: "STATUS - (days)"
                         try:
                             days_val = int(days_since_comp.get((uid, col), 0))
-                            row[col] = f"{v} - ({days_val})"
+                            row[col] = f"{status_label(v)} - ({days_val})"
                         except (KeyError, TypeError, ValueError):
-                            row[col] = v
+                            row[col] = status_label(v)
                     else:
                         row[col] = ''
                     # Tooltip: recommendation only (days now shown in cell)
@@ -290,7 +292,7 @@ def register_machines_callbacks(app):
                         if pd.notna(rv):
                             tip_text = str(rv)[:300]
                     tip_row[col] = {'value': tip_text, 'type': 'text'}
-                row['machine_status'] = pivot.loc[uid, '__machine_status__']
+                row['machine_status'] = status_label(pivot.loc[uid, '__machine_status__'])
                 tip_row['machine_status'] = {'value': '', 'type': 'text'}
                 records.append(row)
                 tooltip_data.append(tip_row)
@@ -299,13 +301,13 @@ def register_machines_callbacks(app):
             for col in display_cols:
                 for st, bg in _STATUS_BG.items():
                     style_cond.append({
-                        'if': {'filter_query': '{' + col + '} contains "' + st + '"', 'column_id': col},
+                        'if': {'filter_query': '{' + col + '} contains "' + status_label(st) + '"', 'column_id': col},
                         'backgroundColor': bg, 'color': _STATUS_FG[st],
                         'fontWeight': 'bold', 'textAlign': 'center'
                     })
             for st in ['Normal', 'Alerta', 'Anormal']:
                 style_cond.append({
-                    'if': {'filter_query': '{machine_status} = "' + st + '"', 'column_id': 'machine_status'},
+                    'if': {'filter_query': '{machine_status} = "' + status_label(st) + '"', 'column_id': 'machine_status'},
                     'backgroundColor': _MACHINE_STATUS_BG[st], 'color': _MACHINE_STATUS_FG[st],
                     'fontWeight': 'bold', 'textAlign': 'center', 'fontSize': '13px',
                     'borderLeft': '3px solid ' + _MACHINE_STATUS_BG[st],
@@ -329,12 +331,12 @@ def register_machines_callbacks(app):
                 style_data_conditional=style_cond,
                 row_selectable='single', selected_rows=[], sort_action='native', page_size=25
             )
-            badge = dbc.Badge(f"{len(records)} máquinas", color="secondary", className="ms-2")
+            badge = dbc.Badge(t("machines_callbacks.maquinas", len_records=len(records)), color="secondary", className="ms-2")
             return table, badge
 
         except Exception as e:
             logger.error(f"Heatmap table error: {e}")
-            return html.P(f"Error: {str(e)}", className="text-danger"), ""
+            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger"), ""
 
     # ========================================
     # Machine Detail
@@ -351,7 +353,7 @@ def register_machines_callbacks(app):
     )
     def update_machine_detail(selected_rows, manual_selection, client, table_data):
         if not client:
-            return "Ninguna máquina seleccionada", "light", html.Div(), "Seleccione un cliente"
+            return t("tab_machines.ninguna_maquina_seleccionada"), "light", html.Div(), t("fleet_overview.select_client")
 
         unit_id = None
         if selected_rows and len(selected_rows) > 0 and table_data:
@@ -360,74 +362,11 @@ def register_machines_callbacks(app):
             unit_id = manual_selection
 
         if not unit_id:
-            return "Ninguna máquina seleccionada", "light", html.Div(), \
-                   "Seleccione una máquina de la tabla o del menú"
+            return t("tab_machines.ninguna_maquina_seleccionada"), "light", html.Div(), \
+                   t("machines_callbacks.seleccione_una_maquina_de_la_tabla")
 
-        settings = get_settings()
-        reports_file = settings.get_classified_reports_path(client.lower())
-        machine_file = settings.get_machine_status_path(client.lower())
-        if not reports_file.exists():
-            return "Sin datos", "light", html.Div(), "No hay datos"
-
-        try:
-            df = load_oil_classified(client)
-            mdf = df[df['unitId'] == unit_id].copy()
-            if mdf.empty:
-                return f"Máquina {unit_id}", "warning", html.Div(), f"Sin datos para {unit_id}"
-
-            mdf['sampleDate'] = pd.to_datetime(mdf['sampleDate'])
-            latest = mdf.loc[mdf.groupby('componentName')['sampleDate'].idxmax()]
-            display_df = latest[['componentName', 'report_status', 'severity_score',
-                                  'essays_broken', 'sampleDate']].copy()
-            for col in ['breached_essays', 'ai_recommendation', 'anomalyType']:
-                if col in latest.columns:
-                    display_df[col] = latest[col]
-
-            comp_hours_allowed = [c.upper() for c in settings.component_hours_allowed_clients]
-            if client.upper() in comp_hours_allowed:
-                chf = settings.get_component_hours_path(client.lower())
-                if chf.exists():
-                    try:
-                        lh = get_latest_component_hours(chf)
-                        if not lh.empty:
-                            uh = lh[lh['unitId'] == unit_id][['componentName', 'componentHours_cleaned']].copy()
-                            if not uh.empty:
-                                display_df = display_df.merge(uh, on='componentName', how='left')
-                    except Exception as e:
-                        logger.warning(f"Component hours: {e}")
-
-            display_df['sampleDate'] = pd.to_datetime(display_df['sampleDate']).dt.strftime('%Y-%m-%d')
-            mt = str(mdf.iloc[0].get('machineName', 'N/A')).title()
-            an = (display_df['report_status'] == 'Anormal').sum()
-            al = (display_df['report_status'] == 'Alerta').sum()
-            no = (display_df['report_status'] == 'Normal').sum()
-
-            indicator = html.Div([
-                html.Strong(f"📍 {unit_id} ({mt})", className="me-3"),
-                html.Span(f"🟢{no} 🟡{al} 🔴{an}", className="small")
-            ])
-
-            rec_card = html.Div()
-            if machine_file.exists():
-                try:
-                    ms_df = load_machine_status_for_client(client)
-                    mr = ms_df[ms_df['unit_id'] == unit_id]
-                    if not mr.empty:
-                        rec = mr.iloc[0].get('machine_ai_recommendation', None)
-                        if rec and pd.notna(rec) and str(rec).strip():
-                            rec_card = dbc.Card([
-                                dbc.CardHeader("🤖 Recomendación IA", className="fw-bold bg-info text-white"),
-                                dbc.CardBody(html.P(str(rec), style={
-                                    'whiteSpace': 'pre-wrap', 'fontSize': '0.9rem', 'lineHeight': '1.5'}))
-                            ], className="mb-3")
-                except Exception as e:
-                    logger.warning(f"Recommendation: {e}")
-
-            table = create_machine_detail_table(display_df)
-            return indicator, "info", rec_card, table
-        except Exception as e:
-            logger.error(f"Machine detail error: {e}")
-            return f"Error: {unit_id}", "danger", html.Div(), str(e)
+        # Shared with the Unit Summary's Tribología card (spec 09_...md).
+        return build_machine_detail(client, unit_id)
 
     # ========================================
     # Sync table click → selectors
@@ -477,7 +416,7 @@ def register_machines_callbacks(app):
         status_val = row_data.get(col_id, '')
 
         # Only navigate if cell has a status value (format: "STATUS - (days)")
-        if not status_val or not any(s in status_val for s in ('Normal', 'Alerta', 'Anormal')):
+        if not status_val or not any(status_label(s) in status_val for s in ('Normal', 'Alerta', 'Anormal')):
             raise PreventUpdate
 
         # col_id is now componentName directly

@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.i18n import LazyLabels
+
 
 class Source(str, Enum):
     alertas = "alertas"
@@ -26,13 +28,13 @@ class Source(str, Enum):
     inspections = "inspections"
 
 
-SOURCE_LABELS: dict[Source, str] = {
-    Source.alertas: "Alertas",
-    Source.telemetria: "Telemetría",
-    Source.aceites: "Aceites",
-    Source.predictivo: "Predictivo",
-    Source.inspections: "Pautas",
-}
+SOURCE_LABELS = LazyLabels({
+    Source.alertas: "erp.source.alertas",
+    Source.telemetria: "erp.source.telemetria",
+    Source.aceites: "erp.source.aceites",
+    Source.predictivo: "erp.source.predictivo",
+    Source.inspections: "erp.source.inspections",
+})
 
 
 class System(str, Enum):
@@ -48,18 +50,18 @@ class System(str, Enum):
     lubricacion = "lubricacion"
 
 
-SYSTEM_LABELS: dict[System, str] = {
-    System.motor: "Motor",
-    System.transmision: "Transmisión",
-    System.diferencial: "Diferencial",
-    System.hidraulico: "Hidráulico",
-    System.convertidor: "Convertidor",
-    System.direccion: "Dirección",
-    System.mando_final: "Mando Final",
-    System.rueda: "Rueda",
-    System.frenos: "Frenos",
-    System.lubricacion: "Lubricación",
-}
+SYSTEM_LABELS = LazyLabels({
+    System.motor: "erp.system.motor",
+    System.transmision: "erp.system.transmision",
+    System.diferencial: "erp.system.diferencial",
+    System.hidraulico: "erp.system.hidraulico",
+    System.convertidor: "erp.system.convertidor",
+    System.direccion: "erp.system.direccion",
+    System.mando_final: "erp.system.mando_final",
+    System.rueda: "erp.system.rueda",
+    System.frenos: "erp.system.frenos",
+    System.lubricacion: "erp.system.lubricacion",
+})
 
 
 class ConditionLabel(str, Enum):
@@ -68,11 +70,11 @@ class ConditionLabel(str, Enum):
     anormal = "anormal"
 
 
-CONDITION_LABEL_LABELS: dict[ConditionLabel, str] = {
-    ConditionLabel.normal: "Normal",
-    ConditionLabel.alerta: "Alerta",
-    ConditionLabel.anormal: "Anormal",
-}
+CONDITION_LABEL_LABELS = LazyLabels({
+    ConditionLabel.normal: "erp.condition.normal",
+    ConditionLabel.alerta: "erp.condition.alerta",
+    ConditionLabel.anormal: "erp.condition.anormal",
+})
 
 
 class Severity(str, Enum):
@@ -82,12 +84,12 @@ class Severity(str, Enum):
     critical = "critical"
 
 
-SEVERITY_LABELS: dict[Severity, str] = {
-    Severity.low: "Bajo",
-    Severity.medium: "Medio",
-    Severity.high: "Alto",
-    Severity.critical: "Crítico",
-}
+SEVERITY_LABELS = LazyLabels({
+    Severity.low: "erp.severity.low",
+    Severity.medium: "erp.severity.medium",
+    Severity.high: "erp.severity.high",
+    Severity.critical: "erp.severity.critical",
+})
 
 
 class WarningStatus(str, Enum):
@@ -97,12 +99,12 @@ class WarningStatus(str, Enum):
     sent = "sent"
 
 
-STATUS_LABELS: dict[WarningStatus, str] = {
-    WarningStatus.pending: "Pendiente",
-    WarningStatus.validated: "Validado",
-    WarningStatus.rejected: "Rechazado",
-    WarningStatus.sent: "Enviado",
-}
+STATUS_LABELS = LazyLabels({
+    WarningStatus.pending: "erp.status.pending",
+    WarningStatus.validated: "erp.status.validated",
+    WarningStatus.rejected: "erp.status.rejected",
+    WarningStatus.sent: "erp.status.sent",
+})
 
 
 class ErpType(str, Enum):

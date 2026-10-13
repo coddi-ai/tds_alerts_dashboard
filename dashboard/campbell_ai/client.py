@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.i18n import t_or
 import json
 import logging
 import os
@@ -125,7 +126,11 @@ _FAILURE_GUIDANCE: dict[str, tuple[str, bool, str]] = {
 
 
 def _failure(kind: str, detail: str = "") -> CampbellAPIClientError:
-    title, retryable, guidance = _FAILURE_GUIDANCE.get(kind, _FAILURE_GUIDANCE["unknown"])
+    key = kind if kind in _FAILURE_GUIDANCE else "unknown"
+    title, retryable, guidance = _FAILURE_GUIDANCE[key]
+    # `_FAILURE_GUIDANCE` holds the Spanish source text; the catalog carries the translation.
+    title = t_or(f"campbell_client.{key}_title", title)
+    guidance = t_or(f"campbell_client.{key}_guidance", guidance)
     return CampbellAPIClientError(
         detail or title, kind=kind, retryable=retryable, guidance=guidance
     )

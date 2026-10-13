@@ -17,6 +17,16 @@
   "use strict";
 
   var namespace = (window.dash_clientside = window.dash_clientside || {});
+
+  /* UI text in the active language. `window.appI18n` comes from i18n_language.js and its
+   * messages from /_i18n/messages.js; without them (tests, a failed load) the Spanish
+   * fallback is used unchanged. */
+  function message(key, fallback, elapsed) {
+    var api = window.appI18n;
+    var text = api && api.t ? api.t(key, "", { elapsed: elapsed }) : "";
+    return text || fallback;
+  }
+
   var state = (window.__campbellStream = {
     result: null,
     controller: null,
@@ -276,10 +286,10 @@
       var threshold = (slowAfterSeconds || 0) + (waitingAck || 0);
       var show = elapsed >= threshold;
       return [
-        "Pensando… " + elapsed + "s",
+        message("js.status_thinking_elapsed", "Pensando… " + elapsed + "s", elapsed),
         "info",
         show,
-        show ? "La consulta lleva " + elapsed + " segundos" : "",
+        show ? message("js.query_running_for", "La consulta lleva " + elapsed + " segundos", elapsed) : "",
       ];
     },
 

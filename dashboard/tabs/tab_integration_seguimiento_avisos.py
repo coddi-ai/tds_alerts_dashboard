@@ -6,6 +6,7 @@ Reactive logic lives in dashboard/callbacks/integration_avisos_callbacks.py.
 """
 from __future__ import annotations
 
+from src.i18n import t
 import dash_bootstrap_components as dbc
 from dash import dash_table, dcc, html
 
@@ -67,11 +68,11 @@ def create_layout() -> dbc.Container:
             html.Div(
                 [
                     html.H3(
-                        [html.I(className="fas fa-chart-bar me-2"), "Seguimiento de Avisos"],
+                        [html.I(className="fas fa-chart-bar me-2"), t("nav.service.integration-seguimiento-avisos")],
                         className="text-primary mb-2",
                     ),
                     html.P(
-                        "Visión global del ciclo de vida de los avisos: pendientes, enviados al ERP y rechazados.",
+                        t("tab_integration_seguimiento_avisos.vision_global_del_ciclo_de_vida"),
                         className="text-muted",
                     ),
                 ],
@@ -80,7 +81,7 @@ def create_layout() -> dbc.Container:
             dbc.Card(
                 [
                     dbc.CardHeader(
-                        html.H5([html.I(className="fas fa-filter me-2"), "Filtros"], className="mb-0"),
+                        html.H5([html.I(className="fas fa-filter me-2"), t("tab_integration_seguimiento_avisos.filtros")], className="mb-0"),
                         className="bg-light",
                     ),
                     dbc.CardBody(
@@ -89,45 +90,45 @@ def create_layout() -> dbc.Container:
                                 [
                                     _filter_dropdown(
                                         "erp-viewer-filter-source",
-                                        "Fuente",
+                                        t("tab_integration_validacion_avisos.fuente"),
                                         "fa-cogs",
                                         _options(Source, SOURCE_LABELS),
-                                        placeholder="Todas las fuentes...",
+                                        placeholder=t("tab_integration_seguimiento_avisos.todas_las_fuentes"),
                                     ),
                                     _filter_dropdown(
                                         "erp-viewer-filter-system",
-                                        "Sistema",
+                                        t("alerts_general.filter_system"),
                                         "fa-cog",
                                         _options(System, SYSTEM_LABELS),
-                                        placeholder="Todos los sistemas...",
+                                        placeholder=t("tab_alerts_detail.todos_los_sistemas"),
                                     ),
                                     _filter_dropdown(
                                         "erp-viewer-filter-label",
-                                        "Clasificación",
+                                        t("tab_integration_validacion_avisos.clasificacion"),
                                         "fa-tag",
                                         _options(ConditionLabel, CONDITION_LABEL_LABELS),
-                                        placeholder="Todas...",
+                                        placeholder=t("tab_integration_seguimiento_avisos.todas"),
                                     ),
                                     _filter_dropdown(
                                         "erp-viewer-filter-severity",
-                                        "Severidad",
+                                        t("tab_integration_seguimiento_avisos.severidad"),
                                         "fa-tachometer-alt",
                                         _options(Severity, SEVERITY_LABELS),
-                                        placeholder="Todas...",
+                                        placeholder=t("tab_integration_seguimiento_avisos.todas"),
                                     ),
                                     _filter_dropdown(
                                         "erp-viewer-filter-status",
-                                        "Estado",
+                                        t("tab_telemetry_fleet.estado"),
                                         "fa-info-circle",
                                         _options(WarningStatus, STATUS_LABELS),
-                                        placeholder="Todos...",
+                                        placeholder=t("tab_integration_seguimiento_avisos.todos"),
                                     ),
                                     _filter_dropdown(
                                         "erp-viewer-filter-asset",
-                                        "Id Del Activo",
+                                        t("tab_integration_validacion_avisos.id_del_activo"),
                                         "fa-truck",
                                         [],
-                                        placeholder="Todos los equipos...",
+                                        placeholder=t("tab_integration_seguimiento_avisos.todos_los_equipos"),
                                     ),
                                 ],
                                 className="g-3",
@@ -136,7 +137,7 @@ def create_layout() -> dbc.Container:
                                 dbc.Col(
                                     [
                                         html.Label(
-                                            [html.I(className="fas fa-calendar-alt me-1"), " Rango de fechas"],
+                                            [html.I(className="fas fa-calendar-alt me-1"), t("tab_integration_seguimiento_avisos.rango_de_fechas")],
                                             className="fw-bold mb-2",
                                         ),
                                         dcc.DatePickerRange(id="erp-viewer-filter-dates", display_format="DD/MM/YYYY"),
@@ -152,15 +153,15 @@ def create_layout() -> dbc.Container:
             ),
             dbc.Row(
                 [
-                    _kpi_card("fa-bell", "Total Avisos", "erp-viewer-kpi-total", "text-primary", "#f0f8ff"),
-                    _kpi_card("fa-clock", "Pendientes", "erp-viewer-kpi-pending", "text-warning", "#fffcf0"),
+                    _kpi_card("fa-bell", t("tab_integration_seguimiento_avisos.total_avisos"), "erp-viewer-kpi-total", "text-primary", "#f0f8ff"),
+                    _kpi_card("fa-clock", t("tab_integration_seguimiento_avisos.pendientes"), "erp-viewer-kpi-pending", "text-warning", "#fffcf0"),
                     _kpi_card(
-                        "fa-check-circle", "Validados y Enviados", "erp-viewer-kpi-sent", "text-success", "#f0fff4"
+                        "fa-check-circle", t("tab_integration_seguimiento_avisos.validados_y_enviados"), "erp-viewer-kpi-sent", "text-success", "#f0fff4"
                     ),
-                    _kpi_card("fa-times-circle", "Rechazados", "erp-viewer-kpi-rejected", "text-danger", "#fff5f5"),
+                    _kpi_card("fa-times-circle", t("tab_integration_seguimiento_avisos.rechazados"), "erp-viewer-kpi-rejected", "text-danger", "#fff5f5"),
                     _kpi_card(
                         "fa-hourglass-half",
-                        "Horas prom. a validación",
+                        t("tab_integration_seguimiento_avisos.horas_prom_a_validacion"),
                         "erp-viewer-kpi-avg-hours",
                         "text-info",
                         "#f0f8ff",
@@ -174,7 +175,7 @@ def create_layout() -> dbc.Container:
                         [
                             dbc.CardHeader(
                                 html.H5(
-                                    [html.I(className="fas fa-chart-line me-2"), "Avisos en el Tiempo"],
+                                    [html.I(className="fas fa-chart-line me-2"), t("tab_integration_seguimiento_avisos.avisos_en_el_tiempo")],
                                     className="mb-0",
                                 ),
                                 className="bg-light",
@@ -199,7 +200,7 @@ def create_layout() -> dbc.Container:
                             [
                                 dbc.CardHeader(
                                     html.H5(
-                                        [html.I(className="fas fa-tag me-2"), "Avisos por Clasificación"],
+                                        [html.I(className="fas fa-tag me-2"), t("tab_integration_seguimiento_avisos.avisos_por_clasificacion")],
                                         className="mb-0",
                                     ),
                                     className="bg-light",
@@ -220,7 +221,7 @@ def create_layout() -> dbc.Container:
                             [
                                 dbc.CardHeader(
                                     html.H5(
-                                        [html.I(className="fas fa-tachometer-alt me-2"), "Avisos por Severidad"],
+                                        [html.I(className="fas fa-tachometer-alt me-2"), t("tab_integration_seguimiento_avisos.avisos_por_severidad")],
                                         className="mb-0",
                                     ),
                                     className="bg-light",
@@ -241,7 +242,7 @@ def create_layout() -> dbc.Container:
                             [
                                 dbc.CardHeader(
                                     html.H5(
-                                        [html.I(className="fas fa-cogs me-2"), "Avisos por Sistema"],
+                                        [html.I(className="fas fa-cogs me-2"), t("tab_integration_seguimiento_avisos.avisos_por_sistema")],
                                         className="mb-0",
                                     ),
                                     className="bg-light",
@@ -264,7 +265,7 @@ def create_layout() -> dbc.Container:
                 [
                     dbc.CardHeader(
                         html.H5(
-                            [html.I(className="fas fa-percentage me-2"), "Tendencia de Tasa de Validación"],
+                            [html.I(className="fas fa-percentage me-2"), t("tab_integration_seguimiento_avisos.tendencia_de_tasa_de_validacion")],
                             className="mb-0",
                         ),
                         className="bg-light",
@@ -281,10 +282,10 @@ def create_layout() -> dbc.Container:
             html.Div(
                 [
                     html.H4(
-                        [html.I(className="fas fa-table me-2"), "Registro de Avisos"],
+                        [html.I(className="fas fa-table me-2"), t("tab_integration_seguimiento_avisos.registro_de_avisos")],
                         className="text-primary mb-3 mt-4 pb-2 border-bottom",
                     ),
-                    html.P("Historial completo de avisos generados por el sistema.", className="text-muted mb-3"),
+                    html.P(t("tab_integration_seguimiento_avisos.historial_completo_de_avisos_generados_por"), className="text-muted mb-3"),
                 ]
             ),
             dbc.Card(
@@ -294,15 +295,15 @@ def create_layout() -> dbc.Container:
                             id="erp-viewer-table",
                             columns=[
                                 {"name": "ID", "id": "warning_id"},
-                                {"name": "Asset", "id": "asset_id"},
-                                {"name": "Fuente", "id": "source"},
-                                {"name": "Sistema", "id": "system"},
-                                {"name": "Clasificación", "id": "condition_label"},
-                                {"name": "Severidad", "id": "severity"},
-                                {"name": "Estado", "id": "status"},
-                                {"name": "Generado", "id": "generated_at"},
-                                {"name": "Validado por", "id": "validated_by"},
-                                {"name": "Ref. ERP", "id": "erp_reference"},
+                                {"name": t("tab_integration_seguimiento_avisos.asset"), "id": "asset_id"},
+                                {"name": t("tab_integration_validacion_avisos.fuente"), "id": "source"},
+                                {"name": t("alerts_general.filter_system"), "id": "system"},
+                                {"name": t("tab_integration_validacion_avisos.clasificacion"), "id": "condition_label"},
+                                {"name": t("tab_integration_seguimiento_avisos.severidad"), "id": "severity"},
+                                {"name": t("tab_telemetry_fleet.estado"), "id": "status"},
+                                {"name": t("tab_integration_validacion_avisos.generado"), "id": "generated_at"},
+                                {"name": t("tab_integration_seguimiento_avisos.validado_por"), "id": "validated_by"},
+                                {"name": t("tab_integration_seguimiento_avisos.ref_erp"), "id": "erp_reference"},
                             ],
                             data=[],
                             style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "500px"},

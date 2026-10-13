@@ -4,6 +4,7 @@ Callbacks for Health Index Dashboard.
 Handles all interactivity for health index visualizations.
 """
 
+from src.i18n import t
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -144,7 +145,7 @@ def register_health_index_callbacks(app):
         
         # Get unique units for filter
         units = sorted(df['Unit'].unique().tolist())
-        unit_options = [{'label': 'Todas', 'value': 'all'}] + [
+        unit_options = [{'label': t("tab_health_index.todas"), 'value': 'all'}] + [
             {'label': unit, 'value': unit} for unit in units
         ]
         
@@ -205,7 +206,7 @@ def register_health_index_callbacks(app):
         df_filtered = apply_filters(df, filters)
         
         if df_filtered.empty:
-            return dbc.Alert("No hay datos para los filtros seleccionados", color="warning")
+            return dbc.Alert(t("health_index_callbacks.no_hay_datos_para_los_filtros"), color="warning")
         
         # Calculate KPIs
         avg_hi = df_filtered['health_index'].mean()
@@ -227,7 +228,7 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-heartbeat fa-2x text-primary mb-2"),
                             html.H3(f"{avg_hi:.3f}", className="mb-0"),
-                            html.P("HI Promedio Flota", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.hi_promedio_flota"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -239,8 +240,8 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-check-circle fa-2x text-success mb-2"),
                             html.H3(f"{healthy_pct:.1f}%", className="mb-0"),
-                            html.P("Equipos Saludables", className="text-muted mb-0 small"),
-                            html.P(f"(HI ≥ 0.8)", className="text-muted mb-0", style={'fontSize': '0.7rem'})
+                            html.P(t("health_index_callbacks.equipos_saludables"), className="text-muted mb-0 small"),
+                            html.P(t("health_index_callbacks.hi_0_8"), className="text-muted mb-0", style={'fontSize': '0.7rem'})
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -252,8 +253,8 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-exclamation-triangle fa-2x text-warning mb-2"),
                             html.H3(f"{warning_pct:.1f}%", className="mb-0"),
-                            html.P("En Precaución", className="text-muted mb-0 small"),
-                            html.P(f"(0.5 ≤ HI < 0.8)", className="text-muted mb-0", style={'fontSize': '0.7rem'})
+                            html.P(t("health_index_callbacks.en_precaucion"), className="text-muted mb-0 small"),
+                            html.P(t("health_index_callbacks.0_5_hi_0_8"), className="text-muted mb-0", style={'fontSize': '0.7rem'})
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -265,8 +266,8 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-times-circle fa-2x text-danger mb-2"),
                             html.H3(f"{critical_pct:.1f}%", className="mb-0"),
-                            html.P("En Alerta", className="text-muted mb-0 small"),
-                            html.P(f"(HI < 0.5)", className="text-muted mb-0", style={'fontSize': '0.7rem'})
+                            html.P(t("health_index_callbacks.en_alerta"), className="text-muted mb-0 small"),
+                            html.P(t("health_index_callbacks.hi_0_5"), className="text-muted mb-0", style={'fontSize': '0.7rem'})
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -278,7 +279,7 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-truck fa-2x text-info mb-2"),
                             html.H3(f"{n_units}", className="mb-0"),
-                            html.P("Unidades Monitoreadas", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.unidades_monitoreadas"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -290,7 +291,7 @@ def register_health_index_callbacks(app):
                         html.Div([
                             html.I(className="fas fa-database fa-2x text-secondary mb-2"),
                             html.H3(f"{total_records:,}", className="mb-0"),
-                            html.P("Registros Totales", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.registros_totales"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -332,7 +333,7 @@ def register_health_index_callbacks(app):
                     dbc.CardHeader([
                         html.H5([
                             html.I(className="fas fa-bell me-2"),
-                            "Atención Prioritaria"
+                            t("health_index_callbacks.atencion_prioritaria")
                         ], className="mb-0 text-danger")
                     ]),
                     dbc.CardBody([
@@ -359,7 +360,7 @@ def register_health_index_callbacks(app):
         if not data:
             return dbc.Alert([
                 dbc.Spinner(size="sm", color="primary"),
-                html.Span(" Cargando datos del Health Index...", className="ms-2")
+                html.Span(t("health_index_callbacks.cargando_datos_del_health_index"), className="ms-2")
             ], color="info", className="mt-4")
         
         df = pd.DataFrame(data)
@@ -371,7 +372,7 @@ def register_health_index_callbacks(app):
             df_filtered = df
         
         if df_filtered.empty:
-            return dbc.Alert("No hay datos para los filtros seleccionados. Intente ajustar los filtros o haga clic en 'Actualizar'.", 
+            return dbc.Alert(t("health_index_callbacks.no_hay_datos_para_los_filtros_2"), 
                             color="warning", className="mt-4")
         
         if selected_tab == 'all-systems':
@@ -389,7 +390,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-chart-line me-2"),
-                                "Evolución Temporal del Health Index"
+                                t("health_index_callbacks.evolucion_temporal_del_health_index")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -410,7 +411,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-th me-2"),
-                                "Heatmap por Unidad y Sistema"
+                                t("health_index_callbacks.heatmap_por_unidad_y_sistema")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -428,7 +429,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-bar-chart me-2"),
-                                "HI Actual por Unidad"
+                                t("health_index_callbacks.hi_actual_por_unidad")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -449,7 +450,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-table me-2"),
-                                "Tabla Detallada"
+                                t("health_index_callbacks.tabla_detallada")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -466,7 +467,7 @@ def register_health_index_callbacks(app):
         df_system = df[df['component'] == system]
         
         if df_system.empty:
-            return dbc.Alert(f"No hay datos para el sistema {system}", color="warning")
+            return dbc.Alert(t("health_index_callbacks.no_hay_datos_para_el_sistema", system=system), color="warning")
         
         return html.Div([
             # System KPIs
@@ -483,7 +484,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-chart-area me-2"),
-                                f"Evolución Temporal - {system}"
+                                t("health_index_callbacks.evolucion_temporal", system=system)
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -502,7 +503,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-chart-bar me-2"),
-                                "Distribución"
+                                t("health_index_callbacks.distribucion")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -519,7 +520,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-chart-pie me-2"),
-                                "Estado del Sistema"
+                                t("health_index_callbacks.estado_del_sistema")
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -539,7 +540,7 @@ def register_health_index_callbacks(app):
                         dbc.CardHeader([
                             html.H6([
                                 html.I(className="fas fa-table me-2"),
-                                f"Resumen por Unidad - {system}"
+                                t("health_index_callbacks.resumen_por_unidad", system=system)
                             ], className="mb-0")
                         ]),
                         dbc.CardBody([
@@ -564,7 +565,7 @@ def register_health_index_callbacks(app):
                     dbc.CardBody([
                         html.Div([
                             html.H4(f"{avg_hi:.3f}", className="mb-1"),
-                            html.P(f"HI Promedio - {system}", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.hi_promedio", system=system), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -575,7 +576,7 @@ def register_health_index_callbacks(app):
                     dbc.CardBody([
                         html.Div([
                             html.H4(f"{min_hi:.3f}", className="mb-1 text-danger"),
-                            html.P("HI Mínimo", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.hi_minimo"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -586,7 +587,7 @@ def register_health_index_callbacks(app):
                     dbc.CardBody([
                         html.Div([
                             html.H4(f"{max_hi:.3f}", className="mb-1 text-success"),
-                            html.P("HI Máximo", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.hi_maximo"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -597,7 +598,7 @@ def register_health_index_callbacks(app):
                     dbc.CardBody([
                         html.Div([
                             html.H4(f"{healthy:.1f}%", className="mb-1 text-primary"),
-                            html.P("Registros Saludables", className="text-muted mb-0 small")
+                            html.P(t("health_index_callbacks.registros_saludables"), className="text-muted mb-0 small")
                         ], className="text-center")
                     ])
                 ], className="shadow-sm")
@@ -618,13 +619,13 @@ def register_health_index_callbacks(app):
     def update_detail_table(data, filters):
         """Update detail table."""
         if not data:
-            return html.Div("Cargando datos...", className="text-muted text-center p-4")
+            return html.Div(t("health_index_callbacks.cargando_datos"), className="text-muted text-center p-4")
         
         df = pd.DataFrame(data)
         df_filtered = apply_filters(df, filters)
         
         if df_filtered.empty:
-            return html.Div("No hay datos para los filtros seleccionados", 
+            return html.Div(t("health_index_callbacks.no_hay_datos_para_los_filtros"), 
                           className="text-muted text-center p-4")
         
         return create_health_index_detail_table(df_filtered)
@@ -639,7 +640,7 @@ def register_health_index_callbacks(app):
         """Update status distribution pie chart."""
         if not data:
             from dashboard.components.health_index_charts import _empty_figure
-            return _empty_figure("Cargando datos...")
+            return _empty_figure(t("health_index_callbacks.cargando_datos"))
         
         df = pd.DataFrame(data)
         df_filtered = apply_filters(df, filters)
@@ -656,7 +657,7 @@ def register_health_index_callbacks(app):
         """Update timeline chart."""
         if not data:
             from dashboard.components.health_index_charts import _empty_figure
-            return _empty_figure("Cargando datos...")
+            return _empty_figure(t("health_index_callbacks.cargando_datos"))
         
         df = pd.DataFrame(data)
         df_filtered = apply_filters(df, filters)
@@ -673,7 +674,7 @@ def register_health_index_callbacks(app):
         """Update heatmap."""
         if not data:
             from dashboard.components.health_index_charts import _empty_figure
-            return _empty_figure("Cargando datos...")
+            return _empty_figure(t("health_index_callbacks.cargando_datos"))
         
         df = pd.DataFrame(data)
         df_filtered = apply_filters(df, filters)
@@ -690,7 +691,7 @@ def register_health_index_callbacks(app):
         """Update bar chart."""
         if not data:
             from dashboard.components.health_index_charts import _empty_figure
-            return _empty_figure("Cargando datos...")
+            return _empty_figure(t("health_index_callbacks.cargando_datos"))
         
         df = pd.DataFrame(data)
         df_filtered = apply_filters(df, filters)
@@ -719,8 +720,8 @@ def register_health_index_callbacks(app):
         # Format for export
         df_export = df_filtered[['Unit', 'truck_model', 'component', 'health_index', 
                                  'start_time', 'end_time']].copy()
-        df_export.columns = ['Unidad', 'Modelo', 'Sistema', 'Health Index', 
-                             'Fecha Inicio', 'Fecha Fin']
+        df_export.columns = [t("alerts_general.filter_unit"), t("health_index_callbacks.modelo"), t("alerts_general.filter_system"), t("health_index_callbacks.health_index"), 
+                             t("tab_health_index.fecha_inicio"), t("tab_health_index.fecha_fin")]
         
         return dcc.send_data_frame(df_export.to_csv, 
                                    f"health_index_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",

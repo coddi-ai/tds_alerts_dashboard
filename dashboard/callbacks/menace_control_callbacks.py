@@ -4,6 +4,7 @@ Callbacks for Menace Control Tab.
 Handles data processing and visualization for equipment criticality monitoring.
 """
 
+from src.i18n import t
 import pandas as pd
 import numpy as np
 from dash import callback, Input, Output, html
@@ -175,7 +176,7 @@ def update_summary_cards(days, client):
         df_oil = load_oil_classified(client)
         
         if df_alerts.empty:
-            return dbc.Alert("No hay datos de alertas disponibles", color="warning")
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Filter by date range
         cutoff_date = datetime.now() - timedelta(days=days)
@@ -203,7 +204,7 @@ def update_summary_cards(days, client):
                 dbc.Card([
                     dbc.CardBody([
                         html.H3(f"{total_alerts:,}", className="text-danger mb-0"),
-                        html.P("Total Alertas", className="text-muted mb-0 small")
+                        html.P(t("menace_control_callbacks.total_alertas"), className="text-muted mb-0 small")
                     ])
                 ], className="text-center shadow-sm")
             ], md=3),
@@ -211,7 +212,7 @@ def update_summary_cards(days, client):
                 dbc.Card([
                     dbc.CardBody([
                         html.H3(f"{total_equipment}", className="text-warning mb-0"),
-                        html.P("Equipos Monitoreados", className="text-muted mb-0 small")
+                        html.P(t("menace_control_callbacks.equipos_monitoreados"), className="text-muted mb-0 small")
                     ])
                 ], className="text-center shadow-sm")
             ], md=3),
@@ -219,7 +220,7 @@ def update_summary_cards(days, client):
                 dbc.Card([
                     dbc.CardBody([
                         html.H3(f"{total_systems}", className="text-info mb-0"),
-                        html.P("Sistemas Afectados", className="text-muted mb-0 small")
+                        html.P(t("menace_control_callbacks.sistemas_afectados"), className="text-muted mb-0 small")
                     ])
                 ], className="text-center shadow-sm")
             ], md=3),
@@ -227,7 +228,7 @@ def update_summary_cards(days, client):
                 dbc.Card([
                     dbc.CardBody([
                         html.H3(f"{critical_equipment}", className="text-danger mb-0"),
-                        html.P("Equipos Críticos (Top 10%)", className="text-muted mb-0 small")
+                        html.P(t("menace_control_callbacks.equipos_criticos_top_10"), className="text-muted mb-0 small")
                     ])
                 ], className="text-center shadow-sm")
             ], md=3)
@@ -237,7 +238,7 @@ def update_summary_cards(days, client):
         
     except Exception as e:
         logger.error(f"Error updating summary cards: {e}")
-        return dbc.Alert(f"Error al cargar estadísticas: {str(e)}", color="danger")
+        return dbc.Alert(t("menace_control_callbacks.error_al_cargar_estadisticas", str_e=str(e)), color="danger")
 
 
 @callback(
@@ -257,13 +258,13 @@ def update_equipment_status_table(days, client):
         df_oil = load_oil_classified(client)
         
         if df_alerts.empty:
-            return dbc.Alert("No hay datos de alertas disponibles", color="warning")
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Get equipment status data
         df_status = get_equipment_status_data(df_alerts, df_oil, days)
         
         if df_status.empty:
-            return dbc.Alert(f"No hay datos de alertas en los últimos {days} días", color="info")
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_en", days=days), color="info")
         
         # Create table
         # Format numbers with commas
@@ -325,14 +326,14 @@ def update_equipment_status_table(days, client):
         return html.Div([
             table,
             html.P(
-                f"Mostrando {len(df_status)} equipos con alertas en los últimos {days} días",
+                t("menace_control_callbacks.mostrando_equipos_con_alertas_en_los", len_df_status=len(df_status), days=days),
                 className="text-muted small mt-2"
             )
         ])
         
     except Exception as e:
         logger.error(f"Error updating equipment status table: {e}")
-        return dbc.Alert(f"Error al cargar tabla: {str(e)}", color="danger")
+        return dbc.Alert(t("hot_sheet_callbacks.error_al_cargar_tabla", str_e=str(e)), color="danger")
 
 
 @callback(
@@ -352,13 +353,13 @@ def update_critical_systems_table(days, client):
         df_oil = load_oil_classified(client)
         
         if df_alerts.empty:
-            return dbc.Alert("No hay datos de alertas disponibles", color="warning")
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Get critical systems data
         df_critical = get_critical_systems_data(df_alerts, df_oil, days)
         
         if df_critical.empty:
-            return dbc.Alert(f"No hay datos de alertas en los últimos {days} días", color="info")
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_en", days=days), color="info")
         
         # Limit to top 50 most critical systems
         df_display = df_critical.head(50).copy()
@@ -428,12 +429,11 @@ def update_critical_systems_table(days, client):
         return html.Div([
             table,
             html.P(
-                f"Mostrando los {len(df_display)} sistemas más críticos de {len(df_critical)} total "
-                f"en los últimos {days} días",
+                t("menace_control_callbacks.mostrando_los_sistemas_mas_criticos_de", len_df_display=len(df_display), len_df_critical=len(df_critical), days=days),
                 className="text-muted small mt-2"
             )
         ])
         
     except Exception as e:
         logger.error(f"Error updating critical systems table: {e}")
-        return dbc.Alert(f"Error al cargar tabla: {str(e)}", color="danger")
+        return dbc.Alert(t("hot_sheet_callbacks.error_al_cargar_tabla", str_e=str(e)), color="danger")

@@ -4,6 +4,7 @@ Callbacks for Hot Sheet Tab.
 Handles the traffic light status view combining alerts and tribology data.
 """
 
+from src.i18n import t
 import pandas as pd
 import numpy as np
 from dash import callback, Input, Output, html
@@ -265,7 +266,7 @@ def update_hot_sheet_table(client):
         df_hot = get_hot_sheet_data(df_alerts, df_oil)
         
         if df_hot.empty:
-            return dbc.Alert("No hay datos de unidades disponibles", color="warning")
+            return dbc.Alert(t("hot_sheet_callbacks.no_hay_datos_de_unidades_disponibles"), color="warning")
         
         # Define color mappings
         status_colors = {
@@ -283,17 +284,17 @@ def update_hot_sheet_table(client):
         }
         
         status_text = {
-            'anormal': 'Anormal',
-            'alerta': 'Alerta',
-            'normal': 'Normal',
-            'sin_datos': 'Sin Datos'
+            'anormal': t("status.abnormal"),
+            'alerta': t("status.alert"),
+            'normal': t("status.normal"),
+            'sin_datos': t("status.no_data")
         }
         
         # Create table
         table_header = [html.Thead(html.Tr([
             html.Th("Unidad", style={'width': '33%'}),
-            html.Th("Telemetría", style={'width': '33%', 'textAlign': 'center'}),
-            html.Th("Tribología", style={'width': '33%', 'textAlign': 'center'})
+            html.Th(t("fleet_overview.technique_telemetry"), style={'width': '33%', 'textAlign': 'center'}),
+            html.Th(t("fleet_overview.technique_oil"), style={'width': '33%', 'textAlign': 'center'})
         ]))]
         
         rows = []
@@ -346,7 +347,7 @@ def update_hot_sheet_table(client):
         
     except Exception as e:
         logger.error(f"Error updating hot sheet table: {e}")
-        return dbc.Alert(f"Error al cargar tabla: {str(e)}", color="danger")
+        return dbc.Alert(t("hot_sheet_callbacks.error_al_cargar_tabla", str_e=str(e)), color="danger")
 
 
 # Summary statistics callback disabled - cards removed from layout

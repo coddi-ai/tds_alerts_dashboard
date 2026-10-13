@@ -2,6 +2,7 @@
 Admin-only callbacks (login events chart for "Registro de usuarios").
 """
 
+from src.i18n import t
 import dash
 from dash import Input, Output
 import plotly.graph_objects as go
@@ -34,7 +35,7 @@ def register_admin_callbacks(app: dash.Dash) -> None:
             events_df = list_login_events()
         except AuthEventsUnavailableError as e:
             logger.error(f"User registry chart: events repository unavailable: {e}")
-            return go.Figure(), "No se pudo cargar el registro de inicios de sesión.", True
+            return go.Figure(), t("admin_callbacks.no_se_pudo_cargar_el_registro"), True
 
         counts_df = get_login_counts_by_user_and_status(events_df)
         return create_login_events_chart(counts_df), "", False

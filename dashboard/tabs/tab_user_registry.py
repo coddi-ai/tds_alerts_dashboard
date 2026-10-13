@@ -1,5 +1,6 @@
 """Admin-only "Registro de usuarios" tab layout — a single login-events chart."""
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
@@ -15,13 +16,13 @@ def create_layout() -> html.Div:
         # dispatch from this page's own content mounting and can race it.
         dcc.Store(id="user-registry-page-load", data=True),
         html.H4(
-            [html.I(className="fas fa-user-clock me-2"), "Registro de usuarios"],
+            [html.I(className="fas fa-user-clock me-2"), t("tab_user_registry.registro_de_usuarios")],
             className="text-primary mb-3 mt-4",
         ),
         dbc.Card([
             dbc.CardHeader(
                 html.H5(
-                    [html.I(className="fas fa-chart-bar me-2"), "Inicios de sesión por usuario"],
+                    [html.I(className="fas fa-chart-bar me-2"), t("tab_user_registry.inicios_de_sesion_por_usuario")],
                     className="mb-0",
                 ),
                 className="bg-light",

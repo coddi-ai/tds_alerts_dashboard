@@ -1,5 +1,6 @@
 """Telemetry fleet overview layout."""
 
+from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
@@ -11,25 +12,25 @@ def create_telemetry_fleet_layout() -> html.Div:
             dbc.CardBody([
                 dbc.Row([
                     dbc.Col([
-                        html.Label("Modelo de equipo", className="small fw-bold"),
+                        html.Label(t("tab_telemetry_fleet.modelo_de_equipo"), className="small fw-bold"),
                         dcc.Dropdown(
                             id="telemetry-fleet-model-filter",
-                            placeholder="Todos los modelos",
+                            placeholder=t("tab_telemetry_fleet.todos_los_modelos"),
                             clearable=True,
                             options=[],
                         ),
                     ], md=6),
                     dbc.Col([
-                        html.Label("Estado", className="small fw-bold"),
+                        html.Label(t("tab_telemetry_fleet.estado"), className="small fw-bold"),
                         dcc.Dropdown(
                             id="telemetry-fleet-status-filter",
-                            placeholder="Todos los estados",
+                            placeholder=t("tab_telemetry_fleet.todos_los_estados"),
                             multi=True,
                             options=[
-                                {"label": "Normal", "value": "Normal"},
-                                {"label": "Alerta", "value": "Alerta"},
-                                {"label": "Anormal", "value": "Anormal"},
-                                {"label": "Sin evidencia suficiente", "value": "InsufficientData"},
+                                {"label": t("tab_machines.normal"), "value": "Normal"},
+                                {"label": t("tab_machines.alerta"), "value": "Alerta"},
+                                {"label": t("tab_machines.anormal"), "value": "Anormal"},
+                                {"label": t("tab_telemetry_fleet.sin_evidencia_suficiente"), "value": "InsufficientData"},
                             ],
                         ),
                     ], md=6),
@@ -42,18 +43,18 @@ def create_telemetry_fleet_layout() -> html.Div:
                     dbc.Col([
                         html.H5([
                             html.I(className="fas fa-table me-2"),
-                            "Estado por Sistema y Unidad",
+                            t("tab_telemetry_fleet.estado_por_sistema_y_unidad"),
                         ], className="mb-0"),
                         html.Small(
-                            "Las filas se ordenan por severidad. Pase sobre un sistema para consultar la acción recomendada.",
+                            t("tab_telemetry_fleet.las_filas_se_ordenan_por_severidad"),
                             className="text-muted",
                         ),
                     ], md=7),
                     dbc.Col([
-                        html.Label("Sistemas visibles", className="small fw-bold mb-1"),
+                        html.Label(t("tab_telemetry_fleet.sistemas_visibles"), className="small fw-bold mb-1"),
                         dcc.Dropdown(
                             id="telemetry-fleet-system-filter",
-                            placeholder="Todos los sistemas",
+                            placeholder=t("tab_telemetry_fleet.todos_los_sistemas"),
                             multi=True,
                             options=[],
                             value=[],
