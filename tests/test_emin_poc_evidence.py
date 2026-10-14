@@ -130,7 +130,8 @@ def test_full_poc_detail_shows_event_and_maintenance_without_blank_oil_warning(t
     assert "Multitécnica" in detail
     assert "Telemetría + Mantenimiento" in detail
     assert "Tribología" not in detail
-    assert "Evento registrado" in detail and "TEST-EVENT-REF" in detail
+    assert "Evento registrado" not in detail and "TEST-EVENT-REF" not in detail
+    assert "Referencia del evento" not in detail
     assert "19/05/2025 04:06" in detail
     assert "2025-05-18" in detail
     assert "mantenimiento preventivo semanal" in detail

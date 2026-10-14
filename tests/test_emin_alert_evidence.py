@@ -343,12 +343,10 @@ def test_detail_sections_follow_published_sources_with_or_without_maintenance(
 
 
 @pytest.mark.parametrize("missing_source", [True, False])
-def test_missing_sensor_series_message_keeps_the_recorded_alert_clear(monkeypatch, missing_source):
+def test_missing_sensor_series_does_not_repeat_event_information(monkeypatch, missing_source):
     from dashboard.callbacks import alerts_callbacks as callbacks
 
     source = pd.DataFrame() if missing_source else pd.DataFrame({"AlertID": ["UNRELATED"], "Unit": ["OTHER"]})
     monkeypatch.setattr(callbacks, "load_telemetry_alert_detail_for_alert", lambda *args: source)
-    rendered = str(callbacks.create_telemetry_evidence_section(pd.Series(_alert()), "emin"))
-    assert "Evento registrado" in rendered and "series de sensores" in rendered
-    assert "T-1" in rendered
-    assert "No hay datos de telemetría" not in rendered
+    rendered = _visible(callbacks.create_telemetry_evidence_section(pd.Series(_alert()), "emin"))
+    assert rendered == ""

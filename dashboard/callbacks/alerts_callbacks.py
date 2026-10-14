@@ -938,31 +938,6 @@ clientside_callback(
 )
 
 
-def _emin_event_reference_section(alert_row):
-    """Show published event metadata without fabricating a sensor series."""
-    timestamp = to_utc_naive(pd.Series([alert_row.get("Timestamp")])).iloc[0]
-    return dbc.Card([
-        dbc.CardHeader(t("alerts_callbacks.recorded_event")),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.Small(t("alerts_callbacks.event_reference"), className="text-muted d-block"),
-                    html.Strong(alert_reference(alert_row.get("TelemetryID")) or t("tab_alerts_detail.no_disponible")),
-                ], md=4),
-                dbc.Col([
-                    html.Small(t("tab_mantenciones_general.fecha"), className="text-muted d-block"),
-                    html.Strong(format_local(timestamp)),
-                ], md=4),
-                dbc.Col([
-                    html.Small(t("alerts_callbacks.senal_variable"), className="text-muted d-block"),
-                    html.Strong(str(alert_row.get("Trigger_Var", ""))),
-                ], md=4),
-            ], className="g-3"),
-            html.P(t("alerts_callbacks.event_without_sensor_series"), className="text-muted mt-3 mb-0"),
-        ]),
-    ], className="shadow-sm mb-4")
-
-
 def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     """
     Create telemetry evidence section with sensor trends, GPS, and KPIs.
@@ -1005,7 +980,8 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
 
         if telemetry_golden.empty:
             if client.lower() == "emin":
-                return html.Div([_emin_event_reference_section(alert_row)])
+                # The alert header already contains the event information.
+                return html.Div()
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_telemetria_disponibles"), color="warning")
             ])
@@ -1017,7 +993,7 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         
         if alert_data.empty:
             if client.lower() == "emin":
-                return html.Div([_emin_event_reference_section(alert_row)])
+                return html.Div()
             return html.Div([
                 dbc.Alert(
                     t("alerts_callbacks.no_se_encontraron_datos_de_telemetria", join_alert_ids=', '.join(alert_ids)),
