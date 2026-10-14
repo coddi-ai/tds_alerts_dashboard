@@ -143,6 +143,13 @@ def test_full_poc_detail_shows_event_and_maintenance_without_blank_oil_warning(t
     table = create_alerts_report_table(pd.DataFrame([row]))
     assert table.data[0]["Fuente"] == "Multitécnica"
     assert table.data[0]["Evidencia"] == "Telemetría + Mantenimiento"
+    summary = callbacks.render_selected_alert_summary({"row": 0}, table.data)
+    assert "mantenimiento preventivo semanal" in _visible(summary)
+    assert "Sistema de Motor - Sistema de Enfriamiento" in _visible(summary)
+    maintenance = callbacks._maintenance_context_summary(table.data[0])
+    activities = [child for child in maintenance.children if getattr(child, "open", None) is True]
+    assert len(activities) == 1
+    assert "mantenimiento preventivo semanal" in _visible(activities[0])
 
 
 def test_mixed_source_label_is_preserved_when_some_evidence_is_unavailable(tmp_path, monkeypatch):

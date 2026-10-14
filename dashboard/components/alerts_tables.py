@@ -17,7 +17,7 @@ from src.utils.logger import get_logger
 from src.utils.date_utils import format_local
 from src.data.emin_alert_evidence import evidence_label
 from dashboard.components.alerts_charts import FEATURE_NAMES_ES
-from dashboard.components.labels import translate_component_label, source_style, SOURCE_STYLE
+from dashboard.components.labels import translate_component_label, source_style, SOURCE_STYLE, light_tint
 
 logger = get_logger(__name__)
 
@@ -332,14 +332,11 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             })
         table = dash_table.DataTable(
             id="alerts-datatable",
-            # ID, Fuente and Evidencia stay in `data` (row selection, the
-            # decision-summary card, and the Mixto row-highlight style all
-            # read them) but are dropped from the visible `columns` - the
-            # same "kept in data, absent from columns" pattern already used
-            # for diagnostico_completo/causa_completa/accion_completa above.
+            # Show the published source explicitly; color alone is ambiguous.
+            # IDs and evidence metadata remain available to row selection.
             columns=[
                 {"name": _column_label(name), "id": name}
-                for name in ["Fecha", "Unidad", "Sistema", "Componente", "Señal / variable", "Diagnóstico", "Acción"]
+                for name in ["Fecha", "Unidad", "Fuente", "Sistema", "Componente", "Señal / variable", "Diagnóstico", "Acción"]
             ],
             data=rows,
             active_cell=None,
@@ -355,15 +352,22 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             ],
             tooltip_duration=None,
             style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "560px"},
-            style_cell={"textAlign": "left", "padding": "9px", "fontSize": "12px", "whiteSpace": "normal", "height": "auto", "minWidth": "90px"},
+            style_cell={"textAlign": "left", "padding": "9px", "fontSize": "12px", "fontFamily": "var(--bs-body-font-family, system-ui, sans-serif)", "whiteSpace": "normal", "height": "auto", "minWidth": "90px"},
             style_header={"backgroundColor": "#23384d", "color": "white", "fontWeight": "bold", "textAlign": "center", "whiteSpace": "normal"},
             style_cell_conditional=[
                 {"if": {"column_id": "Diagnóstico"}, "minWidth": "260px", "maxWidth": "420px"},
                 {"if": {"column_id": "Acción"}, "display": "none"},
                 {"if": {"column_id": "Señal / variable"}, "minWidth": "150px"},
+                {"if": {"column_id": "Fuente"}, "minWidth": "120px", "width": "120px", "maxWidth": "140px"},
             ],
             style_data_conditional=[
-                {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"'}, "borderLeft": f"4px solid {mixto_color}"},
+                {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"'}, "backgroundColor": light_tint(mixto_color)},
+                *[
+                    {"if": {"filter_query": f'{{Fuente}} = "{label}"', "column_id": "Fuente"},
+                     "color": color, "fontWeight": "bold"}
+                    for label, color in (source_style(raw) for raw in ("Telemetria", "Tribologia", "Mixto"))
+                ],
+                {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"', "column_id": "Fecha"}, "borderLeft": f"4px solid {mixto_color}"},
                 {"if": {"state": "active"}, "backgroundColor": "#dbeafe", "color": "#12344d", "border": "1px solid #4f8fc0"},
             ],
         )

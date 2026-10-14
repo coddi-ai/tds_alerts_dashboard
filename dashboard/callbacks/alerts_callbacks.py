@@ -399,7 +399,7 @@ def _maintenance_context_summary(row):
         html.Details([
             html.Summary(t("alerts_callbacks.reported_activities")),
             html.Div(tasks, className="mt-2", style={"whiteSpace": "pre-wrap"}),
-        ]) if tasks else None,
+        ], open=True) if tasks else None,
         html.Div(t("alerts_callbacks.detention_duration_unreported"), className="text-muted small"),
     ], className="alert-maintenance-context mt-3")
 
