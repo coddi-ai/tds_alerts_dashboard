@@ -237,7 +237,7 @@ def test_other_clients_keep_classification_and_detail_contract(tmp_path, monkeyp
     assert "Inspección del motor." in detail
 
 
-def test_loader_reads_exactly_four_iso_files_without_week_reference_fallback(monkeypatch):
+def test_loader_reads_iso_and_legacy_names_without_week_reference_fallback(monkeypatch):
     from src.data import loaders
 
     calls = []
@@ -246,7 +246,7 @@ def test_loader_reads_exactly_four_iso_files_without_week_reference_fallback(mon
         return _frames().get(week, pd.DataFrame())
     monkeypatch.setattr(loaders, "load_maintenance_week", read)
     result = load_emin_maintenance_evidence(_alert(Semana_Resumen_Mantencion="../invalid"))
-    assert calls == [("emin", week) for week in ("25-2026", "26-2026", "27-2026", "28-2026")]
+    assert calls == [("emin", week) for week in ("25-2026", "24-2026", "26-2026", "27-2026", "28-2026")]
     assert result["status"] == "matched"
 
 
@@ -323,7 +323,11 @@ def test_detail_sections_follow_published_sources_with_or_without_maintenance(
 
     week_path = _write_dashboard_data(tmp_path, monkeypatch)
     alerts_path = tmp_path / "alerts/golden/emin/consolidated_alerts.csv"
-    pd.DataFrame([_alert(Trigger_type=source_type)]).to_csv(alerts_path, index=False)
+    pd.DataFrame([_alert(
+        Trigger_type=source_type,
+        TelemetryID="" if source_type == "Tribologia" else "T-1",
+        TribologyID="O-1" if source_type in {"Mixto", "Tribologia"} else "",
+    )]).to_csv(alerts_path, index=False)
     if not context:
         week_path.unlink()
     called = []
@@ -345,5 +349,6 @@ def test_missing_sensor_series_message_keeps_the_recorded_alert_clear(monkeypatc
     source = pd.DataFrame() if missing_source else pd.DataFrame({"AlertID": ["UNRELATED"], "Unit": ["OTHER"]})
     monkeypatch.setattr(callbacks, "load_telemetry_alert_detail_for_alert", lambda *args: source)
     rendered = str(callbacks.create_telemetry_evidence_section(pd.Series(_alert()), "emin"))
-    assert "Esta alerta está registrada" in rendered and "series de sensores" in rendered
+    assert "Evento registrado" in rendered and "series de sensores" in rendered
+    assert "T-1" in rendered
     assert "No hay datos de telemetría" not in rendered

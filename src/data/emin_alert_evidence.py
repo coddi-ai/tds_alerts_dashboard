@@ -4,7 +4,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 from src.i18n import t
@@ -31,6 +31,30 @@ def _text(value) -> str:
         return ""
     text = str(value).strip()
     return "" if text.lower() in {"", "nan", "none", "null", "<na>"} else text
+
+
+def alert_reference(value) -> str:
+    """Normalize a published reference, never manufacture one from the type."""
+    reference = _text(value)
+    if reference.casefold() in {"-", "n/a", "na"}:
+        return ""
+    return re.sub(r"^(\d+)\.0$", r"\1", reference)
+
+
+def oil_report_reference(row) -> str:
+    return alert_reference(row.get("TribologyID")) or alert_reference(row.get("OilReportNumber"))
+
+
+def prepare_emin_alert_sources(alerts: pd.DataFrame) -> pd.DataFrame:
+    """Mixto is a published type, not proof of a telemetry/oil combination."""
+    frame = alerts.copy(deep=True)
+    frame["TribologyID"] = frame.apply(oil_report_reference, axis=1)
+    telemetry = frame.get("TelemetryID", pd.Series("", index=frame.index)).map(alert_reference)
+    source_type = frame.get("SourceType", pd.Series("", index=frame.index)).map(_text).str.casefold()
+    frame["has_telemetry"] = telemetry.ne("") | source_type.eq("telemetry") | frame["Trigger_type"].eq("Telemetria")
+    frame["has_tribology"] = frame["TribologyID"].ne("")
+    frame["source_references_checked"] = True
+    return frame
 
 
 def _fold(value) -> str:
@@ -95,23 +119,55 @@ def maintenance_weeks_for_alert(timestamp) -> tuple[str, ...]:
     )
 
 
+def maintenance_files_for_alert(timestamp) -> tuple[str, ...]:
+    """Read ISO and historical Monday-based %W names for the same date window."""
+    window = maintenance_window(timestamp)
+    if window is None:
+        return ()
+    start, _ = window
+    files = []
+    for offset in range(4):
+        monday = start + pd.Timedelta(weeks=offset)
+        iso = monday.isocalendar()
+        for name in (f"{iso.week:02d}-{iso.year}", monday.strftime("%W-%Y")):
+            if name not in files:
+                files.append(name)
+    return tuple(files)
+
+
+def _file_week_starts(value):
+    starts = []
+    iso = _week_start(value)
+    if iso is not None:
+        starts.append(iso)
+    if re.fullmatch(r"(?:0[1-9]|[1-4]\d|5[0-3])-\d{4}", _text(value)):
+        try:
+            legacy = pd.Timestamp(datetime.strptime(f"{value}-1", "%W-%Y-%w"))
+            if legacy.strftime("%W-%Y") == value and legacy not in starts:
+                starts.append(legacy)
+        except ValueError:
+            pass
+    return starts
+
+
 _WEEKDAYS = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
 
 
-def _task_date(value, week_start):
-    """Validate date against its ISO file week; preserve EMIN's written clock."""
+def _task_date(value, week_starts):
+    """Validate actual dates in either documented filename calendar."""
     text = _text(value)
     match = re.fullmatch(r"(?:(\w+)\s+)?(\d{2})/(\d{2})", text)
     if match:
         weekday, day, month = match.groups()
-        candidates = [
+        candidates = {
             week_start + pd.Timedelta(days=offset) for offset in range(7)
+            for week_start in week_starts
             if (week_start + pd.Timedelta(days=offset)).day == int(day)
             and (week_start + pd.Timedelta(days=offset)).month == int(month)
-        ]
+        }
         if len(candidates) != 1:
             return None
-        instant = candidates[0]
+        instant = next(iter(candidates))
         if weekday and _fold(weekday) != _WEEKDAYS[instant.weekday()]:
             return None
     elif re.fullmatch(
@@ -128,7 +184,10 @@ def _task_date(value, week_start):
             return None
     else:
         return None
-    return instant if week_start <= instant < week_start + pd.Timedelta(weeks=1) else None
+    return instant if any(
+        week_start <= instant < week_start + pd.Timedelta(weeks=1)
+        for week_start in week_starts
+    ) else None
 
 
 def _tasks(value) -> dict:
@@ -169,7 +228,7 @@ def resolve_emin_maintenance_evidence(alert_row, weekly_data: Mapping[str, pd.Da
         return result
     selected, summaries, matched_weeks = {}, [], []
     has_rows, undetermined = False, False
-    for week in maintenance_weeks_for_alert(alert_row.get("Timestamp")):
+    for week in maintenance_files_for_alert(alert_row.get("Timestamp")):
         frame = weekly_data.get(week, pd.DataFrame())
         if frame.empty or "UnitId" not in frame:
             continue
@@ -179,8 +238,9 @@ def resolve_emin_maintenance_evidence(alert_row, weekly_data: Mapping[str, pd.Da
             if not tasks:
                 undetermined = True
             row_matched = False
+            row_weeks = set()
             for day, systems in tasks.items():
-                instant = _task_date(day, _week_start(week))
+                instant = _task_date(day, _file_week_starts(week))
                 if instant is None or not isinstance(systems, dict):
                     undetermined = True
                     continue
@@ -202,21 +262,24 @@ def resolve_emin_maintenance_evidence(alert_row, weekly_data: Mapping[str, pd.Da
                     target = selected.setdefault(instant.isoformat(), {}).setdefault(source_system, [])
                     target.extend(task for task in valid if task not in target)
                     row_matched = True
+                    iso = instant.isocalendar()
+                    actual_week = f"{iso.week:02d}-{iso.year}"
+                    row_weeks.add(actual_week)
+                    if actual_week not in matched_weeks:
+                        matched_weeks.append(actual_week)
             if row_matched:
-                if week not in matched_weeks:
-                    matched_weeks.append(week)
                 summary = _text(row.get("Summary"))
                 if summary:
-                    entry = f"{week} · {summary}"
+                    entry = f"{', '.join(sorted(row_weeks, key=_week_start))} · {summary}"
                     if entry not in summaries:
                         summaries.append(entry)
     if selected:
         result["status"] = "matched"
         result["evidence"] = pd.Series({
-            "UnitId": unit, "Semana": ", ".join(matched_weeks),
+            "UnitId": unit, "Semana": ", ".join(sorted(matched_weeks, key=_week_start)),
             # Source Summary remains weekly unit context, not a per-system diagnosis.
             "Summary": "\n\n".join(summaries) or None,
-            "Tasks_List": json.dumps(selected, ensure_ascii=False),
+            "Tasks_List": json.dumps(dict(sorted(selected.items())), ensure_ascii=False),
         })
     else:
         result["status"] = "undetermined" if undetermined else ("no_match" if has_rows else "no_data")

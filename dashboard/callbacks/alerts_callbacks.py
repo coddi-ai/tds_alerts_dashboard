@@ -14,7 +14,9 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
 from src.data.emin_alert_evidence import (
+    alert_reference,
     evidence_flag,
+    oil_report_reference,
 )
 
 from src.data.loaders import (
@@ -798,6 +800,11 @@ def _alert_case_header(row: pd.Series) -> html.Div:
                 html.Strong(t("alerts_callbacks.evidencia_2"), className='text-muted'),
                 prepared.get('evidence_display', t("alerts_report.sin_evidencia")),
             ], className='mt-3 small'),
+            dbc.Alert(t("alerts_callbacks.published_mixed_incomplete"), color="info", className="mt-3 mb-0")
+            if evidence_flag(row.get("source_references_checked"))
+            and row.get("Trigger_type") == "Mixto"
+            and sum(evidence_flag(row.get(flag)) for flag in ("has_telemetry", "has_tribology", "has_maintenance")) < 2
+            else None,
             html.H5([
                 html.I(className='fas fa-brain me-2'),
                 t("alerts_callbacks.analisis_inteligente")
@@ -931,6 +938,31 @@ clientside_callback(
 )
 
 
+def _emin_event_reference_section(alert_row):
+    """Show published event metadata without fabricating a sensor series."""
+    timestamp = to_utc_naive(pd.Series([alert_row.get("Timestamp")])).iloc[0]
+    return dbc.Card([
+        dbc.CardHeader(t("alerts_callbacks.recorded_event")),
+        dbc.CardBody([
+            dbc.Row([
+                dbc.Col([
+                    html.Small(t("alerts_callbacks.event_reference"), className="text-muted d-block"),
+                    html.Strong(alert_reference(alert_row.get("TelemetryID")) or t("tab_alerts_detail.no_disponible")),
+                ], md=4),
+                dbc.Col([
+                    html.Small(t("tab_mantenciones_general.fecha"), className="text-muted d-block"),
+                    html.Strong(format_local(timestamp)),
+                ], md=4),
+                dbc.Col([
+                    html.Small(t("alerts_callbacks.senal_variable"), className="text-muted d-block"),
+                    html.Strong(str(alert_row.get("Trigger_Var", ""))),
+                ], md=4),
+            ], className="g-3"),
+            html.P(t("alerts_callbacks.event_without_sensor_series"), className="text-muted mt-3 mb-0"),
+        ]),
+    ], className="shadow-sm mb-4")
+
+
 def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     """
     Create telemetry evidence section with sensor trends, GPS, and KPIs.
@@ -972,6 +1004,8 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         )
 
         if telemetry_golden.empty:
+            if client.lower() == "emin":
+                return html.Div([_emin_event_reference_section(alert_row)])
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_telemetria_disponibles"), color="warning")
             ])
@@ -982,6 +1016,8 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         alert_data, _, _ = _select_telemetry_alert_data(telemetry_golden, alert_row)
         
         if alert_data.empty:
+            if client.lower() == "emin":
+                return html.Div([_emin_event_reference_section(alert_row)])
             return html.Div([
                 dbc.Alert(
                     t("alerts_callbacks.no_se_encontraron_datos_de_telemetria", join_alert_ids=', '.join(alert_ids)),
@@ -1239,11 +1275,16 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     try:
         from pathlib import Path
 
-        # Load oil data
+        tribology_id = oil_report_reference(alert_row) if client.lower() == "emin" else alert_row.get('TribologyID')
+        if not alert_reference(tribology_id):
+            return html.Div([
+                dbc.Alert(t("alerts_callbacks.no_oil_reference"), color="info")
+            ])
+
+        # Load oil data only when the alert actually references a sample.
         oil_classified = load_oil_classified(client)
         
         # Check if oil data is available
-        tribology_id = alert_row.get('TribologyID')
         if oil_classified.empty or tribology_id is None or (isinstance(tribology_id, float) and pd.isna(tribology_id)):
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_tribologia_disponibles"), color="warning")
@@ -1251,7 +1292,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         
         # Filter for this sample
         oil_report = oil_classified[
-            oil_classified['sampleNumber'] == tribology_id
+            oil_classified['sampleNumber'].map(alert_reference) == alert_reference(tribology_id)
         ]
         
         if oil_report.empty:
