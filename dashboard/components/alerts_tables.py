@@ -323,7 +323,9 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 "accion_completa": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
                 "Evidencia": evidence,
                 "has_maintenance": bool(row.get("has_maintenance", False)),
-                "maintenance_week": row.get("Semana_Resumen_Mantencion", ""),
+                "maintenance_week": row.get("maintenance_evidence_weeks", row.get("Semana_Resumen_Mantencion", "")),
+                "maintenance_window_start": row.get("maintenance_window_start", ""),
+                "maintenance_window_end": row.get("maintenance_window_end", ""),
                 "maintenance_summary": row.get("maintenance_evidence_summary", ""),
                 "maintenance_tasks": row.get("maintenance_evidence_tasks", ""),
                 "Acción": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
@@ -650,7 +652,7 @@ def create_maintenance_display(
                 
                 # Summary
                 html.Div([
-                    html.H6(t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
+                    html.H6(t("alerts_callbacks.weekly_unit_summary") if include_all_systems else t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
                     html.P(
                         maintenance_data.get('Summary', t("tab_alerts_detail.no_disponible")),
                         className="text-muted",
@@ -722,7 +724,7 @@ def create_maintenance_display(
                         
                         # Summary
                         html.Div([
-                            html.H6(t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
+                            html.H6(t("alerts_callbacks.weekly_unit_summary") if include_all_systems else t("alerts_tables.resumen_de_actividades"), className="text-primary mb-2"),
                             html.P(
                                 maintenance_data.get('Summary', t("tab_alerts_detail.no_disponible")),
                                 className="text-muted",

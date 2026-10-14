@@ -18,7 +18,11 @@ from typing import Dict, List, Optional
 from src.utils.logger import get_logger
 from src.utils.file_utils import list_excel_files, safe_read_excel, safe_read_parquet
 from src.utils.date_utils import to_utc_naive
-from src.data.emin_alert_evidence import enrich_emin_alert_evidence, maintenance_week
+from src.data.emin_alert_evidence import (
+    enrich_emin_alert_evidence,
+    maintenance_weeks_for_alert,
+    resolve_emin_maintenance_evidence,
+)
 from src.data.fast_io import (
     read_csv as fast_read_csv,
     read_csv_filtered as fast_read_csv_filtered,
@@ -549,15 +553,27 @@ def load_alerts_data(client: str) -> pd.DataFrame:
         (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size
     ).copy(deep=True)
     if (client or '').lower() == 'emin' and not df.empty:
-        weeks = df.get('Semana_Resumen_Mantencion', pd.Series(dtype=object)).map(maintenance_week)
+        weeks = {
+            week for timestamp in df['Timestamp'].unique()
+            for week in maintenance_weeks_for_alert(pd.Timestamp(timestamp))
+        }
         # Evidence is resolved outside the alerts cache so updated or deleted
-        # weekly files change the effective classification without a restart.
+        # weekly files change the displayed context without a restart.
         weekly_data = {
             week: load_maintenance_week('emin', week)
-            for week in weeks.unique() if week
+            for week in sorted(weeks)
         }
         df = enrich_emin_alert_evidence(df, weekly_data)
     return df
+
+
+def load_emin_maintenance_evidence(alert_row):
+    """Read the four complete ISO weeks preceding this EMIN alert."""
+    weekly_data = {
+        week: load_maintenance_week('emin', week)
+        for week in maintenance_weeks_for_alert(alert_row.get('Timestamp'))
+    }
+    return resolve_emin_maintenance_evidence(alert_row, weekly_data)
 
 
 def load_telemetry_values(client: str) -> pd.DataFrame:
