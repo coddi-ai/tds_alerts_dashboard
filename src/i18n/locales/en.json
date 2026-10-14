@@ -781,6 +781,7 @@
  "tab_alerts_detail.analisis_detallado_de_alerta": "Detailed Alert Analysis",
  "tab_alerts_detail.buscar_alerta": "Search alert:",
  "tab_alerts_detail.buscar_por_id_unidad_sistema": "Search by ID, unit, system...",
+ "tab_alerts_detail.con_multitecnica": "With Multi-technique",
  "tab_alerts_detail.con_tribologia": "With Tribology",
  "tab_alerts_detail.ensayos_en_alerta": "Essays in Alert:",
  "tab_alerts_detail.evidencia_de_telemetria": "Telemetry Evidence",

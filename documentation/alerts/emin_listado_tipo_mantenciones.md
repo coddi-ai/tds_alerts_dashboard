@@ -60,3 +60,32 @@ resolución de mantenciones. No se ejecutan AWS, S3, bases reales ni pipelines.
 Después de publicar el cambio, comprobar el listado y la selección de CT-178
 en la misma URL. Las capturas de auditoría y registros de ejecución permanecen
 locales, fuera del commit.
+
+## Mejora posterior: filtro de Multitécnica para EMIN
+
+En Vista Detallada, el control que decía «Con Tribología» cambia para EMIN a
+«Con Multitécnica», con opciones «Sí» y «No». Sí selecciona `Trigger_type ==
+"Mixto"`; No selecciona los demás tipos. La existencia de una muestra de aceite
+o una mantención no cambia este resultado. Al limpiar el control se recuperan
+todas las alertas que cumplan los otros filtros. CDA y Capstone conservan el
+filtro de presencia de tribología.
+
+La etiqueta y las opciones se actualizan al cambiar de cliente. Se conserva el
+identificador interno del control para no romper sus conexiones existentes.
+Se incorpora la traducción correspondiente al inglés.
+
+Validación de esta mejora:
+
+- Perfil offline antes de editar: `python -m pytest -q tests`: 1068 passed,
+  10 skipped, 73 warnings.
+- Pruebas dirigidas: `python -m pytest -q tests/test_w34_alerts_filters.py tests/test_w34_callback_registration.py tests/test_i18n.py`:
+  58 passed, 6 warnings.
+- Perfil offline final: `python -m pytest -q tests`: 1076 passed, 10 skipped,
+  73 warnings, 53,95 segundos. TEMP/TMP dentro de `.coddi-local/t`.
+- Interfaz local con datos de ejemplo: Sí devuelve solo la alerta Mixto;
+  No devuelve Telemetria y Tribologia; limpiar restaura las tres opciones.
+  Se comprobó visualmente el texto del filtro y sus dos opciones. Captura local:
+  `.coddi-local/filtro-multitecnica-local.jpg`.
+
+La mejora queda validada localmente y pendiente de publicación junto con el
+ajuste del listado anterior. No se ha modificado la POC en esta revisión.

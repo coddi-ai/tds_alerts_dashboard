@@ -591,6 +591,25 @@ def set_alert_from_navigation(dropdown_options, nav_data, active_tab):
 # ========================================
 
 @callback(
+    Output('detail-source-filter-label', 'children'),
+    Output('detail-filter-tribology', 'options'),
+    Input('client-selector', 'value'),
+)
+def configure_detail_source_filter(client):
+    """EMIN filters the published multi-technique type; other clients filter oil."""
+    is_emin = str(client or '').lower() == 'emin'
+    label = [
+        html.I(className='fas fa-fingerprint me-1' if is_emin else 'fas fa-oil-can me-1'),
+        t('tab_alerts_detail.con_multitecnica' if is_emin else 'tab_alerts_detail.con_tribologia'),
+    ]
+    options = [
+        {'label': t('common.yes' if is_emin else 'tab_alerts_detail.si'), 'value': 'yes'},
+        {'label': t('common.no' if is_emin else 'tab_alerts_detail.no'), 'value': 'no'},
+    ]
+    return label, options
+
+
+@callback(
     [
         Output('detail-filter-unit', 'options'),
         Output('detail-filter-sistema', 'options')
@@ -657,7 +676,8 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
             a plain calendar date string (e.g. "2026-08-01") from
             detail-filter-date-from, interpreted as a Chile calendar day.
             Inclusive; None/"" means no lower bound.
-        has_tribology: Filter for tribology presence
+        has_tribology: Yes/no for published Multitécnica in EMIN, tribology otherwise.
+            The legacy component ID and argument are retained for existing callers.
         client: Selected client
         current_value: Currently selected alert ID
 
@@ -671,7 +691,7 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
 
     # Check if any filters are actually set
     has_any_filter = any([units, sistemas, start_date, has_tribology])
-    if not has_any_filter:
+    if not has_any_filter and client.lower() != 'emin':
         logger.info("No filters set, skipping filter update")
         raise PreventUpdate
 
@@ -712,7 +732,10 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
             except (ValueError, TypeError):
                 logger.warning(f"Fecha desde inválida, ignorando filtro: {start_date!r}")
 
-        if has_tribology == 'yes':
+        if client.lower() == 'emin' and has_tribology in ('yes', 'no'):
+            is_multi = filtered_df['Trigger_type'].eq('Mixto').fillna(False)
+            filtered_df = filtered_df[is_multi if has_tribology == 'yes' else ~is_multi]
+        elif has_tribology == 'yes':
             filtered_df = filtered_df[filtered_df['has_tribology'] == True]
         elif has_tribology == 'no':
             filtered_df = filtered_df[filtered_df['has_tribology'] == False]
