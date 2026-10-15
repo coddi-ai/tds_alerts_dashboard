@@ -89,6 +89,10 @@ from dashboard.callbacks.sidebar_callbacks import register_sidebar_callbacks
 from dashboard.callbacks.troubleshooting_callbacks import register_troubleshooting_callbacks
 from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
 
+# Reportabilidad: S3 report browser + Flask route that streams each PDF
+from dashboard.callbacks.reporting_callbacks import register_reporting_callbacks
+from dashboard.report_files import register_report_files
+
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
 from config.client_services import validate_startup_config
@@ -237,6 +241,9 @@ register_sidebar_callbacks(app)
 register_troubleshooting_callbacks(app)
 # Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.
 register_troubleshooting_handoff(app)
+register_reporting_callbacks(app)
+# Flask route {PATH_PREFIX}reports/file: re-checks access and streams the PDF from S3.
+register_report_files(app)
 
 
 @app.server.after_request

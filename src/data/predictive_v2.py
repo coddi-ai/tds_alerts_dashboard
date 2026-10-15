@@ -285,6 +285,24 @@ def load_unit_failure_analisis(client: str, component: str) -> pd.DataFrame:
     return read_latest_partition(unit_failure_analisis_base_path(client, component))
 
 
+def load_unit_state_history(client: str, component: str) -> pd.DataFrame:
+    """`Unit`, `Fecha`, `estado`, `year`, `week` from every `unit_failure_analisis`
+    partition - the predictive state of each unit run by run, not only the latest.
+    Reportabilidad uses it to show the state a unit had when its report was made.
+    Empty DataFrame if the table doesn't exist for this client/component."""
+    frames = []
+    for year, week, path in _list_week_partitions(unit_failure_analisis_base_path(client, component)):
+        df = _read_partition(path)
+        if df.empty or not {"Unit", "Fecha", "estado"}.issubset(df.columns):
+            continue
+        part = df[["Unit", "Fecha", "estado"]].copy()
+        part["year"], part["week"] = year, week
+        frames.append(part)
+    if not frames:
+        return pd.DataFrame(columns=["Unit", "Fecha", "estado", "year", "week"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def load_signal_daily_status(client: str, component: str) -> pd.DataFrame:
     return read_last_n_weeks(signal_daily_status_base_path(client, component))
 
