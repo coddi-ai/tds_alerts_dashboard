@@ -1,8 +1,17 @@
 {
   "_comment": "Integracion Multi-Technical Alerts Dashboard <-> agente de troubleshooting. Archivo IDENTICO en tds_alerts_dashboard/config/ y tds_faillure_code_agent/config/. Una variable de entorno del mismo nombre en mayusculas tiene precedencia. Ver PLAN_INTEGRACION_DASHBOARD.md.",
+  "_ayuda": {
+    "troubleshooting_sso_secret": "Secreto de firma del token. Mismo valor en los dos repos; nunca el secret_key de Flask. Minimo 32 caracteres.",
+    "sso_max_age_seconds": "Vida del token (s): tiempo entre el clic en el dashboard y la llegada al agente. Default 120, tope 3600.",
+    "sso_clock_skew_seconds": "Tolerancia de reloj (s) entre los servidores, en los dos sentidos. Default 30, tope 3600, 0 = sin tolerancia. Para probar en produccion con relojes desfasados se sube aqui; la edad medida sale en el log del agente ('[auth] Login SSO ... edad=') y en el aviso de rechazo.",
+    "troubleshooting_agent_url": "Destino del boton del dashboard. Vacio oculta la pestaña.",
+    "dashboard_url": "Enlace 'Volver al Dashboard' del agente. Vacio oculta el boton.",
+    "variables_de_entorno": "Cada clave se puede sobrescribir con una variable de entorno de su nombre en mayusculas (p. ej. SSO_CLOCK_SKEW_SECONDS), que tiene precedencia."
+  },
   "contract_version": 1,
   "troubleshooting_sso_secret": "m72i81bVEQW3kLFt-rzQ3gZxwr6ccs8NoK9X6pzPDcbgWQk22MotWOnv-PA7KRE1",
   "sso_max_age_seconds": 120,
+  "sso_clock_skew_seconds": 30,
   "troubleshooting_agent_url": "https://poc.tds.coddi.ai/agent-lab/",
   "dashboard_url": "https://poc.tds.coddi.ai/alerts-dashboard/agents/troubleshooting"
 }
