@@ -69,7 +69,7 @@ SERVICE_LABELS = {
     "integration-validacion-avisos": "Validación de Avisos",
     "integration-seguimiento-avisos": "Seguimiento de Avisos",
     "reporting-main": "Reportabilidad",
-    "reporting-rca": "Reporte RCA",
+    "reporting-rca": "Informe preliminar de falla",
 }
 
 # service id / admin nav id -> URL path.

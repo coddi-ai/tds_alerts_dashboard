@@ -1,0 +1,111 @@
+/* Barlow (SIL Open Font License, ver fonts/OFL.txt), local para no depender de la red al generar el PDF. */
+@font-face { font-family:"Barlow"; font-weight:400; src:url("fonts/Barlow-Regular.ttf"); }
+@font-face { font-family:"Barlow"; font-weight:500; src:url("fonts/Barlow-Medium.ttf"); }
+@font-face { font-family:"Barlow"; font-weight:600; src:url("fonts/Barlow-SemiBold.ttf"); }
+@font-face { font-family:"Barlow"; font-weight:700; src:url("fonts/Barlow-Bold.ttf"); }
+@font-face { font-family:"Barlow Condensed"; font-weight:600; src:url("fonts/BarlowCondensed-SemiBold.ttf"); }
+@font-face { font-family:"Barlow Condensed"; font-weight:700; src:url("fonts/BarlowCondensed-Bold.ttf"); }
+.rca { --fondo:#F3F5F7; --hoja:#FFFFFF; --tinta:#1C2228; --tinta-2:#59636E; --linea:#DCE0E6; --linea-2:#ECEEF1;
+  --azul:#1F5FAD; --azul-claro:#E7EEF8; --rojo:#B3362C; --ambar-txt:#7A4E00; --ambar:#F6EACB;
+  --gris-txt:#3F4A55; --gris:#E6E9ED; --oscuro:#1F2A36;
+  font-family:"Barlow","Segoe UI",system-ui,sans-serif; font-size:16px; line-height:1.5; color:var(--tinta);
+  background:var(--fondo); padding:28px 20px 56px; }
+.rca .contenedor { max-width:1120px; margin:0 auto; display:flex; flex-direction:column; gap:20px; }
+.rca h1, .rca h2 { font-family:"Barlow Condensed","Arial Narrow",sans-serif; margin:0; line-height:1.1; }
+.rca h1 { font-size:34px; } .rca h2 { font-size:26px; margin-bottom:14px; }
+.rca h3 { font-size:17px; margin:0 0 6px; } .rca p { margin:0; }
+.rca .tenue { color:var(--tinta-2); } .rca .nota { font-size:14px; color:var(--tinta-2); margin-top:6px; }
+.rca .etq { font-size:13px; color:var(--tinta-2); } .rca .etq.fuerte { font-weight:600; } .rca .val { font-weight:600; }
+.rca .tarjeta { background:var(--hoja); border:1px solid var(--linea); border-radius:8px; padding:24px 28px; }
+.rca .tarjeta.chica { padding:16px 20px; }
+.rca .barra-sup { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; }
+.rca .marca { font-family:"Barlow Condensed","Arial Narrow",sans-serif; font-weight:700; font-size:24px; }
+  border:1px solid var(--azul); border-radius:6px; cursor:pointer; }
+.rca .cabecera { display:flex; flex-wrap:wrap; align-items:flex-end; gap:24px 36px; }
+.rca .cab-unidad { display:flex; flex-direction:column; gap:6px; } .rca .cab-unidad .tenue { font-size:14px; }
+.rca .unidad { font-family:"Barlow Condensed","Arial Narrow",sans-serif; font-weight:700; font-size:84px; line-height:.85; }
+.rca .cab-datos { display:flex; flex-direction:column; gap:10px; flex:1 1 360px; }
+.rca .grid-datos { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px 24px; }
+.rca .grid-datos.amplia { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px 28px; }
+.rca .resumen { background:var(--oscuro); color:#fff; border-radius:8px; padding:26px 28px; }
+.rca .resumen-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:18px 28px; }
+.rca .resumen-grid > div { display:flex; flex-direction:column; gap:4px; }
+.rca .r-etq { font-size:13px; color:#C2CAD3; } .rca .r-val { font-size:19px; font-weight:600; line-height:1.35; }
+.rca .confianza { display:flex; flex-wrap:wrap; align-items:center; gap:12px; border-top:1px solid #3A4757;
+  padding-top:14px; margin-top:18px; }
+.rca .barras { display:inline-flex; gap:4px; }
+.rca .barra { width:34px; height:8px; border-radius:2px; background:#3A4757; } .rca .barra-on { background:#8DB4E8; }
+.rca .dos { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
+.rca .destacado { font-size:18px; max-width:800px; margin-bottom:16px; }
+.rca .grid-cajas { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+.rca .grid-cajas.dos-col { grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
+.rca .caja { background:var(--fondo); border-radius:6px; padding:12px 14px; }
+.rca .linea { list-style:none; margin:14px 0 0; padding:0; }
+.rca .linea li { display:grid; grid-template-columns:80px 18px minmax(0,1fr); gap:0 14px; padding-bottom:16px; }
+.rca .linea li:last-child { padding-bottom:0; }
+.rca .lt-fecha { font-weight:700; text-align:right; }
+.rca .lt-marca { display:flex; flex-direction:column; align-items:center; }
+.rca .lt-marca span { width:12px; height:12px; border-radius:999px; margin-top:6px; background:var(--azul); }
+.rca .linea li:not(:last-child) .lt-marca::after { content:""; flex:1; width:2px; background:var(--linea); margin-top:2px; }
+.rca .lt-tipo { font-size:13px; font-weight:600; color:var(--azul); }
+.rca .ev-detencion .lt-marca span { width:14px; height:14px; background:var(--rojo); }
+.rca .ev-detencion .lt-tipo { color:var(--rojo); }
+.rca .ev-previa .lt-marca span { border-radius:3px; background:var(--tinta-2); }
+.rca .ev-previa .lt-tipo, .rca .ev-brecha .lt-tipo { color:var(--gris-txt); }
+.rca .ev-brecha .lt-marca span { background:transparent; border:2px solid var(--tinta-2); box-sizing:border-box; }
+.rca .grid-evidencia { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+.rca .tarjeta-int { border:1px solid var(--linea); border-radius:6px; padding:16px 18px; }
+.rca .columna { display:flex; flex-direction:column; gap:16px; }
+.rca svg { width:100%; height:auto; display:block; }
+.rca .g-eje { font-size:11px; fill:var(--tinta-2); font-family:inherit; }
+.rca .g-valor { font-size:11px; font-weight:600; fill:var(--azul); font-family:inherit; }
+.rca .g-grilla { stroke:var(--linea); } .rca .g-ref { stroke:var(--tinta-2); stroke-dasharray:4 4; }
+.rca .g-zona { fill:#EEF1F5; } .rca .g-serie { fill:none; stroke:#9AA3AD; stroke-width:2; }
+.rca .g-anomalo { fill:var(--azul); } .rca .g-detencion { stroke:var(--rojo); stroke-width:2; }
+.rca table { width:100%; border-collapse:collapse; font-size:15px; }
+.rca th { text-align:left; font-weight:500; font-size:13px; color:var(--tinta-2); padding:8px 10px 8px 0;
+  border-bottom:1px solid var(--linea); }
+.rca td { padding:10px 10px 10px 0; border-bottom:1px solid var(--linea-2); vertical-align:top; }
+.rca tbody tr:last-child td { border-bottom:0; }
+.rca .tabla-scroll { overflow-x:auto; } .rca table.hipotesis { min-width:760px; } .rca .h-nombre { font-weight:600; }
+.rca .pill { display:inline-block; font-size:13px; font-weight:600; border-radius:4px; padding:2px 9px; white-space:nowrap; }
+.rca .pill-fuerte { color:#fff; background:var(--azul); } .rca .pill-media { color:var(--ambar-txt); background:var(--ambar); }
+.rca .pill-neutra { color:var(--gris-txt); background:var(--gris); }
+.rca .pill-borde { color:var(--gris-txt); background:#fff; border:1px solid #9AA3AD; padding:1px 8px; }
+.rca .grid-analisis { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:24px; }
+.rca .cadena { list-style:none; margin:10px 0 0; padding:0; display:flex; flex-direction:column; gap:8px; }
+.rca .cadena li { display:grid; grid-template-columns:30px minmax(0,1fr); gap:10px; }
+.rca .paso-n { font-family:"Barlow Condensed","Arial Narrow",sans-serif; font-weight:700; font-size:20px; color:var(--azul); }
+.rca .paso-q { font-size:14px; color:var(--tinta-2); }
+.rca .a-confirmar { font-size:12px; font-weight:600; color:var(--ambar-txt); background:var(--ambar); border-radius:4px;
+  padding:1px 7px; margin-left:4px; white-space:nowrap; }
+.rca .lista { margin:6px 0 0; padding-left:22px; display:flex; flex-direction:column; gap:6px; }
+.rca .nota-paso { color:var(--tinta-2); }
+.rca .pie { font-size:14px; color:var(--tinta-2); padding:0 4px; }
+.rca .tarjeta, .rca .resumen { break-inside:avoid; }
+
+/* --- Agregado en el dashboard: contexto del cliente, registro fotografico y pagina del PDF --- */
+.rca .contexto { display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+.rca .contexto .texto { white-space:pre-wrap; }
+.rca .grid-fotos { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.rca .foto { border:1px solid var(--linea); border-radius:6px; padding:10px; break-inside:avoid; }
+.rca .foto img { display:block; width:100%; max-height:300px; object-fit:contain; background:var(--fondo); border-radius:4px; }
+.rca .foto figcaption { font-size:14px; margin-top:6px; }
+.rca .foto .archivo { font-size:12px; color:var(--tinta-2); }
+/* --- PDF (WeasyPrint): no soporta auto-fit/auto-fill en repeat(), asi que las grillas van con columnas
+       fijas. La pagina es A4 en px CSS a 1060 px de ancho; src/rca/pdf.py la reduce con zoom a A4 real. --- */
+@page { size:1060px 1499px; margin:44px 40px 56px;
+  @bottom-right { content:"Página " counter(page) " de " counter(pages); font-family:"Barlow",sans-serif;
+                  font-size:12px; color:#59636E; } }
+.rca { background:#fff; padding:0; }
+.rca .grid-datos { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.rca .grid-datos.amplia { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.rca .resumen-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.rca .dos { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.rca .grid-cajas { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.rca .grid-cajas.dos-col { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.rca .grid-evidencia { grid-template-columns:3fr 2fr; }
+.rca .grid-analisis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.rca table.hipotesis { min-width:0; }
+.rca .cabecera { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:end; }
+.rca .pie { break-before:avoid; }

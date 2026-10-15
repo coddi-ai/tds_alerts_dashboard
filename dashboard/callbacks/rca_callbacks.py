@@ -1,15 +1,16 @@
 """
-Callbacks de Reportes > Reporte RCA (dashboard/pages/reporting_rca.py).
+Callbacks de Reportes > Informe preliminar de falla (dashboard/pages/reporting_rca.py).
 
 Flujo: al cambiar de cliente se cargan sus unidades (las mismas del Resumen General);
 las imagenes subidas quedan en `rca-images-store` con su descripcion; "Generar" valida
-la unidad, arma la solicitud (src/data/rca_report.py) y se la pasa al generador. Como
-el generador aun esta en desarrollo, el resultado muestra la solicitud que recibiria.
+unidad y fecha, arma la solicitud (src/data/rca_report.py) y la encola en src/rca/service.py.
+La IA tarda, asi que `rca-job-poll` consulta el trabajo hasta que termina; entonces se
+muestra el PDF (servido por dashboard/rca_files.py) y se refresca el historial.
 """
 
 from __future__ import annotations
 
-import json
+from datetime import date
 from typing import List, Optional
 
 import dash
@@ -20,18 +21,13 @@ from dash.exceptions import PreventUpdate
 from config.client_services import is_service_dummy, is_service_enabled, normalize_client_id
 from dashboard.components.fleet_overview import get_ordered_units
 from src.data.erp_schemas import SYSTEM_LABELS
-from src.data.rca_report import (
-    RCA_MAX_IMAGE_BYTES,
-    RCA_MAX_IMAGES,
-    STATUS_PENDING_BACKEND,
-    build_rca_request,
-    decode_image,
-    request_summary,
-    submit_rca_request,
-)
+from dashboard.rca_files import rca_file_href
+from src.data.rca_report import RCA_MAX_IMAGE_BYTES, RCA_MAX_IMAGES, build_rca_request, decode_image
 from src.data.report_health import unit_key
 from src.data.report_store import unit_sort_key
-from src.i18n import t
+from src.i18n import t, t_or
+from src.rca import service
+from src.rca.catalog import COMPONENTE
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -132,50 +128,127 @@ def build_gallery(images: List[dict]):
     ], className="g-3")
 
 
-def build_result(request: dict, response: dict):
-    """Resumen de la solicitud y estado del generador."""
-    summary = request_summary(request)
-    rows = [
-        (t("reporting.filter_unit"), request["unit"]),
-        (t("alerts_general.filter_system"), system_label(request["system"])),
-        (t("rca.event_date"), request["event_date"] or "—"),
-        (t("rca.field_title"), request["title"] or "—"),
-        (t("rca.images_title"), str(len(request["images"]))),
-    ]
-    if response.get("status") == STATUS_PENDING_BACKEND:
-        status = dbc.Alert([
-            html.I(className="fas fa-person-digging me-2"), t("rca.pending_backend"),
-        ], color="info", className="mb-3")
-    elif response.get("status") == "ready" and response.get("href"):
-        status = dbc.Alert([
-            html.I(className="fas fa-circle-check me-2"), t("rca.ready"),
-            html.A([html.I(className="fas fa-file-pdf me-1"), t("reporting.preview")],
-                   href=response["href"], target="_blank", rel="noopener noreferrer",
-                   className="btn btn-primary btn-sm ms-3"),
-        ], color="success", className="mb-3 d-flex align-items-center")
-    else:
-        status = dbc.Alert([
-            html.I(className="fas fa-triangle-exclamation me-2"),
-            response.get("message") or t("rca.generation_error"),
-        ], color="danger", className="mb-3")
+VERDICT_COLORS = {"SEÑAL CLARA": "danger", "SEÑAL DÉBIL": "warning", "SIN SEÑAL ANÓMALA": "success",
+                  "DATOS INSUFICIENTES": "secondary"}
 
+
+def _result_card(body, color: str = "primary") -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-clipboard-check me-2"), t("rca.result_title")], className="mb-0"),
-            className="bg-primary text-white",
+            className=f"bg-{color} text-white",
         ),
-        dbc.CardBody([
-            status,
-            dbc.Row([
-                dbc.Col([html.Small(label, className="text-muted d-block"), html.Strong(value)], xs=6, lg=True)
-                for label, value in rows
-            ], className="g-3 mb-3"),
-            html.Details([
-                html.Summary(t("rca.request_json"), className="small text-primary", style={"cursor": "pointer"}),
-                html.Pre(json.dumps(summary, ensure_ascii=False, indent=2), className="rca-json mt-2 mb-0"),
-            ]),
-        ]),
+        dbc.CardBody(body),
     ], className="shadow-sm mb-4")
+
+
+def build_running(unit: str, event_date: str):
+    return _result_card(html.Div([
+        dbc.Spinner(size="sm", color="primary", spinner_class_name="me-3"),
+        html.Div([
+            html.Div(t("rca.running", unit=unit, date=event_date), className="fw-bold"),
+            html.Small(t("rca.running_hint"), className="text-muted"),
+        ]),
+    ], className="d-flex align-items-center"))
+
+
+def _fecha(iso: Optional[str]) -> str:
+    return date.fromisoformat(iso[:10]).strftime("%d/%m/%Y") if iso else "—"
+
+
+def availability_messages(result: dict) -> list:
+    """Frases del validador: si alcanza o no, con las cifras de la ventana y el rango de datos de la unidad."""
+    if result.get("motivo") not in (None, service.ERROR_INSUFFICIENT):
+        return [t_or(f"rca.error.{result.get('motivo')}", t("rca.generation_error"))]
+    estado = "ok" if result["ok"] else "insufficient"
+    if result["base"] == "diario":
+        frase = t(f"rca.data_{estado}_days", unit=result["unidad"], days=result["dias_con_dato"],
+                  window=result["dias_ventana"], weeks=result["dias_ventana"] // 7, min=result["min_dias"])
+    else:
+        frase = t(f"rca.data_{estado}_weeks", unit=result["unidad"], weeks=result["semanas_validas"],
+                  window=result["semanas_ventana"], min=result["min_semanas"])
+    mensajes = [frase]
+    if result.get("datos_desde"):
+        mensajes.append(t("rca.data_range", start=_fecha(result["datos_desde"]), end=_fecha(result["datos_hasta"])))
+    return mensajes
+
+
+def build_availability(result: dict) -> dbc.Alert:
+    mensajes = availability_messages(result)
+    return dbc.Alert([
+        html.Div([html.I(className=f"fas {'fa-circle-check' if result['ok'] else 'fa-ban'} me-2"), mensajes[0]],
+                 className="fw-bold" if not result["ok"] else None),
+        *[html.Div(m, className="small mt-1") for m in mensajes[1:]],
+    ], color="success" if result["ok"] else "danger", className="mb-0 py-2")
+
+
+def build_error(reason: Optional[str], details: Optional[dict] = None):
+    if reason == service.ERROR_INSUFFICIENT and details:
+        cuerpo = [html.Div(m, className="mb-1") for m in availability_messages(details)]
+    else:
+        cuerpo = [t_or(f"rca.error.{reason}", t("rca.generation_error"))]
+    return _result_card(dbc.Alert([
+        html.I(className="fas fa-triangle-exclamation me-2"), *cuerpo,
+    ], color="danger", className="mb-0"), color="danger")
+
+
+def build_ready(client: str, job: dict):
+    """Veredicto, avisos de los controles y el PDF embebido."""
+    href = rca_file_href(client, job["report_id"])
+    problems = job.get("problems") or []
+    return _result_card([
+        html.Div([
+            html.Div([
+                html.Span(job["unit"], className="fw-bold fs-5 me-2"),
+                html.Span(f"· {job['event_date']}", className="text-muted me-3"),
+                dbc.Badge(job.get("verdict") or "—", color=VERDICT_COLORS.get(job.get("verdict"), "secondary"),
+                          className="me-2"),
+                dbc.Badge(t("rca.confidence", value=job.get("confidence") or "—"), color="light",
+                          text_color="dark", className="border"),
+            ], className="d-flex flex-wrap align-items-center gap-1"),
+            html.Div([
+                html.A([html.I(className="fas fa-up-right-from-square me-1"), t("reporting.open_new_tab")],
+                       href=href, target="_blank", rel="noopener noreferrer",
+                       className="btn btn-outline-secondary btn-sm"),
+                html.A([html.I(className="fas fa-download me-1"), t("reporting.download")],
+                       href=rca_file_href(client, job["report_id"], download=True), className="btn btn-primary btn-sm"),
+            ], className="ms-auto d-flex gap-2"),
+        ], className="d-flex flex-wrap align-items-center gap-3 mb-3"),
+        dbc.Alert([
+            html.Div([html.I(className="fas fa-triangle-exclamation me-2"), t("rca.review_before_sending")],
+                     className="fw-bold mb-1"),
+            html.Ul([html.Li(p) for p in problems], className="mb-0 small"),
+        ], color="warning", className="mb-3") if problems else None,
+        html.Iframe(src=href + "#view=FitH", className="rca-preview"),
+    ])
+
+
+def build_history(client: str, reports: List[dict]):
+    if not reports:
+        return html.P(t("rca.history_empty"), className="text-muted mb-0")
+    header = html.Thead(html.Tr([html.Th(label) for label in (
+        t("rca.col_created"), t("reporting.filter_unit"), t("rca.event_date"), t("rca.field_title"),
+        t("rca.col_verdict"), "")]))
+    rows = [html.Tr([
+        html.Td((r.get("created_at") or "")[:16].replace("T", " ")),
+        html.Td(html.Strong(r.get("unit"))),
+        html.Td(r.get("event_date")),
+        html.Td(r.get("title") or "—", className="text-truncate", style={"maxWidth": "260px"}),
+        html.Td(dbc.Badge(r.get("verdict") or "—", color=VERDICT_COLORS.get(r.get("verdict"), "secondary"))),
+        html.Td(html.Div([
+            html.A(html.I(className="fas fa-eye"), href=rca_file_href(client, r["report_id"]), target="_blank",
+                   rel="noopener noreferrer", className="btn btn-sm btn-outline-primary py-0 px-2",
+                   title=t("reporting.preview")),
+            html.A(html.I(className="fas fa-download"), href=rca_file_href(client, r["report_id"], download=True),
+                   className="btn btn-sm btn-outline-secondary py-0 px-2", title=t("reporting.download")),
+        ], className="d-flex gap-1 justify-content-end")),
+    ]) for r in reports]
+    return dbc.Table([header, html.Tbody(rows)], hover=True, responsive=True, size="sm", className="mb-0")
+
+
+def _active_client(selected_client, user_data) -> str:
+    user_clients = (user_data or {}).get("clients", [])
+    return normalize_client_id(selected_client or (user_clients[0] if user_clients else ""))
 
 
 def register_rca_callbacks(app: dash.Dash) -> None:
@@ -201,9 +274,33 @@ def register_rca_callbacks(app: dash.Dash) -> None:
         Output("rca-generate", "disabled"),
         Output("rca-unit-feedback", "children"),
         Input("rca-unit", "value"),
+        Input("rca-event-date", "date"),
+        Input("rca-job-poll", "disabled"),
+        Input("rca-data-ok", "data"),
     )
-    def toggle_rca_generate(unit):
-        return not unit, None
+    def toggle_rca_generate(unit, event_date, poll_disabled, data_ok):
+        # Un informe a la vez por vista: el boton vuelve cuando termina el que esta en curso.
+        # Sin datos suficientes (validador) no se puede generar.
+        return not (unit and event_date and poll_disabled and data_ok), None
+
+    @app.callback(
+        Output("rca-availability", "children"),
+        Output("rca-data-ok", "data"),
+        Input("rca-unit", "value"),
+        Input("rca-event-date", "date"),
+        State("client-selector", "value"),
+        State("user-info-store", "data"),
+    )
+    def check_rca_data(unit, event_date, selected_client, user_data):
+        if not unit or not event_date or not user_data:
+            return None, False
+        client = _active_client(selected_client, user_data)
+        if client not in {normalize_client_id(c) for c in user_data.get("clients", [])}:
+            return None, False
+        if date.fromisoformat(event_date[:10]) > date.today():
+            return dbc.Alert(t("rca.future_date"), color="danger", className="mb-0 py-2"), False
+        result = service.validar_disponibilidad(client, unit, event_date[:10])
+        return build_availability(result), result["ok"]
 
     @app.callback(
         Output("rca-images-store", "data"),
@@ -244,6 +341,8 @@ def register_rca_callbacks(app: dash.Dash) -> None:
     @app.callback(
         Output("rca-result", "children"),
         Output("rca-unit-feedback", "children", allow_duplicate=True),
+        Output("rca-job-id", "data"),
+        Output("rca-job-poll", "disabled"),
         Input("rca-generate", "n_clicks"),
         State("client-selector", "value"),
         State("user-info-store", "data"),
@@ -263,27 +362,60 @@ def register_rca_callbacks(app: dash.Dash) -> None:
                             title, description, findings, actions, images, caption_ids, captions):
         if not n_clicks or not user_data:
             raise PreventUpdate
-        if not unit:
-            return no_update, t("rca.unit_required")
-        user_clients = user_data.get("clients", [])
-        client = normalize_client_id(selected_client or (user_clients[0] if user_clients else ""))
+        if not unit or not event_date:
+            return no_update, t("rca.unit_required"), no_update, no_update
+        if date.fromisoformat(event_date[:10]) > date.today():
+            return no_update, t("rca.future_date"), no_update, no_update
+        client = _active_client(selected_client, user_data)
         # Se repite la autorizacion: la unidad viene del navegador.
-        units, notice = load_units(client, user_clients)
+        units, notice = load_units(client, user_data.get("clients", []))
         if notice is not None or unit not in units:
-            return notice or _notice(t("reporting.no_access")), None
+            return notice or _notice(t("reporting.no_access")), None, None, True
 
+        system = system or COMPONENTE
         request = build_rca_request(
-            client, unit, system, event_date,
+            client, unit, system, event_date[:10],
             {"title": title, "description": description, "findings": findings, "actions": actions},
             with_captions(images, caption_ids, captions),
             user_data.get("username"),
         )
-        try:
-            response = submit_rca_request(request)
-        except Exception as exc:
-            logger.error(f"Reporte RCA {client}/{unit}: fallo el generador ({type(exc).__name__}: {exc})")
-            response = {"status": "error"}
-        return build_result(request, response), None
+        job_id = service.iniciar(request, sistema_label=system_label(system))
+        return build_running(unit, event_date[:10]), None, job_id, False
+
+    @app.callback(
+        Output("rca-result", "children", allow_duplicate=True),
+        Output("rca-job-poll", "disabled", allow_duplicate=True),
+        Output("rca-history-version", "data"),
+        Input("rca-job-poll", "n_intervals"),
+        State("rca-job-id", "data"),
+        State("rca-history-version", "data"),
+        State("user-info-store", "data"),
+        prevent_initial_call=True,
+    )
+    def poll_rca_job(_n, job_id, history_version, user_data):
+        job = service.estado(job_id)
+        user_clients = {normalize_client_id(c) for c in (user_data or {}).get("clients", [])}
+        if job is None or job["client"] not in user_clients:
+            return build_error(service.ERROR_UNEXPECTED), True, no_update
+        if job["status"] == service.STATUS_RUNNING:
+            raise PreventUpdate
+        if job["status"] == service.STATUS_ERROR:
+            return build_error(job.get("reason"), job.get("details")), True, no_update
+        return build_ready(job["client"], job), True, (history_version or 0) + 1
+
+    @app.callback(
+        Output("rca-history", "children"),
+        Input("client-selector", "value"),
+        Input("rca-history-version", "data"),
+        State("user-info-store", "data"),
+    )
+    def render_rca_history(selected_client, _version, user_data):
+        if not user_data:
+            raise PreventUpdate
+        client = _active_client(selected_client, user_data)
+        if client not in {normalize_client_id(c) for c in user_data.get("clients", [])}:
+            return None
+        return build_history(client, service.listar_informes(client))
 
     @app.callback(
         Output("rca-unit", "value", allow_duplicate=True),
@@ -302,4 +434,4 @@ def register_rca_callbacks(app: dash.Dash) -> None:
     def clear_rca_form(n_clicks):
         if not n_clicks:
             raise PreventUpdate
-        return None, None, None, "", "", "", "", [], None, None
+        return None, COMPONENTE, None, "", "", "", "", [], None, None

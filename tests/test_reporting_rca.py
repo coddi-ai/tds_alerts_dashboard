@@ -13,7 +13,7 @@ from config.client_services import KNOWN_SERVICE_IDS, is_service_enabled
 from dashboard.callbacks import rca_callbacks as rc
 from dashboard.services_registry import NAV_PATHS, SERVICE_SECTIONS, resolve_service_id_for_pathname
 from src.data import rca_report
-from src.data.rca_report import RCA_MAX_IMAGE_BYTES, RCA_MAX_IMAGES, STATUS_PENDING_BACKEND
+from src.data.rca_report import RCA_MAX_IMAGE_BYTES, RCA_MAX_IMAGES
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
@@ -77,11 +77,6 @@ def test_request_carries_the_form_and_summary_drops_image_data():
     assert "data_base64" in request["images"][0]
 
 
-def test_submit_is_pending_until_the_generator_exists():
-    request = rca_report.build_rca_request("CDA", "T_10", None, None, {}, [], None)
-    assert rca_report.submit_rca_request(request) == {"status": STATUS_PENDING_BACKEND}
-
-
 def test_units_are_deduplicated_and_sorted_naturally(units):
     loaded, notice = rc.load_units("cda", ["CDA"])
     assert notice is None
@@ -95,10 +90,19 @@ def test_units_require_access_and_the_service(units):
     assert rc.load_units("EMIN", ["EMIN"])[0] == []
 
 
-def test_result_shows_pending_status():
-    request = rca_report.build_rca_request("CDA", "T_10", "motor", "2026-10-14", {}, [], None)
-    card = str(rc.build_result(request, {"status": STATUS_PENDING_BACKEND}))
-    assert "fa-person-digging" in card
+def test_ready_result_embeds_the_pdf_and_lists_failed_controls(monkeypatch):
+    monkeypatch.setattr(rc, "rca_file_href",
+                        lambda client, rid, download=False: f"/rca/file?client={client}&id={rid}&d={int(download)}")
+    job = {"report_id": "RCA_T_10_2026-10-14_1", "unit": "T_10", "event_date": "2026-10-14",
+           "verdict": "SEÑAL DÉBIL", "confidence": "baja", "problems": ["2 fuentes no existen"]}
+    card = str(rc.build_ready("CDA", job))
+    assert "/rca/file?client=CDA&id=RCA_T_10_2026-10-14_1&d=0#view=FitH" in card
+    assert "&d=1" in card and "2 fuentes no existen" in card
+
+
+def test_error_result_uses_the_reason_text():
+    assert "OPENAI_API_KEY" in str(rc.build_error("no_api_key"))
+    assert "Intenta nuevamente" in str(rc.build_error("motivo-desconocido"))
 
 
 def test_service_is_registered_under_reports():

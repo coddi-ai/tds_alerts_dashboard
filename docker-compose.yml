@@ -32,6 +32,8 @@ services:
       - ./dashboard:/app/dashboard
       - ./config:/app/config
       - ./src:/app/src
+      # Reportes RCA generados (PDF + registro JSON), fuera de la imagen para que sobrevivan al redeploy.
+      - ./outputs/rca:/app/outputs/rca
     ports:
       - "8050:8050"
     depends_on:

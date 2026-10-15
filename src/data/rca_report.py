@@ -1,11 +1,8 @@
 """
-Reportes > Reporte RCA: contrato entre el formulario del dashboard y el generador.
+Reportes > Reporte RCA: la solicitud que arma el formulario del dashboard.
 
-El generador (captura de datos de la unidad + armado del informe de causa raiz) se
-desarrolla en paralelo. El formulario ya arma la solicitud completa con
-`build_rca_request`; `submit_rca_request` es el unico punto que hay que reemplazar
-para conectarlo. Mientras tanto devuelve `status = "pending_backend"` y la vista
-muestra la solicitud tal como la recibiria el generador.
+`build_rca_request` junta lo que el usuario lleno; src/rca/service.py la procesa
+(datos del Predictivo, agente, PDF). Las imagenes se validan aqui al subirlas.
 
 Forma de la solicitud (dict serializable a JSON):
 
@@ -13,7 +10,7 @@ Forma de la solicitud (dict serializable a JSON):
       "client": "CDA",                 # id normalizado del cliente activo
       "unit": "T_10",                  # obligatorio
       "system": "motor" | None,        # valor de src.data.erp_schemas.System; None = todos
-      "event_date": "2026-10-14" | None,
+      "event_date": "2026-10-14",      # fecha de la detencion (obligatoria para generar)
       "title": str, "description": str, "findings": str, "actions": str,
       "troubleshooting": None,         # reservado: bloque aun en desarrollo en la vista
       "images": [{"filename", "mime", "size", "caption", "data_base64"}],
@@ -29,17 +26,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from src.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
 # Las imagenes viajan en base64 entre navegador y servidor en cada callback: el tope
-# mantiene esos viajes livianos hasta que el generador tenga su propio almacenamiento.
+# mantiene esos viajes livianos (el PDF del RCA las lleva en su anexo).
 RCA_MAX_IMAGES = 6
 RCA_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 RCA_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
-
-STATUS_PENDING_BACKEND = "pending_backend"
 
 TEXT_FIELDS = ("title", "description", "findings", "actions")
 
@@ -98,12 +89,3 @@ def request_summary(request: dict) -> dict:
         "images": [{k: v for k, v in image.items() if k != "data_base64"} for image in request["images"]],
     }
 
-
-def submit_rca_request(request: dict) -> dict:
-    """Envia la solicitud al generador de reportes RCA.
-
-    PENDIENTE: el generador aun no existe. Cuando este listo, esta funcion debe
-    devolver {"status": "ready", "href": <url del PDF>} (o "error" con "message").
-    """
-    logger.info(f"Reporte RCA solicitado (generador pendiente): {request_summary(request)}")
-    return {"status": STATUS_PENDING_BACKEND}

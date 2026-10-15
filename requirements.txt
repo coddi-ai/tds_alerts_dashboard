@@ -36,6 +36,11 @@ redis>=5.0.0
 # Utilities
 tqdm>=4.66.0
 
+# Reporte RCA (src/rca): HTML -> PDF y validacion de la respuesta de la IA.
+# WeasyPrint necesita Pango del sistema (ver Dockerfile).
+weasyprint>=62.0
+jsonschema>=4.0
+
 # S3 Interaction (pinned to avoid pip backtracking; must support S3 conditional
 # writes (IfMatch/IfNoneMatch on PutObject, used by config/client_services.py) -
 # 1.35.0 predates that feature, this pin matches what's verified working)

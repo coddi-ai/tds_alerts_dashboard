@@ -1,10 +1,12 @@
 """
-Reportes > Reporte RCA: formulario para pedir un informe de analisis de causa raiz.
+Reportes > Informe preliminar de falla: formulario para pedir el informe de una detencion.
 
 La unidad depende del cliente global (client-selector), asi que la pagina solo arma
 el esqueleto; dashboard/callbacks/rca_callbacks.py lo rellena y arma la solicitud
-(src/data/rca_report.py). El generador del informe aun esta en desarrollo.
+(src/data/rca_report.py); src/rca genera el PDF en segundo plano y la vista lo muestra.
 """
+
+from datetime import date
 
 from src.i18n import t, page_title
 import dash
@@ -13,6 +15,10 @@ from dash import dcc, html
 
 from src.data.erp_schemas import SYSTEM_LABELS, System
 from src.data.rca_report import RCA_MAX_IMAGE_BYTES, RCA_MAX_IMAGES
+from src.rca.service import SISTEMAS_SOPORTADOS
+
+# Mientras corre un informe, la vista consulta su estado cada tanto.
+POLL_INTERVAL_MS = 2000
 
 TEXTAREA_STYLE = {"fontSize": "14px", "minHeight": "110px"}
 
@@ -32,7 +38,7 @@ def _textarea(id_, icon, label, placeholder, md=12):
 
 
 def _scope_card() -> dbc.Card:
-    """Unidad (obligatoria), sistema (opcional) y fecha del evento."""
+    """Unidad y fecha de la detencion (obligatorias) y sistema (por ahora solo motor)."""
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-crosshairs me-2"), t("rca.scope_title")], className="mb-0"),
@@ -49,25 +55,36 @@ def _scope_card() -> dbc.Card:
                     _label("fa-cogs", t("alerts_general.filter_system")),
                     dcc.Dropdown(
                         id="rca-system",
-                        options=[{"label": SYSTEM_LABELS[s], "value": s.value} for s in System],
-                        placeholder=t("tab_alerts_detail.todos_los_sistemas"),
+                        options=_system_options(),
+                        value=SISTEMAS_SOPORTADOS[0],
+                        clearable=False,
                     ),
                 ], md=4),
                 dbc.Col([
-                    _label("fa-calendar-alt", t("rca.event_date")),
+                    _label("fa-calendar-alt", t("rca.event_date"), required=True),
                     dcc.DatePickerSingle(
                         id="rca-event-date",
                         placeholder=t("rca.event_date_placeholder"),
                         display_format="DD/MM/YYYY",
+                        max_date_allowed=date.today(),
                         clearable=True,
                         className="w-100",
                     ),
                 ], md=4),
             ], className="g-3"),
+            # Validador de datos (src/rca/service.validar_disponibilidad), al elegir unidad y fecha.
+            dcc.Loading(html.Div(id="rca-availability", className="mt-3"), type="dot"),
             html.P([html.Span("* ", className="text-danger"), t("rca.required_hint")],
                    className="text-muted small mb-0 mt-3"),
         ]),
     ], className="shadow-sm mb-4")
+
+
+def _system_options() -> list:
+    """Los sistemas que el RCA aun no analiza se muestran, deshabilitados."""
+    return [{"label": SYSTEM_LABELS[s] if s.value in SISTEMAS_SOPORTADOS
+             else f"{SYSTEM_LABELS[s]} ({t('rca.coming_soon')})",
+             "value": s.value, "disabled": s.value not in SISTEMAS_SOPORTADOS} for s in System]
 
 
 def _context_card() -> dbc.Card:
@@ -157,6 +174,17 @@ def _actions_bar() -> html.Div:
     ], className="d-flex justify-content-end gap-2 mb-4")
 
 
+def _history_card() -> dbc.Card:
+    """Informes RCA ya generados para el cliente activo."""
+    return dbc.Card([
+        dbc.CardHeader(
+            html.H5([html.I(className="fas fa-clock-rotate-left me-2"), t("rca.history_title")], className="mb-0"),
+            className="bg-light",
+        ),
+        dbc.CardBody(dcc.Loading(html.Div(id="rca-history"), type="circle")),
+    ], className="shadow-sm mb-4")
+
+
 def layout(**kwargs):
     return html.Div([
         html.Div([
@@ -169,6 +197,12 @@ def layout(**kwargs):
 
         # Imagenes cargadas: [{id, filename, mime, size, data, caption}].
         dcc.Store(id="rca-images-store", data=[]),
+        # True cuando hay datos suficientes para la unidad y la fecha elegidas.
+        dcc.Store(id="rca-data-ok", data=False),
+        # Trabajo en curso (src/rca/service.py) y contador para refrescar el historial.
+        dcc.Store(id="rca-job-id"),
+        dcc.Store(id="rca-history-version", data=0),
+        dcc.Interval(id="rca-job-poll", interval=POLL_INTERVAL_MS, disabled=True),
         html.Div(id="rca-status"),
         # Oculto mientras el cliente activo no tenga unidades o acceso.
         html.Div([
@@ -177,7 +211,8 @@ def layout(**kwargs):
             _images_card(),
             _troubleshooting_card(),
             _actions_bar(),
-            dcc.Loading(html.Div(id="rca-result"), type="circle"),
+            html.Div(id="rca-result"),
+            _history_card(),
         ], id="rca-body"),
     ], className="container-fluid p-4")
 

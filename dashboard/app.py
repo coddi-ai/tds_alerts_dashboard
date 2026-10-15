@@ -93,8 +93,9 @@ from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
 from dashboard.callbacks.reporting_callbacks import register_reporting_callbacks
 from dashboard.report_files import register_report_files
 
-# Reporte RCA: formulario de solicitud (el generador se conecta en src/data/rca_report.py)
+# Reporte RCA: formulario, generacion en segundo plano (src/rca) y ruta Flask que entrega el PDF
 from dashboard.callbacks.rca_callbacks import register_rca_callbacks
+from dashboard.rca_files import register_rca_files
 
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
@@ -249,6 +250,8 @@ register_reporting_callbacks(app)
 register_rca_callbacks(app)
 # Flask route {PATH_PREFIX}reports/file: re-checks access and streams the PDF from S3.
 register_report_files(app)
+# Flask route {PATH_PREFIX}rca/file: re-checks access and serves a generated RCA PDF.
+register_rca_files(app)
 
 
 @app.server.after_request
