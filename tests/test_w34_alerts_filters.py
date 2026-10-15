@@ -15,6 +15,7 @@ import pytest
 
 from dashboard.tabs.tab_alerts_detail import create_layout
 from dashboard.callbacks.alerts_callbacks import (
+    configure_detail_source_filter,
     filter_alert_dropdown_by_criteria,
     populate_detail_filter_options,
 )
@@ -77,6 +78,55 @@ def test_tribology_filter_still_present_after_removing_telemetry():
     """Only the telemetry filter is removed — its sibling must survive."""
     layout_str = str(create_layout())
     assert "detail-filter-tribology" in layout_str
+
+
+def test_emin_source_filter_label_and_plain_yes_no_options():
+    label, options = configure_detail_source_filter('emin')
+    assert 'Con Multitécnica' in str(label)
+    assert options == [{'label': 'Sí', 'value': 'yes'}, {'label': 'No', 'value': 'no'}]
+
+
+@pytest.mark.parametrize('client', ['cda', 'capstone'])
+def test_other_clients_keep_the_tribology_filter(client):
+    label, options = configure_detail_source_filter(client)
+    assert 'Con Tribología' in str(label)
+    assert [option['value'] for option in options] == ['yes', 'no']
+
+
+@pytest.mark.parametrize('choice,expected', [
+    ('yes', {'F-multi'}),
+    ('no', {'F-telemetry', 'F-oil'}),
+    (None, {'F-multi', 'F-telemetry', 'F-oil'}),
+])
+def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, choice, expected):
+    from dashboard.callbacks import alerts_callbacks as callbacks
+
+    rows = pd.DataFrame([
+        {**_base_row('F-multi', '2026-07-09T16:00:00Z'), 'Trigger_type': 'Mixto',
+         'has_tribology': False, 'has_maintenance': False},
+        {**_base_row('F-telemetry', '2026-07-09T16:00:00Z'),
+         'has_tribology': True, 'has_maintenance': True},
+        {**_base_row('F-oil', '2026-07-09T16:00:00Z'), 'Trigger_type': 'Tribologia',
+         'has_tribology': True, 'has_maintenance': False},
+    ])
+    rows['Timestamp'] = pd.to_datetime(rows['Timestamp'], utc=True).dt.tz_localize(None)
+    monkeypatch.setattr(callbacks, 'load_alerts_data', lambda client: rows)
+    options = callbacks.filter_alert_dropdown_by_criteria(None, None, None, choice, 'emin', None)
+    assert {option['value'] for option in options} == expected
+
+
+@pytest.mark.parametrize('choice,expected', [('yes', {'F-oil'}), ('no', {'F-multi'})])
+def test_other_client_filter_still_uses_oil_presence(monkeypatch, choice, expected):
+    from dashboard.callbacks import alerts_callbacks as callbacks
+
+    rows = pd.DataFrame([
+        {**_base_row('F-multi', '2026-07-09T16:00:00Z'), 'Trigger_type': 'Mixto', 'has_tribology': False},
+        {**_base_row('F-oil', '2026-07-09T16:00:00Z'), 'Trigger_type': 'Tribologia', 'has_tribology': True},
+    ])
+    rows['Timestamp'] = pd.to_datetime(rows['Timestamp'], utc=True).dt.tz_localize(None)
+    monkeypatch.setattr(callbacks, 'load_alerts_data', lambda client: rows)
+    options = callbacks.filter_alert_dropdown_by_criteria(None, None, None, choice, 'capstone', None)
+    assert {option['value'] for option in options} == expected
 
 
 # ---------------------------------------------------------------------------

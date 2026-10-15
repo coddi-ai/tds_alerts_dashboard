@@ -1,15 +1,4 @@
-"""W34-03 — Acortar Tabla de Alertas: regression guard, NOT a reimplementation.
-
-The improvement was already implemented before W34 started:
-`create_alerts_report_table` (the live table, rendered by `update_general_tab`)
-already drops ID/Fuente/Evidencia from the visible `columns` while keeping
-them in each row's `data` dict — the exact pattern documented in
-documentation/alerts/agent_context_alerts.md. This file only guards against
-regression: the legacy `create_alerts_datatable` variant (different columns,
-including ID/Fuente as visible) still exists in alerts_tables.py, unimported
-from alerts_callbacks.py since W34-03 — if it were ever wired back in behind
-the same `id='alerts-datatable'`, the three columns would reappear.
-"""
+"""Alerts table: explicit source labels, compact fields and selection metadata."""
 
 import pandas as pd
 
@@ -47,18 +36,18 @@ def _sample_alerts_df() -> pd.DataFrame:
     )
 
 
-def test_id_fuente_evidencia_are_not_visible_columns():
+def test_published_source_is_visible_while_id_and_evidence_remain_metadata():
     table = create_alerts_report_table(_sample_alerts_df())
     visible_ids = {column["id"] for column in table.columns}
     assert "ID" not in visible_ids
-    assert "Fuente" not in visible_ids
+    assert "Fuente" in visible_ids
     assert "Evidencia" not in visible_ids
 
 
 def test_id_fuente_evidencia_still_present_in_row_data():
     """store_selected_alert and render_selected_alert_summary
     (alerts_callbacks.py) read these three fields from
-    `derived_virtual_data` — they must survive even though they're hidden."""
+    `derived_virtual_data` — all three must survive presentation changes."""
     table = create_alerts_report_table(_sample_alerts_df())
     for row in table.data:
         assert "ID" in row and row["ID"] in ("F-1", "F-2")
@@ -67,21 +56,35 @@ def test_id_fuente_evidencia_still_present_in_row_data():
 
 
 def test_mixto_row_highlight_rule_still_targets_the_fuente_field():
-    """The purple left-border rule keys off the *value* in `data`, not a
-    visible column — Dash's filter_query reads `data` regardless of what
-    `columns` exposes, so this must keep working after W34-03."""
+    """Highlight the full row, with one accent rather than a border per cell."""
     table = create_alerts_report_table(_sample_alerts_df())
     filter_queries = [rule["if"].get("filter_query") for rule in table.style_data_conditional if "filter_query" in rule.get("if", {})]
     assert '{Fuente} = "Multitécnica"' in filter_queries
+    accent_rules = [rule for rule in table.style_data_conditional if "borderLeft" in rule]
+    assert accent_rules and all(rule["if"]["column_id"] == "Fecha" for rule in accent_rules)
+    assert any(
+        rule["if"] == {"filter_query": '{Fuente} = "Multitécnica"'} and "backgroundColor" in rule
+        for rule in table.style_data_conditional
+    )
 
 
-def test_visible_columns_are_exactly_the_seven_client_facing_fields():
+def test_visible_columns_include_the_source_next_to_the_unit():
     table = create_alerts_report_table(_sample_alerts_df())
     visible_ids = [column["id"] for column in table.columns]
     assert visible_ids == [
-        "Fecha", "Unidad", "Sistema", "Componente",
+        "Fecha", "Unidad", "Fuente", "Sistema", "Componente",
         "Señal / variable", "Diagnóstico", "Acción",
     ]
+
+
+def test_source_label_does_not_depend_on_available_evidence():
+    alerts = _sample_alerts_df()
+    alerts["has_tribology"] = False
+    alerts["has_maintenance"] = True
+    table = create_alerts_report_table(alerts)
+    by_id = {row["ID"]: row for row in table.data}
+    assert by_id["F-1"]["Fuente"] == "Multitécnica"
+    assert by_id["F-2"]["Fuente"] == "Telemetría"
 
 
 def test_legacy_datatable_variant_is_not_imported_by_the_live_callback_module():

@@ -100,12 +100,12 @@ def create_layout() -> html.Div:
                         )
                     ], md=3),
 
-                    # Has Tribology Filter
+                    # The label and options adapt to the selected client.
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-oil-can me-1"),
                             t("tab_alerts_detail.con_tribologia")
-                        ], className="fw-bold mb-2"),
+                        ], id='detail-source-filter-label', className="fw-bold mb-2"),
                         dcc.Dropdown(
                             id='detail-filter-tribology',
                             options=[

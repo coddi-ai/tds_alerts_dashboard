@@ -14,9 +14,9 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
 from src.data.emin_alert_evidence import (
+    alert_reference,
     evidence_flag,
-    maintenance_evidence_row,
-    maintenance_week as normalize_maintenance_week,
+    oil_report_reference,
 )
 
 from src.data.loaders import (
@@ -30,6 +30,7 @@ from src.data.loaders import (
     load_telemetry_alert_detail_for_alert,
     load_oil_classified,
     load_maintenance_week,
+    load_emin_maintenance_evidence,
     load_essays_mapping,
     _data_path,
 )
@@ -375,7 +376,7 @@ def render_selected_alert_summary(active_cell, table_data):
 
 
 def _maintenance_context_summary(row):
-    """Show the external evidence that supports the effective alert source."""
+    """Show matching maintenance context without changing the published source."""
     if not evidence_flag(row.get("has_maintenance")):
         return html.Div()
     summary = row.get("maintenance_summary", "")
@@ -386,11 +387,19 @@ def _maintenance_context_summary(row):
             html.I(className="fas fa-tools me-2"),
             t("alerts_callbacks.linked_maintenance_context", week=row.get("maintenance_week", "")),
         ]),
-        html.P(summary, className="mb-2", style={"whiteSpace": "pre-wrap"}) if summary else None,
+        html.P(t(
+            "alerts_callbacks.maintenance_iso_window",
+            start=row.get("maintenance_window_start", "")[:10],
+            end=row.get("maintenance_window_end", "")[:10],
+        ), className="text-muted small") if row.get("maintenance_window_start") else None,
+        html.Div([
+            html.Strong(t("alerts_callbacks.weekly_unit_summary")),
+            html.P(summary, className="mb-2", style={"whiteSpace": "pre-wrap"}),
+        ]) if summary else None,
         html.Details([
             html.Summary(t("alerts_callbacks.reported_activities")),
             html.Div(tasks, className="mt-2", style={"whiteSpace": "pre-wrap"}),
-        ]) if tasks else None,
+        ], open=True) if tasks else None,
         html.Div(t("alerts_callbacks.detention_duration_unreported"), className="text-muted small"),
     ], className="alert-maintenance-context mt-3")
 
@@ -582,6 +591,25 @@ def set_alert_from_navigation(dropdown_options, nav_data, active_tab):
 # ========================================
 
 @callback(
+    Output('detail-source-filter-label', 'children'),
+    Output('detail-filter-tribology', 'options'),
+    Input('client-selector', 'value'),
+)
+def configure_detail_source_filter(client):
+    """EMIN filters the published multi-technique type; other clients filter oil."""
+    is_emin = str(client or '').lower() == 'emin'
+    label = [
+        html.I(className='fas fa-fingerprint me-1' if is_emin else 'fas fa-oil-can me-1'),
+        t('tab_alerts_detail.con_multitecnica' if is_emin else 'tab_alerts_detail.con_tribologia'),
+    ]
+    options = [
+        {'label': t('common.yes' if is_emin else 'tab_alerts_detail.si'), 'value': 'yes'},
+        {'label': t('common.no' if is_emin else 'tab_alerts_detail.no'), 'value': 'no'},
+    ]
+    return label, options
+
+
+@callback(
     [
         Output('detail-filter-unit', 'options'),
         Output('detail-filter-sistema', 'options')
@@ -648,7 +676,8 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
             a plain calendar date string (e.g. "2026-08-01") from
             detail-filter-date-from, interpreted as a Chile calendar day.
             Inclusive; None/"" means no lower bound.
-        has_tribology: Filter for tribology presence
+        has_tribology: Yes/no for published Multitécnica in EMIN, tribology otherwise.
+            The legacy component ID and argument are retained for existing callers.
         client: Selected client
         current_value: Currently selected alert ID
 
@@ -662,7 +691,7 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
 
     # Check if any filters are actually set
     has_any_filter = any([units, sistemas, start_date, has_tribology])
-    if not has_any_filter:
+    if not has_any_filter and client.lower() != 'emin':
         logger.info("No filters set, skipping filter update")
         raise PreventUpdate
 
@@ -703,7 +732,10 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
             except (ValueError, TypeError):
                 logger.warning(f"Fecha desde inválida, ignorando filtro: {start_date!r}")
 
-        if has_tribology == 'yes':
+        if client.lower() == 'emin' and has_tribology in ('yes', 'no'):
+            is_multi = filtered_df['Trigger_type'].eq('Mixto').fillna(False)
+            filtered_df = filtered_df[is_multi if has_tribology == 'yes' else ~is_multi]
+        elif has_tribology == 'yes':
             filtered_df = filtered_df[filtered_df['has_tribology'] == True]
         elif has_tribology == 'no':
             filtered_df = filtered_df[filtered_df['has_tribology'] == False]
@@ -791,6 +823,11 @@ def _alert_case_header(row: pd.Series) -> html.Div:
                 html.Strong(t("alerts_callbacks.evidencia_2"), className='text-muted'),
                 prepared.get('evidence_display', t("alerts_report.sin_evidencia")),
             ], className='mt-3 small'),
+            dbc.Alert(t("alerts_callbacks.published_mixed_incomplete"), color="info", className="mt-3 mb-0")
+            if evidence_flag(row.get("source_references_checked"))
+            and row.get("Trigger_type") == "Mixto"
+            and sum(evidence_flag(row.get(flag)) for flag in ("has_telemetry", "has_tribology", "has_maintenance")) < 2
+            else None,
             html.H5([
                 html.I(className='fas fa-brain me-2'),
                 t("alerts_callbacks.analisis_inteligente")
@@ -871,10 +908,10 @@ def update_detail_view(dropdown_value, client, nav_data):
         show_oil = 'tribologia' in trigger_lower or 'oil' in trigger_lower or 'mixto' in trigger_lower
         show_maintenance = pd.notna(alert_row.get('Semana_Resumen_Mantencion'))
         if client.lower() == 'emin':
-            # Event + maintenance is Multitécnica without implying oil data.
+            # Published source data owns the type; maintenance is context.
             show_telemetry = evidence_flag(alert_row.get('has_telemetry'))
             show_oil = evidence_flag(alert_row.get('has_tribology'))
-            show_maintenance = evidence_flag(alert_row.get('has_maintenance'))
+            show_maintenance = True
         
         logger.info(f"Trigger type: {trigger_type}, Evidence sections - Telemetry: {show_telemetry}, Oil: {show_oil}, Maintenance: {show_maintenance}")
         
@@ -965,6 +1002,9 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         )
 
         if telemetry_golden.empty:
+            if client.lower() == "emin":
+                # The alert header already contains the event information.
+                return html.Div()
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_telemetria_disponibles"), color="warning")
             ])
@@ -975,6 +1015,8 @@ def create_telemetry_evidence_section(alert_row: pd.Series, client: str) -> html
         alert_data, _, _ = _select_telemetry_alert_data(telemetry_golden, alert_row)
         
         if alert_data.empty:
+            if client.lower() == "emin":
+                return html.Div()
             return html.Div([
                 dbc.Alert(
                     t("alerts_callbacks.no_se_encontraron_datos_de_telemetria", join_alert_ids=', '.join(alert_ids)),
@@ -1232,11 +1274,16 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     try:
         from pathlib import Path
 
-        # Load oil data
+        tribology_id = oil_report_reference(alert_row) if client.lower() == "emin" else alert_row.get('TribologyID')
+        if not alert_reference(tribology_id):
+            return html.Div([
+                dbc.Alert(t("alerts_callbacks.no_oil_reference"), color="info")
+            ])
+
+        # Load oil data only when the alert actually references a sample.
         oil_classified = load_oil_classified(client)
         
         # Check if oil data is available
-        tribology_id = alert_row.get('TribologyID')
         if oil_classified.empty or tribology_id is None or (isinstance(tribology_id, float) and pd.isna(tribology_id)):
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_tribologia_disponibles"), color="warning")
@@ -1244,7 +1291,7 @@ def create_oil_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
         
         # Filter for this sample
         oil_report = oil_classified[
-            oil_classified['sampleNumber'] == tribology_id
+            oil_classified['sampleNumber'].map(alert_reference) == alert_reference(tribology_id)
         ]
         
         if oil_report.empty:
@@ -1483,6 +1530,27 @@ def clear_oil_tendencia_date_range(_):
     return None, None
 
 
+def _create_emin_maintenance_evidence_section(alert_row):
+    result = load_emin_maintenance_evidence(alert_row)
+    heading = html.H4([
+        html.I(className="fas fa-tools me-2"),
+        t("alerts_callbacks.evidencia_de_mantenimiento"),
+    ], className="text-secondary mb-3")
+    window = html.P(t(
+        "alerts_callbacks.maintenance_iso_window",
+        start=result["start"][:10], end=result["end"][:10],
+    ), className="text-muted") if result["start"] else None
+    if result["evidence"] is None:
+        message = t("alerts_callbacks.maintenance_" + result["status"])
+        return html.Div([heading, window, dbc.Alert(message, color="info")], className="mb-4")
+    return html.Div([
+        heading, window,
+        create_maintenance_display(
+            result["evidence"], alert_row["sistema"], include_all_systems=True,
+        ),
+    ], className="mb-4")
+
+
 def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> html.Div:
     """
     Create maintenance evidence section.
@@ -1497,10 +1565,10 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
     logger.info("Creating maintenance evidence section")
     
     try:
+        if client.lower() == 'emin':
+            return _create_emin_maintenance_evidence_section(alert_row)
         # Get maintenance week
         maintenance_week = alert_row.get('Semana_Resumen_Mantencion')
-        if client.lower() == 'emin':
-            maintenance_week = normalize_maintenance_week(maintenance_week)
         
         if pd.isna(maintenance_week) or not maintenance_week:
             return html.Div([
@@ -1516,26 +1584,19 @@ def create_maintenance_evidence_section(alert_row: pd.Series, client: str) -> ht
             ])
         
         # Filter for this unit
-        if client.lower() == 'emin':
-            unit_maintenance = maintenance_evidence_row(maintenance_df, alert_row['UnitId'])
-        else:
-            matches = maintenance_df[maintenance_df['UnitId'] == alert_row['UnitId']]
-            unit_maintenance = None if matches.empty else matches.iloc[0]
+        matches = maintenance_df[maintenance_df['UnitId'] == alert_row['UnitId']]
+        unit_maintenance = None if matches.empty else matches.iloc[0]
 
         if unit_maintenance is None:
             return html.Div([
                 dbc.Alert(t("alerts_callbacks.no_hay_datos_de_mantenimiento_para_2", alert_row_unitid=alert_row['UnitId']), color="warning")
             ])
 
-        if client.lower() == 'emin':
-            unit_maintenance = unit_maintenance.copy()
-            unit_maintenance['Semana'] = maintenance_week
         
         # Create maintenance display
         maintenance_card = create_maintenance_display(
             maintenance_data=unit_maintenance,
             alert_system=alert_row['sistema'],
-            include_all_systems=client.lower() == 'emin',
         )
         
         # Build section
