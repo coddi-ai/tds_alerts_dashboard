@@ -55,6 +55,7 @@ from dashboard.components.fleet_overview import (
 )
 from dashboard.components.labels import status_label, translate_component_label
 from dashboard.components.oil_machine_detail import build_machine_compact_table
+from dashboard.components.predictive_state import STATE_COLORS
 from src.data.loaders import (
     load_alerts_data,
     load_machine_status_for_client,
@@ -135,10 +136,10 @@ _PREDICTIVE_ICON = "fas fa-chart-line"
 # sub-model card's icon and its section's icon are visibly the same concept.
 _MONITOREO_ICON = "fas fa-desktop"
 
-# Shared with tab_predictive_evidence.py's own STATUS_COLORS - the fleet
-# scatter/comparative-bars charts reused below (create_fleet_scatter) key
-# their status legend off exactly this vocabulary.
-_PREDICTIVE_STATUS_COLORS = {"Anormal": "#e24b4a", "Alerta": "#ef9f27", "Normal": "#1d9e75"}
+# The fleet scatter reused below (create_fleet_scatter) colors its points with the
+# same red / yellow / green state rule as Resumen's charts, so its quadrant fills
+# (also state-colored) never clash with the points.
+_PREDICTIVE_STATUS_COLORS = STATE_COLORS
 
 
 def _reference_time(latest_ts) -> tuple:

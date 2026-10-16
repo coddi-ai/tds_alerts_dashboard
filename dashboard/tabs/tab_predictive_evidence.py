@@ -396,6 +396,99 @@ def _get_unit_ai_analysis(df_analisis, unit):
     return rows.iloc[-1]
 
 
+_AI_NARRATIVE_COLS = ("diagnostico", "causa_probable", "acciones")
+_EMPTY_AI_PANEL = {"diagnostico": None, "causa_probable": None, "acciones": None}
+
+
+def _unit_narrative_panel(ai_row):
+    """Panel kwargs from a `unit_failure_analisis` row, or None when the row
+    carries no narrative (`analisis_fuente == "omitida"`: the upstream LLM pass
+    is skipped for `normal` units)."""
+    if ai_row is None or not all(col in ai_row.index for col in _AI_NARRATIVE_COLS):
+        return None
+    if str(ai_row.get("analisis_fuente", "")).strip().lower() == "omitida":
+        return None
+    if not any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _AI_NARRATIVE_COLS):
+        return None
+    return {
+        "diagnostico": ai_row.get("diagnostico"),
+        "causa_probable": ai_row.get("causa_probable"),
+        "acciones": ai_row.get("acciones"),
+        "header_text": t("tab_predictive_evidence.analisis_inteligente_2"),
+    }
+
+
+def _mode_narrative_panel(diag_row, unit_estado):
+    """Panel kwargs from the unit's worst-mode `mode_failure_analisis` row, or
+    None when it would mislead. `healthy_default` rows carry a fixed "no signs
+    of this mode" message that contradicts a unit whose own `estado` isn't
+    `normal` (its worst mode can score under the client's FLAG_THRESHOLD while
+    the unit is still alerta/anormal)."""
+    if diag_row is None:
+        return None
+    analysis_status = str(diag_row.get("analysis_status", "")).strip().lower()
+    if analysis_status == "error":
+        # Never surface raw exception text to the user - documented
+        # incident: a BadRequestError string once ended up rendered in a
+        # unit's report. Show a generic interface message instead of
+        # trusting probable_cause/recommended_actions' contents.
+        return {
+            "diagnostico": None,
+            "causa_probable": t("tab_predictive_evidence.el_analisis_para_este_modo_no"),
+            "acciones": None,
+        }
+    if analysis_status == "healthy_default" and unit_estado not in ("", "normal"):
+        return None
+    header_text = t("tab_predictive_evidence.analisis_inteligente_2")
+    if analysis_status == "fallback_rules":
+        # Model was unavailable upstream and this came from fixed rules
+        # instead - flag it visually so it doesn't read as more precise than
+        # it is.
+        header_text = t("tab_predictive_evidence.analisis_inteligente_basado_en_reglas")
+    return {
+        "diagnostico": diag_row.get("diagnostico"),
+        "causa_probable": diag_row.get("probable_cause"),
+        "acciones": diag_row.get("recommended_actions"),
+        "header_text": header_text,
+    }
+
+
+def _resolve_unit_ai_panel(client, component, unit):
+    """`create_ai_analysis_panel` kwargs for the unit-level Analisis Inteligente.
+
+    The overview describes the whole unit, so its narrative comes from
+    `unit_failure_analisis` (Data Contract v2.3, formerly `analisis_inteligente`
+    - live and partitioned, not a frozen flat file): written with the unit's
+    state, ranking, fleet position and maintenance context. Clients/components
+    not yet on the new layout fall back to the deprecated flat
+    `analisis_inteligente.parquet`.
+
+    That table skips `normal` units (`analisis_fuente == "omitida"`), so for
+    them the worst-mode row of `mode_failure_analisis` (worst first via the
+    modos_ordenados join - see predictive_v2.get_unit_mode_failure_analisis and
+    documentation/predictive/predictive_data_contracts.md §3) stands in: a
+    flagged mode's AI text, or the fixed healthy message. With nothing usable
+    the panel's own "No disponible" layout is shown, so the card's shape never
+    changes across units.
+    """
+    if not client:
+        return dict(_EMPTY_AI_PANEL)
+
+    df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component)
+    if df_unit_analisis.empty:
+        df_unit_analisis = load_analisis_inteligente(client)
+    ai_row = _get_unit_ai_analysis(df_unit_analisis, unit)
+
+    panel = _unit_narrative_panel(ai_row)
+    if panel is not None:
+        return panel
+
+    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit)
+    diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
+    unit_estado = str(ai_row.get("estado", "")).strip().lower() if ai_row is not None else ""
+    return _mode_narrative_panel(diag_row, unit_estado) or dict(_EMPTY_AI_PANEL)
+
+
 def _build_insight_panel(insight):
     """Build the AI insight panel UI component."""
     if not insight:
@@ -568,86 +661,10 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     calendar_fig = create_mode_status_calendar(df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
-    # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
-    # `failure_mode_diagnosis`) is the published contract - one row per unit x
-    # flagged mode, worst mode first via the modos_ordenados join (see
-    # predictive_v2.get_unit_mode_failure_analisis and
-    # documentation/predictive/predictive_data_contracts.md §3). Falls back to
-    # `unit_failure_analisis` (formerly `analisis_inteligente`, now live and
-    # partitioned rather than a frozen flat file) for units with no flagged
-    # mode this week, then to the deprecated flat `analisis_inteligente.parquet`
-    # for clients/components not yet on the new layout, then to the rule-based
-    # insight engine when none of those has narrative content.
-    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit) if client else pd.DataFrame()
-    diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
-
-    ai_section = None
-    if diag_row is not None:
-        analysis_status = str(diag_row.get("analysis_status", "")).strip().lower()
-        if analysis_status == "error":
-            # Never surface raw exception text to the user - documented
-            # incident: a BadRequestError string once ended up rendered in a
-            # unit's report. Show a generic interface message instead of
-            # trusting probable_cause/recommended_actions' contents.
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    None,
-                    t("tab_predictive_evidence.el_analisis_para_este_modo_no"),
-                    None,
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-        else:
-            header_text = t("tab_predictive_evidence.analisis_inteligente_2")
-            if analysis_status == "fallback_rules":
-                # Model was unavailable upstream and this came from fixed
-                # rules instead - flag it visually so it doesn't read as more
-                # precise than it is.
-                header_text = t("tab_predictive_evidence.analisis_inteligente_basado_en_reglas")
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    diag_row.get("diagnostico"),
-                    diag_row.get("probable_cause"),
-                    diag_row.get("recommended_actions"),
-                    header_text=header_text,
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-    else:
-        df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component) if client else pd.DataFrame()
-        if df_unit_analisis.empty:
-            # Not on the new layout yet for this client/component - last
-            # resort is the deprecated frozen snapshot.
-            df_unit_analisis = load_analisis_inteligente(client) if client else pd.DataFrame()
-        ai_row = _get_unit_ai_analysis(df_unit_analisis, unit) if client else None
-        _narrative_cols = ("diagnostico", "causa_probable", "acciones")
-        has_narrative = (
-            ai_row is not None
-            and all(col in ai_row.index for col in _narrative_cols)
-            and str(ai_row.get("analisis_fuente", "")).strip().lower() != "omitida"
-            and any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _narrative_cols)
-        )
-        if has_narrative:
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    ai_row.get("diagnostico"),
-                    ai_row.get("causa_probable"),
-                    ai_row.get("acciones"),
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-
-    if ai_section is None:
-        # No narrative diagnosis on file for this unit in either the current
-        # contract or the legacy table (source 1/2 both empty) - show the
-        # same Diagnostico/Causa probable/Acciones layout as source 1 rather
-        # than the rule-based insight panel, so the card's shape never
-        # changes across units; create_ai_analysis_panel already renders
-        # "No disponible" for each column when passed None.
-        ai_section = html.Div(
-            create_ai_analysis_panel(None, None, None),
-            style={"marginBottom": "1.5rem"},
-        )
+    ai_section = html.Div(
+        create_ai_analysis_panel(**_resolve_unit_ai_panel(client, component, unit)),
+        style={"marginBottom": "1.5rem"},
+    )
 
     return html.Div([
         # KPIs

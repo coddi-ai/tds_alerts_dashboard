@@ -373,3 +373,46 @@
 .insight-obs-item:last-child {
   margin-bottom: 0;
 }
+
+/* ── Resumen layer-2 charts: Short View and Long View share a 2.5:1 (w:h) frame ── */
+
+.predictive-chart-ratio {
+  --predictive-chart-ratio: 5 / 2;
+  width: 100%;
+  aspect-ratio: var(--predictive-chart-ratio);
+}
+
+/* ── Unit selection (dropdown, risk badges, risk-grouped chips) of both layer-2 charts ──
+   Badges and chips are colored by the risk group they stand for, in the same
+   red / yellow / green as the chart points: --sel-color fills the active badge or
+   selected chip, --sel-ink is the text on that fill, --sel-text the text off it. */
+
+.unit-sel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.unit-sel-label { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block; }
+
+.unit-badge, .unit-chip { --sel-color: #6c757d; --sel-ink: #fff; --sel-text: #6c757d; }
+.unit-badge--anormal, .unit-chip--anormal { --sel-color: #e24b4a; --sel-ink: #fff; --sel-text: #a32d2d; }
+.unit-badge--alerta,  .unit-chip--alerta  { --sel-color: #eab308; --sel-ink: #3b2a00; --sel-text: #7a5a05; }
+.unit-badge--normal,  .unit-chip--normal  { --sel-color: #1d9e75; --sel-ink: #fff; --sel-text: #0b5a43; }
+
+.unit-sel-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.unit-badge {
+  border: 1.5px solid var(--sel-color); background: #fff; color: var(--sel-text);
+  border-radius: 999px; padding: 3px 14px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.unit-badge--active { background: var(--sel-color); color: var(--sel-ink); }
+
+.unit-sel-note { font-size: 11px; color: var(--text-muted); }
+
+/* Badges + chips: locked while the panel's callback runs, so clicks cannot overlap (see RISK_BUSY_CLASS). */
+.unit-sel-risk { display: flex; flex-direction: column; gap: 10px; }
+.unit-sel-risk--busy { pointer-events: none; opacity: 0.6; cursor: progress; }
+
+.unit-chip-groups { display: flex; flex-direction: column; gap: 8px; }
+.unit-chip-heading { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 4px; }
+.unit-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.unit-chip {
+  border: 1.5px solid var(--sel-color); background: #fff; color: var(--sel-text);
+  border-radius: 999px; padding: 1px 9px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; opacity: 0.55;
+}
+.unit-chip--on { background: var(--sel-color); color: var(--sel-ink); opacity: 1; }

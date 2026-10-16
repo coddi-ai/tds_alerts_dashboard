@@ -86,7 +86,7 @@ def test_failure_table_renders_dash_for_missing_ranking_not_the_text_nan():
 def test_failure_table_renders_dash_for_missing_failure_mode_score():
     """_failure_table returns Div([Table([Thead, Tbody(rows)])]) — navigate
     down to the single data row's cells: Unit, ranking (window-driven),
-    Estado, fm1, fm2."""
+    Estado, Component Hour, fm1, fm2."""
     row = _unit_row("U1")
     row["fm1_30d"] = float("nan")
     df = pd.DataFrame([row])
@@ -95,7 +95,7 @@ def test_failure_table_renders_dash_for_missing_failure_mode_score():
     tbody = table.children[1]
     data_row = tbody.children[0]
     cells = data_row.children
-    assert len(cells) == 5  # Unit, ranking (window), Estado, fm1, fm2
+    assert len(cells) == 6  # Unit, ranking (window), Estado, Component Hour, fm1, fm2
     fm1_cell = str(cells[-2])
     fm2_cell = str(cells[-1])
     assert "—" in fm1_cell

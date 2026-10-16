@@ -487,3 +487,69 @@ def read_cumulative_risk_curve(client: str, component: str) -> Optional[pd.DataF
     df = df.copy(deep=True)
     df.attrs.update(attrs)
     return df
+
+
+# ── Long view: active cycle of the cumulative risk curve ──────────────────
+
+_ACTIVE_CURVE_REQUIRED = (
+    "Unit", "Fecha", "componentHours_filled", "ranking_acumulado_ajustado",
+    "estado", "es_vigente",
+)
+
+
+def load_active_cycle_curve(client: str, component: str) -> Optional[pd.DataFrame]:
+    """`cumulative_risk_curve` rows of each unit's active cycle (`es_vigente`),
+    from the latest partition only - never mixed with another partition, whose
+    `config` may differ and whose curves are then not comparable.
+
+    Always read through `read_cumulative_risk_curve` (the contract's
+    `leer_curva`), so `df.attrs["config"]`/`["banda"]` travel with the frame.
+    `estado` is left exactly as delivered: units that are not yet `evaluable`
+    already arrive as `Normal`.
+
+    None when the client/component has no usable curve data (table missing, no
+    active-cycle rows, or the contract columns absent), which is what the Long
+    View's "working on it" placeholder keys off.
+    """
+    curve = read_cumulative_risk_curve(client, component)
+    if curve is None or curve.empty:
+        return None
+    missing = [c for c in _ACTIVE_CURVE_REQUIRED if c not in curve.columns]
+    if missing:
+        logger.warning("cumulative_risk_curve de %s/%s sin columnas %s", client, component, missing)
+        return None
+    for key in ("config", "banda"):
+        if key not in curve.attrs:
+            logger.warning(
+                "cumulative_risk_curve de %s/%s sin metadata '%s': las fronteras de zona "
+                "pueden no coincidir con la clasificacion", client, component, key,
+            )
+    active = curve[curve["es_vigente"].fillna(False).astype(bool)].copy()
+    if active.empty:
+        return None
+    active.attrs.update(curve.attrs)
+    return active
+
+
+def latest_active_points(active: pd.DataFrame) -> pd.DataFrame:
+    """One row per unit: the last point (latest `Fecha`) of its active cycle."""
+    if active is None or active.empty:
+        return pd.DataFrame(columns=list(_ACTIVE_CURVE_REQUIRED))
+    ordered = active.sort_values(["Unit", "Fecha", "componentHours_filled"])
+    return ordered.groupby("Unit", sort=False).tail(1)
+
+
+def active_cycle_estado(active: Optional[pd.DataFrame]) -> dict:
+    """{Unit: `estado`} of the last point of each unit's active cycle, as delivered."""
+    last = latest_active_points(active)
+    return dict(zip(last["Unit"], last["estado"]))
+
+
+def active_cycle_component_hours(active: Optional[pd.DataFrame]) -> dict:
+    """{Unit: `componentHours_filled`} at the last point of each unit's active
+    cycle - the Predictivo section's single component-hours source. A unit
+    with no non-null reading is absent."""
+    if active is None or active.empty:
+        return {}
+    last = latest_active_points(active.dropna(subset=["componentHours_filled"]))
+    return {u: float(h) for u, h in zip(last["Unit"], last["componentHours_filled"])}

@@ -7,8 +7,6 @@ from dashboard.components.labels import status_label
 from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import pandas as pd
 from src.utils.logger import get_logger
-from config.settings import get_settings
-from src.data.loaders import get_latest_component_hours
 from dashboard.components.predictive_config import (
     resolve_failure_modes,
     resolve_failure_mode_options,
@@ -19,8 +17,23 @@ from dashboard.tabs.tab_predictive_overview import (
     _load_component_data as _load_overview_component,
     _render_component_overview,
     _failure_table,
+    attach_component_hours,
     attach_status,
+    load_active_curve,
+    load_status_frame,
+    load_unit_component_hours,
+    render_long_view,
+    render_short_view,
+    LAYER2_CONTENT_ID,
+    LAYER2_LONG,
+    LAYER2_TABS_ID,
+    LONG_PANEL,
+    RISK_BUSY_CLASS,
+    RISK_IDLE_CLASS,
+    SHORT_PANEL,
     WINDOW_SUFFIX,
+    long_view_update,
+    short_view_update,
 )
 from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_component,
@@ -29,6 +42,79 @@ from dashboard.tabs.tab_predictive_evidence import (
 )
 
 logger = get_logger(__name__)
+
+
+def _long_view_update(event, state, client, component):
+    """Long View panel update, or None when the client has no curve."""
+    active = load_active_curve(client, component)
+    return None if active is None else long_view_update(event, state, active)
+
+
+def _short_view_update(event, state, client, component):
+    """Short View panel update, or None when the client/component has no data."""
+    latest = load_status_frame(client, component)
+    return None if latest is None else short_view_update(event, state, latest, client, component)
+
+
+def register_selection_callback(app, panel, update):
+    """Wire one unit-selection panel (dropdown / chips / risk badges / chart).
+
+    This callback is the only place the panel's selection changes. Whatever was
+    touched (the dropdown, a chip, a risk badge, the active badge again), the new
+    selection is computed once from the stored one by `update(event, state, client,
+    component)` and written back to every view - the store, the dropdown, the
+    chips, the badges and the chart - so none of them can be left showing
+    something else. Each panel has its own ids and store, so the Short View's and
+    the Long View's selections never touch each other. While it runs, the panel's
+    badges and chips are locked (`RISK_BUSY_CLASS`) so rapid clicks cannot overlap.
+    """
+    @app.callback(
+        Output(panel.state_id, "data"),
+        Output(panel.dropdown_id, "value"),
+        Output({"type": panel.chip, "unit": ALL}, "className"),
+        Output({"type": panel.badge, "badge": ALL}, "className"),
+        Output(panel.graph_id, "figure"),
+        Input(panel.dropdown_id, "value"),
+        Input({"type": panel.chip, "unit": ALL}, "n_clicks"),
+        Input({"type": panel.badge, "badge": ALL}, "n_clicks"),
+        State(panel.state_id, "data"),
+        State("predictive-ev-client-store", "data"),
+        State("predictive-ev-component-store", "data"),
+        running=[(Output(panel.risk_id, "className"), RISK_BUSY_CLASS, RISK_IDLE_CLASS)],
+        prevent_initial_call=True,
+    )
+    def update_selection(dropdown_value, _chip_clicks, _badge_clicks, state, client, component):
+        unchanged = (no_update,) * 5
+        triggered = ctx.triggered_id
+        if triggered == panel.dropdown_id:
+            event = ("dropdown", dropdown_value or [])
+        elif isinstance(triggered, dict):
+            # Re-rendered buttons arrive with n_clicks 0; only a real click counts.
+            if not (ctx.triggered and ctx.triggered[0].get("value")):
+                return unchanged
+            event = ("chip", triggered["unit"]) if triggered["type"] == panel.chip else ("badge", triggered["badge"])
+        else:
+            return unchanged
+
+        result = update(event, state, client, component) if client and component else None
+        if result is None:
+            return unchanged
+        if event[0] == "dropdown" and result["state"] == state:
+            return unchanged  # an echo of our own update: nothing changed
+
+        chip_units = [item["id"]["unit"] for item in ctx.outputs_list[2]]
+        badges = [item["id"]["badge"] for item in ctx.outputs_list[3]]
+        return (
+            result["state"],
+            # the dropdown already shows what the user just picked in it
+            no_update if event[0] == "dropdown" else result["selected"],
+            [result["chip_classes"][u] for u in chip_units],
+            [result["badge_classes"][b] for b in badges],
+            result["figure"],
+        )
+
+    return update_selection
+
 
 # _load_real_oil_samples was moved to
 # dashboard.components.predictive_config.load_real_oil_samples so
@@ -130,6 +216,39 @@ def register_callbacks(app):
             ])
 
     # ══════════════════════════════════════════════════════════════════════════
+    # OVERVIEW: Layer 2 submenu (Short View / Long View)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @app.callback(
+        Output(LAYER2_CONTENT_ID, "children"),
+        Input(LAYER2_TABS_ID, "value"),
+        State("predictive-ev-client-store", "data"),
+        State("predictive-ev-component-store", "data"),
+        prevent_initial_call=True,
+    )
+    def switch_layer2_view(view, client, component):
+        """Render the picked analysis under the Layer 2 submenu. The Short View is
+        pre-rendered with Resumen; the Long View is built here, only when asked for."""
+        if not client or not component:
+            return no_update
+        filepath = _discover_components(client).get(component)
+        if not filepath:
+            return no_update
+        _, df_latest, _ = _load_overview_component(filepath, component, client)
+        if df_latest is None or df_latest.empty:
+            return no_update
+        if view == LAYER2_LONG:
+            return render_long_view(client, component, df_latest["Unit"])
+        return render_short_view(attach_status(df_latest, client, component), client, component)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # OVERVIEW: unit selection of each Layer 2 chart (dropdown / chips / risk badges / chart)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    register_selection_callback(app, SHORT_PANEL, _short_view_update)
+    register_selection_callback(app, LONG_PANEL, _long_view_update)
+
+    # ══════════════════════════════════════════════════════════════════════════
     # OVERVIEW -> EVIDENCE: click a scatter point / table row to open that unit
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -206,7 +325,9 @@ def register_callbacks(app):
             return no_update, no_update
 
         failure_modes = resolve_failure_modes(component, client)
-        latest = attach_status(df_latest, client, component)
+        latest = attach_component_hours(
+            attach_status(df_latest, client, component), load_active_curve(client, component)
+        )
         fm_keys = list(failure_modes.keys())
 
         state = dict(state or {})
@@ -284,61 +405,16 @@ def register_callbacks(app):
 
         component_label = (component or "").title()
 
-        # ── Load component horómetro (at last evidence date) ──
+        # ── Component horómetro: the Predictivo section's single component-hours
+        # source (cumulative_risk_curve), same value as the Resumen table, the
+        # Long View and the fleet scatter tooltip ──
         horometro_text = "—"
         horometro_date = ""
-        if client and component:
-            settings = get_settings()
-            allowed = [c.upper() for c in settings.component_hours_allowed_clients]
-            if client.upper() in allowed:
-                comp_hours_file = settings.get_component_hours_path(client.lower())
-                if comp_hours_file.exists():
-                    try:
-                        from src.data.loaders import load_component_hours
-                        import re as _re
-                        all_hours = load_component_hours(comp_hours_file)
-                        if not all_hours.empty:
-                            # Normalize unit IDs (T_09 vs T_9)
-                            def _norm_uid(uid):
-                                m = _re.match(r'^([A-Za-z]+_)0*(\d+)$', str(uid))
-                                return f"{m.group(1)}{m.group(2)}" if m else str(uid)
-
-                            unit_norm = _norm_uid(selected_unit)
-                            all_hours['_uid_norm'] = all_hours['unitId'].apply(_norm_uid)
-
-                            # Get last evidence date
-                            components_map = _discover_components(client)
-                            filepath = components_map.get(component)
-                            last_ev_date = None
-                            if filepath:
-                                df_ev, _ = _load_evidence_component(filepath, component, client)
-                                if df_ev is not None:
-                                    df_ev_unit = df_ev[df_ev["Unit"] == selected_unit]
-                                    if not df_ev_unit.empty:
-                                        last_ev_date = df_ev_unit["Fecha"].max()
-
-                            hours_component_name = settings.get_component_hours_name(client, component)
-                            unit_hours = all_hours[
-                                (all_hours['_uid_norm'] == unit_norm) &
-                                (all_hours['componentName'] == hours_component_name)
-                            ].copy()
-
-                            if not unit_hours.empty and last_ev_date is not None:
-                                unit_hours['date_diff'] = abs(unit_hours['sampleDate'] - last_ev_date)
-                                closest = unit_hours.sort_values('date_diff').iloc[0]
-                                hrs = closest['componentHours_cleaned']
-                                date_val = closest['sampleDate']
-                                if pd.notna(hrs):
-                                    horometro_text = f"{hrs:,.0f} hrs"
-                                if pd.notna(date_val):
-                                    horometro_date = pd.to_datetime(date_val).strftime('%d %b %Y')
-                            elif not unit_hours.empty:
-                                latest_row = unit_hours.sort_values('sampleDate').iloc[-1]
-                                hrs = latest_row['componentHours_cleaned']
-                                if pd.notna(hrs):
-                                    horometro_text = f"{hrs:,.0f} hrs"
-                    except Exception as e:
-                        logger.warning(f"Could not load component hours for banner: {e}")
+        point = load_unit_component_hours(client, component, selected_unit) if client and component else None
+        if point is not None:
+            hours, reading_date = point
+            horometro_text = f"{hours:,.0f} hrs"
+            horometro_date = pd.to_datetime(reading_date).strftime('%d %b %Y')
 
         return html.Div([
             html.Div([

@@ -13,8 +13,9 @@ COLORS = {"Normal": "#1d9e75", "Anormal": "#e24b4a"}
 def _latest(n=6):
     return pd.DataFrame({
         "Unit": [f"T_{i:02d}" for i in range(n)],
-        "ranking": np.linspace(2, 30, n),
-        "avg_ranking_30d": np.linspace(30, 3, n),
+        "ranking": np.linspace(40, 1, n),             # today: in the tooltip, not plotted
+        "avg_ranking_7d": np.linspace(2, 30, n),      # x axis
+        "avg_ranking_30d": np.linspace(30, 3, n),     # y axis
         "status": ["Normal", "Anormal"] * (n // 2),
     })
 
@@ -71,6 +72,7 @@ def test_no_threshold_renders_plain_scatter():
 def test_all_nan_ranking_does_not_break_the_chart():
     df = _latest()
     df["ranking"] = np.nan
+    df["avg_ranking_7d"] = np.nan
     df["avg_ranking_30d"] = np.nan
     for thresh in [(16, 16), None]:
         fig = create_fleet_scatter(df, None, COLORS, thresholds=thresh)
@@ -83,8 +85,9 @@ def test_tooltip_shows_meter_and_dash_for_unit_without_reading():
                                meter_by_unit={"T_00": 12345.0, "T_01": 800.0})
     for trace in fig.data:
         assert "%{hovertext}" in trace.hovertemplate
-        # existing fields are still there
-        assert "%{x:.0f}" in trace.hovertemplate and "%{y:.1f}" in trace.hovertemplate
+        # today / 7d / 30d are all there (today comes from customdata: it is not plotted)
+        assert "%{customdata[1]}" in trace.hovertemplate
+        assert "%{x:.1f}" in trace.hovertemplate and "%{y:.1f}" in trace.hovertemplate
         assert trace.hovertemplate.endswith("<extra></extra>")
     texts = {u: h for t in fig.data for u, h in zip(t.text, t.hovertext)}
     assert texts["T_00"] == "12,345 hrs" and texts["T_01"] == "800 hrs" and texts["T_02"] == "—"
@@ -99,7 +102,8 @@ def test_tooltip_without_meter_source_is_unchanged():
 def test_click_to_evidence_still_reads_the_unit_from_customdata():
     fig = create_fleet_scatter(_latest(), "T_01", COLORS, thresholds=(16, 16), meter_by_unit={"T_00": 1.0})
     for trace in fig.data:
-        assert list(trace.customdata) == list(trace.text)
+        # [unit, today's ranking]: the click callback takes index 0 of a list
+        assert [c[0] for c in trace.customdata] == list(trace.text)
 
 
 def _alpha(rgba):
