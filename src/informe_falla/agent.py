@@ -7,7 +7,7 @@ Los controles verifican el esquema, que las fuentes citadas existan en lo que re
 las hipotesis sin respaldo, los pasos de inspeccion fuera de lugar y que los textos para
 el cliente no usen terminos internos del paquete.
 
-Modelo, timeout, temperatura y semilla: src/rca/config.py (requiere OPENAI_API_KEY).
+Modelo, timeout, temperatura y semilla: src/informe_falla/config.py (requiere OPENAI_API_KEY).
 """
 
 from __future__ import annotations
@@ -16,12 +16,12 @@ import json
 import re
 from typing import Callable, Optional
 
-from src.rca import catalog as c
-from src.rca.catalog import MODOS, NOMBRE_MODO, VERIFICACIONES
-from src.rca.config import get_rca_settings
+from src.informe_falla import catalog as c
+from src.informe_falla.catalog import MODOS, NOMBRE_MODO, VERIFICACIONES
+from src.informe_falla.config import get_informe_settings
 
 # Cambia cada vez que cambian el prompt o el esquema; queda en el registro de cada informe.
-PROMPT_VERSION = "2.3"
+PROMPT_VERSION = "2.5"
 
 # llm_fn(system, user, esquema) -> str con la respuesta JSON del modelo
 LlmFn = Callable[[str, str, dict], str]
@@ -30,7 +30,7 @@ EVALUACIONES = ["mas_probable", "poco_probable", "descartada", "no_evaluable"]
 
 
 # =============================================================================
-# Esquema de salida (formato RCA)
+# Esquema de salida (formato informe preliminar)
 # =============================================================================
 def _obj(props):
     """Objeto estricto: todos los campos obligatorios y ninguno extra (requisito de Structured Outputs)."""
@@ -45,7 +45,7 @@ def _enum(opciones):
     return {"type": "string", "enum": opciones}
 
 
-ESQUEMA_INFORME = {"name": "rca_probable", "strict": True, "schema": _obj({
+ESQUEMA_INFORME = {"name": "informe_falla_probable", "strict": True, "schema": _obj({
     "veredicto": _enum(c.VEREDICTOS),
     "confianza": _enum(c.CONFIANZAS),
     "motivo_confianza": _TEXTO,
@@ -112,6 +112,13 @@ DATOS (calculados por herramientas; tú no calculas nada):
 - ranking_modos: los modos ordenados por nivel. veredicto_reglas: el veredicto determinista.
 - acciones_previas y analisis_por_metrica.<modo>.verificaciones_sugeridas: el catálogo de pasos de inspección.
 - contexto_cliente (si viene): título, descripción del evento, hallazgos de inspección y acciones realizadas.
+- Mantenciones (registros de la unidad ANTERIORES a la detención; no son hallazgos de esta detención):
+  cobertura_mantenciones.estado dice si la fuente cubre el período ("completa", "parcial", "unidad_sin_registros",
+  "fuera_de_cobertura", "sin_fuente"). detenciones_previas: las intervenciones del sistema en el período (fecha,
+  tipo Correctiva/Programada/Sin clasificar, subsistema, componentes, qué se hizo, horas intervenidas ese día,
+  modos_relacionados por subsistema o componente, y cerca_de_la_detencion). antecedentes_mantencion: último
+  mantenimiento programado, recurrencia de correctivas por subsistema, última intervención en el subsistema de cada
+  modo destacado y rellenos de aceite o refrigerante, todo en los últimos 180 días.
 
 VENTANAS (ver "ventanas"): el período analizado son los 3 meses previos a la detención; el último mes es el que se
 compara contra el resto (la línea base de la unidad). La semana de la detención (rel=0) se excluye por diseño: NO es
@@ -162,6 +169,21 @@ REGLAS:
     si el cliente describe un síntoma compatible con un modo, dilo en "a_favor"), pero no lo cites en "fuentes", no
     subas la confianza por él y no cambies con él el nivel de ningún modo. Si contradice al Predictivo, dilo en
     "limitaciones". Sin contexto_cliente, no lo menciones.
+15. MANTENCIONES.
+    - Cítalas en "fuentes" como "detenciones_previas[fecha=AAAA-MM-DD]", "antecedentes_mantencion.recurrencia",
+      "antecedentes_mantencion.rellenos" o "cobertura_mantenciones.estado".
+    - Dos o más correctivas en el subsistema de un modo destacado pueden ir "a favor" de esa hipótesis como falla
+      repetida o causa posiblemente no resuelta, y en el paso "¿Por qué no se detectó antes?".
+    - Una intervención reciente sobre un componente compatible es un antecedente que puede pesar en los dos sentidos
+      (reparado, o mal reparado o con causa no resuelta). Nunca marques una hipótesis como "descartada" solo por un
+      registro de mantención.
+    - Los rellenos repetidos de refrigerante o de aceite son un antecedente para refrigerante, blow-by y lubricación.
+    - Si cobertura_mantenciones.estado no es "completa", no afirmes que no hubo intervenciones: di que no hay registros.
+    - Un registro con cerca_de_la_detencion = true es de los días previos y puede ser parte de esta misma detención:
+      descríbelo así, no como un antecedente independiente.
+    - La relación entre modos y subsistemas es una propuesta sin validar: escribe "relacionado con", nunca "causado
+      por" ni "confirmado por el registro de mantención".
+    - La cobertura de los registros de mantención ya la declara el informe: no la repitas en "limitaciones".
 
 CÓMO ESCRIBIR (todo texto, salvo "fuentes" y "motivo_si_difiere", lo lee el cliente):
 - Español claro, frases cortas. El resumen ("causa_mas_probable", "que_mostro_el_predictivo",
@@ -174,7 +196,8 @@ CÓMO ESCRIBIR (todo texto, salvo "fuentes" y "motivo_si_difiere", lo lee el cli
   unidad".
 - Usa fechas ("23 de septiembre"), no códigos de semana como "W37" ni posiciones relativas.
 - No inventes nombres: solo puedes nombrar el Predictivo, el dashboard, los modos (con la tabla de arriba), los
-  componentes de "componentes_compatibles" y lo que escriba el cliente. Nada de marcas, software, sensores ni siglas
+  componentes de "componentes_compatibles", los subsistemas y componentes de los registros de mantención y lo que
+  escriba el cliente. Nada de marcas, software, sensores ni siglas
   que no estén en el paquete.
 - "motivo_confianza": una frase que explique por qué la confianza es esa, en palabras del cliente (por ejemplo,
   "faltan 6 días de datos justo antes de la detención").
@@ -280,6 +303,17 @@ def terminos_internos(informe) -> list:
     return sorted({m.group(0) for texto in _textos_cliente(informe) for m in _TERMINOS_INTERNOS.finditer(texto or "")})
 
 
+_AFIRMACIONES_PROHIBIDAS = re.compile(
+    r"confirmad[oa]s? (?:por|en) (?:el |los |la |las )?(?:registros?|mantenci[oó]n|historial)"
+    r"|causad[oa]s? por (?:la |el )?(?:mantenci[oó]n|intervenci[oó]n|registro)", re.IGNORECASE)
+
+
+def afirmaciones_prohibidas(informe) -> list:
+    """Frases que convierten un registro de mantencion en prueba (la equivalencia esta sin validar)."""
+    return sorted({m.group(0) for texto in _textos_cliente(informe)
+                   for m in _AFIRMACIONES_PROHIBIDAS.finditer(texto or "")})
+
+
 def controles(informe, evid, enviada, esquema=None):
     return {
         "errores_esquema": validar_esquema(informe, esquema),
@@ -287,6 +321,7 @@ def controles(informe, evid, enviada, esquema=None):
         "hipotesis_sin_respaldo": hipotesis_sin_respaldo(informe, evid),
         "verificaciones_fuera_de_lugar": verificaciones_fuera_de_lugar(informe),
         "terminos_internos": terminos_internos(informe),
+        "afirmaciones_prohibidas": afirmaciones_prohibidas(informe),
     }
 
 
@@ -294,7 +329,7 @@ def controles(informe, evid, enviada, esquema=None):
 # Agente
 # =============================================================================
 def correr_agente(evid: dict, perfil: dict, llm_fn: LlmFn, contexto_cliente: Optional[dict] = None) -> dict:
-    """La evidencia, lo que recibio la IA, su informe (formato RCA) y los controles."""
+    """La evidencia, lo que recibio la IA, su informe (formato informe preliminar) y los controles."""
     enviada = evidencia_para_ia(evid, contexto_cliente)
     informe = json.loads(llm_fn(prompt_informe(perfil), json.dumps(enviada, ensure_ascii=False), ESQUEMA_INFORME))
     return {"evidencia": evid, "evidencia_enviada": enviada, "informe": informe,
@@ -305,7 +340,7 @@ def openai_llm(model: Optional[str] = None) -> LlmFn:
     """llm_fn sobre la API de OpenAI con Structured Outputs. Requiere OPENAI_API_KEY."""
     from openai import OpenAI
 
-    ajustes = get_rca_settings()
+    ajustes = get_informe_settings()
     client = OpenAI(timeout=ajustes.llm_timeout_seconds)
     model = model or ajustes.model
     # Solo se envian si estan configurados: no todos los modelos los aceptan.

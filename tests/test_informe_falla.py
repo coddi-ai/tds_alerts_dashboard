@@ -1,4 +1,4 @@
-"""Informe preliminar de falla (src/rca): evidencia, controles de la IA, informe, validador, servicio y ruta del PDF.
+"""Informe preliminar de falla (src/informe_falla): evidencia, controles de la IA, informe, validador, servicio y ruta del PDF.
 
 Los datos del Predictivo son sinteticos: una flota de 12 unidades con ruido bajo y una
 unidad (T_09) cuya contaminacion por refrigerante se dispara en el ultimo mes. La IA se
@@ -19,9 +19,9 @@ import pandas as pd
 import pytest
 
 from config.users import USERS
-from dashboard import rca_files
-from src.rca import agent, catalog, config, evidence, report_html, service
-from src.rca.catalog import MODOS
+from dashboard import informe_falla_files
+from src.informe_falla import agent, catalog, config, evidence, report_html, service
+from src.informe_falla.catalog import MODOS
 
 FECHA = "2026-03-12"          # jueves; la semana de la fecha queda excluida por diseño
 UNIDAD = "T_09"
@@ -134,15 +134,15 @@ def test_unidad_sin_datos_es_datos_insuficientes(fuentes):
 
 
 def test_configuracion_por_defecto_y_por_entorno(monkeypatch, tmp_path):
-    for var in ("RCA_MODEL", "RCA_TEMPERATURE", "RCA_SEED", "RCA_OUTPUT_DIR"):
+    for var in ("INFORME_FALLA_MODEL", "INFORME_FALLA_TEMPERATURE", "INFORME_FALLA_SEED", "INFORME_FALLA_OUTPUT_DIR"):
         monkeypatch.delenv(var, raising=False)
-    ajustes = config.get_rca_settings()
+    ajustes = config.get_informe_settings()
     assert ajustes.model == "gpt-6-luna" and ajustes.temperature is None and ajustes.seed is None
-    monkeypatch.setenv("RCA_MODEL", "otro-modelo")
-    monkeypatch.setenv("RCA_TEMPERATURE", "0")
-    monkeypatch.setenv("RCA_SEED", "7")
-    monkeypatch.setenv("RCA_OUTPUT_DIR", str(tmp_path))
-    ajustes = config.get_rca_settings()
+    monkeypatch.setenv("INFORME_FALLA_MODEL", "otro-modelo")
+    monkeypatch.setenv("INFORME_FALLA_TEMPERATURE", "0")
+    monkeypatch.setenv("INFORME_FALLA_SEED", "7")
+    monkeypatch.setenv("INFORME_FALLA_OUTPUT_DIR", str(tmp_path))
+    ajustes = config.get_informe_settings()
     assert (ajustes.model, ajustes.temperature, ajustes.seed, ajustes.output_dir) == ("otro-modelo", 0.0, 7, tmp_path)
 
 
@@ -216,7 +216,7 @@ def test_informe_escapa_el_texto_del_usuario_e_incluye_las_fotos(evid):
 
 
 def test_pdf_real_con_weasyprint(evid):
-    from src.rca import pdf
+    from src.informe_falla import pdf
     if not pdf.pdf_disponible():
         pytest.skip("WeasyPrint o Pango no disponibles en este entorno (se prueba en la imagen Docker)")
     res = agent.correr_agente(evid, config.perfil_cliente("CDA"), _llm)
@@ -232,12 +232,15 @@ def test_pdf_real_con_weasyprint(evid):
 def servicio(fuentes, monkeypatch, tmp_path):
     status, risk = fuentes
     lecturas = []
-    monkeypatch.setenv("RCA_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("INFORME_FALLA_OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_FUENTES", {})
     monkeypatch.setattr(service, "load_unit_status_history", lambda client, comp: lecturas.append(client) or status)
     monkeypatch.setattr(service, "load_risk_scores_history", lambda client, comp: risk)
     monkeypatch.setattr(service, "pdf_disponible", lambda: True)
     monkeypatch.setattr(service, "html_a_pdf", lambda html: b"%PDF-sintetico")
+    # Sin fuente de mantenciones: estas pruebas no leen la data real (tests/test_informe_falla_mantenciones.py la cubre).
+    monkeypatch.setattr(service.mantenciones, "_cargar", lambda cliente: (pd.DataFrame(), pd.DataFrame(
+        columns=["unidad_key", "dia", "intervention_hours"])))
     return lecturas
 
 
@@ -254,7 +257,7 @@ def test_genera_guarda_y_lista_el_informe(servicio):
     def llm(system, user, esquema):
         enviados.append(json.loads(user))
         return _llm(system, user, esquema)
-    resultado = service.generar_rca(_solicitud(), llm_fn=llm, sistema_label="Motor")
+    resultado = service.generar_informe(_solicitud(), llm_fn=llm, sistema_label="Motor")
     # El sistema elegido va al PDF, no a la IA.
     assert enviados[0]["contexto_cliente"] == {"titulo": "Pérdida de potencia"}
     assert resultado["status"] == service.STATUS_READY
@@ -273,12 +276,12 @@ def test_genera_guarda_y_lista_el_informe(servicio):
 
 
 def test_el_historial_se_lee_una_vez_por_cliente(servicio):
-    service.generar_rca(_solicitud(), llm_fn=_llm)
-    service.generar_rca(_solicitud(), llm_fn=_llm)
+    service.generar_informe(_solicitud(), llm_fn=_llm)
+    service.generar_informe(_solicitud(), llm_fn=_llm)
     assert servicio == ["cda"]
 
 
-@pytest.mark.parametrize("report_id", ["", "../cda/x", "RCA_x/../../y", "a" * 200, "RCA_no_existe"])
+@pytest.mark.parametrize("report_id", ["", "../cda/x", "IPF_x/../../y", "a" * 200, "IPF_no_existe"])
 def test_ids_ajenos_o_maliciosos_no_resuelven(servicio, report_id):
     assert service.ruta_pdf("CDA", report_id) is None
 
@@ -288,8 +291,8 @@ def test_ids_ajenos_o_maliciosos_no_resuelven(servicio, report_id):
     ({"unit": "T_99"}, service.ERROR_UNIT),
 ])
 def test_errores_de_la_solicitud(servicio, cambios, motivo):
-    with pytest.raises(service.RcaError) as error:
-        service.generar_rca(_solicitud(**cambios), llm_fn=_llm)
+    with pytest.raises(service.InformeError) as error:
+        service.generar_informe(_solicitud(**cambios), llm_fn=_llm)
     assert error.value.motivo == motivo
 
 
@@ -317,14 +320,14 @@ def test_validador_unidad_inexistente(servicio):
 def test_sin_datos_suficientes_no_se_llama_a_la_ia(servicio):
     def llm(*_):
         raise AssertionError("no debe llamarse a la IA sin datos suficientes")
-    with pytest.raises(service.RcaError) as error:
-        service.generar_rca(_solicitud(event_date="2026-05-15"), llm_fn=llm)
+    with pytest.raises(service.InformeError) as error:
+        service.generar_informe(_solicitud(event_date="2026-05-15"), llm_fn=llm)
     assert error.value.motivo == service.ERROR_INSUFFICIENT
     assert error.value.datos["dias_con_dato"] == 0 and error.value.datos["unidad"] == UNIDAD
 
 
 def test_mensajes_del_validador_en_la_vista(servicio):
-    from dashboard.callbacks import rca_callbacks as rc
+    from dashboard.callbacks import informe_falla_callbacks as rc
     ok = rc.availability_messages(service.validar_disponibilidad("CDA", "T_9", FECHA))
     assert ok[0].startswith("Datos suficientes: T_09 tiene 28 de 28 días")
     falta = service.validar_disponibilidad("CDA", UNIDAD, "2026-05-15")
@@ -337,28 +340,28 @@ def test_mensajes_del_validador_en_la_vista(servicio):
 
 def test_sin_api_key_no_llama_a_la_ia(servicio, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(service.RcaError) as error:
-        service.generar_rca(_solicitud())
+    with pytest.raises(service.InformeError) as error:
+        service.generar_informe(_solicitud())
     assert error.value.motivo == service.ERROR_NO_API_KEY
 
 
 def test_el_trabajo_en_segundo_plano_termina(monkeypatch):
-    monkeypatch.setattr(service, "generar_rca",
-                        lambda request, sistema_label=None: {"status": service.STATUS_READY, "report_id": "RCA_1"})
+    monkeypatch.setattr(service, "generar_informe",
+                        lambda request, sistema_label=None: {"status": service.STATUS_READY, "report_id": "INFORME_FALLA_1"})
     job_id = service.iniciar(_solicitud())
     for _ in range(100):
         job = service.estado(job_id)
         if job["status"] != service.STATUS_RUNNING:
             break
         time.sleep(0.02)
-    assert job["status"] == service.STATUS_READY and job["client"] == "CDA" and job["report_id"] == "RCA_1"
+    assert job["status"] == service.STATUS_READY and job["client"] == "CDA" and job["report_id"] == "INFORME_FALLA_1"
     assert service.estado("no-existe") is None
 
 
 def test_un_error_del_trabajo_queda_con_su_motivo(monkeypatch):
     def falla(request, sistema_label=None):
-        raise service.RcaError(service.ERROR_NO_DATA)
-    monkeypatch.setattr(service, "generar_rca", falla)
+        raise service.InformeError(service.ERROR_NO_DATA)
+    monkeypatch.setattr(service, "generar_informe", falla)
     job_id = service.iniciar(_solicitud())
     for _ in range(100):
         if service.estado(job_id)["status"] != service.STATUS_RUNNING:
@@ -377,18 +380,18 @@ PREFIX = "/alerts-dashboard/"
 
 @pytest.fixture
 def web(servicio):
-    report_id = service.generar_rca(_solicitud(), llm_fn=_llm)["report_id"]
+    report_id = service.generar_informe(_solicitud(), llm_fn=_llm)["report_id"]
     app = dash.Dash(__name__, url_base_pathname=PREFIX, suppress_callback_exceptions=True)
     app.layout = dash.html.Div()
     app.server.secret_key = "flask-secret-key-sintetica-0123456789"
-    rca_files.register_rca_files(app)
+    informe_falla_files.register_informe_falla_files(app)
     app.server.testing = True
     with app.server.test_client() as test_client:
         yield test_client, report_id
 
 
 def _get(test_client, report_id, client="CDA", **extra):
-    return test_client.get(f"{PREFIX}rca/file", query_string={"client": client, "id": report_id, **extra})
+    return test_client.get(f"{PREFIX}informe-falla/file", query_string={"client": client, "id": report_id, **extra})
 
 
 def _login(test_client, username):
@@ -412,4 +415,4 @@ def test_ruta_niega_otro_cliente_e_ids_invalidos(web):
     _login(test_client, CDA_USER)
     assert _get(test_client, report_id, client="CAPSTONE").status_code == 403
     assert _get(test_client, "../" + report_id).status_code == 404
-    assert _get(test_client, "RCA_no_existe").status_code == 404
+    assert _get(test_client, "IPF_no_existe").status_code == 404

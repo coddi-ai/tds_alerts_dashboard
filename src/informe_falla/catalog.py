@@ -1,5 +1,5 @@
 """
-Metodo del RCA Asistido: ventanas, umbrales, modos de falla, componentes compatibles y
+Metodo del Informe preliminar de falla: ventanas, umbrales, modos de falla, componentes compatibles y
 catalogo de verificaciones. La operacion (modelo, carpetas, caches) y el contexto de cada
 cliente estan en config.py.
 
@@ -16,7 +16,7 @@ VERSION = 2   # 1 = score semanal; 2 = + score diario (risk_scores)
 
 ZONA_HORARIA = "America/Santiago"
 
-# Componente del Predictivo que analiza el RCA. Los modos y el catalogo son de motor.
+# Componente del Predictivo que analiza el informe. Los modos y el catalogo son de motor.
 COMPONENTE = "motor"
 
 # --- Ventanas, en semanas ISO contadas hacia atras desde la semana de la fecha (semana 0, excluida)
@@ -185,3 +185,46 @@ def verificaciones(ids) -> list:
 def fecha_inicio_base(perfil: Optional[dict]) -> date:
     """Sin corte de base, cualquier fecha sirve: se usa una muy antigua."""
     return (perfil or {}).get("fecha_inicio_base") or date(2000, 1, 1)
+
+
+# =============================================================================
+# Mantenciones: equivalencias entre modos del Predictivo y la data de mantencion
+# =============================================================================
+# PROPUESTA SIN VALIDAR con mantenimiento: todo informe que la use lo declara.
+# Origen: notebooks/paquete_troubleshooting/catalogos/equivalencias_subsistemas.json
+# ("por_failure_mode", Capstone), copiada aqui porque esa carpeta no se versiona.
+# Los valores son nombres de query_3.action_subsystem_name. Un cliente sin tabla queda
+# sin modos relacionados por subsistema (y se declara), nunca con una tabla inventada.
+EQUIVALENCIA_SIN_VALIDAR = "propuesta sin validar"
+SUBSISTEMAS_POR_MODO = {
+    "CAPSTONE": {
+        "blowby_risk": ["Sistema de Motor Básico"],
+        "lubrication_failure_risk": ["Sistema de Lubricación"],
+        "bearing_wear_risk": ["Sistema de Motor Básico", "Sistema de Lubricación"],
+        "oil_degradation_risk": ["Sistema de Lubricación"],
+        "coolant_contamination_risk": ["Sistema de Enfriamiento", "Sistema de Lubricación"],
+        "combustion_risk": ["Sistema de Combustible", "Sistema de entrada y salida de Aire"],
+        "thermal_imbalance_risk": ["Sistema de Combustible", "Sistema de entrada y salida de Aire"],
+        "turbocharger_risk": ["Sistema de entrada y salida de Aire"],
+        "abrasive_wear_risk": ["Sistema de entrada y salida de Aire", "Sistema de Lubricación"],
+    },
+}
+
+# Palabras de query_3.component_names que apuntan a un modo (en minuscula, por inclusion).
+# Misma advertencia: propuesta sin validar. Vale para todos los clientes.
+COMPONENTES_CLAVE_POR_MODO = {
+    "turbocharger_risk": ["turbo", "postenfriador", "aftercooler"],
+    "coolant_contamination_risk": ["enfriador de aceite", "radiador", "bomba de agua", "termostato",
+                                   "refrigerante", "líneas de agua", "culata"],
+    "combustion_risk": ["inyector", "bomba de inyección", "combustible"],
+    "thermal_imbalance_risk": ["inyector", "múltiple de escape", "tubo de escape"],
+    "lubrication_failure_risk": ["bomba de aceite", "líneas de aceite", "filtro de aceite", "colector del aceite"],
+    "bearing_wear_risk": ["cojinete", "cigüeñal", "biela", "volante", "amortiguador"],
+    "blowby_risk": ["respiradero", "cilindro", "pistón", "camisa", "anillo"],
+    "abrasive_wear_risk": ["limpiador de aire", "filtro de aire", "ducto de admisión"],
+}
+
+# Sistemas de mantencion que corresponden a cada sistema del formulario (query_3.action_system_name, en minuscula).
+SISTEMAS_MANTENCION = {
+    "motor": {"motor", "sistema motor", "sistema de motor", "sistema de motor básico"},
+}

@@ -1,7 +1,7 @@
 """
-Reportes > Reporte RCA: la solicitud que arma el formulario del dashboard.
+Reportes > Informe preliminar de falla: la solicitud que arma el formulario del dashboard.
 
-`build_rca_request` junta lo que el usuario lleno; src/rca/service.py la procesa
+`build_informe_request` junta lo que el usuario lleno; src/informe_falla/service.py la procesa
 (datos del Predictivo, agente, PDF). Las imagenes se validan aqui al subirlas.
 
 Forma de la solicitud (dict serializable a JSON):
@@ -27,10 +27,10 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 # Las imagenes viajan en base64 entre navegador y servidor en cada callback: el tope
-# mantiene esos viajes livianos (el PDF del RCA las lleva en su anexo).
-RCA_MAX_IMAGES = 6
-RCA_MAX_IMAGE_BYTES = 4 * 1024 * 1024
-RCA_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+# mantiene esos viajes livianos (el PDF del informe las lleva en su anexo).
+INFORME_MAX_IMAGES = 6
+INFORME_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+INFORME_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
 
 TEXT_FIELDS = ("title", "description", "findings", "actions")
 
@@ -42,13 +42,13 @@ def decode_image(filename: str, contents: str) -> Tuple[Optional[dict], Optional
     """
     header, _, payload = (contents or "").partition(",")
     mime = header.removeprefix("data:").split(";", 1)[0].lower()
-    if mime not in RCA_IMAGE_TYPES:
+    if mime not in INFORME_IMAGE_TYPES:
         return None, "type"
     try:
         size = len(base64.b64decode(payload, validate=True))
     except (binascii.Error, ValueError):
         return None, "invalid"
-    if size > RCA_MAX_IMAGE_BYTES:
+    if size > INFORME_MAX_IMAGE_BYTES:
         return None, "size"
     return {
         "id": uuid.uuid4().hex,
@@ -60,7 +60,7 @@ def decode_image(filename: str, contents: str) -> Tuple[Optional[dict], Optional
     }, None
 
 
-def build_rca_request(client: str, unit: str, system: Optional[str], event_date: Optional[str],
+def build_informe_request(client: str, unit: str, system: Optional[str], event_date: Optional[str],
                       fields: dict, images: List[dict], requested_by: Optional[str]) -> dict:
     """Solicitud completa para el generador, a partir de lo que el usuario lleno."""
     return {

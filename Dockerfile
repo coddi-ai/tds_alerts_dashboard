@@ -2,7 +2,7 @@ FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 
-# Pango y HarfBuzz: los usa WeasyPrint para el PDF del Reporte RCA (src/rca/pdf.py).
+# Pango y HarfBuzz: los usa WeasyPrint para el PDF del Informe preliminar de falla (src/informe_falla/pdf.py).
 RUN apt-get update && apt-get install -y gcc curl libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
     && rm -rf /var/lib/apt/lists/*
 

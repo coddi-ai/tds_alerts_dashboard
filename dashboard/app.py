@@ -93,9 +93,9 @@ from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
 from dashboard.callbacks.reporting_callbacks import register_reporting_callbacks
 from dashboard.report_files import register_report_files
 
-# Reporte RCA: formulario, generacion en segundo plano (src/rca) y ruta Flask que entrega el PDF
-from dashboard.callbacks.rca_callbacks import register_rca_callbacks
-from dashboard.rca_files import register_rca_files
+# Informe preliminar de falla: formulario, generacion en segundo plano (src/informe_falla) y ruta Flask que entrega el PDF
+from dashboard.callbacks.informe_falla_callbacks import register_informe_falla_callbacks
+from dashboard.informe_falla_files import register_informe_falla_files
 
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
@@ -166,7 +166,7 @@ import dashboard.pages.agents_troubleshooting
 import dashboard.pages.integration_validacion_avisos
 import dashboard.pages.integration_seguimiento_avisos
 import dashboard.pages.reporting_main
-import dashboard.pages.reporting_rca
+import dashboard.pages.reporting_informe_falla
 import dashboard.pages.admin_main
 import dashboard.pages.admin_user_registry
 import dashboard.pages.no_services
@@ -247,11 +247,11 @@ register_troubleshooting_callbacks(app)
 # Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.
 register_troubleshooting_handoff(app)
 register_reporting_callbacks(app)
-register_rca_callbacks(app)
+register_informe_falla_callbacks(app)
 # Flask route {PATH_PREFIX}reports/file: re-checks access and streams the PDF from S3.
 register_report_files(app)
-# Flask route {PATH_PREFIX}rca/file: re-checks access and serves a generated RCA PDF.
-register_rca_files(app)
+# Flask route {PATH_PREFIX}informe-falla/file: re-checks access and serves a generated informe preliminar PDF.
+register_informe_falla_files(app)
 
 
 @app.server.after_request

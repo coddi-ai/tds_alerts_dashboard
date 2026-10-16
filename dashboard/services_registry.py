@@ -52,7 +52,7 @@ SERVICE_SECTIONS = [
         "section": "reporting",
         "label": "Reportes",
         "icon": "fas fa-file-alt",
-        "services": ["reporting-main", "reporting-rca"],
+        "services": ["reporting-main", "reporting-informe-falla"],
     },
 ]
 
@@ -69,7 +69,7 @@ SERVICE_LABELS = {
     "integration-validacion-avisos": "Validación de Avisos",
     "integration-seguimiento-avisos": "Seguimiento de Avisos",
     "reporting-main": "Reportabilidad",
-    "reporting-rca": "Informe preliminar de falla",
+    "reporting-informe-falla": "Informe preliminar de falla",
 }
 
 # service id / admin nav id -> URL path.
@@ -86,7 +86,7 @@ NAV_PATHS = {
     "integration-validacion-avisos": "/integration/validacion-avisos",
     "integration-seguimiento-avisos": "/integration/seguimiento-avisos",
     "reporting-main": "/reporting",
-    "reporting-rca": "/reporting/rca",
+    "reporting-informe-falla": "/reporting/informe-falla",
     "admin-main": "/admin",
     "admin-user-registry": "/admin/registro-usuarios",
 }
@@ -104,7 +104,7 @@ SERVICE_EXACT_ROUTES = {
     "integration/validacion-avisos": "integration-validacion-avisos",
     "integration/seguimiento-avisos": "integration-seguimiento-avisos",
     "reporting": "reporting-main",
-    "reporting/rca": "reporting-rca",
+    "reporting/informe-falla": "reporting-informe-falla",
 }
 
 

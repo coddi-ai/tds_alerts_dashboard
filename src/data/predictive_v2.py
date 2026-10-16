@@ -307,7 +307,7 @@ def read_all_partitions(base: Path) -> pd.DataFrame:
     """Every week partition under `base`, concatenated, with its `year`/`week`.
 
     For callers that need the whole history rather than the latest run or the
-    last ~3 months - the RCA report (src/rca) looks months back from an
+    last ~3 months - the preliminary failure report (src/informe_falla) looks months back from an
     arbitrary past date. Each partition goes through the same cache as the
     other readers."""
     frames = []

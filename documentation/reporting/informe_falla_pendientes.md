@@ -1,163 +1,128 @@
-# Informe preliminar de falla (ex Reporte RCA): estado, diferencias con el template y pendientes
+# Informe preliminar de falla: estado y pendientes
 
-Estado al 2026-10-15. Vista: Reportes > Informe preliminar de falla (`/reporting/rca`). Código: `src/rca/`,
-`dashboard/pages/reporting_rca.py`, `dashboard/callbacks/rca_callbacks.py`, `dashboard/rca_files.py`.
+Actualizado: 2026-10-16.
 
-## Origen
+**Vista:** Reportes > Informe preliminar de falla (`/reporting/informe-falla`).
 
-El análisis viene de la carpeta `rca/rca/` (no versionada en git y ya borrada; ver "Originales del colega"), escrita por fuera del dashboard:
-`agent_v1.py` (score semanal), `agent_v2.py` (+ score diario), `informe_html.py` (informe HTML) y
-`test.ipynb`, que los ejecuta en este orden:
+**Código:**
+- `src/informe_falla/`;
+- `dashboard/pages/reporting_informe_falla.py`;
+- `dashboard/callbacks/informe_falla_callbacks.py`;
+- `dashboard/informe_falla_files.py`.
 
-1. Carga `unit_status_summary` y `risk_scores` (`cargar_status`, `cargar_risk`).
-2. `armar_evidencia(unidad, fecha, status, risk)`: reglas sin IA.
-3. `correr_agente(..., llm_fn)`: OpenAI con Structured Outputs (`MODELO = "gpt-6-luna"`, sin temperatura ni semilla) y controles.
-4. `informe_html.guardar(res, version=2, cliente="[Cliente]")`: HTML imprimible.
+**Documentación relacionada:**
+- [informe_preliminar_contexto_y_detenciones.md](informe_preliminar_contexto_y_detenciones.md): qué es el informe y
+  cómo se construye.
+- [plan_detenciones_previas_informe.md](plan_detenciones_previas_informe.md): integración de las mantenciones.
 
-El ejemplo de salida es `RCA_CA-88_2025-09-25.html` (CA-88, detención del 25-sep-2025).
+## Qué es
 
-## Paridad verificada contra `test.ipynb` (2026-10-15)
+Cuando una máquina tiene una detención, el informe reúne la información clave y los antecedentes de la máquina,
+el sistema o el componente, y procesa lo que ya está en el dashboard para dar una primera lectura del evento:
+- qué mostraban los datos antes de la detención;
+- la falla más probable y qué la respalda o la contradice;
+- qué revisar primero en la inspección;
+- qué no se puede afirmar con los datos.
 
-Mismo caso (CA-88, 2025-09-25), misma data local y la misma respuesta de IA inyectada a los dos lados:
+**No es un análisis de causa raíz definitivo:** la causa se confirma en la inspección.
 
-| Paso | Resultado |
+## Estado actual
+
+| Pieza | Estado |
 |---|---|
-| Evidencia sin IA (`armar_evidencia`) | Idéntica |
-| Esquema de salida de la IA | Idéntico |
-| Controles (esquema, fuentes, hipótesis, inspección) | Idénticos |
-| Gráfico SVG | Idéntico (solo se agregan atributos de color para WeasyPrint) |
-| Datos enviados a la IA | Igual **más** `contexto_cliente` |
-| Prompt | Igual **más** 3 cambios (ver abajo) |
-| Informe | Igual salvo la limpieza listada abajo |
+| Predictivo de motor (score semanal y diario, 13 semanas) | Listo. Reglas del método original, sin IA |
+| Mantenciones previas del sistema (tabla, línea de tiempo, recurrencia, rellenos) | Listo para motor. CDA, con clasificación por texto |
+| Formulario (relato y fotos) | Listo |
+| Validador de datos (bloquea si no hay datos suficientes del Predictivo) | Listo |
+| Redacción con IA (`gpt-6-luna`, prompt 2.5) y controles | Listo |
+| PDF A4 (WeasyPrint) e historial por cliente | Listo. Se guarda en `outputs/informe_falla/` |
+| Configuración (`INFORME_FALLA_*`) | `src/informe_falla/config.py` |
 
-Desviaciones del pipeline original al 2026-10-15 (la paridad de arriba se midió antes del prompt 2.1):
+## Pendientes, por pasos
 
-- **Prompt 2.2** (`agent.PROMPT_VERSION`, ver "Cambios del 2026-10-15" abajo): sin Ishikawa, con
-  `contexto_cliente` y con reglas de vocabulario para el cliente.
-- **Perfil por cliente:** `EQUIPO`, `CLIENTE` y `FECHA_INICIO_BASE` pasaron a `config.PERFILES_CLIENTE`.
-  Capstone mantiene sus valores; CDA usa un perfil genérico ("camión minero", sin corte de base).
-- **Modos ausentes:** CDA no publica refrigerante ni turbo; se completan como `sin_datos` (el original fallaba).
+Ordenados por prioridad. Cada paso se puede tomar por separado.
 
-No migrado del notebook: la sección 7 (elegir la detención desde la base sqlite de detenciones), la vista
-rápida en texto y las celdas del test placebo (la función `evaluar_lote` sí está en `evidence.py`).
+### Paso 1: confiabilidad del texto de la IA
+1. Forzar en código que la confianza no supere el techo de la auditoría y marcar cuando el veredicto de la IA
+   difiere del de las reglas. Hoy solo lo pide el prompt.
+2. Reintentar una vez cuando fallan los controles (fuentes inexistentes, términos internos, afirmaciones prohibidas).
+3. Validar que toda cifra escrita por la IA exista en la evidencia (como `campbell_ai/summary.sanitize_summary`).
+4. Evitar notas de inspección que repiten el paso del catálogo. Hoy se filtran en la plantilla; podrían
+   eliminarse desde el prompt.
 
-## Por qué el PDF no coincide con el template
+### Paso 2: reproducibilidad
+1. Guardar en el registro de cada informe una huella de la data usada (fecha o hash de las particiones).
+2. Probar `INFORME_FALLA_TEMPERATURE=0` y `INFORME_FALLA_SEED`, si el modelo los acepta.
+3. Opcional: reutilizar el informe guardado si se pide el mismo caso con la misma data.
+4. Confirmar con el equipo del Predictivo si el historial se recalcula en cada corrida. El 2026-10-07 cambiaron
+   los valores de septiembre de 2025 y por eso el informe ya no coincide con el ejemplo original.
 
-1. **La data histórica cambió.** Las particiones de `predictive/golden/capstone/motor` se reescribieron el
-   2026-10-07 con valores distintos para los mismos días (CA-88: turbo el 16-sep 26,7 → 46,3; refrigerante el
-   23-sep 23 → 45,3; estado W37 "normal" → "anormal"). El template se generó con un snapshot anterior. La
-   actualización incremental del 2026-10-15 agregó semanas nuevas, pero no tocó 2025. Hay que confirmar con el
-   equipo del Predictivo si el pipeline recalcula el historial en cada corrida: afecta la reproducibilidad de
-   cualquier informe.
-2. **La IA no es determinista**, tampoco en el notebook: no hay temperatura fija ni semilla, y los modelos son distintos.
-3. **Presentación:** el template es una página web; el dashboard genera un PDF A4 con WeasyPrint, que no soporta
-   `repeat(auto-fit, …)`, así que las grillas usan columnas fijas (`assets/report.css`).
+### Paso 3: mantenciones (fases pendientes del plan)
+1. Revisar a mano los informes de CA-47 y CA-88 (fase 1e).
+2. Backtest: comparar el modo más probable del informe con el subsistema registrado en la detención. Solo cuentan
+   las detenciones que tienen Predictivo (fase 1f).
+3. Validar con mantenimiento la equivalencia entre modos y subsistemas (`catalog.SUBSISTEMAS_POR_MODO`, hoy
+   "propuesta sin validar") y las palabras clave de componentes.
+4. Vista a nivel record con inicio, fin, duración y categoría en el repo de vistas, para clasificar bien CDA.
+5. Contrastar las reglas de texto de `mantenciones.py` con las originales de `reproceso_analisis/antecedentes.py`.
+6. Pedir que las vistas de Capstone incluyan **CA-65 y CA-80 a CA-93**: hoy esas 15 unidades del Predictivo no
+   tienen registros de mantención, incluida CA-88.
+7. Decidir si "Componente afectado" se llena desde el registro de la detención (rotulado y sin pasarlo a la IA).
 
-## Limpieza aplicada al informe (2026-10-15)
+### Paso 4: más fuentes del dashboard
+1. **Aceite** (`data/oil/golden/<cliente>/classified.parquet`): última muestra y tendencia antes de la detención
+   (Fe, Cu, Pb, Al, Si, Na, K, viscosidad, agua, refrigerante, combustible, hollín). CA-88 tiene 97 muestras de motor.
+2. **Telemetría y alertas** del período previo.
+3. **Horómetro y horas del componente**: hay horas en la data de aceite (`machineHours`, `componentHours`) y en
+   `cleaned_component_hours.parquet`.
+4. Otros sistemas además del motor.
 
-Se quitó del PDF lo que no aporta al cliente:
+### Paso 5: experiencia en la vista
+1. Mostrar la "revisión sin IA" (veredicto y modos destacados) antes de gastar la llamada.
+2. Elegir la detención desde los eventos de mantención reales de la unidad, en vez de escribir la fecha.
+3. Filtrar el selector a unidades con Predictivo de motor.
+4. Perfil de CDA con el modelo de equipo y conteo de modos por cliente (CDA tiene 7, no 9).
 
-- Ishikawa (6M). Desde el prompt 2.1 la IA tampoco lo produce.
-- Tarjeta y menciones de "detenciones previas (por integrar)": vuelven a mostrarse solas cuando
-  `evidencia["detenciones_previas"]` exista.
-- Aviso "Revisar antes de entregar al cliente" y el pie con el veredicto de las reglas y los controles
-  (ambos se muestran en la vista del dashboard).
-- Botón "Imprimir o guardar PDF".
+### Paso 6: operación
+1. Guardar los PDF en S3 y listarlos en Reportabilidad.
+2. Trabajos en segundo plano en almacenamiento compartido si gunicorn pasa a más de un worker.
+3. Test placebo automático: casos al azar, con un tope de casos con señal.
+4. Visual: decidir entre Chromium (fiel al HTML, más de 300 MB extra) o seguir afinando el CSS de WeasyPrint.
+   Opcional: descarga en HTML.
 
-Agregados respecto del template: los campos del formulario en "Información entregada por el cliente", el
-anexo "10. Registro fotográfico" y la paginación A4.
-
-## Cambios del 2026-10-15
-
-- **Configuración en `src/rca/config.py`:** modelo, timeout, temperatura, semilla, carpeta de salida, caché de
-  datos, hilos y vida de los trabajos, cada uno con su variable `RCA_*`. Además, los perfiles por cliente.
-- **Modelo por defecto `gpt-6-luna`**, el que usaba el colega; solo para el RCA, Campbell AI no cambia.
-  Temperatura y semilla quedan vacías (no se envían), como en el notebook.
-- **Prompt 2.1 y 2.2:**
-  - sin Ishikawa (regla y campo del esquema eliminados);
-  - tabla de nombres en español de los modos;
-  - fuentes como rutas exactas, sin comodines;
-  - sección "Cómo escribir": sin jerga del paquete, fechas en vez de códigos de semana, nombres de modos en minúscula dentro de la frase y nada de nombres
-    inventados;
-  - los modos sin datos van a limitaciones.
-- **El sistema elegido ya no se envía a la IA**, solo se muestra en el PDF.
-- **Control nuevo `terminos_internos`:** detecta en los textos para el cliente identificadores de modos, rutas,
-  "techo de confianza", "auditoría", códigos de semana, etc., y lo informa en la vista.
-- **Registro del informe:** guarda `modelo`, `temperatura`, `semilla` y `prompt`.
-- **"Otros modos" del informe:** se enumeran con comas y distinguen los modos sin datos de los sin cambios.
-
-## Nombre, alcance y validador (2026-10-15)
-
-- **Nombre:** "Informe preliminar de falla" en lugar de "Reporte RCA", en todo lo que ve el usuario:
-  menú, títulos, PDF y prompt. N.º de informe `IPF-<unidad>-<AAAAMMDD>`; archivos `IPF_*.pdf`.
-  Los identificadores internos no cambian: paquete `src/rca`, servicio `reporting-rca`, ruta `/reporting/rca`.
-- **Alcance (prompt 2.3):** no es un análisis de causa raíz definitivo; indica la falla más probable, qué la
-  respalda y qué confirmar en la inspección. El PDF lo dice bajo el título y al pie; "Causa raíz" pasó a "Causa".
-- **Validador de datos** (`service.validar_disponibilidad` / `service.disponibilidad`): usa el criterio del método.
-  Con score diario: al menos 7 de los 28 días previos con datos; sin score diario: al menos 2 de 4 semanas
-  válidas. Si no alcanza, el informe sería "datos insuficientes".
-  - **En la vista:** corre al elegir unidad y fecha. Muestra los días con datos y el rango disponible de la unidad,
-    y deshabilita "Generar informe" si no alcanza.
-  - **En el servicio:** se repite antes de llamar a la IA (`ERROR_INSUFFICIENT`), así nunca se paga una llamada
-    sin datos.
-
-## Plan para igualar el template (pendiente)
-
-1. **Datos:** pedir al colega el snapshot o la fecha de la data que usó; si no existe, aceptar la data vigente.
-   Guardar en el JSON de cada informe una huella de la data (mtime o hash de las particiones usadas).
-2. **IA reproducible:**
-   - ~~modelo `gpt-6-luna`~~ (hecho);
-   - ~~no enviar el sistema~~ (hecho);
-   - probar `RCA_TEMPERATURE=0` y `RCA_SEED` (si el modelo los acepta);
-   - decidir si `contexto_cliente` se queda en el prompt;
-   - opcional: reutilizar el informe guardado si se pide el mismo caso con la misma huella de data.
-3. **Visual:** elegir entre
-   - (a) renderizar con Chromium/Playwright: igual a "Imprimir" del template en el navegador, pero suma más de 300 MB a la imagen;
-   - (b) afinar el CSS de WeasyPrint: sección 1 en 5 columnas, evidencia 50/50.
-
-   Opcional: ofrecer también la descarga del HTML.
-4. **Prueba de regresión:** test que corra el agente original y el migrado sobre la misma data con una IA falsa
-   y compare la evidencia y el HTML, mientras el original siga disponible.
-
-## Mejoras propuestas (pendiente)
-
-**Confiabilidad**
-- Forzar en código que la confianza no supere `auditoria.techo_confianza` y marcar cuando el veredicto de la
-  IA difiere del de reglas (hoy solo lo pide el prompt).
-- Reintentar una vez cuando los controles fallan (p. ej. fuentes inexistentes).
-- Validar el texto libre: toda cifra debe existir en la evidencia (como `campbell_ai/summary.sanitize_summary`).
-  En una prueba la IA escribió una palabra inventada ("Sygnosys"); el prompt 2.2 lo prohíbe, pero no hay control.
-- Mostrar en la vista la "revisión sin IA" (veredicto y modos destacados) antes de gastar la llamada.
-
-**Contenido**
-- Detenciones previas desde `mantentions/golden/<cliente>/Maintance_Labeler_Views/query_3_actions_all_equipment.parquet`
-  (fecha confiable: `change_date`): llena la línea de tiempo y la sección 4.
-- Elegir la detención desde eventos de mantención reales por unidad, en vez de escribir la fecha.
-- Filtrar el selector de unidades a las que tienen Predictivo de motor.
-- Conteo de modos por cliente (CDA tiene 7, no 9) y modelo de equipo en el perfil de CDA.
-- Nuevas fuentes previstas por el colega: aceite (v3) y telemetría (v4), además de alertas.
-
-**Operación**
-- Guardar los PDF en S3 y listarlos en Reportabilidad (hoy viven en `outputs/rca/` del contenedor, montado
-  como volumen en `docker-compose.yml`).
-- Trabajos en segundo plano en almacenamiento compartido si gunicorn pasa a más de un worker.
-- Test placebo automático: casos al azar, con un tope de casos con señal.
+### Paso 7: plantilla de jefatura
+Evaluar qué secciones de "Informe Preliminar de Falla – Motor Camión Minero (Plantilla).docx" se suman con la
+data disponible (ver la revisión del 2026-10-16 en la conversación del equipo): cronología, historial del
+componente, evidencia y preservación, clasificación y consecuencia, acciones y firmas.
 
 ## Casos de prueba
 
-Reemplazos en Sistema de Motor (`query_3`) evaluados con las reglas sin IA:
+Con Predictivo y mantenciones (Capstone):
+- **CA-31 @ 2025-10-12:** cobertura completa, 6 correctivas, recurrencia en Combustible.
+- **CA-47 @ 2026-02-16.**
+- **CA-88 @ 2025-09-25:** sin registros de mantención; el informe lo declara.
 
-- Capstone: CA-50 2025-09-06 (turbo), CA-57 2025-09-13 (turbo), CA-32 2025-12-14 (bomba de inyección),
-  CA-44 2026-04-30; contraste sin señal: CA-48 2025-09-23 (bomba de aceite).
-- CDA: T_16 2026-01-01 (enfriador de aceite), T_17 2025-06-23, T_14 2025-04-20, T_13 2025-06-13;
-  contraste sin señal: T_18 2025-05-22 (bomba de aceite).
+Bloqueados por el validador por falta de Predictivo: CA-30, CA-35, CA-37 y CA-57 en las fechas del plan.
 
-## Originales del colega
+Con señal del Predictivo, según las reglas:
+- **Capstone:** CA-50 @ 2025-09-06, CA-57 @ 2025-09-13, CA-32 @ 2025-12-14.
+- **CDA:** T_16 @ 2026-01-01, T_17 @ 2025-06-23, T_14 @ 2025-04-20.
 
-`test.ipynb` se movió a `notebooks/test.ipynb` (carpeta en `.gitignore`: no se versiona) y se borraron
-`rca/` y `RCA_CA-88_2025-09-25.html`. Nada del repo los usaba. Consecuencias:
+## Historia (resumen)
 
-- El notebook ya no corre tal cual: importa `agent_v2` e `informe_html`, que vivían en `rca/rca/`. Para
-  reusarlo hay que apuntarlo a `src/rca` (`evidence.armar_evidencia`, `agent.correr_agente`, `report_html.documento`).
-- La prueba de paridad (punto 4 del plan) solo es posible si el colega vuelve a entregar `agent_v2.py`,
-  `agent_v1.py` e `informe_html.py`. La paridad del 2026-10-15 quedó registrada arriba.
+- **Origen:** el método viene de un notebook y unos scripts de un colega (score semanal y diario más IA). Se
+  migraron a `src/informe_falla/`. El 2026-10-15 se verificó que, con la misma data, la evidencia, el esquema, los
+  controles y el gráfico eran idénticos al original. Los originales ya no están en el repo; el notebook quedó en
+  `notebooks/test.ipynb` (sin versionar) y ya no corre tal cual.
+- **Cambios respecto del original:**
+  - nombre y alcance de "informe preliminar";
+  - sin Ishikawa;
+  - reglas de vocabulario y control de términos internos;
+  - perfil por cliente;
+  - validador de datos;
+  - mantenciones previas;
+  - campos del formulario y anexo de fotos;
+  - PDF A4.
+- **Nombres:** hasta el 2026-10-16 todo se llamaba "RCA". Ese día se renombraron el código, los archivos, el
+  servicio (`reporting-informe-falla`), la ruta y las variables de entorno (`INFORME_FALLA_*`), y los informes
+  antiguos pasaron a `IPF_*`.

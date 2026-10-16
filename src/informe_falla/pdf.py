@@ -1,5 +1,5 @@
 """
-RCA Asistido: HTML del informe a PDF con WeasyPrint.
+Informe preliminar de falla: HTML del informe a PDF con WeasyPrint.
 
 WeasyPrint necesita Pango del sistema (en la imagen Docker se instala con apt; en Windows
 requiere GTK). Si no esta disponible, `pdf_disponible()` es False y el servicio lo informa
@@ -16,7 +16,7 @@ el PDF quede en A4 real.
 
 from __future__ import annotations
 
-from src.rca.report_html import ASSETS_DIR
+from src.informe_falla.report_html import ASSETS_DIR
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,14 +30,14 @@ def pdf_disponible() -> bool:
     try:
         import weasyprint  # noqa: F401
     except Exception as exc:   # OSError si falta Pango, ImportError si falta el paquete
-        logger.warning(f"RCA: WeasyPrint no disponible ({type(exc).__name__}: {exc})")
+        logger.warning(f"informe preliminar: WeasyPrint no disponible ({type(exc).__name__}: {exc})")
         return False
     return True
 
 
 def _verificar(url: str) -> None:
     if not (url.startswith("data:") or url.startswith(ASSETS_DIR.resolve().as_uri() + "/")):
-        raise ValueError(f"Recurso externo bloqueado en el PDF del RCA: {url[:80]}")
+        raise ValueError(f"Recurso externo bloqueado en el PDF del informe: {url[:80]}")
 
 
 def _fetcher():

@@ -36,7 +36,7 @@ redis>=5.0.0
 # Utilities
 tqdm>=4.66.0
 
-# Reporte RCA (src/rca): HTML -> PDF y validacion de la respuesta de la IA.
+# Informe preliminar de falla (src/informe_falla): HTML -> PDF y validacion de la respuesta de la IA.
 # WeasyPrint necesita Pango del sistema (ver Dockerfile).
 weasyprint>=62.0
 jsonschema>=4.0

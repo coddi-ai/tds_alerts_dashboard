@@ -594,8 +594,8 @@
     }
 }
 
-/* Reportes > Reporte RCA (dashboard/pages/reporting_rca.py) */
-.rca-upload {
+/* Reportes > Informe preliminar de falla (dashboard/pages/reporting_informe_falla.py) */
+.informe-upload {
     display: block;
     padding: 24px 16px;
     border: 2px dashed var(--border-strong, #adb5bd);
@@ -605,12 +605,12 @@
     transition: background-color 0.15s, border-color 0.15s;
 }
 
-.rca-upload:hover {
+.informe-upload:hover {
     border-color: #0d6efd;
     background-color: rgba(52, 152, 219, 0.06);
 }
 
-.rca-thumb {
+.informe-thumb {
     display: block;
     width: 100%;
     height: 140px;
@@ -620,7 +620,7 @@
     background-color: #f8f9fa;
 }
 
-.rca-thumb-remove {
+.informe-thumb-remove {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -629,14 +629,14 @@
 }
 
 /* Bloque reservado para funcionalidad que aun no esta disponible. */
-.rca-in-development {
+.informe-in-development {
     margin: 12px;
     border: 1px dashed var(--border-strong, #adb5bd);
     border-radius: 6px;
     opacity: 0.75;
 }
 
-.rca-preview {
+.informe-preview {
     width: 100%;
     height: 80vh;
     border: 1px solid #dee2e6;

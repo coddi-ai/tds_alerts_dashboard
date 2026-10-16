@@ -66,7 +66,7 @@ KNOWN_SERVICE_IDS: List[str] = [
     "integration-validacion-avisos",
     "integration-seguimiento-avisos",
     "reporting-main",
-    "reporting-rca",
+    "reporting-informe-falla",
 ]
 
 ServiceState = Dict[str, bool]  # {"display": bool, "dummy": bool}

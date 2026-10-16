@@ -6,8 +6,8 @@ cada solicitud corre en un hilo y la vista consulta su estado (`iniciar` / `esta
 trabajos viven en memoria del proceso: el dashboard corre con un solo worker de gunicorn
 (Dockerfile). Con varios workers habria que moverlos a un almacenamiento compartido.
 
-La configuracion (modelo, carpeta de salida, caches, hilos) esta en src/rca/config.py.
-Cada informe queda en la carpeta de salida (por defecto outputs/rca) como
+La configuracion (modelo, carpeta de salida, caches, hilos) esta en src/informe_falla/config.py.
+Cada informe queda en la carpeta de salida (por defecto outputs/informe_falla) como
 `{cliente}/{id}.pdf` mas `{cliente}/{id}.json` con el registro completo: la solicitud
 (sin las imagenes), la evidencia, lo que recibio la IA, su respuesta y los controles.
 """
@@ -27,23 +27,24 @@ from typing import List, Optional
 
 from src.data.predictive_v2 import load_risk_scores_history, load_unit_status_history
 from src.data.report_health import unit_key
-from src.rca import catalog as c
-from src.rca.agent import PROMPT_VERSION, LlmFn, correr_agente, openai_llm
-from src.rca.config import get_rca_settings, perfil_cliente
-from src.rca.evidence import armar_evidencia, preparar_risk, preparar_status
-from src.rca.pdf import html_a_pdf, pdf_disponible
-from src.rca.report_html import documento, numero_informe, problemas
+from src.informe_falla import catalog as c
+from src.informe_falla.agent import PROMPT_VERSION, LlmFn, correr_agente, openai_llm
+from src.informe_falla.config import get_informe_settings, perfil_cliente
+from src.informe_falla.evidence import armar_evidencia, preparar_risk, preparar_status
+from src.informe_falla import mantenciones
+from src.informe_falla.pdf import html_a_pdf, pdf_disponible
+from src.informe_falla.report_html import documento, numero_informe, problemas
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-# Sistemas del formulario que el RCA sabe analizar (los modos y el catalogo son de motor).
+# Sistemas del formulario que el informe sabe analizar (los modos y el catalogo son de motor).
 SISTEMAS_SOPORTADOS = (c.COMPONENTE,)
 
 STATUS_RUNNING, STATUS_READY, STATUS_ERROR = "running", "ready", "error"
 
-# Motivos de error que la vista traduce (rca.error.<motivo>).
+# Motivos de error que la vista traduce (informe_falla.error.<motivo>).
 ERROR_NO_API_KEY = "no_api_key"
 ERROR_NO_PDF = "no_pdf"
 ERROR_SYSTEM = "unsupported_system"
@@ -56,7 +57,7 @@ ERROR_UNEXPECTED = "unexpected"
 _REPORT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,120}$")
 
 
-class RcaError(Exception):
+class InformeError(Exception):
     def __init__(self, motivo: str, detalle: str = "", datos: Optional[dict] = None):
         super().__init__(detalle or motivo)
         self.motivo = motivo
@@ -68,7 +69,7 @@ class RcaError(Exception):
 # Almacenamiento
 # =============================================================================
 def output_dir() -> Path:
-    return get_rca_settings().output_dir
+    return get_informe_settings().output_dir
 
 
 def _carpeta(cliente: str) -> Path:
@@ -133,7 +134,7 @@ def cargar_fuentes(cliente: str):
     cliente = cliente.lower()
     with _FUENTES_LOCK:
         guardado = _FUENTES.get(cliente)
-        if guardado and time.time() - guardado[0] < get_rca_settings().data_cache_seconds:
+        if guardado and time.time() - guardado[0] < get_informe_settings().data_cache_seconds:
             return guardado[1], guardado[2]
         status = preparar_status(load_unit_status_history(cliente, c.COMPONENTE))
         risk = preparar_risk(load_risk_scores_history(cliente, c.COMPONENTE))
@@ -202,7 +203,10 @@ def validar_disponibilidad(cliente: str, unidad: str, fecha: str) -> dict:
     if nombre is None:
         return {"ok": False, "motivo": ERROR_UNIT}
     evid = armar_evidencia(nombre, fecha, status, risk, perfil_cliente(cliente))
-    return disponibilidad(evid, nombre, status, risk)
+    resultado = disponibilidad(evid, nombre, status, risk)
+    # Las mantenciones no bloquean el informe: solo se informa su cobertura.
+    resultado["mantenciones"] = mantenciones.cobertura(cliente, unidad, fecha)
+    return resultado
 
 
 def _imagenes(request: dict) -> list:
@@ -210,38 +214,43 @@ def _imagenes(request: dict) -> list:
              "data": f"data:{i['mime']};base64,{i['data_base64']}"} for i in request.get("images", [])]
 
 
-def generar_rca(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label: Optional[str] = None) -> dict:
-    """Corre el RCA completo para una solicitud (src/data/rca_report.build_rca_request) y guarda el PDF."""
+def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label: Optional[str] = None) -> dict:
+    """Corre el informe completo para una solicitud (src/data/informe_falla_request.build_informe_request) y guarda el PDF."""
     cliente = request["client"]
     if request.get("system") and request["system"] not in SISTEMAS_SOPORTADOS:
-        raise RcaError(ERROR_SYSTEM)
+        raise InformeError(ERROR_SYSTEM)
     if llm_fn is None and not os.getenv("OPENAI_API_KEY"):
-        raise RcaError(ERROR_NO_API_KEY)
+        raise InformeError(ERROR_NO_API_KEY)
     if not pdf_disponible():
-        raise RcaError(ERROR_NO_PDF)
+        raise InformeError(ERROR_NO_PDF)
 
     perfil = perfil_cliente(cliente)
     status, risk = cargar_fuentes(cliente)
     if status.empty and risk.empty:
-        raise RcaError(ERROR_NO_DATA)
+        raise InformeError(ERROR_NO_DATA)
     unidad = resolver_unidad(request["unit"], status, risk)
     if unidad is None:
-        raise RcaError(ERROR_UNIT)
+        raise InformeError(ERROR_UNIT)
 
     contexto = contexto_de(request, sistema_label)
     evid = armar_evidencia(unidad, request["event_date"], status, risk, perfil)
     # Sin datos suficientes en la ventana no se llama a la IA: el informe no tendria contenido.
     datos = disponibilidad(evid, unidad, status, risk)
     if not datos["ok"]:
-        raise RcaError(ERROR_INSUFFICIENT, datos=datos)
-    ajustes = get_rca_settings()
+        raise InformeError(ERROR_INSUFFICIENT, datos=datos)
+    # Intervenciones de mantencion previas (sin IA): cobertura, tabla y antecedentes.
+    destacados = [r["modo"] for r in evid["ranking_modos"] if r["nivel"] in ("alto", "medio")]
+    evid.update(mantenciones.antecedentes_mantencion(cliente, unidad, evid["consulta"]["fecha"],
+                                                     sistema=request.get("system") or c.COMPONENTE,
+                                                     modos=destacados))
+    ajustes = get_informe_settings()
     modelo = {"modelo": ajustes.model if llm_fn is None else "personalizado", "temperatura": ajustes.temperature,
               "semilla": ajustes.seed, "prompt": PROMPT_VERSION}
     try:
         contexto_ia = {k: v for k, v in contexto.items() if k != "sistema"}
         res = correr_agente(evid, perfil, llm_fn or openai_llm(), contexto_ia)
     except Exception as exc:
-        raise RcaError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
+        raise InformeError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
 
     fecha = evid["consulta"]["fecha"]
     report_id = f"IPF_{re.sub(r'[^A-Za-z0-9-]', '-', unidad)}_{fecha}_{datetime.now():%Y%m%d%H%M%S}"
@@ -269,21 +278,21 @@ def generar_rca(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label: Op
 # =============================================================================
 # Trabajos en segundo plano
 # =============================================================================
-_EXECUTOR = ThreadPoolExecutor(max_workers=get_rca_settings().max_workers, thread_name_prefix="rca")
+_EXECUTOR = ThreadPoolExecutor(max_workers=get_informe_settings().max_workers, thread_name_prefix="informe_falla")
 _JOBS: dict = {}
 _LOCK = threading.Lock()
 
 
 def _purgar_viejos() -> None:
-    limite = time.time() - get_rca_settings().job_ttl_seconds
+    limite = time.time() - get_informe_settings().job_ttl_seconds
     for job_id in [j for j, d in _JOBS.items() if d["started"] < limite]:
         _JOBS.pop(job_id, None)
 
 
 def _correr(job_id: str, request: dict, sistema_label: Optional[str]) -> None:
     try:
-        resultado = generar_rca(request, sistema_label=sistema_label)
-    except RcaError as exc:
+        resultado = generar_informe(request, sistema_label=sistema_label)
+    except InformeError as exc:
         logger.warning(f"Informe preliminar {request['client']}/{request['unit']}: {exc.motivo} ({exc})")
         resultado = {"status": STATUS_ERROR, "reason": exc.motivo, "details": exc.datos}
     except Exception:

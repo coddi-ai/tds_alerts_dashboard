@@ -12,7 +12,7 @@
     "integration-validacion-avisos": {"display": true, "dummy": false},
     "integration-seguimiento-avisos": {"display": true, "dummy": false},
     "reporting-main": {"display": true, "dummy": false},
-    "reporting-rca": {"display": true, "dummy": false}
+    "reporting-informe-falla": {"display": true, "dummy": false}
   },
   "EMIN": {
     "overview-general": {"display": true, "dummy": false},
@@ -42,7 +42,7 @@
     "integration-validacion-avisos": {"display": true, "dummy": false},
     "integration-seguimiento-avisos": {"display": true, "dummy": false},
     "reporting-main": {"display": true, "dummy": false},
-    "reporting-rca": {"display": true, "dummy": false}
+    "reporting-informe-falla": {"display": true, "dummy": false}
   },
   "CENTINELA" : {
     "integration-validacion-avisos": {"display": true, "dummy": false},

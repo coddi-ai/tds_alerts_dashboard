@@ -120,5 +120,5 @@ ai_docs/*
 
 # .pyc files
 *.pyc
-# Reportes RCA generados (src/rca/service.py)
+# Informes preliminares de falla generados (src/informe_falla/service.py)
 outputs/

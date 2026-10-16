@@ -9,8 +9,8 @@ catalogo. Lo que el usuario escribio en el formulario y sus fotos van tal cual, 
 
 El PDF es para el cliente: no lleva el Ishikawa (la IA lo sigue produciendo y queda en el
 registro JSON), ni avisos internos de los controles o el veredicto de las reglas (esos se
-muestran en la vista del dashboard), ni bloques de detenciones previas mientras ese
-historial no este integrado.
+muestran en la vista del dashboard). Las intervenciones previas (mantenciones.py) se
+muestran segun su cobertura: la falta de registros nunca se lee como falta de intervenciones.
 
 Los estilos viven en assets/report.css (fuentes locales en assets/fonts/).
 """
@@ -18,11 +18,12 @@ Los estilos viven en assets/report.css (fuentes locales en assets/fonts/).
 from __future__ import annotations
 
 import html
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional
 
-from src.rca.catalog import NOMBRE_MODO
+from src.informe_falla.catalog import NOMBRE_MODO
 
 ASSETS_DIR = Path(__file__).parent / "assets"
 
@@ -156,11 +157,15 @@ def _racha_flota(evid, modos):
 
 
 def _linea_de_tiempo(evid):
-    """Eventos ordenados por fecha: detenciones previas, señales del Predictivo, brechas y la detencion."""
+    """Eventos ordenados por fecha: intervenciones previas, señales del Predictivo, brechas y la detencion."""
     eventos = []
-    for p in evid.get("detenciones_previas") or []:          # se llena cuando se integre el historial
-        detalle = ", ".join(x for x in (p.get("tipo"), p.get("componentes")) if x) or "Sin detalle"
-        eventos.append((p["fecha"], "previa", "Detención previa", detalle))
+    for p in evid.get("detenciones_previas") or []:
+        if p.get("en_linea_de_tiempo"):
+            eventos.append((p["fecha"], "previa", "Correctiva previa", _resumen_intervencion(p)))
+    pm = (evid.get("antecedentes_mantencion") or {}).get("ultimo_pm")
+    desde = (evid.get("cobertura_mantenciones") or {}).get("ventana_desde")
+    if pm and desde and pm["fecha"] >= desde:
+        eventos.append((pm["fecha"], "previa", "Último PM", "Mantención programada del sistema."))
 
     destacados = _destacados(evid)
     juntos = "bearing_wear_risk" in destacados and "lubrication_failure_risk" in destacados
@@ -324,6 +329,8 @@ def problemas(res) -> List[str]:
         p.append("Hipótesis 'más probables' sin respaldo del Predictivo: " + ", ".join(res["hipotesis_sin_respaldo"]) + ".")
     if res.get("terminos_internos"):
         p.append("Textos para el cliente con términos internos: " + ", ".join(res["terminos_internos"]) + ".")
+    if res.get("afirmaciones_prohibidas"):
+        p.append("Afirmaciones que los registros de mantención no permiten: " + ", ".join(res["afirmaciones_prohibidas"]) + ".")
     if res.get("verificaciones_fuera_de_lugar"):
         p.append(f"{len(res['verificaciones_fuera_de_lugar'])} pasos de inspección no corresponden a las hipótesis.")
     return p
@@ -354,27 +361,98 @@ def _inspeccion(inf, evid):
     items = []
     for p in inf.get("inspeccion", []):
         if p["id"] in catalogo:
-            nota = ' <span class="nota-paso">' + _e(p["nota"]) + "</span>" if p.get("nota") else ""
+            aporta = p.get("nota") and not _repite(p["nota"], catalogo[p["id"]]["accion"])
+            nota = ' <span class="nota-paso">' + _e(p["nota"]) + "</span>" if aporta else ""
             items.append("<li>" + _e(catalogo[p["id"]]["accion"]) + "." + nota + "</li>")
     return "".join(items)
 
 
+def _resumen_intervencion(p: dict, largo: int = 110) -> str:
+    texto = p.get("descripcion") or "Sin detalle"
+    texto = texto if len(texto) <= largo else texto[:largo - 1].rstrip() + "…"
+    return (p["subsistema"] + ": " if p.get("subsistema") else "") + texto
+
+
+def nota_cobertura_mantenciones(evid) -> str:
+    """Frase determinista cuando la cobertura de mantenciones no es completa (vacia si lo es o no hay fuente).
+
+    La ausencia de registros solo se lee como "sin intervenciones" con cobertura completa.
+    """
+    cob = evid.get("cobertura_mantenciones") or {}
+    unidad = evid["consulta"]["unidad"]
+    estado = cob.get("estado")
+    if estado == "unidad_sin_registros":
+        return f"La fuente de mantenciones no tiene registros de {unidad}: no se puede saber si hubo intervenciones previas."
+    if estado == "fuera_de_cobertura":
+        return (f"Los registros de mantención disponibles van del {_fecha_media(cob['datos_desde'])} al "
+                f"{_fecha_media(cob['datos_hasta'])} y no cubren el período analizado.")
+    if estado == "parcial":
+        desde = max(cob["ventana_desde"], cob["datos_desde"])
+        hasta = min(cob["ventana_hasta"], cob["datos_hasta"])
+        return (f"Los registros de mantención cubren solo parte del período analizado "
+                f"(del {_fecha_media(desde)} al {_fecha_media(hasta)}).")
+    return ""
+
+
+def _repite(nota: str, accion: str) -> bool:
+    """La nota de la IA solo repite el paso del catalogo (la mayoria de sus palabras ya estan en el)."""
+    palabras = {w for w in re.findall(r"\w{4,}", nota.lower())}
+    return bool(palabras) and len(palabras & set(re.findall(r"\w{4,}", accion.lower()))) / len(palabras) >= 0.7
+
+
 def _tabla_previas(evid):
-    """Tarjeta de detenciones previas; vacia mientras el historial no este integrado."""
+    """Tabla de intervenciones del sistema en la ventana, o el mensaje que corresponde a la cobertura."""
+    cob = evid.get("cobertura_mantenciones") or {}
     previas = evid.get("detenciones_previas")
-    if previas is None:
+    if not cob or cob.get("estado") == "sin_fuente":
         return ""
+    if previas is None:
+        return f'<p class="nota">{_e(nota_cobertura_mantenciones(evid))}</p>'
     if not previas:
-        return "<p>Sin detenciones previas en el período analizado.</p>"
-    filas = "".join("<tr><td>" + _e(_fecha_media(p["fecha"])) + "</td><td>" + _e(p.get("tipo", "")) + "</td><td>"
-                    + _e(p.get("componentes", "")) + "</td></tr>" for p in previas)
-    return ('<table><thead><tr><th scope="col">Fecha</th><th scope="col">Tipo</th><th scope="col">Componentes</th>'
+        texto = ("Sin intervenciones del sistema en el período analizado." if cob["estado"] == "completa"
+                 else "Sin intervenciones registradas en el tramo cubierto.")
+        return f"<p>{_e(texto)}</p>"
+    filas = "".join(
+        "<tr><td>" + _e(_fecha_media(p["fecha"])) + "</td><td>" + _e(p.get("tipo", ""))
+        + (' <span class="a-confirmar">Días previos</span>' if p.get("cerca_de_la_detencion") else "")
+        + "</td><td>" + _e(p.get("subsistema", "")) + "</td><td>" + _e(p.get("descripcion", ""))
+        + "</td><td>" + _e(_num(p["horas_dia"]) if p.get("horas_dia") is not None else "—") + "</td></tr>"
+        for p in previas)
+    return ('<table class="previas"><thead><tr><th scope="col">Fecha</th><th scope="col">Tipo</th>'
+            '<th scope="col">Subsistema</th><th scope="col">Qué se hizo</th><th scope="col">Horas del día</th>'
             "</tr></thead><tbody>" + filas + "</tbody></table>")
+
+
+def _resumen_antecedentes(evid) -> list:
+    """Lineas cortas bajo la tabla: ultimo PM, rellenos, recurrencia y lo que se omitio."""
+    a = evid.get("antecedentes_mantencion") or {}
+    if not a:
+        return []
+    lineas = []
+    if a.get("ultimo_pm"):
+        lineas.append(f"Último mantenimiento programado: {_fecha_media(a['ultimo_pm']['fecha'])} "
+                      f"({a['ultimo_pm']['dias_antes']} días antes).")
+    rellenos = [f"{v['n']} de {k}" for k, v in (a.get("rellenos") or {}).items() if v["n"] and k != "otro"]
+    if rellenos:
+        lineas.append("Rellenos en el período: " + ", ".join(rellenos) + ".")
+    for r in a.get("recurrencia") or []:
+        lineas.append(f"{r['subsistema']}: {r['correctivas']} correctivas en los últimos "
+                      f"{a.get('ventana_extendida_dias', 180)} días.")
+    extra = (a.get("omitidos") or {}).get("fuera_del_tope")
+    if extra:
+        lineas.append(f"Y {extra} registros más en el período.")
+    return lineas
 
 
 def _bloque_previas(evid):
     tabla = _tabla_previas(evid)
-    return f'<div class="tarjeta-int"><h3>Detenciones previas (3 meses)</h3>{tabla}</div>' if tabla else ""
+    if not tabla:
+        return ""
+    notas = "".join(f'<p class="nota">{_e(x)}</p>' for x in _resumen_antecedentes(evid))
+    if (evid.get("cobertura_mantenciones") or {}).get("estado") == "parcial":
+        notas += f'<p class="nota">{_e(nota_cobertura_mantenciones(evid))}</p>'
+    return (f'<div class="tarjeta-int previas-bloque"><h3>Intervenciones previas del sistema (3 meses)</h3>'
+            f'{tabla}{notas}</div>')
 
 
 def _lista(items):
@@ -413,7 +491,7 @@ def _fotos(imagenes, numero_seccion):
 def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, version=None,
             contexto: Optional[dict] = None, imagenes: Optional[list] = None,
             emision: Optional[date] = None) -> str:
-    """Cuerpo del RCA (sin <html>): fragmento con la clase .rca, estilos aparte (assets/report.css)."""
+    """Cuerpo del informe (sin <html>): fragmento con la clase .informe_falla, estilos aparte (assets/report.css)."""
     evid, inf = res["evidencia"], res["informe"]
     consulta, aud, ventanas = evid["consulta"], evid["auditoria"], evid.get("ventanas", {})
     unidad, fecha = consulta["unidad"], consulta["fecha"]
@@ -448,14 +526,19 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
                     f'<div class="lt-marca"><span></span></div><div><div class="lt-tipo">{_e(etq)}</div>'
                     f'<div>{_e(texto)}</div></div></li>' for f, tipo, etq, texto in _linea_de_tiempo(evid))
     hay_previas = evid.get("detenciones_previas") is not None
+    cob = evid.get("cobertura_mantenciones") or {}
     fuentes = ("Predictivo (score semanal y diario)" if hay_diario else "Predictivo (score semanal)") + \
-              ", 3 meses previos a la detención" + \
-              (". Historial de detenciones previas de la unidad." if hay_previas else ".")
-    sub_linea = ("señales del Predictivo, brechas de datos y detenciones anteriores" if hay_previas
+              ", 3 meses previos a la detención." + \
+              (f" Registros de mantención de la unidad (disponibles hasta el {_fecha_media(cob['datos_hasta'])})."
+               if hay_previas else "")
+    sub_linea = ("señales del Predictivo, brechas de datos e intervenciones previas" if hay_previas
                  else "señales del Predictivo y brechas de datos")
+    limitaciones = list(inf.get("limitaciones", []))
+    if nota_cobertura_mantenciones(evid):
+        limitaciones.append(nota_cobertura_mantenciones(evid))
 
     return f"""
-<div class="rca">
+<div class="informe_falla">
 <div class="contenedor">
 <div class="barra-sup">
   <span class="marca">Informe preliminar de falla</span>
@@ -530,9 +613,9 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
     {bloque_graf}
     <div class="columna">
       <div class="tarjeta-int"><h3>Otros modos del Predictivo</h3><p>{_e(_otros_modos(evid, modo_graf))}</p></div>
-      {_bloque_previas(evid)}
     </div>
   </div>
+  {_bloque_previas(evid)}
 </section>
 
 <section class="tarjeta">
@@ -569,7 +652,7 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
 
 <section class="tarjeta">
   <h2>9. Limitaciones del análisis</h2>
-  <ul class="lista">{_lista(inf.get("limitaciones", []))}</ul>
+  <ul class="lista">{_lista(limitaciones)}</ul>
 </section>
 
 <footer class="pie">{_e(ALCANCE)}</footer>

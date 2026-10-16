@@ -1,5 +1,5 @@
 """
-RCA Asistido, paso 1 (sin IA): la evidencia del Predictivo para una unidad y una fecha.
+Informe preliminar de falla, paso 1 (sin IA): la evidencia del Predictivo para una unidad y una fecha.
 
 Score semanal (unit_status_summary): compara el ultimo mes de cada modo de falla contra
 la propia unidad y contra la flota, y asigna un nivel por modo (alto, medio, bajo, ninguno).
@@ -22,8 +22,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.rca import catalog as c
-from src.rca.catalog import MODOS, NIVELES
+from src.informe_falla import catalog as c
+from src.informe_falla.catalog import MODOS, NIVELES
 
 
 # =============================================================================
