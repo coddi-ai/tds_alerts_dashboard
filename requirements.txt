@@ -27,6 +27,8 @@ itsdangerous>=2.2.0
 fastapi>=0.115.0
 uvicorn>=0.30.0
 openai-agents>=0.3.3,<0.4.0
+# Offline translation script (scripts/translate_text_fields.py) calls the OpenAI client directly.
+openai>=1.99.0
 
 # Shared conversation sessions across workers/replicas.
 # Only needed when CAMPBELL_AI_SESSION_BACKEND=redis; the default in-memory backend

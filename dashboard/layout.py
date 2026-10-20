@@ -83,11 +83,11 @@ def create_login_page() -> dbc.Container:
                                 className="text-center mt-3 mb-1",
                                 style={"fontWeight": "600", "color": "#1a252f", "fontSize": "1.4rem"}
                             ),
-                            # html.P(
-                            #     "Technical Alerts Dashboard",
-                            #     className="text-center mb-0 text-muted",
-                            #     style={"fontSize": "0.9rem"}
-                            # )
+                            html.P(
+                                t("app.platform_subtitle"),
+                                className="text-center mb-0 text-muted",
+                                style={"fontSize": "0.9rem"}
+                            )
                         ], style={
                             "padding": "32px 32px 24px 32px",
                             "borderBottom": "2px solid #f0f0f0",

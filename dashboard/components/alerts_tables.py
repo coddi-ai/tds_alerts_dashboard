@@ -5,6 +5,7 @@ Functions to create Dash DataTables for alerts listings.
 """
 
 from src.i18n import t
+from src.i18n.data_text import localized_value
 import pandas as pd
 import re
 import ast
@@ -284,7 +285,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         sorted_alerts_df["_fecha_local"] = format_local(sorted_alerts_df["Timestamp"])
         rows = []
         for _, row in sorted_alerts_df.iterrows():
-            sections = parse_ia_message_sections(row.get("mensaje_ia", ""))
+            sections = parse_ia_message_sections(localized_value(row, "mensaje_ia", ""))
             trigger_vars = row.get("Trigger_Var", t("alerts_report.sin_senal_registrada"))
             # Mixed alerts store Trigger_Var as a serialized list. Preserve
             # that representation so each telemetry/oil variable is translated.

@@ -92,6 +92,9 @@ logs/
 !src/campbell_ai/schema/dataset_columns.json
 # UI translation catalogs (es.json / en.json): source code, not data - must ship with the code.
 !src/i18n/locales/*.json
+# Input mapping of the offline translation script (scripts/translate_text_fields.py); its output stays out of git.
+!scripts/translation_mapping.json
+/scripts/output/
 # Docker
 *.pid
 *.seed

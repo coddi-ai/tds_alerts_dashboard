@@ -6,6 +6,7 @@ interactive filtering, and cross-navigation.
 """
 
 from src.i18n import t
+from src.i18n.data_text import localized_value
 import pandas as pd
 from dash import callback, callback_context, clientside_callback, ALL, Input, Output, State, html, dcc, no_update, dash_table
 from dash.exceptions import PreventUpdate
@@ -764,7 +765,7 @@ def _alert_case_header(row: pd.Series) -> html.Div:
     """Render the single client-facing alert summary and its IA analysis."""
     prepared = prepare_alert_rows(pd.DataFrame([row])).iloc[0]
     timestamp = prepared.get('date_display', '-')
-    diagnosis = parse_ia_message_sections(row.get('mensaje_ia', ''))
+    diagnosis = parse_ia_message_sections(localized_value(row, 'mensaje_ia', ''))
     # W34-04: same (label, color) pair as the table's row-highlight, the
     # color legend and the "Alertas mixtas" KPI card.
     source_label, source_badge_color = source_style(prepared.get('Trigger_type', ''))

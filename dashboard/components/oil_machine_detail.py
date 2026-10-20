@@ -16,6 +16,7 @@ from dash import dash_table, html
 from config.settings import get_settings
 from dashboard.components.tables import create_machine_detail_table
 from src.data.loaders import get_latest_component_hours, load_machine_status_for_client, load_oil_classified
+from src.i18n.data_text import localized_series, localized_value
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -152,7 +153,7 @@ def build_machine_detail(client: str, unit_id: str) -> tuple:
                               'essays_broken', 'sampleDate']].copy()
         for col in ['breached_essays', 'ai_recommendation', 'anomalyType']:
             if col in latest.columns:
-                display_df[col] = latest[col]
+                display_df[col] = localized_series(latest, col) if col == 'ai_recommendation' else latest[col]
 
         comp_hours_allowed = [c.upper() for c in settings.component_hours_allowed_clients]
         if client.upper() in comp_hours_allowed:
@@ -184,7 +185,7 @@ def build_machine_detail(client: str, unit_id: str) -> tuple:
                 ms_df = load_machine_status_for_client(client)
                 mr = ms_df[ms_df['unit_id'] == unit_id]
                 if not mr.empty:
-                    rec = mr.iloc[0].get('machine_ai_recommendation', None)
+                    rec = localized_value(mr.iloc[0], 'machine_ai_recommendation')
                     if rec and pd.notna(rec) and str(rec).strip():
                         rec_card = dbc.Card([
                             dbc.CardHeader(_t("oil_machine_detail.recomendacion_ia"), className="fw-bold bg-info text-white"),

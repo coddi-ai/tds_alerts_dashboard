@@ -237,10 +237,10 @@ def test_t_or_uses_the_default_for_unknown_keys_only():
 
 def test_page_title_is_evaluated_per_request():
     title = page_title("page.title.monitoring_oil")
-    assert title() == "Aceite | Multi-Technical Alerts"
+    assert title() == "Aceite | CODDI ASSET HEALTH"
     with _request_in("en"):
-        assert title() == "Oil | Multi-Technical Alerts"
-        assert title(unit_id="T_1") == "Oil | Multi-Technical Alerts"
+        assert title() == "Oil | CODDI ASSET HEALTH"
+        assert title(unit_id="T_1") == "Oil | CODDI ASSET HEALTH"
 
 
 def test_lazy_labels_follow_the_request_language():

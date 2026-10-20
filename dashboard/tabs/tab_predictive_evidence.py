@@ -35,6 +35,7 @@ from dashboard.components.predictive_tables import create_oil_variables_table
 from dashboard.components.oil_charts import get_essay_limits_four, classify_four_limit_value
 from dashboard.components.ai_analysis_panel import create_ai_analysis_panel
 from src.data.loaders import load_analisis_inteligente
+from src.i18n.data_text import localized_value
 from src.data import predictive_v2
 from dashboard.tabs.tab_predictive_overview import (
     attach_status,
@@ -411,9 +412,9 @@ def _unit_narrative_panel(ai_row):
     if not any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _AI_NARRATIVE_COLS):
         return None
     return {
-        "diagnostico": ai_row.get("diagnostico"),
-        "causa_probable": ai_row.get("causa_probable"),
-        "acciones": ai_row.get("acciones"),
+        "diagnostico": localized_value(ai_row, "diagnostico"),
+        "causa_probable": localized_value(ai_row, "causa_probable"),
+        "acciones": localized_value(ai_row, "acciones"),
         "header_text": t("tab_predictive_evidence.analisis_inteligente_2"),
     }
 
@@ -446,9 +447,9 @@ def _mode_narrative_panel(diag_row, unit_estado):
         # it is.
         header_text = t("tab_predictive_evidence.analisis_inteligente_basado_en_reglas")
     return {
-        "diagnostico": diag_row.get("diagnostico"),
-        "causa_probable": diag_row.get("probable_cause"),
-        "acciones": diag_row.get("recommended_actions"),
+        "diagnostico": localized_value(diag_row, "diagnostico"),
+        "causa_probable": localized_value(diag_row, "probable_cause"),
+        "acciones": localized_value(diag_row, "recommended_actions"),
         "header_text": header_text,
     }
 

@@ -196,7 +196,7 @@ def t_or(key: str, default: str) -> str:
     return default
 
 
-def page_title(key: str, suffix: str = " | Multi-Technical Alerts"):
+def page_title(key: str, suffix: str = " | CODDI ASSET HEALTH"):
     """Browser-tab title for `dash.register_page(title=...)`.
 
     Dash accepts a callable and evaluates it on every page load and navigation, which

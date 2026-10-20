@@ -14,6 +14,7 @@ import pandas as pd
 from dashboard.components.alerts_charts import FEATURE_NAMES_ES, translate_system_label
 from dashboard.components.labels import translate_component_label, source_style
 from dashboard.components.alerts_tables import parse_ia_message_sections
+from src.i18n.data_text import localized_series
 from src.utils.date_utils import format_local, to_utc_naive
 from src.data.emin_alert_evidence import evidence_label
 from src.utils.logger import get_logger
@@ -81,7 +82,8 @@ def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
     frame["source_display"] = frame.get("Trigger_type", "").map(translate_alert_source)
     frame["component_display"] = frame.get("componente", "").map(translate_alert_component)
     frame["signal_display"] = frame.get("Trigger_Var", "").map(_signal_labels)
-    sections = frame.get("mensaje_ia", pd.Series("", index=frame.index)).map(_message_sections)
+    messages = localized_series(frame, "mensaje_ia") if "mensaje_ia" in frame.columns else pd.Series("", index=frame.index)
+    sections = messages.map(_message_sections)
     frame["diagnosis_display"] = sections.map(lambda item: item.get("diagnostico") or t("alerts_report.sin_diagnostico_ia_disponible"))
     frame["cause_display"] = sections.map(lambda item: item.get("causa_probable") or t("alerts_report.sin_causa_probable_registrada"))
     frame["action_display"] = sections.map(lambda item: item.get("acciones") or t("alerts_report.sin_accion_recomendada_registrada"))
