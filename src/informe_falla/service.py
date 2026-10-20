@@ -235,9 +235,10 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
     contexto = contexto_de(request, sistema_label)
     evid = armar_evidencia(unidad, request["event_date"], status, risk, perfil)
     # Sin datos suficientes en la ventana no se llama a la IA: el informe no tendria contenido.
-    datos = disponibilidad(evid, unidad, status, risk)
-    if not datos["ok"]:
-        raise InformeError(ERROR_INSUFFICIENT, datos=datos)
+    if get_informe_settings().validar_datos:
+        datos = disponibilidad(evid, unidad, status, risk)
+        if not datos["ok"]:
+            raise InformeError(ERROR_INSUFFICIENT, datos=datos)
     # Intervenciones de mantencion previas (sin IA): cobertura, tabla y antecedentes.
     destacados = [r["modo"] for r in evid["ranking_modos"] if r["nivel"] in ("alto", "medio")]
     evid.update(mantenciones.antecedentes_mantencion(cliente, unidad, evid["consulta"]["fecha"],

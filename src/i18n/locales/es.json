@@ -449,7 +449,7 @@
  "informe_falla.running": "Generando el informe preliminar de {unit} para la detención del {date}…",
  "informe_falla.running_hint": "El análisis con IA puede tardar uno o dos minutos. Puedes seguir en esta página.",
  "informe_falla.scope_title": "Alcance del informe",
- "informe_falla.subtitle": "Genera un informe preliminar de una detención a partir de lo que el Predictivo mostró en los 3 meses previos, con tu contexto e imágenes de respaldo. Indica la falla más probable y qué confirmar en la inspección.",
+ "informe_falla.subtitle": "Genera un informe preliminar de una detención con los datos del dashboard: el Predictivo de los 3 meses previos y las mantenciones de la unidad. Indica la falla más probable y qué confirmar en la inspección.",
  "informe_falla.troubleshooting_hint": "Aquí podrás incorporar al informe los diagnósticos de una sesión del agente de Troubleshooting.",
  "informe_falla.troubleshooting_placeholder": "Disponible próximamente",
  "informe_falla.unavailable": "El informe preliminar de falla no está habilitado para {client}.",

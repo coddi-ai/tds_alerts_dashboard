@@ -32,8 +32,8 @@ el sistema o el componente, y procesa lo que ya está en el dashboard para dar u
 |---|---|
 | Predictivo de motor (score semanal y diario, 13 semanas) | Listo. Reglas del método original, sin IA |
 | Mantenciones previas del sistema (tabla, línea de tiempo, recurrencia, rellenos) | Listo para motor. CDA, con clasificación por texto |
-| Formulario (relato y fotos) | Listo |
-| Validador de datos (bloquea si no hay datos suficientes del Predictivo) | Listo |
+| Formulario | **Mínimo por defecto:** unidad, sistema y fecha. Contexto, imágenes y Troubleshooting ocultos; se muestran con `INFORME_FALLA_FORMULARIO_COMPLETO=true` |
+| Validador de suficiencia de datos | **Desactivado por defecto** desde el 2026-10-20, porque sumaba tiempo. Se activa con `INFORME_FALLA_VALIDAR_DATOS=true` (vista y servicio). Sin él, un caso sin datos se genera igual y el informe dice "datos insuficientes" |
 | Redacción con IA (`gpt-6-luna`, prompt 2.5) y controles | Listo |
 | PDF A4 (WeasyPrint) e historial por cliente | Listo. Se guarda en `outputs/informe_falla/` |
 | Configuración (`INFORME_FALLA_*`) | `src/informe_falla/config.py` |

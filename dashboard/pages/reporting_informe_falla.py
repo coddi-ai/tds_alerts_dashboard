@@ -15,6 +15,7 @@ from dash import dcc, html
 
 from src.data.erp_schemas import SYSTEM_LABELS, System
 from src.data.informe_falla_request import INFORME_MAX_IMAGE_BYTES, INFORME_MAX_IMAGES
+from src.informe_falla.config import get_informe_settings
 from src.informe_falla.service import SISTEMAS_SOPORTADOS
 
 # Mientras corre un informe, la vista consulta su estado cada tanto.
@@ -207,9 +208,10 @@ def layout(**kwargs):
         # Oculto mientras el cliente activo no tenga unidades o acceso.
         html.Div([
             _scope_card(),
-            _context_card(),
-            _images_card(),
-            _troubleshooting_card(),
+            # Contexto, imagenes y Troubleshooting: ocultos salvo INFORME_FALLA_FORMULARIO_COMPLETO=true
+            # (config.py). Quedan en el layout, invisibles, porque los callbacks leen sus valores.
+            html.Div([_context_card(), _images_card(), _troubleshooting_card()],
+                     style={} if get_informe_settings().formulario_completo else {"display": "none"}),
             _actions_bar(),
             html.Div(id="informe-result"),
             _history_card(),

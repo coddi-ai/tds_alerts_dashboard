@@ -112,3 +112,39 @@ def test_service_is_registered_under_reports():
     assert NAV_PATHS["reporting-informe-falla"] == "/reporting/informe-falla"
     assert resolve_service_id_for_pathname("reporting/informe-falla") == "reporting-informe-falla"
     assert resolve_service_id_for_pathname("reporting") == "reporting-main"
+
+
+@pytest.mark.parametrize("valor, visible", [(None, False), ("true", True)])
+def test_formulario_minimo_oculta_contexto_imagenes_y_troubleshooting(monkeypatch, valor, visible):
+    from dashboard.pages import reporting_informe_falla as pagina
+    if valor is None:
+        monkeypatch.delenv("INFORME_FALLA_FORMULARIO_COMPLETO", raising=False)
+    else:
+        monkeypatch.setenv("INFORME_FALLA_FORMULARIO_COMPLETO", valor)
+    layout = pagina.layout()
+
+    def buscar(nodo, id_):
+        if getattr(nodo, "id", None) == id_:
+            return True
+        hijos = getattr(nodo, "children", None)
+        hijos = hijos if isinstance(hijos, (list, tuple)) else [hijos]
+        return any(buscar(h, id_) for h in hijos if h is not None and not isinstance(h, str))
+
+    def contenedor(nodo):
+        """El Div que agrupa las secciones opcionales (el que contiene el campo de descripcion)."""
+        hijos = getattr(nodo, "children", None)
+        hijos = hijos if isinstance(hijos, (list, tuple)) else [hijos]
+        for h in hijos:
+            if h is None or isinstance(h, str):
+                continue
+            if isinstance(getattr(h, "style", None), dict) and buscar(h, "informe-description") \
+                    and not buscar(h, "informe-unit"):
+                return h
+            encontrado = contenedor(h)
+            if encontrado is not None:
+                return encontrado
+        return None
+
+    # Los campos siguen en el layout (los callbacks los leen), pero ocultos salvo con el formulario completo.
+    assert buscar(layout, "informe-description") and buscar(layout, "informe-upload")
+    assert (contenedor(layout).style.get("display") != "none") == visible

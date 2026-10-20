@@ -12,6 +12,10 @@ variable de entorno (en .env o en docker-compose.yml) sin tocar codigo:
     INFORME_FALLA_DATA_CACHE_SECONDS    vida del historial del Predictivo ya cargado, por cliente
     INFORME_FALLA_MAX_WORKERS           informes que se generan a la vez
     INFORME_FALLA_JOB_TTL_SECONDS       cuanto se recuerda un trabajo terminado en memoria
+    INFORME_FALLA_VALIDAR_DATOS         true = valida la suficiencia de datos del Predictivo antes de generar
+                                        (en la vista y en el servicio). Apagado por defecto: suma tiempo.
+    INFORME_FALLA_FORMULARIO_COMPLETO   true = muestra contexto del evento, imagenes y Troubleshooting en la
+                                        vista. Apagado por defecto: solo unidad, sistema y fecha.
 
 Solo aplica al informe preliminar: Campbell AI tiene su propia configuracion (src/campbell_ai/config.py).
 Los umbrales del analisis (ventanas, percentiles, niveles) y el catalogo de verificaciones
@@ -44,6 +48,8 @@ class InformeSettings:
     data_cache_seconds: int = 900
     max_workers: int = 2
     job_ttl_seconds: int = 6 * 3600
+    validar_datos: bool = False
+    formulario_completo: bool = False
 
     @classmethod
     def from_env(cls) -> "InformeSettings":
@@ -57,7 +63,14 @@ class InformeSettings:
             data_cache_seconds=int(_env_str("INFORME_FALLA_DATA_CACHE_SECONDS") or defaults["data_cache_seconds"]),
             max_workers=int(_env_str("INFORME_FALLA_MAX_WORKERS") or defaults["max_workers"]),
             job_ttl_seconds=int(_env_str("INFORME_FALLA_JOB_TTL_SECONDS") or defaults["job_ttl_seconds"]),
+            validar_datos=_env_bool("INFORME_FALLA_VALIDAR_DATOS", defaults["validar_datos"]),
+            formulario_completo=_env_bool("INFORME_FALLA_FORMULARIO_COMPLETO", defaults["formulario_completo"]),
         )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env_str(name)
+    return default if value is None else value.lower() in {"1", "true", "yes", "on", "si", "sí"}
 
 
 def _env_str(name: str) -> Optional[str]:

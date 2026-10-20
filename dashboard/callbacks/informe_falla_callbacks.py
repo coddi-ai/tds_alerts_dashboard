@@ -27,6 +27,7 @@ from src.data.report_health import unit_key
 from src.data.report_store import unit_sort_key
 from src.i18n import t, t_or
 from src.informe_falla import service
+from src.informe_falla.config import get_informe_settings
 from src.informe_falla.catalog import COMPONENTE
 from src.utils.logger import get_logger
 
@@ -311,6 +312,8 @@ def register_informe_falla_callbacks(app: dash.Dash) -> None:
             return None, False
         if date.fromisoformat(event_date[:10]) > date.today():
             return dbc.Alert(t("informe_falla.future_date"), color="danger", className="mb-0 py-2"), False
+        if not get_informe_settings().validar_datos:
+            return None, True   # validador apagado (config.py): no se cargan datos al elegir unidad y fecha
         result = service.validar_disponibilidad(client, unit, event_date[:10])
         return build_availability(result), result["ok"]
 

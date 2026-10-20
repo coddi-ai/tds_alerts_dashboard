@@ -317,7 +317,28 @@ def test_validador_unidad_inexistente(servicio):
     assert service.validar_disponibilidad("CDA", "T_99", FECHA) == {"ok": False, "motivo": service.ERROR_UNIT}
 
 
-def test_sin_datos_suficientes_no_se_llama_a_la_ia(servicio):
+def test_interruptores_apagados_por_defecto(monkeypatch):
+    for var in ("INFORME_FALLA_VALIDAR_DATOS", "INFORME_FALLA_FORMULARIO_COMPLETO"):
+        monkeypatch.delenv(var, raising=False)
+    ajustes = config.get_informe_settings()
+    assert not ajustes.validar_datos and not ajustes.formulario_completo
+    monkeypatch.setenv("INFORME_FALLA_VALIDAR_DATOS", "true")
+    assert config.get_informe_settings().validar_datos
+
+
+def test_sin_validador_se_genera_igual(servicio, monkeypatch):
+    monkeypatch.delenv("INFORME_FALLA_VALIDAR_DATOS", raising=False)
+    llamadas = []
+    def llm(system, user, esquema):
+        llamadas.append(1)
+        return _llm(system, user, esquema)
+    resultado = service.generar_informe(_solicitud(event_date="2026-05-15"), llm_fn=llm)
+    assert resultado["status"] == service.STATUS_READY and llamadas == [1]
+    assert resultado["rules_verdict"] == "DATOS INSUFICIENTES"
+
+
+def test_sin_datos_suficientes_no_se_llama_a_la_ia(servicio, monkeypatch):
+    monkeypatch.setenv("INFORME_FALLA_VALIDAR_DATOS", "true")
     def llm(*_):
         raise AssertionError("no debe llamarse a la IA sin datos suficientes")
     with pytest.raises(service.InformeError) as error:
