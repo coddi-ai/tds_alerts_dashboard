@@ -19,9 +19,11 @@ from dashboard.components.predictive_config import (
 from src.data import predictive_v2
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_charts import (
+    SCATTER_AXIS_FIELDS,
     create_empty_selection_figure,
     create_fleet_scatter,
     create_long_view_chart,
+    scatter_axis_columns,
 )
 from dashboard.components.predictive_state import STATE_COLORS, combine_states, normalize_state
 from dashboard.components import predictive_long_selection as long_sel
@@ -284,10 +286,16 @@ def attach_component_hours(latest: pd.DataFrame, active) -> pd.DataFrame:
 
 
 def make_fleet_scatter(latest, client: str, component: str, selected_unit, status_colors, height=380):
-    """`create_fleet_scatter` with this client/component's configured quadrant
-    thresholds (None -> plain scatter) and each unit's component hours in the tooltip."""
+    """`create_fleet_scatter` with this client/component's configured axes, quadrant
+    thresholds (None -> plain scatter) and each unit's component hours in the tooltip.
+    A pair with no configured axes has nothing to plot: a "not configured" message
+    figure, never a default pairing."""
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    if axes is None:
+        logger.warning("No fleet_scatter_axes configured for %s/%s; Short View scatter not drawn", client, component)
+        return create_empty_selection_figure("predictive_charts.ejes_sin_configurar")
     return create_fleet_scatter(
-        latest, selected_unit, status_colors,
+        latest, selected_unit, status_colors, axes=axes,
         thresholds=get_settings().get_fleet_scatter_threshold(client, component),
         meter_by_unit=load_latest_component_meter(client, component, latest["Unit"]),
         height=height,
@@ -701,17 +709,17 @@ def _selection_result(sel, groups, figure) -> dict:
 
 # ── Short View ──
 
-def _short_view_model(latest):
+def _short_view_model(latest, client: str, component: str):
     """What the Short View's panel and chart work from, fleet-wide: the units it can
-    actually draw (a recognised `unit_status_summary` state and both ranking means),
-    their fleet order and the risk group per badge. A unit outside this set has no
-    point on the chart, so it is not offered in the panel either."""
-    state = latest["status"].map(normalize_state)
-    drawable = latest[
-        state.notna()
-        & np.isfinite(latest["avg_ranking_7d"].astype(float))
-        & np.isfinite(latest["avg_ranking_30d"].astype(float))
-    ].sort_values("Unit")
+    actually draw (a recognised `unit_status_summary` state and a value on both
+    configured axis fields), their fleet order and the risk group per badge. A unit
+    outside this set has no point on the chart, so it is not offered in the panel
+    either. With no axes configured for the pair nothing can be drawn."""
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    ok = latest["status"].map(normalize_state).notna() & (axes is not None)
+    for column in (scatter_axis_columns(axes) if axes is not None else ()):
+        ok &= np.isfinite(latest[column].astype(float))
+    drawable = latest[ok].sort_values("Unit")
     universe = list(drawable["Unit"])
     groups = {
         badge: [u for u, s in zip(drawable["Unit"], drawable["status"].map(normalize_state)) if s == badge]
@@ -733,7 +741,7 @@ def _short_view_figure(drawable, selected, client: str, component: str):
 def short_view_update(event, state, latest, client: str, component: str) -> dict:
     """One interaction on the Short View's panel -> everything that must change with
     it (see `_selection_result`)."""
-    drawable, universe, groups = _short_view_model(latest)
+    drawable, universe, groups = _short_view_model(latest, client, component)
     sel = _apply_selection_event(event, state, universe, groups)
     return _selection_result(sel, groups, _short_view_figure(drawable, sel.selected, client, component))
 
@@ -751,12 +759,17 @@ def load_status_frame(client: str, component: str):
 
 
 def render_short_view(latest, client: str, component: str):
-    """Short View Analysis: the fleet scatter (7-day mean vs 30-day mean ranking,
-    per-client thresholds), points colored/sized by `unit_status_summary.estado`,
+    """Short View Analysis: the fleet scatter (the ranking fields configured as its
+    axes for this client/component, with its thresholds), points colored/sized by
+    `unit_status_summary.estado`,
     with its own unit selection (dropdown, risk-grouped chips, risk badges) that
     picks which units are drawn. Clicking a point opens that unit in Evidence
     (navigate_to_evidence_from_overview)."""
-    drawable, universe, groups = _short_view_model(latest)
+    drawable, universe, groups = _short_view_model(latest, client, component)
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    subtitle = t("tab_predictive_overview.short_view_subtitle",
+                 x_label=t(SCATTER_AXIS_FIELDS[axes[0]][1]), y_label=t(SCATTER_AXIS_FIELDS[axes[1]][1]).lower()
+                 ) if axes is not None else ""
     sel = long_sel.initial_selection(universe)
     if universe:
         fig = _short_view_figure(drawable, sel.selected, client, component)
@@ -766,7 +779,7 @@ def render_short_view(latest, client: str, component: str):
         html.Div([
             html.Span([html.I(className="fas fa-dot-circle me-1"), t("tab_predictive_overview.posicion_en_la_flota")],
                       className="card-subtitle fw-500"),
-            html.Span(t("tab_predictive_overview.short_view_subtitle"),
+            html.Span(subtitle,
                       style={"fontSize": "11px", "color": "var(--text-light)", "marginLeft": "8px"}),
         ], style={"marginBottom": "8px"}),
         dcc.Store(id=SHORT_STATE_ID, data=long_sel.to_dict(sel)),

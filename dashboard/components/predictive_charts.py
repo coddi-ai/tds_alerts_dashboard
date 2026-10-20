@@ -47,6 +47,26 @@ _ZONE_STATE = {
 }
 
 
+# Short View axis fields (config.settings.FLEET_SCATTER_AXIS_FIELDS): name -> (column
+# of the per-unit frame, axis-title i18n key). 60d / 90d are the loader's rolling means.
+SCATTER_AXIS_FIELDS = {
+    "ranking_today": ("ranking", "predictive_charts.ranking_hoy"),
+    "ranking_7d": ("avg_ranking_7d", "predictive_charts.ranking_7_dias"),
+    "ranking_30d": ("avg_ranking_30d", "predictive_charts.ranking_30_dias"),
+    "ranking_60d": ("avg_ranking_60d", "predictive_charts.ranking_60_dias"),
+    "ranking_90d": ("ranking_acum_90d", "predictive_charts.ranking_90_dias"),
+}
+
+
+def scatter_axis_columns(axes):
+    """Frame columns of the configured (x, y) axis fields. Raises on a missing or
+    unknown pair: there is no default pairing to fall back to."""
+    try:
+        return tuple(SCATTER_AXIS_FIELDS[field][0] for field in axes)
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"fleet scatter axes {axes!r} must be two of {list(SCATTER_AXIS_FIELDS)}") from exc
+
+
 def _axis_range(values, thresh, min_pad):
     """Axis range around the data that always contains `thresh` (so no zone
     collapses when the whole fleet sits on one side of it). Without a threshold
@@ -232,11 +252,15 @@ def _label_annotation(unit, x, y, placement):
 
 
 def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=None, meter_by_unit=None,
-                         height=380):
+                         height=380, *, axes):
     """
-    Crear scatter de avg_ranking_7d (eje X) vs avg_ranking_30d (eje Y) con todos
-    los equipos. Destaca el equipo seleccionado. El tooltip muestra el ranking de
-    hoy, el de 7 y 30 días y las horas de componente.
+    Crear scatter con todos los equipos. Destaca el equipo seleccionado. El tooltip
+    muestra el ranking de hoy, el de 7 y 30 días y las horas de componente, sea
+    cual sea el par de ejes.
+
+    `axes` es el (x, y) de campos de ranking configurado para el cliente/componente
+    (Settings.get_fleet_scatter_axes; claves de SCATTER_AXIS_FIELDS). Es obligatorio:
+    no hay un par por defecto, y uno ausente o desconocido lanza ValueError.
 
     `height` en px; None deja que el gráfico tome el alto de su contenedor
     (General lo dimensiona 2.5:1 por CSS).
@@ -253,8 +277,10 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
     `meter_by_unit` ({Unit: horas}) agrega las horas de componente al tooltip; None
     lo omite y una unidad sin lectura muestra "—".
     """
-    x_all = df_latest["avg_ranking_7d"].astype(float)
-    y_all = df_latest["avg_ranking_30d"].astype(float)
+    x_col, y_col = scatter_axis_columns(axes)
+    x_title, y_title = (_t(SCATTER_AXIS_FIELDS[field][1]) for field in axes)
+    x_all = df_latest[x_col].astype(float)
+    y_all = df_latest[y_col].astype(float)
 
     x_thresh, y_thresh = thresholds if thresholds is not None else (None, None)
     x0, x1 = _axis_range(x_all, x_thresh, 5)
@@ -320,7 +346,14 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
     # top. Label positions are solved over every group at once so labels never
     # collide across states.
     groups = []  # (state, color, frame, is_selected)
-    today = {u: (f"{v:.0f}" if pd.notna(v) else "—") for u, v in zip(df_latest["Unit"], df_latest["ranking"])}
+    def _shown(column, spec):
+        """{Unit: text} of a ranking column, as the tooltip shows it."""
+        if column not in df_latest.columns:
+            return {}
+        return {u: (format(v, spec) if pd.notna(v) else "—") for u, v in zip(df_latest["Unit"], df_latest[column].astype(float))}
+
+    # The tooltip's four ranking values do not depend on which two are plotted.
+    today, r7, r30 = _shown("ranking", ".0f"), _shown("avg_ranking_7d", ".1f"), _shown("avg_ranking_30d", ".1f")
     for st, color in status_colors.items():
         subset = df_latest[(df_latest["status"] == st) & (df_latest["Unit"] != selected_unit)]
         if not subset.empty:
@@ -337,8 +370,8 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
     all_units, all_x, all_y, all_sizes, all_priority = [], [], [], [], []
     for st, _color, frame, is_selected in groups:
         all_units += list(frame["Unit"])
-        all_x += list(frame["avg_ranking_7d"].astype(float))
-        all_y += list(frame["avg_ranking_30d"].astype(float))
+        all_x += list(frame[x_col].astype(float))
+        all_y += list(frame[y_col].astype(float))
         all_sizes += [_group_size(st, is_selected)] * len(frame)
         # most severe first; the selected unit ahead of all so it keeps its label
         all_priority += [(len(STATE_SEVERITY) if is_selected else STATE_SEVERITY.get(normalize_state(st), -1))] * len(frame)
@@ -360,13 +393,14 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
             name = status_label(st)
         unit_placements = [placements[u] for u in units]
         fig.add_trace(go.Scatter(
-            x=frame["avg_ranking_7d"].astype(float),
-            y=frame["avg_ranking_30d"].astype(float),
+            x=frame[x_col].astype(float),
+            y=frame[y_col].astype(float),
             mode="markers+text",
             name=name,
             text=units,
-            # [unit, today's ranking]: click-to-Evidence reads the unit from index 0
-            customdata=[[u, today[u]] for u in units],
+            # [unit, today's, 7-day and 30-day ranking]: click-to-Evidence reads the
+            # unit from index 0; the tooltip reads the rest (not the plotted x / y)
+            customdata=[[u, today.get(u, "—"), r7.get(u, "—"), r30.get(u, "—")] for u in units],
             # A label that fits nowhere is left out (blank template) but the point
             # is still drawn; `text` stays for the tooltip and click handler.
             textposition=[p.position if p else _SCATTER_LABEL_ORDER[0] for p in unit_placements],
@@ -386,12 +420,12 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
         margin=dict(l=60, r=20, t=20, b=50),
         showlegend=False,
         xaxis=dict(
-            title=_t("predictive_charts.ranking_7_dias"),
+            title=x_title,
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[x0, x1]
         ),
         yaxis=dict(
-            title=_t("predictive_charts.ranking_30_dias"),
+            title=y_title,
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[y0, y1]
         ),
@@ -435,10 +469,11 @@ def _long_view_band(active, df):
     return None
 
 
-def create_empty_selection_figure():
+def create_empty_selection_figure(message_key="predictive_charts.selection_empty"):
     """A blank chart (no points, no axes) saying that no unit is selected - what an
-    empty unit selection shows on either chart. Never a fallback to the whole fleet."""
-    message = _t("predictive_charts.selection_empty")
+    empty unit selection shows on either chart. Never a fallback to the whole fleet.
+    `message_key` swaps the message (the Short View's "axes not configured" case)."""
+    message = _t(message_key)
     fig = go.Figure()
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",

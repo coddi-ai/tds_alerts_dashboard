@@ -16,6 +16,8 @@ def _latest(n=6):
         "ranking": np.linspace(40, 1, n),             # today: in the tooltip, not plotted
         "avg_ranking_7d": np.linspace(2, 30, n),      # x axis
         "avg_ranking_30d": np.linspace(30, 3, n),     # y axis
+        "avg_ranking_60d": np.linspace(25, 4, n),
+        "ranking_acum_90d": np.linspace(20, 5, n),
         "status": ["Normal", "Anormal"] * (n // 2),
     })
 
@@ -45,7 +47,7 @@ def test_unconfigured_pair_has_no_threshold(client, component):
 
 @pytest.mark.parametrize("thresh", [(50, 50), (16, 16), (16, 40)])
 def test_dividers_zones_and_labels_follow_the_threshold(thresh):
-    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=thresh)
+    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=thresh, axes=("ranking_7d", "ranking_30d"))
     xs = {s.x0 for s in _dividers(fig) if s.x0 == s.x1}
     ys = {s.y0 for s in _dividers(fig) if s.y0 == s.y1}
     assert xs == {thresh[0]} and ys == {thresh[1]}
@@ -59,12 +61,12 @@ def test_dividers_zones_and_labels_follow_the_threshold(thresh):
 
 
 def test_axis_range_contains_threshold_when_fleet_is_all_on_one_side():
-    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(50, 50))
+    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(50, 50), axes=("ranking_7d", "ranking_30d"))
     assert fig.layout.xaxis.range[1] > 50 and fig.layout.yaxis.range[1] > 50
 
 
 def test_no_threshold_renders_plain_scatter():
-    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=None)
+    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=None, axes=("ranking_7d", "ranking_30d"))
     assert not fig.layout.shapes and not fig.layout.annotations
     assert sum(len(t.x) for t in fig.data) == 6
 
@@ -75,32 +77,31 @@ def test_all_nan_ranking_does_not_break_the_chart():
     df["avg_ranking_7d"] = np.nan
     df["avg_ranking_30d"] = np.nan
     for thresh in [(16, 16), None]:
-        fig = create_fleet_scatter(df, None, COLORS, thresholds=thresh)
+        fig = create_fleet_scatter(df, None, COLORS, thresholds=thresh, axes=("ranking_7d", "ranking_30d"))
         assert all(np.isfinite(fig.layout.xaxis.range)) and all(np.isfinite(fig.layout.yaxis.range))
 
 
 def test_tooltip_shows_meter_and_dash_for_unit_without_reading():
     df = _latest()
     fig = create_fleet_scatter(df, "T_01", COLORS, thresholds=(16, 16),
-                               meter_by_unit={"T_00": 12345.0, "T_01": 800.0})
+                               meter_by_unit={"T_00": 12345.0, "T_01": 800.0}, axes=("ranking_7d", "ranking_30d"))
     for trace in fig.data:
         assert "%{hovertext}" in trace.hovertemplate
-        # today / 7d / 30d are all there (today comes from customdata: it is not plotted)
-        assert "%{customdata[1]}" in trace.hovertemplate
-        assert "%{x:.1f}" in trace.hovertemplate and "%{y:.1f}" in trace.hovertemplate
+        # today / 7d / 30d are all there, read from customdata (not from the plotted x / y)
+        assert all(f"%{{customdata[{i}]}}" in trace.hovertemplate for i in (1, 2, 3))
         assert trace.hovertemplate.endswith("<extra></extra>")
     texts = {u: h for t in fig.data for u, h in zip(t.text, t.hovertext)}
     assert texts["T_00"] == "12,345 hrs" and texts["T_01"] == "800 hrs" and texts["T_02"] == "—"
 
 
 def test_tooltip_without_meter_source_is_unchanged():
-    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(16, 16), meter_by_unit=None)
+    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(16, 16), meter_by_unit=None, axes=("ranking_7d", "ranking_30d"))
     for trace in fig.data:
         assert "hovertext" not in trace.hovertemplate and trace.hovertext is None
 
 
 def test_click_to_evidence_still_reads_the_unit_from_customdata():
-    fig = create_fleet_scatter(_latest(), "T_01", COLORS, thresholds=(16, 16), meter_by_unit={"T_00": 1.0})
+    fig = create_fleet_scatter(_latest(), "T_01", COLORS, thresholds=(16, 16), meter_by_unit={"T_00": 1.0}, axes=("ranking_7d", "ranking_30d"))
     for trace in fig.data:
         # [unit, today's ranking]: the click callback takes index 0 of a list
         assert [c[0] for c in trace.customdata] == list(trace.text)
@@ -120,7 +121,7 @@ def _luminance(hex_or_rgb):
 
 
 def test_zone_fills_are_stronger_and_labels_readable_on_them():
-    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(16, 16))
+    fig = create_fleet_scatter(_latest(), None, COLORS, thresholds=(16, 16), axes=("ranking_7d", "ranking_30d"))
     for shape, ann in zip(_zones(fig), fig.layout.annotations):
         assert _alpha(shape.fillcolor) >= 0.15  # was 0.05
         r, g, b = [float(v) for v in shape.fillcolor[5:shape.fillcolor.rindex(",")].split(",")]

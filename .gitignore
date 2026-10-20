@@ -114,6 +114,7 @@ dataDep/
 new_dashboard/*
 migration_dashboard/*
 ai_docs/*
+outputs/*
 
 # PDF files (local reference docs)
 *.pdf

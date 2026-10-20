@@ -127,6 +127,7 @@ def short_frame():
         "ranking": [90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0],
         "avg_ranking_7d": [5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0],
         "avg_ranking_30d": [8.0, 12.0, 30.0, 26.0, 40.0, 60.0, 20.0],
+        "ranking_acum_90d": [10.0, 22.0, 33.0, 44.0, 66.0, 77.0, 88.0],
     })
 
 
@@ -441,9 +442,9 @@ def test_short_view_selection_draws_only_those_points_and_fits_the_axes(monkeypa
     front = FrontEnd(monkeypatch, "short", fleet_active, short_frame)
     front.pick(["U1"])
     [trace] = front.figure.data
-    assert list(trace.text) == ["U1"] and list(trace.x) == [5.0] and list(trace.y) == [8.0]
-    wide = create_fleet_scatter(short_frame.iloc[:6], None, STATE_COLORS, thresholds=None)
-    narrow = create_fleet_scatter(short_frame.iloc[:1], None, STATE_COLORS, thresholds=None)
+    assert list(trace.text) == ["U1"] and list(trace.x) == [5.0] and list(trace.y) == [10.0]
+    wide = create_fleet_scatter(short_frame.iloc[:6], None, STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_90d"))
+    narrow = create_fleet_scatter(short_frame.iloc[:1], None, STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_90d"))
     assert narrow.layout.xaxis.range[1] < wide.layout.xaxis.range[1]
 
 
@@ -459,7 +460,7 @@ def test_short_view_keeps_click_to_evidence_working(monkeypatch, fleet_active, s
 def test_both_layer_two_charts_sit_in_the_2_5_to_1_frame(monkeypatch, fleet_active):
     monkeypatch.setattr(ov, "load_active_curve", lambda c, comp: fleet_active)
     latest = pd.DataFrame({"Unit": ["U1"], "ranking": [1.0], "avg_ranking_7d": [2.0],
-                           "avg_ranking_30d": [3.0], "status": ["Normal"]})
+                           "avg_ranking_30d": [3.0], "ranking_acum_90d": [4.0], "status": ["Normal"]})
     graphs = _graphs(ov.render_short_view(latest, "capstone", "motor")) + _graphs(ov.render_long_view("capstone", "motor", FLEET))
     assert len(graphs) == 2
     for graph in graphs:
@@ -472,29 +473,29 @@ def test_both_layer_two_charts_sit_in_the_2_5_to_1_frame(monkeypatch, fleet_acti
 
 
 def test_unit_summary_keeps_its_fixed_height_scatter():
-    assert create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=None).layout.height == 380
+    assert create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_30d")).layout.height == 380
 
 
-# ── Short View: 7-day x axis ─────────────────────────────────────────────────
+# ── Short View: 7-day x axis, 90-day y axis (configured, see test_fleet_scatter_axes) ──
 
-def test_short_view_plots_the_7_day_mean_on_x_and_the_30_day_mean_on_y():
+def test_short_view_plots_the_7_day_mean_on_x_and_the_90_day_mean_on_y():
     df = _fleet()
-    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=(50, 50))
+    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=(50, 50), axes=("ranking_7d", "ranking_90d"))
     xs = sorted(x for t in fig.data for x in t.x)
     ys = sorted(y for t in fig.data for y in t.y)
-    assert xs == pytest.approx(sorted(df["avg_ranking_7d"])) and ys == pytest.approx(sorted(df["avg_ranking_30d"]))
-    assert fig.layout.xaxis.title.text == "Ranking 7 días" and fig.layout.yaxis.title.text == "Ranking 30 días"
+    assert xs == pytest.approx(sorted(df["avg_ranking_7d"])) and ys == pytest.approx(sorted(df["ranking_acum_90d"]))
+    assert fig.layout.xaxis.title.text == "Ranking 7 días" and fig.layout.yaxis.title.text == "Ranking 90 días"
     assert {s.x0 for s in fig.layout.shapes if s.type == "line" and s.x0 == s.x1} == {50}  # thresholds unchanged
     assert {s.y0 for s in fig.layout.shapes if s.type == "line" and s.y0 == s.y1} == {50}
 
 
 def test_short_view_tooltip_has_today_7d_30d_and_the_component_meter():
     df = _fleet()
-    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=None, meter_by_unit={"T_00": 1234.0})
+    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=None, meter_by_unit={"T_00": 1234.0}, axes=("ranking_7d", "ranking_30d"))
     for trace in fig.data:
         template = trace.hovertemplate
-        assert "Ranking hoy: %{customdata[1]}" in template and "Ranking 7 días: %{x:.1f}" in template
-        assert "Ranking 30 días: %{y:.1f}" in template and "Horómetro: %{hovertext}" in template
+        assert "Ranking hoy: %{customdata[1]}" in template and "Ranking 7 días: %{customdata[2]}" in template
+        assert "Ranking 30 días: %{customdata[3]}" in template and "Horómetro: %{hovertext}" in template
     today = {c[0]: c[1] for t in fig.data for c in t.customdata}
     assert today["T_00"] == f"{df.loc[0, 'ranking']:.0f}"  # today's ranking: shown, not plotted
     assert {u: h for t in fig.data for u, h in zip(t.text, t.hovertext)}["T_00"] == "1,234 hrs"

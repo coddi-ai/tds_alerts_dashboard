@@ -222,7 +222,7 @@ def test_table_shows_component_hour_column(active):
 def test_fleet_scatter_tooltip_hours_use_the_same_source(monkeypatch, active):
     monkeypatch.setattr(ov, "load_active_curve", lambda c, comp: active)
     latest = pd.DataFrame({"Unit": ["U1", "U2"], "ranking": [5.0, 9.0], "avg_ranking_7d": [5.5, 8.5],
-                           "avg_ranking_30d": [4.0, 8.0], "status": ["Normal", "Alerta"]})
+                           "avg_ranking_30d": [4.0, 8.0], "ranking_acum_90d": [3.0, 7.0], "status": ["Normal", "Alerta"]})
     fig = ov.make_fleet_scatter(latest, "capstone", "motor", None, STATE_COLORS)
     texts = {u: h for t in fig.data for u, h in zip(t.text, t.hovertext)}
     assert texts == {"U1": "1,500 hrs", "U2": "1,200 hrs"}
@@ -428,11 +428,12 @@ def _fleet(n=9):
         "Unit": [f"T_{i:02d}" for i in range(n)],
         "ranking": np.linspace(90, 1, n), "avg_ranking_7d": np.linspace(2, 80, n),
         "avg_ranking_30d": np.linspace(5, 70, n), "status": states,
+        "avg_ranking_60d": np.linspace(8, 60, n), "ranking_acum_90d": np.linspace(60, 10, n),
     })
 
 
 def test_scatter_points_are_colored_and_sized_by_their_own_state():
-    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50))
+    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50), axes=("ranking_7d", "ranking_30d"))
     by_state = {t.name: t for t in fig.data}
     for state in ("Normal", "Alerta", "Anormal"):
         trace = [t for t in fig.data if t.marker.color == STATE_COLORS[state]]
@@ -442,7 +443,7 @@ def test_scatter_points_are_colored_and_sized_by_their_own_state():
 
 
 def test_scatter_selected_unit_keeps_its_state_color_and_gets_a_ring():
-    fig = create_fleet_scatter(_fleet(), "T_02", STATE_COLORS, thresholds=None)
+    fig = create_fleet_scatter(_fleet(), "T_02", STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_30d"))
     selected = fig.data[-1]
     assert list(selected.text) == ["T_02"]
     assert selected.marker.color == STATE_COLORS["Anormal"]          # T_02 is Anormal
@@ -451,7 +452,7 @@ def test_scatter_selected_unit_keeps_its_state_color_and_gets_a_ring():
 
 
 def test_scatter_labels_are_gray_in_trace_text_and_never_connector_lines():
-    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50))
+    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50), axes=("ranking_7d", "ranking_30d"))
     for trace in fig.data:
         assert len(trace.textposition) == len(trace.x) == len(trace.text) == len(trace.texttemplate)
         assert trace.textfont.color == pc.LABEL_COLOR            # gray, whatever the state
@@ -460,13 +461,13 @@ def test_scatter_labels_are_gray_in_trace_text_and_never_connector_lines():
 
 
 def test_scatter_selected_unit_label_is_gray_too():
-    fig = create_fleet_scatter(_fleet(), "T_02", STATE_COLORS, thresholds=None)
+    fig = create_fleet_scatter(_fleet(), "T_02", STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_30d"))
     assert fig.data[-1].textfont.color == pc.LABEL_COLOR
     assert fig.data[-1].texttemplate[0] == "%{text}"            # the selected unit keeps its label
 
 
 def test_scatter_zones_use_the_state_colors_only():
-    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50))
+    fig = create_fleet_scatter(_fleet(), None, STATE_COLORS, thresholds=(50, 50), axes=("ranking_7d", "ranking_30d"))
     fills = [s.fillcolor for s in fig.layout.shapes if s.type == "rect"]
     assert len(fills) == 4
     assert set(fills) == set(STATE_ZONE_FILL.values())          # red critical, yellow x2, green healthy
@@ -481,7 +482,7 @@ def test_crowded_scatter_labels_shrink_or_drop_never_a_connector_line():
         "ranking": 10 + rng.normal(0, 0.6, n), "avg_ranking_7d": 10 + rng.normal(0, 0.6, n),
         "avg_ranking_30d": 10 + rng.normal(0, 0.6, n), "status": "Normal",
     })
-    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=None)
+    fig = create_fleet_scatter(df, None, STATE_COLORS, thresholds=None, axes=("ranking_7d", "ranking_30d"))
     assert not [a for a in fig.layout.annotations if a.showarrow]      # no line to an offset label
     trace = fig.data[0]
     shown = [tmpl == "%{text}" for tmpl in trace.texttemplate]
