@@ -59,11 +59,21 @@ def test_panel_renders_provided_diagnostico_and_causa_verbatim():
     assert "No disponible" in rendered  # only acciones is missing
 
 
-def test_panel_renders_json_array_acciones_as_a_bulleted_list():
+def test_panel_renders_json_array_acciones_as_a_checklist():
     panel = create_ai_analysis_panel("d", "c", '["Revisar presión", "Cambiar filtro"]')
     rendered = str(panel)
     assert "Revisar presión" in rendered
     assert "Cambiar filtro" in rendered
+    assert "Checklist" in rendered and "Ul(" not in rendered
+
+
+def test_panel_cards_use_no_colored_left_border():
+    rendered = str(create_ai_analysis_panel("d", "c", '["a"]'))
+    assert "borderLeft" not in rendered and "border-left" not in rendered
+
+
+def test_panel_header_is_accented():
+    assert "Análisis Inteligente" in str(create_ai_analysis_panel("d", "c", None))
 
 
 def test_panel_never_raises_for_any_combination_of_missing_fields():

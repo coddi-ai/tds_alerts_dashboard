@@ -426,6 +426,17 @@ def general_states(latest: pd.DataFrame, active) -> pd.Series:
     )
 
 
+def attach_general_status(latest: pd.DataFrame, active) -> pd.DataFrame:
+    """Add `general_status`: the worse of the short-view `status` and the long-view
+    estado of the unit's active cycle (see `general_states`). It is the Estado the
+    failure-mode table and the Evidencia banner show, so both cross-reference the
+    two views. `status` stays the short view's own (the Short View scatter keys off
+    it); a unit with no curve, or a client with none, keeps its short-view state."""
+    latest = latest.copy()
+    latest["general_status"] = general_states(latest, active).fillna(latest["status"])
+    return latest
+
+
 def units_missing_from_curve(units, active) -> list:
     """Units with no active-cycle row in the curve - true missing data, not the
     same thing as `evaluable = False` (those arrive as Normal and are trusted)."""
@@ -554,7 +565,8 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client=
 
     rows = []
     for _, r in sorted_df.iterrows():
-        status = r["status"]
+        # Estado is the general state (short + long view) when the caller attached it
+        status = r["general_status"] if "general_status" in r.index else r["status"]
         colors = _status_colors(status)
         # W34-10: `pd.notna` before the cast, not a bare `.get(key, 0)` —
         # that only defaults when the KEY is absent, not when the row's
@@ -918,12 +930,14 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     failure_modes = resolve_failure_modes(component, client)
 
     active = load_active_curve(client, component)
-    latest = attach_component_hours(attach_status(df_latest, client, component), active)
+    latest = attach_general_status(
+        attach_component_hours(attach_status(df_latest, client, component), active), active
+    )
     avg_ranking = float(latest["ranking"].mean())
 
-    # KPI counts use the "general state" (worse of short and long view); the
-    # per-unit `status` column keeps the short view's own estado.
-    counts = general_states(latest, active).value_counts()
+    # KPI counts and the table's Estado use the "general state" (worse of short and
+    # long view); the per-unit `status` column keeps the short view's own estado.
+    counts = latest["general_status"].value_counts()
     n_anormal = counts.get("Anormal", 0)
     n_alert = counts.get("Alerta", 0)
     n_normal = counts.get("Normal", 0)

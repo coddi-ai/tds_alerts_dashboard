@@ -18,6 +18,7 @@ from dashboard.tabs.tab_predictive_overview import (
     _render_component_overview,
     _failure_table,
     attach_component_hours,
+    attach_general_status,
     attach_status,
     load_active_curve,
     load_status_frame,
@@ -39,6 +40,7 @@ from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_component,
     render_initial_content,
     render_detailed_evidence,
+    unit_banner_style,
 )
 
 logger = get_logger(__name__)
@@ -325,8 +327,9 @@ def register_callbacks(app):
             return no_update, no_update
 
         failure_modes = resolve_failure_modes(component, client)
-        latest = attach_component_hours(
-            attach_status(df_latest, client, component), load_active_curve(client, component)
+        active = load_active_curve(client, component)
+        latest = attach_general_status(
+            attach_component_hours(attach_status(df_latest, client, component), active), active
         )
         fm_keys = list(failure_modes.keys())
 
@@ -379,26 +382,25 @@ def register_callbacks(app):
 
         # Load data to get status context
         status_text = ""
-        status_color = "#667eea"
         if client and component:
             components = _discover_components(client)
             filepath = components.get(component)
             if filepath:
                 _, df_latest = _load_evidence_component(filepath, component, client)
                 if df_latest is not None and not df_latest.empty:
-                    # Status via attach_status() (same source as Estado de
-                    # Flota, REQ-PR-04) so the banner never disagrees with the
-                    # priority cards for the same unit.
-                    latest_with_status = attach_status(df_latest, client, component)
+                    # Same Estado as the Riesgo por Modo de Falla table: the worse of
+                    # the short view (attach_status, REQ-PR-04) and the unit's
+                    # long-view curve state.
+                    latest_with_status = attach_general_status(
+                        attach_status(df_latest, client, component), load_active_curve(client, component)
+                    )
                     row = latest_with_status[latest_with_status["Unit"] == selected_unit]
                     if not row.empty:
                         row = row.iloc[0]
-                        status_text = row["status"]
-                        status_color = {
-                            "Anormal": "#e24b4a",
-                            "Alerta": "#ef9f27",
-                            "Normal": "#1d9e75",
-                        }.get(status_text, "#667eea")
+                        status_text = row["general_status"]
+
+        # Banner and Estado badge colors come from the unit's status alone
+        banner_style = unit_banner_style(status_text)
 
         component_label = (component or "").title()
 
@@ -456,20 +458,18 @@ def register_callbacks(app):
                             "letterSpacing": "0.5px", "opacity": "0.8", "marginBottom": "4px"
                         }),
                         html.Span(status_label(status_text), style={
-                            "background": "rgba(255,255,255,0.2)",
+                            **banner_style["badge"],
                             "padding": "4px 12px", "borderRadius": "12px",
                             "fontSize": "13px", "fontWeight": "600",
-                            "border": "1px solid rgba(255,255,255,0.4)"
-                        }),
+                        }, **{"data-tier": banner_style["tier"] or "sin_datos"}),
                     ], style={"textAlign": "center"}),
                 ], style={"display": "flex", "alignItems": "center"}),
             ], style={
                 "display": "flex", "justifyContent": "space-between", "alignItems": "center"
             })
         ], style={
-            "background": f"linear-gradient(135deg, {status_color} 0%, {status_color}dd 100%)",
-            "color": "white", "padding": "20px 28px", "borderRadius": "12px",
-            "boxShadow": f"0 4px 12px {status_color}44", "marginBottom": "1.5rem"
+            **banner_style["banner"],
+            "padding": "20px 28px", "borderRadius": "12px", "marginBottom": "1.5rem"
         })
 
     # ══════════════════════════════════════════════════════════════════════════

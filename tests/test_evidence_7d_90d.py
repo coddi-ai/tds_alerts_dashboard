@@ -1,5 +1,7 @@
 """Evidence's Resumen de Condición and Perfil de riesgo use the 7d / 90d windows,
 plus the 7d-vs-90d risk trend marker."""
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -51,16 +53,106 @@ def _texts(component):
     return out
 
 
-def test_resumen_de_condicion_cards(monkeypatch):
-    latest = _latest()
+def _render_resumen(monkeypatch, latest=None):
+    latest = _latest() if latest is None else latest
     monkeypatch.setattr(ev, "attach_status", lambda df, client, component: df)
     monkeypatch.setattr(ev, "_resolve_unit_ai_panel", lambda *a, **k: {})
     monkeypatch.setattr(ev, "create_ai_analysis_panel", lambda **k: None)
     monkeypatch.setattr(ev, "resolve_failure_modes", lambda component, client: MODES)
     df = pd.DataFrame({"Unit": ["U1", "U2"], "Fecha": pd.to_datetime(["2026-01-02", "2026-01-02"])})
-    texts = _texts(ev.render_initial_content("U1", df, latest, "motor", "cda"))
+    return ev.render_initial_content("U1", df, latest, "motor", "cda")
+
+
+def _walk(node):
+    yield node
+    children = getattr(node, "children", None)
+    if isinstance(children, (list, tuple)):
+        for child in children:
+            yield from _walk(child)
+    elif children is not None and not isinstance(children, str):
+        yield from _walk(children)
+
+
+def _tiles(rendered):
+    return [n for n in _walk(rendered) if "ev-tile" in (getattr(n, "className", None) or "").split()]
+
+
+def test_resumen_de_condicion_cards(monkeypatch):
+    texts = _texts(_render_resumen(monkeypatch))
     assert "Ranking 7 días" in texts and "40.0" in texts
     assert "Riesgo acum. 90d" in texts and "20.0" in texts
     assert not {"Ranking actual", "Riesgo acum. 30d"} & set(texts)
-    assert "Tendencia de riesgo" in texts and any("Aumentando" in s for s in texts)  # 40 vs 20
-    assert "Modo dominante" in texts and "Última evidencia" in texts
+    assert "Tendencia de riesgo" in texts and "Empeorando" in texts  # 40 vs 20
+    assert "Modo dominante" in texts
+
+
+def test_kpi_tiles_are_ordered_90d_7d_trend_mode(monkeypatch):
+    titles = [_texts(tile)[0] for tile in _tiles(_render_resumen(monkeypatch))]
+    assert titles == ["Riesgo acum. 90d", "Ranking 7 días", "Tendencia de riesgo", "Modo dominante"]
+
+
+def test_no_tile_uses_a_colored_left_accent(monkeypatch):
+    rendered = _render_resumen(monkeypatch)
+    assert not [n for n in _walk(rendered) if "kpi-accent" in (getattr(n, "className", None) or "")]
+    assert not [n for n in _walk(rendered)
+                if "borderLeft" in (getattr(n, "style", None) or {}) or "border-left" in str(getattr(n, "style", None) or "")]
+
+
+def test_risk_tiles_show_a_gauge_and_a_chip_on_the_same_scale(monkeypatch):
+    by_title = {_texts(t)[0]: t for t in _tiles(_render_resumen(monkeypatch))}
+    for title, value, chip in [("Riesgo acum. 90d", "20.0", "Normal"), ("Ranking 7 días", "40.0", "Atención")]:
+        tile = by_title[title]
+        assert value in _texts(tile) and chip in _texts(tile)
+        gauge = next(n for n in _walk(tile) if "ev-gauge" in (getattr(n, "className", None) or "").split())
+        assert gauge.role == "meter" and getattr(gauge, "aria-valuemax") == 100
+
+
+@pytest.mark.parametrize("value, label", [(0, "Normal"), (39.9, "Normal"), (40, "Atención"), (69.9, "Atención"), (70, "Crítico"), (100, "Crítico")])
+def test_risk_chip_thresholds_are_shared_by_both_tiles(value, label):
+    assert ev.risk_band(value)[1] == label
+    for tile in (ev._risk_tile("a", value, ""), ev._risk_tile("b", value, "")):
+        assert label in _texts(tile)
+
+
+def test_risk_tile_without_a_score_is_neutral_not_healthy():
+    tile = ev._risk_tile("Ranking", float("nan"), "sub")
+    assert "—" in _texts(tile) and "Normal" not in _texts(tile) and "Sin Datos" in _texts(tile)
+
+
+def test_trend_tile_states_the_direction_in_words():
+    for r7, r90, word, arrow in [(40, 20, "Empeorando", "▲"), (10, 30, "Mejorando", "▼"), (20, 22, "Estable", "●")]:
+        texts = _texts(ev._risk_trend_card(r7, r90))
+        assert word in texts and arrow in texts and any("pts" in s for s in texts)
+
+
+def test_dominant_mode_tile_stays_out_of_the_risk_palette():
+    tile = ev._dominant_mode_card("Modo Uno", 12.3)
+    rendered = str(tile)
+    assert "ev-tile--mode" in rendered
+    for _, _, fill, chip_bg, chip_text in ev.RISK_SCALE_BANDS:
+        assert not {fill, chip_bg, chip_text} & set(re.findall(r"#[0-9a-fA-F]{6}", rendered))
+    assert "ev-gauge" not in rendered and "ev-chip" not in rendered
+
+
+def test_ultima_evidencia_is_subtitle_metadata_not_a_tile(monkeypatch):
+    rendered = _render_resumen(monkeypatch)
+    assert not any("Última evidencia" in _texts(tile)[0] for tile in _tiles(rendered))
+    meta = next(n for n in _walk(rendered) if "ev-meta" in (getattr(n, "className", None) or "").split())
+    assert any(s.startswith("Última evidencia") for s in _texts(meta)) and "02 Jan 2026" in _texts(meta)
+
+
+@pytest.mark.parametrize("status, tier", [
+    ("Normal", "normal"), ("normal", "normal"), ("Alerta", "anormal"), ("Anormal", "critico"),
+    ("Sin Datos", None), (None, None), ("", None),
+])
+def test_banner_tier_comes_from_the_unit_status(status, tier):
+    assert ev.banner_tier(status) == tier
+    assert ev.unit_banner_style(status)["tier"] == tier
+
+
+def test_each_banner_tier_has_its_own_fill_and_normal_has_no_alarm_color():
+    fills = {tier: ev.unit_banner_style(s)["banner"]["background"]
+             for tier, s in [("normal", "Normal"), ("anormal", "Alerta"), ("critico", "Anormal"), (None, "Sin Datos")]}
+    assert len(set(fills.values())) == 4
+    assert "e24b4a" in fills["critico"] and "b45309" in fills["anormal"]
+    assert not {"e24b4a", "b45309", "ef9f27"} & set(re.findall(r"[0-9a-f]{6}", fills["normal"], re.I))

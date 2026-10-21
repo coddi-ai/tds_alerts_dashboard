@@ -22,7 +22,9 @@ from dashboard.components.predictive_config import (
     load_predictive_oil_limits_four,
     load_real_oil_samples,
 )
+from dashboard.components.labels import status_label
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
+from dashboard.components.predictive_state import normalize_state
 from dashboard.components.predictive_charts import (
     create_comparative_bars,
     create_mode_status_calendar,
@@ -101,23 +103,100 @@ def _fmt_ranking(val):
     return "—" if pd.isna(val) else f"{val:.1f}"
 
 
-def _ranking_color(val):
-    if pd.isna(val):
-        return "#6B7280"
-    if val >= 70:
-        return "#e24b4a"
-    if val >= 40:
-        return "#ef9f27"
-    return "#1d9e75"
+# ── Unit status banner ────────────────────────────────────────────────────────
+
+# The banner is styled from one value per unit: `status` as attach_status() sets it
+# (unit_status_summary.estado). That status maps to one of three banner tiers, and
+# each tier to one style, so no caller picks a banner color on its own. `Alerta`
+# keeps today's amber and `Anormal` today's red; `Normal` loses its alarm color.
+BANNER_TIER_BY_STATUS = {"Normal": "normal", "Alerta": "anormal", "Anormal": "critico"}
+
+UNIT_BANNER_STYLES = {
+    "normal": {
+        "banner": {"background": "#F3F4F6", "color": "#1F2937", "boxShadow": "0 4px 12px rgba(15,17,23,0.08)",
+                   "border": "1px solid #D1D5DB"},
+        "badge": {"background": "#FFFFFF", "border": "1px solid #9CA3AF"},
+    },
+    "anormal": {
+        "banner": {"background": "linear-gradient(135deg, #b45309 0%, #b45309dd 100%)", "color": "white",
+                   "boxShadow": "0 4px 12px #b4530944", "border": "1px solid transparent"},
+        "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+    },
+    "critico": {
+        "banner": {"background": "linear-gradient(135deg, #e24b4a 0%, #e24b4add 100%)", "color": "white",
+                   "boxShadow": "0 4px 12px #e24b4a44", "border": "1px solid transparent"},
+        "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+    },
+}
+
+# A unit with no usable status ("Sin Datos") is not one of the three tiers: it must
+# not borrow the light "normal" look and read as healthy.
+_UNIT_BANNER_NO_STATUS = {
+    "banner": {"background": "linear-gradient(135deg, #64748b 0%, #64748bdd 100%)", "color": "white",
+               "boxShadow": "0 4px 12px #64748b44", "border": "1px solid transparent"},
+    "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+}
 
 
-def _kpi_card(label, value, color, sub, value_style=None):
+def banner_tier(status):
+    """'normal' / 'anormal' / 'critico' for a unit's `status`, or None without a usable one."""
+    return BANNER_TIER_BY_STATUS.get(normalize_state(status))
+
+
+def unit_banner_style(status):
+    """{'tier', 'banner', 'badge'}: the colors of the Evidencia unit banner and its
+    Estado badge for a unit's `status`."""
+    tier = banner_tier(status)
+    return {"tier": tier, **UNIT_BANNER_STYLES.get(tier, _UNIT_BANNER_NO_STATUS)}
+
+
+# ── Shared 0-100 risk scale (Riesgo Acumulado 90d and Ranking 7 Días) ─────────
+
+# (lower bound, chip label, gauge fill, chip background, chip text), highest band
+# first. Provisional: the 40 / 70 cut-offs are the ones the ranking colors and score
+# cells already use (see tab_predictive_overview._score_cell_style); the team has not
+# confirmed them for the chips. Both tiles read this one table.
+RISK_SCALE_BANDS = (
+    (70, "Crítico", "#e24b4a", "#fcebeb", "#a32d2d"),
+    (40, "Atención", "#ef9f27", "#faeeda", "#854f0b"),
+    (0, "Normal", "#1d9e75", "#eaf3de", "#3b6d11"),
+)
+_RISK_SCALE_TICKS = (40, 70)
+_NO_DATA_CHIP = ("#E5E7EB", "#4B5563")
+
+
+def risk_band(value):
+    """The RISK_SCALE_BANDS row for a 0-100 score, or None when it is missing."""
+    if pd.isna(value):
+        return None
+    return next(band for band in RISK_SCALE_BANDS if value >= band[0])
+
+
+def _risk_tile(label, value, sub):
+    """KPI tile for a score on the shared 0-100 risk scale: value, severity chip and
+    a gauge whose ticks mark the chip thresholds."""
+    band = risk_band(value)
+    if band is None:
+        fill, chip_bg, chip_text, chip_label, pct = "#9CA3AF", *_NO_DATA_CHIP, status_label("Sin Datos"), 0.0
+    else:
+        _, chip_label, fill, chip_bg, chip_text = band
+        chip_label, pct = status_label(chip_label), max(0.0, min(100.0, float(value)))
+    meter = {"role": "meter", "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": label}
+    if band is not None:
+        meter["aria-valuenow"] = round(pct, 1)
     return html.Div([
-        html.Div(className="kpi-accent", style={"background": color}),
-        html.Div(label, className="kpi-label"),
-        html.Div(str(value), className="kpi-value", style=value_style),
+        html.Div(label, className="kpi-title"),
+        html.Div([
+            html.Div(_fmt_ranking(value), className="kpi-value"),
+            html.Span(chip_label, className="ev-chip", style={"background": chip_bg, "color": chip_text}),
+        ], className="ev-tile-main"),
+        html.Div([
+            html.Div(className="ev-gauge-fill", style={"width": f"{pct}%", "background": fill}),
+            *[html.Span(className="ev-gauge-tick", style={"left": f"{tick}%"}) for tick in _RISK_SCALE_TICKS],
+        ], className="ev-gauge", **meter),
+        html.Div([html.Span("0"), html.Span("100")], className="ev-gauge-scale"),
         html.Div(sub, className="kpi-sub"),
-    ], className="kpi-card")
+    ], className="kpi-card ev-tile")
 
 
 # ── Risk trend (ranking_7d vs ranking_90d) ───────────────────────────────────
@@ -125,12 +204,13 @@ def _kpi_card(label, value, color, sub, value_style=None):
 # Points of 7d-minus-90d difference tolerated before a trend is flagged
 RISK_TREND_TOLERANCE = 5.0
 
-# trend -> (value i18n key, color, arrow); same direction convention as Short View's
-# "Peor / Mejor en la última semana" quadrants
+# trend -> (word i18n key, text color, arrow); same direction convention as Short View's
+# "Peor / Mejor en la última semana" quadrants. The word carries the meaning, so it
+# never depends on the color alone.
 _RISK_TREND_STYLE = {
-    "increasing": ("tab_predictive_evidence.tendencia_aumentando", "#e24b4a", "▲"),
-    "decreasing": ("tab_predictive_evidence.tendencia_disminuyendo", "#1d9e75", "▼"),
-    "stable": ("tab_predictive_evidence.tendencia_estable", "#6B7280", "●"),
+    "increasing": ("tab_predictive_evidence.tendencia_empeorando", "#a32d2d", "▲"),
+    "decreasing": ("tab_predictive_evidence.tendencia_mejorando", "#3b6d11", "▼"),
+    "stable": ("tab_predictive_evidence.tendencia_estable", "#4B5563", "●"),
 }
 
 
@@ -150,24 +230,33 @@ def risk_trend(ranking_7d, ranking_90d, tolerance=RISK_TREND_TOLERANCE):
 
 
 def _risk_trend_card(ranking_7d, ranking_90d):
+    label = t("tab_predictive_evidence.tendencia_de_riesgo")
     trend = risk_trend(ranking_7d, ranking_90d)
     if trend is None:
-        return _kpi_card(t("tab_predictive_evidence.tendencia_de_riesgo"), "—", "#6B7280",
-                         t("tab_predictive_evidence.tendencia_sin_datos"))
+        return html.Div([
+            html.Div(label, className="kpi-title"),
+            html.Div("—", className="kpi-value"),
+            html.Div(t("tab_predictive_evidence.tendencia_sin_datos"), className="kpi-sub"),
+        ], className="kpi-card ev-tile")
     key, color, arrow = _RISK_TREND_STYLE[trend]
-    return _kpi_card(
-        t("tab_predictive_evidence.tendencia_de_riesgo"), f"{arrow} {t(key)}", color,
-        t("tab_predictive_evidence.tendencia_detalle", diff=float(ranking_7d) - float(ranking_90d)),
-        value_style={"fontSize": "22px", "color": color},
-    )
+    return html.Div([
+        html.Div(label, className="kpi-title"),
+        html.Div([
+            html.Span(arrow, className="ev-trend-arrow"),
+            html.Span(t(key)),
+        ], className="kpi-value ev-trend-value", style={"color": color}),
+        html.Div(t("tab_predictive_evidence.tendencia_detalle", diff=float(ranking_7d) - float(ranking_90d)),
+                 className="kpi-sub"),
+    ], className="kpi-card ev-tile")
 
 
-def _status_colors(status):
-    return {
-        "Crítica":   {"border": "#e24b4a", "bg": "#fcebeb", "text": "#a32d2d"},
-        "Alerta":    {"border": "#ef9f27", "bg": "#faeeda", "text": "#854f0b"},
-        "Saludable": {"border": "#1d9e75", "bg": "#eaf3de", "text": "#3b6d11"},
-    }.get(status, {"border": "#888", "bg": "#f0f0f0", "text": "#444"})
+def _dominant_mode_card(label, mode_score):
+    """Not a risk-severity tile: no gauge, chip or red/amber/green, its own accent."""
+    return html.Div([
+        html.Div(t("tab_predictive_evidence.modo_dominante"), className="kpi-title"),
+        html.Div(label, className="kpi-value ev-mode-value"),
+        html.Div(t("tab_predictive_evidence.score", fm_scores_dominant=mode_score), className="kpi-sub"),
+    ], className="kpi-card ev-tile ev-tile--mode")
 
 
 # ── Insight generation (AI-style explanations) ────────────────────────────────
@@ -696,11 +785,10 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # subview (dashboard/callbacks/predictive_callbacks.py's
     # update_unit_banner) — not repeated here as a KPI.
     kpis = [
-        _kpi_card(t("tab_predictive_evidence.ranking_7_dias"), _fmt_ranking(ranking_7d_val), _ranking_color(ranking_7d_val), t("tab_predictive_evidence.escala_0_100")),
-        _kpi_card(t("tab_predictive_evidence.riesgo_acum_90d"), _fmt_ranking(ranking_90d_val), _ranking_color(ranking_90d_val), t("tab_predictive_evidence.indice_historico")),
+        _risk_tile(t("tab_predictive_evidence.riesgo_acum_90d"), ranking_90d_val, t("tab_predictive_evidence.indice_historico")),
+        _risk_tile(t("tab_predictive_evidence.ranking_7_dias"), ranking_7d_val, t("tab_predictive_evidence.escala_0_100")),
         _risk_trend_card(ranking_7d_val, ranking_90d_val),
-        _kpi_card(t("tab_predictive_evidence.modo_dominante"), dominant_label, "#7C3AED", t("tab_predictive_evidence.score", fm_scores_dominant=fm_scores[dominant_mode])),
-        _kpi_card(t("tab_predictive_evidence.ultima_evidencia"), last_date_str, "#6B7280", t("tab_predictive_evidence.fecha_mas_reciente")),
+        _dominant_mode_card(dominant_label, fm_scores[dominant_mode]),
     ]
 
     # Fleet charts
@@ -722,9 +810,16 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
             html.Div([
                 html.H4([html.I(className="fas fa-tachometer-alt me-2"), t("tab_predictive_evidence.resumen_de_condicion")],
                         className="text-primary mb-2"),
-                html.P(t("tab_predictive_evidence.indicadores_principales_de_riesgo_de_la", unit=unit), className="text-muted mb-3"),
+                html.Div([
+                    html.P(t("tab_predictive_evidence.indicadores_principales_de_riesgo_de_la", unit=unit), className="text-muted mb-0"),
+                    html.Span([
+                        html.I(className="far fa-clock me-1"),
+                        t("tab_predictive_evidence.ultima_evidencia") + ": ",
+                        html.Strong(last_date_str),
+                    ], className="ev-meta"),
+                ], className="ev-subtitle-row mb-3"),
             ]),
-            html.Div(kpis, className="kpi-row"),
+            html.Div(kpis, className="kpi-row ev-kpi-row"),
         ], className="card shadow-sm", style={"marginBottom": "1.5rem"}),
 
         # AI analysis

@@ -119,9 +119,9 @@ def layout(client: str, component: str):
             value='resumen',
             children=[
                 dcc.Tab(label=t("tab_predictive_component.resumen"), value='resumen',
-                        className='custom-tab', selected_className='custom-tab--selected'),
+                        className='custom-tab pred-tab', selected_className='custom-tab--selected pred-tab--selected'),
                 dcc.Tab(label=t("tab_predictive_component.evidencia"), value='evidencia',
-                        className='custom-tab', selected_className='custom-tab--selected'),
+                        className='custom-tab pred-tab', selected_className='custom-tab--selected pred-tab--selected'),
             ],
             className='mb-4'
         ),

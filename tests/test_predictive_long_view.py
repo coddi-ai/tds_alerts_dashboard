@@ -219,6 +219,38 @@ def test_table_shows_component_hour_column(active):
     assert first.children == "1,500" and second.children == "—"
 
 
+def _estado_cells(table):
+    _, tbody = table.children[0].children
+    return {row.children[0].children: row.children[2].children.children for row in tbody.children}  # Unit -> Estado
+
+
+def test_table_estado_is_the_worse_of_short_and_long_view(active):
+    # long (active-cycle last point): U1 Normal, U2 Alerta, U3 Anormal; U9 has no curve
+    short = ["Alerta", "Normal", "Normal", "Anormal"]
+    latest = pd.DataFrame({"Unit": ["U1", "U2", "U3", "U9"], "status": short, "ranking": 1.0,
+                           "avg_ranking_30d": 1.0, "fm1_30d": 1.0})
+    latest = ov.attach_general_status(latest, active)
+    assert list(latest["general_status"]) == ["Alerta", "Alerta", "Anormal", "Anormal"]
+    assert list(latest["status"]) == short  # the short view's own estado is left alone
+    table = ov._failure_table(latest, "avg_ranking_30d", "avg_ranking_30d", False, {"fm1": "Modo Uno"})
+    assert _estado_cells(table) == {"U1": "Alerta", "U2": "Alerta", "U3": "Anormal", "U9": "Anormal"}
+
+
+def test_table_estado_is_the_short_view_without_a_curve():
+    latest = pd.DataFrame({"Unit": ["U1", "U2"], "status": ["Alerta", "Sin Datos"], "ranking": 1.0,
+                           "avg_ranking_30d": 1.0, "fm1_30d": 1.0})
+    latest = ov.attach_general_status(latest, None)
+    assert list(latest["general_status"]) == ["Alerta", "Sin Datos"]
+
+
+def test_evidence_banner_and_table_share_one_estado(active):
+    from dashboard.tabs.tab_predictive_evidence import banner_tier
+
+    latest = ov.attach_general_status(pd.DataFrame({"Unit": ["U2"], "status": ["Normal"]}), active)
+    assert latest["general_status"].iloc[0] == "Alerta"  # Normal short + Alerta long
+    assert banner_tier(latest["general_status"].iloc[0]) == "anormal"
+
+
 def test_fleet_scatter_tooltip_hours_use_the_same_source(monkeypatch, active):
     monkeypatch.setattr(ov, "load_active_curve", lambda c, comp: active)
     latest = pd.DataFrame({"Unit": ["U1", "U2"], "ranking": [5.0, 9.0], "avg_ranking_7d": [5.5, 8.5],
