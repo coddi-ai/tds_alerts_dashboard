@@ -22,7 +22,9 @@ from dashboard.components.predictive_charts import (
     SCATTER_AXIS_FIELDS,
     create_empty_selection_figure,
     create_fleet_scatter,
+    classify_criticidad,
     create_long_view_chart,
+    get_mode_thresholds,
     scatter_axis_columns,
 )
 from dashboard.components.predictive_state import STATE_COLORS, combine_states, normalize_state
@@ -168,6 +170,12 @@ def _load_component_data_cached(
     last_day = df_sorted.groupby("Unit")["Fecha"].transform("max")
     last_week = df_sorted[df_sorted["Fecha"] > last_day - pd.Timedelta(days=7)]
     new_cols["avg_ranking_7d"] = df_latest["Unit"].map(last_week.groupby("Unit")["ranking"].mean()).astype(float).values
+
+    # Same 7-day window per failure mode (Evidence's Perfil de riesgo, aligned with
+    # the Calendario de estado's trailing 7-day mean).
+    week_by_mode = last_week.groupby("Unit")[[c for c in fm_keys if c in last_week.columns]].mean()
+    for col in week_by_mode.columns:
+        new_cols[f"{col}_7d"] = df_latest["Unit"].map(week_by_mode[col]).astype(float).values
 
     # Compute max failure mode 30d average per unit (for status classification)
     fm_30d_cols = [f"{col}_30d" for col in fm_keys if f"{col}_30d" in latest_rolling.columns]
@@ -445,6 +453,25 @@ def _score_cell_style(value) -> dict:
     return {"background": "#eaf3de", "text": "#3b6d11"}
 
 
+# Cell tones of the four criticidad bands (Saludable, Monitoreo, Prioridad alta,
+# Crítico), the light-background counterparts of the Calendario de estado's colours.
+_BAND_CELL_STYLES = (
+    {"background": "#eaf3de", "text": "#3b6d11"},
+    {"background": "#fdf3c4", "text": "#7a5f00"},
+    {"background": "#fde4cf", "text": "#9a4a0a"},
+    {"background": "#fcebeb", "text": "#a32d2d"},
+)
+
+
+def _mode_cell_style(value, edges=None) -> dict:
+    """Cell style of a failure-mode score. With the mode's calibrated `edges`
+    (P75/P90/P98, see predictive_charts.get_mode_thresholds) the cell takes its
+    criticidad band; without them it keeps the fixed 40/70 style."""
+    if edges is None or value is None or pd.isna(value):
+        return _score_cell_style(value)
+    return _BAND_CELL_STYLES[classify_criticidad(value, edges)]
+
+
 # ── Components ────────────────────────────────────────────────────────────────
 
 # Ranking window options for the bottom table's single ranking column (REQ-PR-09)
@@ -461,16 +488,28 @@ WINDOW_SUFFIX = {
     "ranking_acum_90d": "_90d",
 }
 
+# Window the bottom table opens on (dropdown value, first sort and stored state)
+FAILURE_TABLE_DEFAULT_WINDOW = "ranking_acum_90d"
 
-def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
+# Failure modes the data scores but the bottom table does not show a column for
+FAILURE_TABLE_HIDDEN_MODES = frozenset({"early_oil_change_risk"})
+
+
+def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client=None):
     """Bottom ranking table: one ranking column driven by `window`, plus one
     column per failure mode. `sort_by` is either `window` itself or a failure
     mode key - clicking a failure-mode header sorts by that column (REQ-PR-10)
     while the ranking column stays a single value driven by the window
     dropdown (REQ-PR-09, option ii).
+
+    A failure-mode cell is coloured by the mode's calibrated criticidad edges
+    for `client` when it has them (same ones as the Calendario de estado),
+    applied to the value shown for the chosen window.
     """
-    fm_keys = list(failure_modes.keys())
-    fm_labels = list(failure_modes.values())
+    thresholds = get_mode_thresholds(client)
+    shown = {k: lbl for k, lbl in failure_modes.items() if k not in FAILURE_TABLE_HIDDEN_MODES}
+    fm_keys = list(shown.keys())
+    fm_labels = list(shown.values())
     fm_suffix = WINDOW_SUFFIX.get(window, "_30d")
 
     def _arrow(is_active):
@@ -549,7 +588,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
             # is NaN — a missing failure-mode score must not render "0" in
             # the same green a genuinely healthy 0 score gets.
             val = float(r[col_name]) if col_name in r.index and pd.notna(r[col_name]) else None
-            fm_style = _score_cell_style(val)
+            fm_style = _mode_cell_style(val, thresholds.get(key))
             is_sort = key == sort_by
             cells.append(html.Td(
                 f"{val:.0f}" if val is not None else "—",
@@ -938,7 +977,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     # renders — plain `sort_values` on one column falls back to an unstable
     # quicksort for ties, so two identical-input renders could otherwise show
     # tied units in a different order.
-    sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
+    sorted_df = latest.sort_values([FAILURE_TABLE_DEFAULT_WINDOW, "Unit"], ascending=[False, True])
     table_section = html.Div([
         html.Div([
             html.Div([
@@ -957,7 +996,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                             {"label": t("tab_predictive_overview.60_dias"), "value": "avg_ranking_60d"},
                             {"label": t("tab_predictive_overview.90_dias"), "value": "ranking_acum_90d"},
                         ],
-                        value="avg_ranking_30d",
+                        value=FAILURE_TABLE_DEFAULT_WINDOW,
                         clearable=False,
                         style={"width": "140px", "fontSize": "0.85rem"},
                     ),
@@ -971,12 +1010,12 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                    className="text-muted mb-3", style={"fontSize": "0.85rem"}),
         ]),
         html.Div(
-            _failure_table(sorted_df, "avg_ranking_30d", "avg_ranking_30d", False, failure_modes),
+            _failure_table(sorted_df, FAILURE_TABLE_DEFAULT_WINDOW, FAILURE_TABLE_DEFAULT_WINDOW, False, failure_modes, client),
             id="predictive-fm-table-container",
         ),
         dcc.Store(
             id="predictive-fm-table-state",
-            data={"window": "avg_ranking_30d", "sort_by": "avg_ranking_30d", "ascending": False},
+            data={"window": FAILURE_TABLE_DEFAULT_WINDOW, "sort_by": FAILURE_TABLE_DEFAULT_WINDOW, "ascending": False},
         ),
     ], className="card", style={"marginTop": "16px"})
 

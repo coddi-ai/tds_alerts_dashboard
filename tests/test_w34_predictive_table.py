@@ -154,3 +154,13 @@ def test_non_tied_units_still_sort_by_score_first():
     ])
     ordered = df.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])["Unit"].tolist()
     assert ordered == ["U_high", "U_low"]
+
+
+def test_failure_table_has_no_early_oil_change_column():
+    row = _unit_row("U1")
+    row["early_oil_change_risk_30d"] = 55.0
+    modes = {**FAILURE_MODES, "early_oil_change_risk": "Early Oil Change"}
+    table = _failure_table(pd.DataFrame([row]), "avg_ranking_30d", "avg_ranking_30d", False, modes)
+    assert "Early Oil Change" not in str(table)
+    assert "early_oil_change_risk" not in str(table)
+    assert len(table.children[0].children[1].children[0].children) == 6  # same cells as without the mode

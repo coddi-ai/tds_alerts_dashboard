@@ -334,6 +334,25 @@ def test_long_view_background_is_the_reference_band_independent_of_unit_state(ac
     assert before == after
 
 
+def test_long_view_zone_edges_are_median_plus_one_and_two_sigma(active):
+    fig = create_long_view_chart(active)
+    zones = {z.fillcolor: z for z in fig.data if z.fill == "toself"}
+    n = len(zones[STATE_ZONE_FILL["Normal"]].x) // 2
+    # each zone is [upper edge ..., lower edge reversed]: read the upper/lower edge back
+    upper = lambda zone: np.array(zones[STATE_ZONE_FILL[zone]].y[:n])
+    lower = lambda zone: np.array(zones[STATE_ZONE_FILL[zone]].y[n:][::-1])
+    media, umbral = np.array(BANDA["media"]), np.array(BANDA["umbral"])
+    sigma = (umbral - media) / CONFIG["K_SIGMA"]
+    # the band is held flat out to the axis end, so compare on the original grid
+    grid = np.array(zones[STATE_ZONE_FILL["Normal"]].x[:n])
+    y_up = upper("Anormal").max()  # the edges are clipped to the visible top
+    interp = lambda v: np.minimum(np.interp(grid, BANDA["grid"], v), y_up)
+    np.testing.assert_allclose(upper("Normal"), interp(media + sigma))
+    np.testing.assert_allclose(lower("Alerta"), interp(media + sigma))
+    np.testing.assert_allclose(upper("Alerta"), interp(media + 2 * sigma))
+    np.testing.assert_allclose(lower("Anormal"), interp(media + 2 * sigma))
+
+
 def test_long_view_falls_back_to_row_band_when_metadata_is_missing(active):
     bare = active.copy()
     bare.attrs.clear()

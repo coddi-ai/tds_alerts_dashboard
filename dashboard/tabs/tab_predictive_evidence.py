@@ -97,7 +97,13 @@ def _load_component_data(filepath: Path, component: str, client: str = "cda"):
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
+def _fmt_ranking(val):
+    return "—" if pd.isna(val) else f"{val:.1f}"
+
+
 def _ranking_color(val):
+    if pd.isna(val):
+        return "#6B7280"
     if val >= 70:
         return "#e24b4a"
     if val >= 40:
@@ -105,13 +111,55 @@ def _ranking_color(val):
     return "#1d9e75"
 
 
-def _kpi_card(label, value, color, sub):
+def _kpi_card(label, value, color, sub, value_style=None):
     return html.Div([
         html.Div(className="kpi-accent", style={"background": color}),
         html.Div(label, className="kpi-label"),
-        html.Div(str(value), className="kpi-value"),
+        html.Div(str(value), className="kpi-value", style=value_style),
         html.Div(sub, className="kpi-sub"),
     ], className="kpi-card")
+
+
+# ── Risk trend (ranking_7d vs ranking_90d) ───────────────────────────────────
+
+# Points of 7d-minus-90d difference tolerated before a trend is flagged
+RISK_TREND_TOLERANCE = 5.0
+
+# trend -> (value i18n key, color, arrow); same direction convention as Short View's
+# "Peor / Mejor en la última semana" quadrants
+_RISK_TREND_STYLE = {
+    "increasing": ("tab_predictive_evidence.tendencia_aumentando", "#e24b4a", "▲"),
+    "decreasing": ("tab_predictive_evidence.tendencia_disminuyendo", "#1d9e75", "▼"),
+    "stable": ("tab_predictive_evidence.tendencia_estable", "#6B7280", "●"),
+}
+
+
+def risk_trend(ranking_7d, ranking_90d, tolerance=RISK_TREND_TOLERANCE):
+    """'increasing' / 'decreasing' / 'stable' from the 7-day vs 90-day ranking, or
+    None when either is missing. `diff = 7d - 90d`: beyond +tolerance the recent
+    window is worse than the baseline, beyond -tolerance it is better, and a
+    difference within +-tolerance (inclusive) is stable."""
+    if pd.isna(ranking_7d) or pd.isna(ranking_90d):
+        return None
+    diff = float(ranking_7d) - float(ranking_90d)
+    if diff > tolerance:
+        return "increasing"
+    if diff < -tolerance:
+        return "decreasing"
+    return "stable"
+
+
+def _risk_trend_card(ranking_7d, ranking_90d):
+    trend = risk_trend(ranking_7d, ranking_90d)
+    if trend is None:
+        return _kpi_card(t("tab_predictive_evidence.tendencia_de_riesgo"), "—", "#6B7280",
+                         t("tab_predictive_evidence.tendencia_sin_datos"))
+    key, color, arrow = _RISK_TREND_STYLE[trend]
+    return _kpi_card(
+        t("tab_predictive_evidence.tendencia_de_riesgo"), f"{arrow} {t(key)}", color,
+        t("tab_predictive_evidence.tendencia_detalle", diff=float(ranking_7d) - float(ranking_90d)),
+        value_style={"fontSize": "22px", "color": color},
+    )
 
 
 def _status_colors(status):
@@ -637,8 +685,8 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     dominant_label = failure_modes[dominant_mode]
 
     # KPIs
-    ranking_val = float(row["ranking"])
-    ranking_30d_val = float(row.get("avg_ranking_30d", 0))
+    ranking_7d_val = float(row.get("avg_ranking_7d", float("nan")))
+    ranking_90d_val = float(row.get("ranking_acum_90d", float("nan")))
 
     df_unit = df[df["Unit"] == unit].sort_values("Fecha")
     last_evidence_date = df_unit["Fecha"].max() if not df_unit.empty else None
@@ -648,8 +696,9 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # subview (dashboard/callbacks/predictive_callbacks.py's
     # update_unit_banner) — not repeated here as a KPI.
     kpis = [
-        _kpi_card(t("tab_predictive_evidence.ranking_actual"), f"{ranking_val:.0f}", _ranking_color(ranking_val), t("tab_predictive_evidence.escala_0_100")),
-        _kpi_card(t("tab_predictive_evidence.riesgo_acum_30d"), f"{ranking_30d_val:.1f}", _ranking_color(ranking_30d_val), t("tab_predictive_evidence.indice_historico")),
+        _kpi_card(t("tab_predictive_evidence.ranking_7_dias"), _fmt_ranking(ranking_7d_val), _ranking_color(ranking_7d_val), t("tab_predictive_evidence.escala_0_100")),
+        _kpi_card(t("tab_predictive_evidence.riesgo_acum_90d"), _fmt_ranking(ranking_90d_val), _ranking_color(ranking_90d_val), t("tab_predictive_evidence.indice_historico")),
+        _risk_trend_card(ranking_7d_val, ranking_90d_val),
         _kpi_card(t("tab_predictive_evidence.modo_dominante"), dominant_label, "#7C3AED", t("tab_predictive_evidence.score", fm_scores_dominant=fm_scores[dominant_mode])),
         _kpi_card(t("tab_predictive_evidence.ultima_evidencia"), last_date_str, "#6B7280", t("tab_predictive_evidence.fecha_mas_reciente")),
     ]
@@ -659,7 +708,7 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # (`failure_modes` is data-driven). The window ends at the component's
     # latest date, not the unit's, so a unit that stopped reporting shows
     # trailing "Sin datos" instead of looking current.
-    calendar_fig = create_mode_status_calendar(df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS)
+    calendar_fig = create_mode_status_calendar(df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS, client=client)
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
     ai_section = html.Div(

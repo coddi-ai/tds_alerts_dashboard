@@ -361,7 +361,7 @@ def register_callbacks(app):
         else:
             sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
 
-        return _failure_table(sorted_df, window, sort_by, ascending, failure_modes), state
+        return _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client), state
 
     # ══════════════════════════════════════════════════════════════════════════
     # EVIDENCE: Unit banner
@@ -378,7 +378,6 @@ def register_callbacks(app):
             return None
 
         # Load data to get status context
-        ranking_text = ""
         status_text = ""
         status_color = "#667eea"
         if client and component:
@@ -394,8 +393,6 @@ def register_callbacks(app):
                     row = latest_with_status[latest_with_status["Unit"] == selected_unit]
                     if not row.empty:
                         row = row.iloc[0]
-                        ranking_val = float(row.get("ranking", 0))
-                        ranking_text = f"{ranking_val:.0f}/100"
                         status_text = row["status"]
                         status_color = {
                             "Anormal": "#e24b4a",
@@ -438,7 +435,7 @@ def register_callbacks(app):
                         }),
                     ]),
                 ], style={"display": "flex", "alignItems": "center"}),
-                # Status badges on the right (ranking + horómetro + estado)
+                # Status badges on the right (horómetro + estado)
                 html.Div([
                     # Horómetro badge
                     html.Div([
@@ -452,16 +449,6 @@ def register_callbacks(app):
                         html.Div(horometro_date, style={
                             "fontSize": "9px", "opacity": "0.7", "marginTop": "2px"
                         }) if horometro_date else None,
-                    ], style={"textAlign": "center", "marginRight": "20px"}),
-                    # Ranking badge
-                    html.Div([
-                        html.Div(t("predictive_callbacks.ranking_actual"), style={
-                            "fontSize": "10px", "textTransform": "uppercase",
-                            "letterSpacing": "0.5px", "opacity": "0.8", "marginBottom": "4px"
-                        }),
-                        html.Div(ranking_text, style={
-                            "fontSize": "24px", "fontWeight": "700"
-                        }),
                     ], style={"textAlign": "center", "marginRight": "20px"}),
                     html.Div([
                         html.Div(t("fleet_overview.col_status"), style={

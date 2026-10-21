@@ -1,55 +1,142 @@
 {
- "version": 2,
+ "version": 3,
  "description": "Long Spanish text columns that get an English twin (<column>_eng) from scripts/translate_text_fields.py. Paths are relative to the data root (data/) and, with the S3 prefix, are the S3 keys. date_column is the row date the --since-days window uses. Human-readable version: documentation/general/translation_text_fields.md",
  "s3_prefix": "MultiTechnique Alerts/",
  "targets": [
   {
    "id": "oil_classified",
-   "sections": ["Monitoring > Oil > Fleet overview", "Monitoring > Oil > Report detail"],
+   "sections": [
+    "Monitoring > Oil > Fleet overview",
+    "Monitoring > Oil > Report detail"
+   ],
    "path": "oil/golden/{client}/classified.parquet",
    "format": "parquet",
    "date_column": "sampleDate",
-   "columns": ["ai_recommendation"]
+   "columns": [
+    "ai_recommendation"
+   ]
   },
   {
    "id": "oil_machine_status",
-   "sections": ["Monitoring > Oil > Fleet overview"],
+   "sections": [
+    "Monitoring > Oil > Fleet overview"
+   ],
    "path": "oil/golden/{client}/machine_status.parquet",
    "format": "parquet",
    "date_column": "latest_sample_date",
-   "columns": ["machine_ai_recommendation"]
+   "columns": [
+    "machine_ai_recommendation"
+   ]
   },
   {
    "id": "alerts_consolidated",
-   "sections": ["Monitoring > Alerts > General view", "Monitoring > Alerts > Detailed view"],
+   "sections": [
+    "Monitoring > Alerts > General view",
+    "Monitoring > Alerts > Detailed view"
+   ],
    "path": "alerts/golden/{client}/consolidated_alerts.csv",
    "format": "csv",
    "date_column": "Timestamp",
-   "columns": ["mensaje_ia"]
+   "columns": [
+    "mensaje_ia"
+   ]
   },
   {
    "id": "predictive_unit_failure_analisis",
-   "sections": ["Monitoring > Predictive > Evidence"],
+   "sections": [
+    "Monitoring > Predictive > Evidence"
+   ],
    "path": "predictive/golden/{client}/{component}/unit_failure_analisis",
    "format": "parquet_partitioned",
    "date_column": "Fecha",
-   "columns": ["diagnostico", "causa_probable", "acciones"]
+   "columns": [
+    "diagnostico",
+    "causa_probable",
+    "acciones"
+   ]
   },
   {
    "id": "predictive_mode_failure_analisis",
-   "sections": ["Monitoring > Predictive > Evidence"],
+   "sections": [
+    "Monitoring > Predictive > Evidence"
+   ],
    "path": "predictive/golden/{client}/{component}/mode_failure_analisis",
    "format": "parquet_partitioned",
    "date_column": "Fecha",
-   "columns": ["diagnostico", "probable_cause", "recommended_actions"]
+   "columns": [
+    "diagnostico",
+    "probable_cause",
+    "recommended_actions"
+   ]
   },
   {
    "id": "predictive_analisis_inteligente_legacy",
-   "sections": ["Monitoring > Predictive > Evidence"],
+   "sections": [
+    "Monitoring > Predictive > Evidence"
+   ],
    "path": "predictive/golden/{client}/analisis_inteligente.parquet",
    "format": "parquet",
    "date_column": "Fecha",
-   "columns": ["diagnostico", "causa_probable", "acciones"]
+   "columns": [
+    "diagnostico",
+    "causa_probable",
+    "acciones"
+   ]
+  },
+  {
+   "id": "telemetry_ai_unit_comments",
+   "sections": [
+    "Monitoring > Telemetry (fleet view, unit detail)"
+   ],
+   "path": "telemetry/golden/{client}/ai_unit_comments",
+   "format": "parquet_partitioned",
+   "date_column": "evaluation_timestamp",
+   "columns": [
+    "description",
+    "explaining",
+    "recommended_action"
+   ]
+  },
+  {
+   "id": "telemetry_ai_system_comments",
+   "sections": [
+    "Monitoring > Telemetry (fleet view, unit detail)"
+   ],
+   "path": "telemetry/golden/{client}/ai_system_comments",
+   "format": "parquet_partitioned",
+   "date_column": "evaluation_timestamp",
+   "columns": [
+    "description",
+    "explaining",
+    "recommended_action"
+   ]
+  },
+  {
+   "id": "telemetry_ai_signal_comments",
+   "sections": [
+    "Monitoring > Telemetry (fleet view, unit detail)"
+   ],
+   "path": "telemetry/golden/{client}/ai_signal_comments",
+   "format": "parquet_partitioned",
+   "date_column": "evaluation_timestamp",
+   "columns": [
+    "description",
+    "explaining"
+   ]
+  },
+  {
+   "id": "telemetry_ai_comments_legacy",
+   "sections": [
+    "Monitoring > Telemetry (fleet view, unit detail)"
+   ],
+   "path": "telemetry/golden/{client}/ai_comments",
+   "format": "parquet_partitioned",
+   "date_column": "evaluation_timestamp",
+   "columns": [
+    "description",
+    "explaining",
+    "recommended_action"
+   ]
   }
  ],
  "not_translated": {
@@ -58,6 +145,7 @@
   "unit_failure_analisis.observaciones": "Not rendered by the dashboard (Evidence builds its own observations from data).",
   "unit_failure_analisis.limitacion / mode_failure_analisis.limitation": "Not rendered by the dashboard.",
   "unit_failure_analisis.modos_ordenados": "JSON of mode -> score, no prose.",
-  "Predictive > General": "Renders no long text column (state, ranking, curves only)."
+  "Predictive > General": "Renders no long text column (state, ranking, curves only).",
+  "Telemetry > numeric health tables": "unit_health, system_health, deviation/trend/event results hold scores and names only, no prose."
  }
 }

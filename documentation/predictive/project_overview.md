@@ -271,7 +271,7 @@ depends solely on whether `cleaned_component_hours.parquet` exists for the clien
 | Telemetry evidence | Stacked alert/critic rate bars, one chart per associated signal | `create_telemetry_signal_chart` |
 
 **Fleet scatter quadrants** (dividers at ranking=80 and the fleet's 30d-P80): Crítica sostenida,
-Empeoró de golpe, Mejoró recientemente, Zona saludable.
+Peor en la última semana, Mejor en la última semana, Zona saludable.
 
 ---
 

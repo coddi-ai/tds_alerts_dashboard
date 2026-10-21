@@ -25,6 +25,10 @@ Paths are relative to `data/`; with the prefix `MultiTechnique Alerts/` they are
 | `alerts_consolidated` | `alerts/golden/{client}/consolidated_alerts.csv` | `mensaje_ia` | Alerts > General view (table), Alerts > Detailed view (case header) |
 | `predictive_unit_failure_analisis` | `predictive/golden/{client}/{component}/unit_failure_analisis/year=*/week=*/*.parquet` (latest week) | `diagnostico`, `causa_probable`, `acciones` | Predictive > Evidence (unit "Análisis inteligente" panel) |
 | `predictive_mode_failure_analisis` | `predictive/golden/{client}/{component}/mode_failure_analisis/year=*/week=*/*.parquet` (latest week) | `diagnostico`, `probable_cause`, `recommended_actions` | Predictive > Evidence (stand-in panel for units without a unit narrative) |
+| `telemetry_ai_unit_comments` | `telemetry/golden/{client}/ai_unit_comments/year=*/week=*/*.parquet` (latest week) | `description`, `explaining`, `recommended_action` | Telemetry > Fleet view (priority table, matrix) and unit detail (unit comment) |
+| `telemetry_ai_system_comments` | `telemetry/golden/{client}/ai_system_comments/year=*/week=*/*.parquet` (latest week) | `description`, `explaining`, `recommended_action` | Telemetry > unit detail (system rows) |
+| `telemetry_ai_signal_comments` | `telemetry/golden/{client}/ai_signal_comments/year=*/week=*/*.parquet` (latest week) | `description`, `explaining` | Telemetry > unit detail (signal rows and signal diagnosis) |
+| `telemetry_ai_comments_legacy` | `telemetry/golden/{client}/ai_comments/year=*/week=*/*.parquet` (latest week) | same three | Telemetry, only where the `ai_*_comments` folders are absent |
 | `predictive_analisis_inteligente_legacy` | `predictive/golden/{client}/analisis_inteligente.parquet` | `diagnostico`, `causa_probable`, `acciones` | Predictive > Evidence, only for clients not yet on the v2 layout |
 
 Not translated, on purpose:
@@ -33,8 +37,9 @@ Not translated, on purpose:
 * `breached_essays` (JSON of essay names/values; the names are translated at display time),
   `component_details` (nested struct, read only by Overview), `observaciones`, `limitacion`,
   `limitation` (not rendered anywhere), `modos_ordenados` (JSON of scores).
+* The numeric telemetry tables (`unit_health`, `system_health`, deviation/trend/event results).
 * Every other file under `data/`, including maintenance (`mantentions/`) evidence shown inside
-  EMIN alerts, telemetry comments and Overview.
+  EMIN alerts, and Overview.
 
 To add a column, add it to `scripts/translation_mapping.json`, read it at its display site through
 `localized_value` / `localized_series`, and add a case to `tests/test_data_text.py`.
@@ -79,12 +84,23 @@ Full mode uses exactly the same translation code; only the row scope (all rows) 
 
 ### Full mode and S3
 
-After translating, each file is uploaded to the key it came from, replacing it. Safety checks, per file:
+For each file, the script **downloads the version that is in S3 right now**, translates that, and uploads it
+back to the same key, replacing it. It does not translate the copy in `data/`, so it never works from a stale
+file and never needs `data/` to be freshly synced (`data/` only decides *which* files to process, including
+which predictive/telemetry week is the latest, so keep it reasonably current). Safety checks, per file:
 
 * **No new keys**: if there is no object at that key, the file is skipped.
-* **No lost upstream updates**: if the S3 object is newer than the local source file (the pipeline
-  published since `data/` was last synced), it is skipped. Sync `data/` and re-run, or pass `--force`.
+* **No lost upstream updates**: the upload is conditional on the ETag of the version that was downloaded
+  (`IfMatch`). If the pipeline published a newer version while the translation ran, that version is kept, the
+  file is reported as skipped, and rerunning translates the new one (cached texts are free). `--force` disables
+  the condition.
 * Skipped uploads and translation failures make the exit code non-zero and are listed in `report.json`.
+* The downloaded copies are kept under `scripts/output/translation/full/_s3_source/`. With `--in-place` the
+  translated files are also written over the local copies in `data/`.
+
+Why not just translate the local copy: the dashboard re-downloads from S3 at startup (`SYNC_DATA=True`) any file
+whose size differs from the local one, so a translation that never reached S3 is overwritten by the Spanish
+original on the next start.
 
 ## Translation rules
 
@@ -117,6 +133,10 @@ After translating, each file is uploaded to the key it came from, replacing it. 
 * Only the display sites listed in the mapping read `_eng`. Other readers (Overview, Unit Summary,
   Campbell AI, telemetry) keep reading the Spanish columns. `_eng` columns are excluded from the
   essay-column scans of Oil > Report detail.
+* **Telemetry text goes through `client_facing_text`**, which hides internal score/confidence numbers.
+  It has Spanish rules (unchanged) and English rules that run only when the UI is in English, so an
+  English comment never gets Spanish words injected ("nivel de riesgo", "Engine" -> "Motor"), and signal
+  names become their English label.
 * The text under the labels is shown translated, but values the dashboard rewrites itself
   (`_translate_signal_text` swaps signal keys for their label in the current language) behave as before.
 
@@ -127,6 +147,8 @@ After translating, each file is uploaded to the key it came from, replacing it. 
   until the next publish. Until the pipeline carries `_eng` through (or a scheduled run of this script
   follows each publish), rerun the script; the cache makes a rerun cheap because unchanged texts are not
   re-translated.
-* Only the **latest** predictive week is translated (the one the dashboard reads).
+* Only the **latest** week of the predictive and telemetry partitions is translated (the one the dashboard reads).
+* The telemetry partitions are Spark output (`part-*.parquet` plus `_committed_*`/`_SUCCESS` markers). The script rewrites
+  the `part-*.parquet` files in place under the same names; the markers are left alone.
 * Not implemented (out of the current scope): automatic retry queue for failed rows and detecting
   changed Spanish text beyond the cache (a changed text simply gets a new translation on the next run).

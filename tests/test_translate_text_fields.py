@@ -9,7 +9,6 @@ columns come out unchanged, and a bad translation is retried and then left blank
 import importlib.util
 import json
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -105,6 +104,9 @@ def test_mapping_columns_are_the_ones_the_dashboard_reads():
     assert mapping["alerts_consolidated"] == ["mensaje_ia"]
     assert mapping["predictive_unit_failure_analisis"] == ["diagnostico", "causa_probable", "acciones"]
     assert mapping["predictive_mode_failure_analisis"] == ["diagnostico", "probable_cause", "recommended_actions"]
+    assert mapping["telemetry_ai_unit_comments"] == ["description", "explaining", "recommended_action"]
+    assert mapping["telemetry_ai_system_comments"] == ["description", "explaining", "recommended_action"]
+    assert mapping["telemetry_ai_signal_comments"] == ["description", "explaining"]
 
 
 # ── Demo mode ───────────────────────────────────────────────────────────────────
@@ -295,19 +297,56 @@ def test_second_run_is_served_from_the_cache(data_root):
 # ── Full mode and S3 ────────────────────────────────────────────────────────────
 
 class FakeS3:
-    def __init__(self, objects):
-        self.objects = objects  # key -> LastModified
-        self.uploaded = []
+    """In-memory bucket: get_object returns body + ETag, put_object honours IfMatch."""
 
-    def head_object(self, Bucket, Key):
+    def __init__(self, objects):
+        self.objects = objects  # key -> {"body": bytes, "etag": str, "type": str}
+        self.puts = []
+        self.gets = []
+        self.after_get = None  # hook: simulate the pipeline publishing while we translate
+
+    def get_object(self, Bucket, Key):
         from botocore.exceptions import ClientError
 
         if Key not in self.objects:
-            raise ClientError({"Error": {"Code": "404", "Message": "nf"}}, "HeadObject")
-        return {"LastModified": self.objects[Key]}
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "nf"}}, "GetObject")
+        self.gets.append(Key)
+        obj = dict(self.objects[Key])
+        if self.after_get:
+            self.after_get(self, Key)
 
-    def upload_file(self, filename, bucket, key):
-        self.uploaded.append((key, Path(filename).read_bytes()))
+        class Body:
+            def iter_chunks(self_inner):
+                yield obj["body"]
+
+        return {"Body": Body(), "ETag": obj["etag"], "ContentType": obj["type"]}
+
+    def put_object(self, Bucket, Key, Body, IfMatch=None, ContentType=None):
+        from botocore.exceptions import ClientError
+
+        if IfMatch is not None and self.objects[Key]["etag"] != IfMatch:
+            raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "412"}}, "PutObject")
+        self.puts.append((Key, Body.read(), ContentType))
+        self.objects[Key] = {"body": self.puts[-1][1], "etag": "new-" + str(len(self.puts)), "type": ContentType}
+
+
+PREFIX = "MultiTechnique Alerts/"
+OIL_KEY = PREFIX + "oil/golden/cda/classified.parquet"
+ALERTS_KEY = PREFIX + "alerts/golden/capstone/consolidated_alerts.csv"
+PRED_KEY = (PREFIX + "predictive/golden/capstone/motor/unit_failure_analisis/year=2026/week=42/"
+            "unit_failure_analisis.parquet")
+
+
+def _published_oil_with_one_more_row(data_root):
+    """The S3 version of the oil file: the pipeline has added a row since `data/` was synced."""
+    import io
+
+    frame = pd.read_parquet(data_root / "oil" / "golden" / "cda" / "classified.parquet")
+    extra = frame.iloc[[-1]].copy()
+    extra["unitId"], extra["ai_recommendation"] = "T_NEW", "Diagnóstico: Nuevo.\nAcción: Revisar T_NEW."
+    buffer = io.BytesIO()
+    pd.concat([frame, extra], ignore_index=True).to_parquet(buffer, index=False)
+    return buffer.getvalue()
 
 
 @pytest.fixture
@@ -317,44 +356,61 @@ def fake_s3(monkeypatch, data_root):
     monkeypatch.setenv("BUCKET_NAME", "bkt")
     monkeypatch.setenv("ACCESS_KEY", "a")
     monkeypatch.setenv("SECRET_KEY", "b")
-    old = datetime.now(timezone.utc) - timedelta(days=30)
-    prefix = "MultiTechnique Alerts/"
+    alerts = (data_root / "alerts" / "golden" / "capstone" / "consolidated_alerts.csv").read_bytes()
     s3 = FakeS3({
-        prefix + "oil/golden/cda/classified.parquet": old,
-        prefix + "alerts/golden/capstone/consolidated_alerts.csv": datetime.now(timezone.utc) + timedelta(days=1),  # newer
-        # predictive key does not exist in the bucket
+        OIL_KEY: {"body": _published_oil_with_one_more_row(data_root), "etag": "oil-1", "type": "application/octet-stream"},
+        ALERTS_KEY: {"body": alerts, "etag": "alerts-1", "type": "text/csv"},
+        # the predictive key does not exist in the bucket
     })
     monkeypatch.setattr(boto3, "client", lambda *a, **k: s3)
     return s3
 
 
-def test_full_mode_translates_every_row_and_replaces_existing_keys_only(data_root, fake_s3):
+def test_full_mode_translates_the_current_s3_file_and_replaces_it(data_root, fake_s3):
     code, out = run(data_root, "--yes")
-    oil = pd.read_parquet(out / "full" / "oil" / "golden" / "cda" / "classified.parquet")
-    assert oil["ai_recommendation_eng"].notna().sum() == N_RECENT
+    puts = {key: (body, ctype) for key, body, ctype in fake_s3.puts}
+    assert set(puts) == {OIL_KEY, ALERTS_KEY}  # existing keys only
+    assert puts[ALERTS_KEY][1] == "text/csv"  # content type kept
 
-    keys = [k for k, _ in fake_s3.uploaded]
-    assert keys == ["MultiTechnique Alerts/oil/golden/cda/classified.parquet"]
-    assert fake_s3.uploaded[0][1] == (out / "full" / "oil" / "golden" / "cda" / "classified.parquet").read_bytes()
-    outcomes = {o["key"].split("/", 1)[1]: o["result"]
+    import io
+
+    uploaded = pd.read_parquet(io.BytesIO(puts[OIL_KEY][0]))
+    assert "T_NEW" in uploaded["unitId"].tolist()  # translated what S3 holds, not the stale local copy
+    assert uploaded["ai_recommendation_eng"].notna().sum() == N_RECENT + 1
+
+    outcomes = {o["key"]: o["result"]
                 for o in json.loads((out / "full" / "report.json").read_text(encoding="utf-8"))["uploads"]}
-    assert "newer" in outcomes["alerts/golden/capstone/consolidated_alerts.csv"]
-    assert "no object" in outcomes[
-        "predictive/golden/capstone/motor/unit_failure_analisis/year=2026/week=42/unit_failure_analisis.parquet"]
-    assert code == 1  # skipped uploads must not look like success
+    assert outcomes[OIL_KEY] == outcomes[ALERTS_KEY] == "uploaded"
+    assert "no object" in outcomes[PRED_KEY]
+    assert code == 1  # a skipped file must not look like success
 
 
-def test_force_uploads_over_a_newer_s3_copy(data_root, fake_s3):
+def test_a_version_published_while_translating_is_not_overwritten(data_root, fake_s3):
+    def publish(s3, key):
+        if key == OIL_KEY:
+            s3.objects[OIL_KEY] = {**s3.objects[OIL_KEY], "etag": "oil-2"}
+
+    fake_s3.after_get = publish
+    code, out = run(data_root, "--yes")
+    assert OIL_KEY not in [k for k, _, _ in fake_s3.puts]
+    outcomes = {o["key"]: o["result"]
+                for o in json.loads((out / "full" / "report.json").read_text(encoding="utf-8"))["uploads"]}
+    assert "changed while translating" in outcomes[OIL_KEY]
+    assert code == 1
+
+
+def test_force_overwrites_even_if_s3_changed_meanwhile(data_root, fake_s3):
+    fake_s3.after_get = lambda s3, key: s3.objects[OIL_KEY].update(etag="oil-2") if key == OIL_KEY else None
     run(data_root, "--yes", "--force")
-    assert "MultiTechnique Alerts/alerts/golden/capstone/consolidated_alerts.csv" in [k for k, _ in fake_s3.uploaded]
+    assert OIL_KEY in [k for k, _, _ in fake_s3.puts]
 
 
 def test_full_mode_can_skip_the_upload(data_root, fake_s3):
     code, _ = run(data_root, "--yes", "--no-upload")
-    assert fake_s3.uploaded == [] and code == 0
+    assert fake_s3.puts == [] and fake_s3.gets == [] and code == 0  # no S3 traffic at all
 
 
 def test_full_run_asks_for_confirmation_before_replacing_s3(data_root, fake_s3, monkeypatch):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     code, _ = run(data_root)
-    assert code == 2 and fake_s3.uploaded == []
+    assert code == 2 and fake_s3.puts == [] and fake_s3.gets == []

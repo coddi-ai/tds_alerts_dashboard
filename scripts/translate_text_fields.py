@@ -438,7 +438,8 @@ class JobResult:
     failures: dict = field(default_factory=dict)  # text -> reason
     missing_columns: list = field(default_factory=list)
     output: Optional[Path] = None
-    source_mtime: float = 0.0
+    etag: Optional[str] = None  # S3 version this translation was made from (full mode)
+    content_type: Optional[str] = None
     review: list = field(default_factory=list)  # (row, column, source, translation)
 
 
@@ -456,7 +457,7 @@ def select_rows(columns: dict, n_rows: int, demo_rows: Optional[int], seed: str,
 
 def run_job(job: Job, translator: Translator, out_path: Path, *, demo_rows: Optional[int], seed: int,
             workers: int, cutoff: Optional[pd.Timestamp] = None, progress: Optional[Callable] = None) -> JobResult:
-    result = JobResult(job=job, source_mtime=job.source.stat().st_mtime)
+    result = JobResult(job=job)
     n_rows, columns, result.missing_columns = read_columns(job)
     result.rows_total = n_rows
     if not columns:
@@ -500,40 +501,71 @@ def run_job(job: Job, translator: Translator, out_path: Path, *, demo_rows: Opti
 
 # ── S3 ─────────────────────────────────────────────────────────────────────────
 
-def upload_results(results: list, prefix: str, force: bool) -> list:
-    """Replace each translated file at its existing S3 key. Only called outside demo mode."""
+def connect_s3() -> tuple:
+    """(client, bucket) from the same variables src/data/s3_downloader.py uses."""
     import boto3
-    from botocore.exceptions import ClientError
 
     bucket = os.getenv("BUCKET_NAME")
     if not bucket:
         raise SystemExit("BUCKET_NAME is not set (environment or .env).")
     access, secret = os.getenv("ACCESS_KEY"), os.getenv("SECRET_KEY")
     if access and secret:
-        s3 = boto3.client("s3", aws_access_key_id=access, aws_secret_access_key=secret, region_name="us-east-1")
-    elif os.getenv("STAGE_NAME"):
-        s3 = boto3.client("s3", region_name="us-east-1")
-    else:
-        raise SystemExit("ACCESS_KEY/SECRET_KEY are not set (environment or .env).")
+        return boto3.client("s3", aws_access_key_id=access, aws_secret_access_key=secret, region_name="us-east-1"), bucket
+    if os.getenv("STAGE_NAME"):
+        return boto3.client("s3", region_name="us-east-1"), bucket
+    raise SystemExit("ACCESS_KEY/SECRET_KEY are not set (environment or .env).")
+
+
+def s3_key(prefix: str, rel_path: str) -> str:
+    return prefix.rstrip("/") + "/" + rel_path
+
+
+def fetch_current(s3, bucket: str, prefix: str, job: Job, work_dir: Path) -> Optional[tuple]:
+    """Download the file as it is in S3 right now: (local path, ETag, content type), None if there is none.
+
+    A full run translates this copy, not whatever `data/` held at its last sync: the pipelines keep
+    rewriting these files, and translating a stale copy would either be refused or overwrite newer data.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        response = s3.get_object(Bucket=bucket, Key=s3_key(prefix, job.rel_path))
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+    destination = work_dir / job.rel_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as handle:
+        for chunk in response["Body"].iter_chunks():
+            handle.write(chunk)
+    return destination, response.get("ETag"), response.get("ContentType")
+
+
+def upload_results(results: list, s3, bucket: str, prefix: str, force: bool) -> list:
+    """Replace each translated file at the S3 key it was fetched from. Only called outside demo mode.
+
+    The write is conditional on the ETag fetched with the file, so if the pipeline published a new
+    version while the translation ran, that version is kept and the file is reported instead.
+    """
+    from botocore.exceptions import ClientError
 
     outcomes = []
     for res in results:
         if res.output is None:
             continue
-        key = prefix.rstrip("/") + "/" + res.job.rel_path
+        key = s3_key(prefix, res.job.rel_path)
+        extra = {} if force or not res.etag else {"IfMatch": res.etag}
+        if res.content_type:
+            extra["ContentType"] = res.content_type
         try:
-            head = s3.head_object(Bucket=bucket, Key=key)
+            with res.output.open("rb") as handle:
+                s3.put_object(Bucket=bucket, Key=key, Body=handle, **extra)
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
-                outcomes.append((key, "skipped: no object at this key (this script only replaces existing files)"))
+            if exc.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                outcomes.append((key, "skipped: S3 version changed while translating; rerun to translate the new one"))
                 continue
             raise
-        # The local file was synced from S3 at some point. If S3 changed after that, uploading would
-        # silently discard the newer upstream version, so refuse unless --force.
-        if head["LastModified"].timestamp() > res.source_mtime and not force:
-            outcomes.append((key, "skipped: S3 copy is newer than the local file; sync data/ first or use --force"))
-            continue
-        s3.upload_file(str(res.output), bucket, key)
         outcomes.append((key, "uploaded"))
     return outcomes
 
@@ -563,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=16, help="parallel API calls")
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--no-upload", action="store_true", help="full mode: translate and write files, skip S3")
-    parser.add_argument("--force", action="store_true", help="upload even if the S3 copy is newer than the local file")
+    parser.add_argument("--force", action="store_true", help="upload even if the S3 file changed while translating")
     parser.add_argument("--yes", action="store_true", help="do not ask before a full run")
     parser.add_argument("--list", action="store_true", help="show what would be processed and exit")
     return parser
@@ -671,18 +703,28 @@ def main(argv=None, llm: Optional[Callable] = None) -> int:
     except ImportError:
         bar, tick_one = None, None
 
-    results = []
+    # Demo mode never reaches the S3 code: no client, no credentials read, nothing sent.
+    s3, bucket = connect_s3() if not args.demo and not args.no_upload else (None, None)
+    results, uploads = [], []
     for job, *_ in plan:
+        etag = content_type = None
+        if s3 is not None:
+            fetched = fetch_current(s3, bucket, mapping["s3_prefix"], job, mode_dir / "_s3_source")
+            if fetched is None:
+                uploads.append((s3_key(mapping["s3_prefix"], job.rel_path),
+                                "skipped: no object at this key (this script only replaces existing files)"))
+                continue
+            job.source, etag, content_type = fetched
         out_path = (args.data_root if args.in_place else mode_dir) / job.rel_path
-        results.append(run_job(job, translator, out_path, demo_rows=demo_rows, seed=args.seed,
-                               workers=args.workers, cutoff=cutoff, progress=tick_one))
+        result = run_job(job, translator, out_path, demo_rows=demo_rows, seed=args.seed,
+                         workers=args.workers, cutoff=cutoff, progress=tick_one)
+        result.etag, result.content_type = etag, content_type
+        results.append(result)
     if bar:
         bar.close()
 
-    uploads: list = []
-    # Demo mode never reaches the S3 code: no client, no credentials read, nothing sent.
-    if not args.demo and not args.no_upload:
-        uploads = upload_results(results, mapping["s3_prefix"], args.force)
+    if s3 is not None:
+        uploads += upload_results(results, s3, bucket, mapping["s3_prefix"], args.force)
         for key, outcome in uploads:
             logger.info("S3 %s: %s", key, outcome)
 

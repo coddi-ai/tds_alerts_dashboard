@@ -1,11 +1,16 @@
 """
 Componentes de gráficos para la página de evidencia.
 """
+import json
+import logging
 import math
+from functools import lru_cache
+from pathlib import Path
 from typing import NamedTuple
 
 from src.i18n import t as _t
 from dashboard.components.labels import status_label
+logger = logging.getLogger(__name__)
 import numpy as np
 import plotly.graph_objects as go
 import pandas as pd
@@ -255,7 +260,7 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
                          height=380, *, axes):
     """
     Crear scatter con todos los equipos. Destaca el equipo seleccionado. El tooltip
-    muestra el ranking de hoy, el de 7 y 30 días y las horas de componente, sea
+    muestra el ranking de hoy, el de 7, 30 y 90 días y las horas de componente, sea
     cual sea el par de ejes.
 
     `axes` es el (x, y) de campos de ranking configurado para el cliente/componente
@@ -352,8 +357,9 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
             return {}
         return {u: (format(v, spec) if pd.notna(v) else "—") for u, v in zip(df_latest["Unit"], df_latest[column].astype(float))}
 
-    # The tooltip's four ranking values do not depend on which two are plotted.
-    today, r7, r30 = _shown("ranking", ".0f"), _shown("avg_ranking_7d", ".1f"), _shown("avg_ranking_30d", ".1f")
+    # The tooltip's ranking values do not depend on which two are plotted.
+    today, r7, r30, r90 = (_shown("ranking", ".0f"), _shown("avg_ranking_7d", ".1f"),
+                           _shown("avg_ranking_30d", ".1f"), _shown("ranking_acum_90d", ".1f"))
     for st, color in status_colors.items():
         subset = df_latest[(df_latest["status"] == st) & (df_latest["Unit"] != selected_unit)]
         if not subset.empty:
@@ -398,9 +404,9 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
             mode="markers+text",
             name=name,
             text=units,
-            # [unit, today's, 7-day and 30-day ranking]: click-to-Evidence reads the
+            # [unit, today's, 7-day, 30-day and 90-day ranking]: click-to-Evidence reads the
             # unit from index 0; the tooltip reads the rest (not the plotted x / y)
-            customdata=[[u, today.get(u, "—"), r7.get(u, "—"), r30.get(u, "—")] for u in units],
+            customdata=[[u, today.get(u, "—"), r7.get(u, "—"), r30.get(u, "—"), r90.get(u, "—")] for u in units],
             # A label that fits nowhere is left out (blank template) but the point
             # is still drawn; `text` stays for the tooltip and click handler.
             textposition=[p.position if p else _SCATTER_LABEL_ORDER[0] for p in unit_placements],
@@ -469,6 +475,21 @@ def _long_view_band(active, df):
     return None
 
 
+def _long_view_alert_fraction(active):
+    """Where the Normal/Alerta edge sits between `media` and `umbral`:
+    K_ALERTA / K_SIGMA of the way, i.e. median + K_ALERTA*sigma given that
+    `umbral` = median + K_SIGMA*sigma. Both come from the curve's `config`
+    (upstream defaults 1 and 2 -> one sigma, halfway) when it did not survive."""
+    config = (getattr(active, "attrs", None) or {}).get("config") or {}
+    try:
+        k_sigma, k_alerta = float(config.get("K_SIGMA", 2.0)), float(config.get("K_ALERTA", 1.0))
+    except (TypeError, ValueError):
+        return 0.5
+    if not (k_sigma > 0 and 0 < k_alerta <= k_sigma):
+        return 0.5
+    return k_alerta / k_sigma
+
+
 def create_empty_selection_figure(message_key="predictive_charts.selection_empty"):
     """A blank chart (no points, no axes) saying that no unit is selected - what an
     empty unit selection shows on either chart. Never a fallback to the whole fleet.
@@ -504,7 +525,8 @@ def create_long_view_chart(active, selected_units=None):
     which sits at the end dot where it fits (smaller where crowded, omitted where
     even that would crowd; never a connector line). The dot is sized Anormal 1.5x,
     Alerta 1.2x, Normal 1x. The background shades the fleet reference band
-    (Normal / Alerta / Anormal zones) in the same colors and is independent of the
+    (Normal below median + 1 sigma, Alerta up to median + 2 sigma, Anormal above)
+    in the same colors and is independent of the
     units' own `estado`. None when `active` has nothing to plot at all.
 
     The height is left to the container (General sizes it 2.5:1).
@@ -528,7 +550,7 @@ def create_long_view_chart(active, selected_units=None):
     fig = go.Figure()
     annotations = []
 
-    # ── Reference band: three zones, then the median/threshold edges ──
+    # ── Reference band: three zones, then the Alerta/Anormal edges ──
     band = _long_view_band(active, df)
     if band is not None:
         grid, media, umbral = band
@@ -537,11 +559,13 @@ def create_long_view_chart(active, selected_units=None):
         if grid[-1] < x_up:  # hold the last band value out to the axis end
             grid = np.append(grid, x_up)
             media, umbral = np.append(media, media[-1]), np.append(umbral, umbral[-1])
-        media_c, umbral_c = np.minimum(media, y_up), np.minimum(umbral, y_up)
+        # Normal < median + 1 sigma <= Alerta < median + 2 sigma (= umbral) <= Anormal
+        alerta = media + _long_view_alert_fraction(active) * (umbral - media)
+        alerta_c, umbral_c = np.minimum(alerta, y_up), np.minimum(umbral, y_up)
         loop_x = np.concatenate([grid, grid[::-1]])
         for zone, lower, upper in (
-            ("Normal", np.zeros_like(grid), media_c),
-            ("Alerta", media_c, umbral_c),
+            ("Normal", np.zeros_like(grid), alerta_c),
+            ("Alerta", alerta_c, umbral_c),
             ("Anormal", umbral_c, np.full_like(grid, y_up)),
         ):
             fig.add_trace(go.Scatter(
@@ -550,7 +574,7 @@ def create_long_view_chart(active, selected_units=None):
                 hoverinfo="skip", showlegend=False,
             ))
         fig.add_trace(go.Scatter(
-            x=grid, y=media_c, mode="lines", hoverinfo="skip", showlegend=False,
+            x=grid, y=alerta_c, mode="lines", hoverinfo="skip", showlegend=False,
             line=dict(color="rgba(17,24,39,0.55)", width=1.4, dash="dash"),
         ))
         fig.add_trace(go.Scatter(
@@ -559,8 +583,8 @@ def create_long_view_chart(active, selected_units=None):
         ))
         for zone, x_frac, y_of in (
             ("Anormal", 0.12, lambda xv: np.interp(xv, grid, umbral_c) + (y_up - np.interp(xv, grid, umbral_c)) * 0.6),
-            ("Alerta", 0.85, lambda xv: (np.interp(xv, grid, media_c) + np.interp(xv, grid, umbral_c)) / 2),
-            ("Normal", 0.85, lambda xv: np.interp(xv, grid, media_c) * 0.25),
+            ("Alerta", 0.85, lambda xv: (np.interp(xv, grid, alerta_c) + np.interp(xv, grid, umbral_c)) / 2),
+            ("Normal", 0.85, lambda xv: np.interp(xv, grid, alerta_c) * 0.25),
         ):
             xv = x_up * x_frac
             annotations.append(dict(
@@ -639,15 +663,15 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
     fm_keys = list(failure_modes.keys())
     fm_labels = [failure_modes[k] for k in fm_keys]
     
-    # Valores del equipo seleccionado (use 30d averages for consistency)
+    # Valores del equipo seleccionado (7-day means, the Calendario de estado's window)
     unit_vals = [
-        float(unit_row[f"{k}_30d"]) if f"{k}_30d" in unit_row.index and pd.notna(unit_row[f"{k}_30d"]) else 0.0
+        float(unit_row[f"{k}_7d"]) if f"{k}_7d" in unit_row.index and pd.notna(unit_row[f"{k}_7d"]) else 0.0
         for k in fm_keys
     ]
-    
-    # Valores promedio de la flota (use 30d averages)
+
+    # Valores promedio de la flota (7-day means)
     fleet_vals = [
-        float(df_latest[f"{k}_30d"].mean()) if f"{k}_30d" in df_latest.columns else 0.0
+        float(df_latest[f"{k}_7d"].mean()) if f"{k}_7d" in df_latest.columns else 0.0
         for k in fm_keys
     ]
     
@@ -743,19 +767,63 @@ _NO_DATA_COLOR = "#e5e7eb"
 _WEAR_PALETTE = ["#2563EB", "#E24B4A", "#1D9E75", "#7C3AED", "#EF9F27", "#0891B2"]
 
 
-def classify_criticidad(value):
+_THRESHOLDS_DIR = Path(__file__).resolve().parents[2] / "config" / "umbrales_criticidad"
+_MEAN_WINDOW_DAYS = 7
+
+
+@lru_cache(maxsize=8)
+def _load_mode_thresholds(client_key: str) -> dict:
+    """{mode: (p75, p90, p98)} from config/umbrales_criticidad/<client>.json
+    (the `umbrales_criticidad` dictionary written by the calibration script),
+    or {} when the client has no file or it can't be parsed. Edges are the
+    lower bounds of Monitoreo / Prioridad alta / Crítico."""
+    if not client_key:
+        return {}
+    path = _THRESHOLDS_DIR / f"{client_key}.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("No se pudo leer %s", path)
+        return {}
+    modes = (data.get("umbrales_criticidad", data) or {}).get("modos") or {}
+    edges = {}
+    for mode, v in modes.items():
+        try:
+            e = (float(v["p75"]), float(v["p90"]), float(v["p98"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if e[0] <= e[1] <= e[2]:
+            edges[mode] = e
+    return edges
+
+
+def get_mode_thresholds(client) -> dict:
+    """Calibrated criticidad edges per failure mode for `client` ({} if none)."""
+    return _load_mode_thresholds((client or "").lower())
+
+
+def classify_criticidad(value, edges=_CRITICIDAD_EDGES):
     """Band index (0..3) of a risk score, or None when there is no score -
-    a missing day is "no data", never implicitly Saludable."""
+    a missing day is "no data", never implicitly Saludable. `edges` are the
+    lower bounds of bands 1..3 (the fixed 35/55/75 unless a mode is calibrated)."""
     if value is None or pd.isna(value):
         return None
-    return sum(float(value) >= edge for edge in _CRITICIDAD_EDGES)
+    return sum(float(value) >= edge for edge in edges)
 
 
-def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90):
+def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90, client=None):
     """Calendar heatmap: one row per failure mode, one column per day over the
     `days` days ending at `end_date`, coloured by the criticidad band of that
-    day's `risk_value`. `df_unit` is the unit's wide risk frame (Fecha + one
-    column per mode); a mode/day with no value renders as "Sin datos".
+    day's value. `df_unit` is the unit's wide risk frame (Fecha + one column
+    per mode); a mode/day with no value renders as "Sin datos".
+
+    A mode with calibrated thresholds for `client` (config/umbrales_criticidad)
+    is classified on its trailing 7-day mean - the series the P75/P90/P98 edges
+    were computed on - against its own edges. Any other mode keeps the daily
+    `risk_value` against the fixed 35/55/75 bands. A day without a reading stays
+    "Sin datos" in both cases, so the mean never paints a day the unit skipped.
     Dotted vertical lines mark each Monday (week start).
     """
     if df_unit is None or df_unit.empty or end_date is None:
@@ -766,25 +834,34 @@ def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90):
 
     end = pd.Timestamp(end_date).normalize()
     dates = pd.date_range(end=end, periods=days, freq="D")
-    daily = (
+    unit_days = (
         df_unit.assign(Fecha=pd.to_datetime(df_unit["Fecha"]).dt.normalize())
         .drop_duplicates(subset="Fecha", keep="last")
         .set_index("Fecha")
-        .reindex(dates)[modes]
     )
+    daily = unit_days.reindex(dates)[modes]
+    # The mean needs the days before the window too; calendar days, so a gap
+    # lowers the divisor instead of stretching the mean over older readings.
+    lead = pd.date_range(end=end, periods=days + _MEAN_WINDOW_DAYS - 1, freq="D")
+    mean_7d = unit_days.reindex(lead)[modes].rolling(_MEAN_WINDOW_DAYS, min_periods=1).mean().reindex(dates)
+    thresholds = get_mode_thresholds(client)
     # Worst mode on top: order by mean over the window, ties by catalogue order.
     order = sorted(modes, key=lambda m: (-(daily[m].mean() if daily[m].notna().any() else -1.0), modes.index(m)))
 
     z, hover = [], []
     for m in order:
+        edges = thresholds.get(m)
+        series = mean_7d[m].where(daily[m].notna()) if edges else daily[m]
         row_z, row_h = [], []
-        for d, v in zip(dates, daily[m]):
-            band = classify_criticidad(v)
+        for d, v in zip(dates, series):
+            band = classify_criticidad(v, edges or _CRITICIDAD_EDGES)
             row_z.append(_NO_DATA_CODE if band is None else band)
-            row_h.append(
-                _t("predictive_charts.sin_datos", d=d) if band is None
-                else f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}"
-            )
+            if band is None:
+                row_h.append(_t("predictive_charts.sin_datos", d=d))
+            elif edges:
+                row_h.append(_t("predictive_charts.hover_mean_7d", d=d, v=float(v), band=_band_label(band)))
+            else:
+                row_h.append(f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}")
         z.append(row_z)
         hover.append(row_h)
 

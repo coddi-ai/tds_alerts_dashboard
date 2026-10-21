@@ -153,12 +153,19 @@ def test_tooltip_keeps_today_7d_30d_and_meter_whatever_is_plotted(axes):
     for trace in fig.data:
         template = trace.hovertemplate
         for needle in ("Ranking hoy: %{customdata[1]}", "Ranking 7 días: %{customdata[2]}",
-                       "Ranking 30 días: %{customdata[3]}", "Horómetro: %{hovertext}"):
+                       "Ranking 30 días: %{customdata[3]}", "Ranking 90 días: %{customdata[4]}", "Horómetro: %{hovertext}"):
             assert needle in template
         assert "%{x" not in template and "%{y" not in template
     rows = {c[0]: c for t in fig.data for c in t.customdata}
     for i, unit in enumerate(df["Unit"]):
-        assert rows[unit][1:] == [f"{df.loc[i, 'ranking']:.0f}", f"{df.loc[i, 'avg_ranking_7d']:.1f}", f"{df.loc[i, 'avg_ranking_30d']:.1f}"]
+        assert rows[unit][1:] == [f"{df.loc[i, 'ranking']:.0f}", f"{df.loc[i, 'avg_ranking_7d']:.1f}", f"{df.loc[i, 'avg_ranking_30d']:.1f}",
+                             f"{df.loc[i, 'ranking_acum_90d']:.1f}"]
+
+
+def test_zone_captions_name_the_last_week_and_keep_the_agreement_zones():
+    fig = create_fleet_scatter(_latest(), None, STATE_COLORS, thresholds=(16, 16), axes=("ranking_7d", "ranking_90d"))
+    assert sorted(a.text for a in fig.layout.annotations) == sorted(
+        ["Zona saludable", "Crítica sostenida", "Mejor en la última semana", "Peor en la última semana"])
 
 
 def test_tooltip_shows_a_dash_for_a_ranking_the_unit_lacks():

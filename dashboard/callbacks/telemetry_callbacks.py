@@ -1,6 +1,7 @@
 """Callbacks for the reportable telemetry fleet and unit views."""
 
 from src.i18n import t
+from src.i18n.data_text import localized_value
 from dashboard.components.labels import status_label
 from datetime import date, datetime, timedelta
 from functools import lru_cache
@@ -468,7 +469,7 @@ def _text_value(row, *fields):
         return None
     for field in fields:
         try:
-            value = row.get(field, '')
+            value = localized_value(row, field, '')
         except AttributeError:
             value = ''
         if value is not None and not pd.isna(value) and str(value).strip():

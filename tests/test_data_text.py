@@ -193,3 +193,45 @@ def test_predictive_evidence_panels_use_the_english_columns():
     with _in("es"):
         assert ev._unit_narrative_panel(unit)["diagnostico"] == "Diag es"
         assert ev._mode_narrative_panel(mode, "alerta")["acciones"] == '["Medir"]'
+
+
+# ── Telemetry ───────────────────────────────────────────────────────────────────
+
+def test_telemetry_comment_helpers_read_the_english_columns():
+    from dashboard.callbacks.telemetry_callbacks import _text_value
+    from dashboard.components.telemetry_report import _comment_text
+
+    comment = pd.Series({
+        "description": "Motor sobrecalentado", "description_eng": "Engine overheating",
+        "explaining": "Explicacion", "explaining_eng": "",
+    })
+    with _in("en"):
+        assert _text_value(comment, "description") == "Engine overheating"
+        assert _comment_text(comment, {}, "description") == "Engine overheating"
+        assert _text_value(comment, "explaining") == "Explicacion"  # blank translation -> Spanish
+    with _in("es"):
+        assert _text_value(comment, "description") == "Motor sobrecalentado"
+
+
+def test_client_facing_text_hides_scores_in_english_without_spanish_leaking_in():
+    from dashboard.components.telemetry_report import client_facing_text
+
+    text = ("Engine shows a priority score of 7.2 and a risk score of 5.5 out of 10, with confidence of 85%. "
+            "Criticality is 3 and the signal ranges between 10% and 20%.")
+    with _in("en"):
+        out = client_facing_text(text, {"EngCoolTemp": "Temperatura del refrigerante"})
+    for number in ("7.2", "5.5", "85", "10%", "20%"):
+        assert number not in out, out
+    assert "Engine" in out  # not rewritten to the Spanish "Motor"
+    for spanish in ("nivel de riesgo", "prioridad asignada", "evidencia", "Motor"):
+        assert spanish not in out, out
+
+
+def test_client_facing_text_in_spanish_is_unchanged():
+    from dashboard.components.telemetry_report import client_facing_text
+
+    text = "Engine con un puntaje de prioridad de 7.2 y confianza del 85%, riesgos de 3.2 y 4.1 respectivamente."
+    expected = "Motor con una prioridad asignada y evidencia disponible, niveles de riesgo."
+    assert client_facing_text(text) == expected
+    with _in("es"):
+        assert client_facing_text(text) == expected
