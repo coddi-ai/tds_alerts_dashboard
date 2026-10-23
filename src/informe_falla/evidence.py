@@ -24,6 +24,9 @@ import pandas as pd
 
 from src.informe_falla import catalog as c
 from src.informe_falla.catalog import MODOS, NIVELES
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # =============================================================================
@@ -77,13 +80,30 @@ def _modos(valor) -> dict:
         return {}
 
 
+# Columnas de unit_status_summary que usa el informe. Las primeras son imprescindibles; las demas, si
+# faltan en las particiones leidas (puede pasar entre la copia local y S3), se agregan vacias.
+COLUMNAS_STATUS_OBLIGATORIAS = ["Unit", "Fecha", "year", "week", "modos_ordenados"]
+COLUMNAS_STATUS_OPCIONALES = ["dias_sin_datos", "dias_media_30d", "estado", "media_30d", "ranking", "peor_modo",
+                              "peor_valor"]
+
+
 def preparar_status(df: pd.DataFrame) -> pd.DataFrame:
     """unit_status_summary (todas las semanas, con year/week) con los modos como columnas y el lunes de cada semana."""
     df = df.copy()
     if df.empty:
-        return pd.DataFrame(columns=["Unit", "Fecha", "year", "week", "lunes", "dias_sin_datos", "dias_media_30d",
-                                     "estado", "media_30d", "ranking", "peor_modo", "peor_valor", *MODOS])
+        return pd.DataFrame(columns=COLUMNAS_STATUS_OBLIGATORIAS + ["lunes"] + COLUMNAS_STATUS_OPCIONALES + MODOS)
+    faltan = [col for col in COLUMNAS_STATUS_OBLIGATORIAS if col not in df.columns]
+    if faltan:
+        raise ValueError(f"unit_status_summary sin las columnas {faltan}: no se puede armar el informe")
     df["Fecha"] = pd.to_datetime(df["Fecha"])
+    opcionales = [col for col in COLUMNAS_STATUS_OPCIONALES if col not in df.columns]
+    if opcionales:
+        logger.warning(f"unit_status_summary sin las columnas {opcionales}: se usan vacias")
+        for col in opcionales:
+            df[col] = np.nan
+    if "dias_sin_datos" in opcionales:
+        # Mismo calculo que el contrato: dias entre la Fecha de la unidad y la ultima Fecha de esa semana.
+        df["dias_sin_datos"] = (df.groupby(["year", "week"])["Fecha"].transform("max") - df["Fecha"]).dt.days
     df["lunes"] = [pd.Timestamp(date.fromisocalendar(int(y), int(w), 1)) for y, w in zip(df["year"], df["week"])]
     modos = df["modos_ordenados"].apply(_modos)
     for m in MODOS:

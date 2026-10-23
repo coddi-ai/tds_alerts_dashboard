@@ -1,11 +1,12 @@
 """
-Informe preliminar de falla, paso 2: la IA lo redacta sobre la evidencia y los controles lo revisan.
+Informe preliminar de falla, paso 2: la IA redacta sus textos sobre la evidencia y los controles los revisan.
 
-La IA solo puede dar como "mas probable" un modo que las herramientas marcaron como alto
-o medio, y elige los pasos de inspeccion del catalogo por identificador (no los redacta).
-Los controles verifican el esquema, que las fuentes citadas existan en lo que recibio,
-las hipotesis sin respaldo, los pasos de inspeccion fuera de lugar y que los textos para
-el cliente no usen terminos internos del paquete.
+La IA escribe el diagnostico y la causa probable de la seccion Detenciones y, al final, el Resumen
+(diagnostico, causa probable y acciones) integrando el Predictivo y las detenciones. El diagnostico
+y la causa probable de la seccion Predictivo no los escribe: vienen de unit_failure_analisis.
+Todos los textos siguen los lineamientos de mensajes del Analisis Inteligente (largos, vocabulario,
+glosario). Los controles verifican el esquema, el largo de cada mensaje, el vocabulario prohibido,
+los terminos internos del paquete y las afirmaciones que los registros de mantencion no permiten.
 
 Modelo, timeout, temperatura y semilla: src/informe_falla/config.py (requiere OPENAI_API_KEY).
 """
@@ -17,21 +18,24 @@ import re
 from typing import Callable, Optional
 
 from src.informe_falla import catalog as c
-from src.informe_falla.catalog import MODOS, NOMBRE_MODO, VERIFICACIONES
+from src.informe_falla.catalog import MODOS, NOMBRE_MODO
 from src.informe_falla.config import get_informe_settings
 
 # Cambia cada vez que cambian el prompt o el esquema; queda en el registro de cada informe.
-PROMPT_VERSION = "2.5"
+PROMPT_VERSION = "3.0"
 
 # llm_fn(system, user, esquema) -> str con la respuesta JSON del modelo
 LlmFn = Callable[[str, str, dict], str]
 
-EVALUACIONES = ["mas_probable", "poco_probable", "descartada", "no_evaluable"]
-
 
 # =============================================================================
-# Esquema de salida (formato informe preliminar)
+# Esquema de salida (informe preliminar de fallas)
 # =============================================================================
+# La IA escribe dos de las tres secciones del informe, en este orden:
+#   1. detenciones: diagnostico y causa probable a partir de las mantenciones previas;
+#   2. resumen: diagnostico, causa probable y acciones, integrando el Predictivo y las detenciones.
+# El diagnostico y la causa probable de la seccion Predictivo NO los escribe: vienen de
+# unit_failure_analisis (analisis_unidad.py), el mismo texto que el cliente ve en la plataforma.
 def _obj(props):
     """Objeto estricto: todos los campos obligatorios y ninguno extra (requisito de Structured Outputs)."""
     return {"type": "object", "additionalProperties": False, "required": list(props), "properties": props}
@@ -45,36 +49,24 @@ def _enum(opciones):
     return {"type": "string", "enum": opciones}
 
 
-ESQUEMA_INFORME = {"name": "informe_falla_probable", "strict": True, "schema": _obj({
+ESQUEMA_INFORME = {"name": "informe_preliminar_falla", "strict": True, "schema": _obj({
     "veredicto": _enum(c.VEREDICTOS),
     "confianza": _enum(c.CONFIANZAS),
     "motivo_confianza": _TEXTO,
-    "causa_mas_probable": _TEXTO,
-    "que_mostro_el_predictivo": _TEXTO,
-    "recomendacion_principal": _TEXTO,
-    "estado_unidad": _TEXTO,
-    "hipotesis": {"type": "array", "items": _obj({
-        "nombre": _TEXTO,
-        "modos": {"type": "array", "items": _enum(MODOS)},
-        "a_favor": _TEXTO,
-        "en_contra": _TEXTO,
-        "evaluacion": _enum(EVALUACIONES),
-        "fuentes": _LISTA_TEXTO,
-    })},
-    "cadena_causal": {"type": "array", "items": _obj({
-        "pregunta": _TEXTO, "respuesta": _TEXTO, "a_confirmar": {"type": "boolean"}})},
-    "causa_fisica": _TEXTO,
-    "causas_contribuyentes": _TEXTO,
-    "inspeccion": {"type": "array", "items": _obj({"id": _enum(sorted(VERIFICACIONES)), "nota": _TEXTO})},
-    "prevencion": _LISTA_TEXTO,
-    "limitaciones": _LISTA_TEXTO,
+    "detenciones": _obj({"diagnostico": _TEXTO, "causa_probable": _TEXTO}),
+    "resumen": _obj({"diagnostico": _TEXTO, "causa_probable": _TEXTO, "acciones": _LISTA_TEXTO,
+                     "riesgo_si_no_se_hace": _TEXTO}),
     "coincide_con_veredicto_reglas": {"type": "boolean"},
     "motivo_si_difiere": _TEXTO,
 })}
 
-# Campos que lee el cliente en el PDF (los controles revisan su vocabulario).
-CAMPOS_TEXTO_CLIENTE = ["motivo_confianza", "causa_mas_probable", "que_mostro_el_predictivo",
-                        "recomendacion_principal", "estado_unidad", "causa_fisica", "causas_contribuyentes"]
+
+def _textos_cliente(informe) -> list:
+    """Todo lo que lee el cliente en el PDF (los controles revisan su vocabulario)."""
+    r, d = informe.get("resumen") or {}, informe.get("detenciones") or {}
+    return [informe.get("motivo_confianza", ""), r.get("diagnostico", ""), r.get("causa_probable", ""),
+            *r.get("acciones", []), r.get("riesgo_si_no_se_hace", ""), d.get("diagnostico", ""),
+            d.get("causa_probable", "")]
 
 
 # =============================================================================
@@ -84,123 +76,112 @@ def _tabla_modos() -> str:
     return "\n".join(f"  {m} = {NOMBRE_MODO[m]}" for m in MODOS)
 
 
+def _limite(campo: str) -> str:
+    frases, palabras = c.LIMITES_MENSAJE[campo]
+    return f"máximo {frases} frases, unas {palabras} palabras"
+
+
 def prompt_informe(perfil: dict) -> str:
     """Instrucciones para la IA, con el equipo y el cliente del perfil (config.perfil_cliente)."""
-    return f"""Eres un ingeniero de confiabilidad que redacta un INFORME PRELIMINAR DE FALLA para un cliente. Una unidad
+    return f"""Eres un ingeniero de confiabilidad que redacta un INFORME PRELIMINAR DE FALLAS para un cliente. Una unidad
 ({perfil["equipo"]}, cliente {perfil["nombre"]}) tuvo una detención. El cliente entregó la unidad y la fecha; a veces
-agrega un relato escrito (contexto_cliente) que nadie verificó. No hay resultados de inspección confirmados. Tu análisis
-se basa en lo que el Predictivo (el sistema predictivo) mostró en los 3 meses previos. Todo lo que concluyas es
-PROBABLE, nunca confirmado. No es un análisis de causa raíz definitivo: el informe indica la falla más probable, qué
-la respalda y qué hay que confirmar en la inspección. Nunca lo llames "RCA" ni "análisis de causa raíz".
+agrega un relato escrito (contexto_cliente) que nadie verificó. No hay resultados de inspección confirmados. Todo lo
+que concluyas es PROBABLE, nunca confirmado. Nunca lo llames "RCA" ni "análisis de causa raíz".
+
+El informe tiene tres secciones:
+1. Resumen: diagnóstico, causa probable y acciones. Lo escribes tú, AL FINAL, integrando las otras dos.
+2. Predictivo: gráficos y tablas del sistema predictivo, más su diagnóstico y causa probable, que YA EXISTEN
+   (analisis_unidad: el texto que el Predictivo publicó para esta unidad la semana previa). No los reescribas.
+3. Detenciones: las detenciones previas de la unidad. Escribes su diagnóstico y su causa probable.
 
 DATOS (calculados por herramientas; tú no calculas nada):
-- Score semanal del Predictivo: estado del dashboard, media de 30 días y el valor semanal (0-100, relativo a la flota)
-  de {len(MODOS)} modos de falla, para los 3 meses previos (trayectoria).
-- analisis_por_metrica.<modo>: nivel, semanas anómalas, racha hasta la última semana, comparación con la propia
-  unidad (vs_unidad), con la flota (vs_flota) y especificidad.
-  Semana anómala: la unidad estuvo sobre el percentil {c.PERCENTIL_FLOTA_MIN} de la flota, sobre el máximo de su
-  propia línea base y al menos {c.Z_MIN:g} desviaciones sobre su media habitual.
-  Nivel "alto": {c.RACHA_ALTA} o más semanas anómalas seguidas hasta la última semana, o {c.SEMANAS_ANOMALAS_ALTA} o más
-  en el mes, y pocas unidades de la flota con el mismo patrón. Nivel "medio": {c.SEMANAS_ANOMALAS_MEDIA} semanas
-  anómalas, o una sola en las últimas {c.SEMANAS_FRESCAS} semanas. Una semana anómala aislada y lejana es "bajo".
-  "sin_datos": el modo no tiene datos para la unidad (no es lo mismo que "ninguno").
-- diario (risk_scores): el mismo score, día a día, hasta el día anterior a la fecha. Incluye los días de la
-  semana de la detención, que el score semanal no ve. diario.analisis_por_modo.<modo> trae los días anómalos,
-  el inicio del primer episodio (al menos {c.DIAS_SOSTENIDO} días anómalos en {c.VENTANA_SOSTENIDO} días), la racha
-  hasta el último día con dato y la especificidad. diario.auditoria trae las brechas con fechas exactas.
-  En analisis_por_metrica.<modo>, "nivel" es el mayor entre "nivel_semanal" y "nivel_diario".
-- ranking_modos: los modos ordenados por nivel. veredicto_reglas: el veredicto determinista.
+- analisis_unidad: diagnóstico, causa probable, acciones y limitación que el Predictivo publicó para la unidad,
+  con su fecha. "con_texto": false = la unidad estaba normal y el Predictivo no escribió nada; "disponible":
+  false = no hay análisis previo. "antiguo": true = tiene más de {c.DIAS_ANALISIS_VIEJO} días antes de la detención.
+- analisis_por_metrica.<modo> y ranking_modos: el nivel de cada modo de falla en el último mes ("alto", "medio",
+  "bajo", "ninguno" o "sin_datos"), comparado con lo habitual de la propia unidad. "nivel" es el mayor entre el
+  semanal y el diario. diario.analisis_por_modo.<modo> trae los días anómalos y el inicio del episodio.
+- trayectoria: el estado semanal de la unidad ("normal", "alerta", "anormal") en los 3 meses previos.
+- ciclo_vida: la curva acumulada del motor frente a la flota. estado_final ("Normal", "Alerta", "Anormal"),
+  evaluable (false = bajo {c.HORAS_MIN_CURVA} horas: "Normal" no significa sano), fuera_de_normal_desde,
+  horas_motor.
+- veredicto_reglas: el veredicto determinista (referencia).
+- Mantenciones (registros ANTERIORES a la detención; no son hallazgos de esta detención):
+  cobertura_mantenciones.estado ("completa", "parcial", "unidad_sin_registros", "fuera_de_cobertura",
+  "sin_fuente"); detenciones_previas (fecha, tipo Correctiva/Programada/Sin clasificar, subsistema, componentes,
+  qué se hizo, horas, modos_relacionados, cerca_de_la_detencion); antecedentes_mantencion (último mantenimiento
+  programado, correctivas repetidas por subsistema, rellenos de aceite o refrigerante).
 - acciones_previas y analisis_por_metrica.<modo>.verificaciones_sugeridas: el catálogo de pasos de inspección.
-- contexto_cliente (si viene): título, descripción del evento, hallazgos de inspección y acciones realizadas.
-- Mantenciones (registros de la unidad ANTERIORES a la detención; no son hallazgos de esta detención):
-  cobertura_mantenciones.estado dice si la fuente cubre el período ("completa", "parcial", "unidad_sin_registros",
-  "fuera_de_cobertura", "sin_fuente"). detenciones_previas: las intervenciones del sistema en el período (fecha,
-  tipo Correctiva/Programada/Sin clasificar, subsistema, componentes, qué se hizo, horas intervenidas ese día,
-  modos_relacionados por subsistema o componente, y cerca_de_la_detencion). antecedentes_mantencion: último
-  mantenimiento programado, recurrencia de correctivas por subsistema, última intervención en el subsistema de cada
-  modo destacado y rellenos de aceite o refrigerante, todo en los últimos 180 días.
+  Úsalo para elegir QUÉ revisar en las acciones; redáctalo en palabras simples.
+- contexto_cliente (si viene): título, descripción, hallazgos y acciones que escribió el cliente.
 
-VENTANAS (ver "ventanas"): el período analizado son los 3 meses previos a la detención; el último mes es el que se
-compara contra el resto (la línea base de la unidad). La semana de la detención (rel=0) se excluye por diseño: NO es
-una brecha.
-
-NOMBRES DE LOS MODOS: en todo texto para el cliente usa estos nombres, nunca el identificador (en minúscula dentro
-de una frase: "señales de contaminación por refrigerante"):
+NOMBRES DE LOS MODOS: en todo texto usa estos nombres, nunca el identificador, en minúscula dentro de una frase:
 {_tabla_modos()}
 
-REGLAS:
-1. Nunca calcules ni estimes números. Cada cifra que escribas debe existir en el paquete.
-2. FUENTES: en cada hipótesis, "fuentes" es una lista de rutas que existen tal cual en el paquete, una ruta por
-   elemento, sin texto adicional, sin "<modo>" ni otros comodines. Al citar un elemento de una lista, identifícalo por
-   su semana o su fecha: "trayectoria[rel=-2].bearing_wear_risk",
-   "analisis_por_metrica.blowby_risk.vs_flota.por_semana[rel=-2]", "diario.analisis_por_modo.blowby_risk.nivel_diario".
-   Una hipótesis sin respaldo puede tener la lista vacía.
-3. HIPÓTESIS. Incluye: (a) una por cada modo con nivel "alto" o "medio"; (b) los modos "bajo" que valga la pena
-   mencionar, normalmente como "poco_probable"; (c) una fila que agrupe los modos sin cambios, como "descartada",
-   citando el nivel de cada uno ("analisis_por_metrica.<identificador>.nivel"); (d) siempre una fila "Falla eléctrica,
-   estructural o de montaje" con modos vacíos, como "no_evaluable" (el Predictivo no mide esas fallas). Solo un modo
-   con nivel "alto" o "medio" puede ser "mas_probable". Los modos "sin_datos" no son descartados: van en
-   "limitaciones". El "nombre" de cada hipótesis es corto, sin etiquetas entre paréntesis.
-4. Lubricación y cojinetes comparten casi todas sus variables: si ambos destacan, dilo en "en_contra" (no son
-   evidencias independientes). Lo mismo, en menor grado, turbo y desbalance térmico.
-5. "a_favor" y "en_contra" en frases cortas y concretas. Si no hay evidencia, escribe "Sin evidencia a favor." o
-   "Sin evidencia en contra.".
-6. CADENA CAUSAL (3 a 5 pasos): de lo que probablemente falló hacia por qué. Empieza por "¿Qué falló,
-   probablemente?". Marca "a_confirmar": true en todo paso que no se pueda afirmar con el Predictivo. Si el
-   Predictivo tenía la señal y el dashboard no alertó, o si hubo brechas de datos, agrega un paso final
-   "¿Por qué no se detectó antes?". Sin señal, la cadena puede tener 1 o 2 pasos.
-7. "inspeccion": de 3 a 6 identificadores. Empieza por PRE-1 (la muestra de aceite preserva la evidencia) y luego los
-   pasos de verificaciones_sugeridas de los modos "mas_probable", primero los de tipo "rapida". El texto de cada paso
-   ya existe: no lo repitas; en "nota" agrega solo si aporta una frase breve (o ""). Nunca escribas valores de
-   especificación. "prevencion": 1 a 3 recomendaciones breves para que no se repita.
-8. Los scores son índices calculados por el Predictivo, no mediciones: nunca los llames "telemetría". Esta versión
-   usa el score semanal y el diario; no hay muestras de aceite ni telemetría por señal.
-9. Los campos base_media, base_max, reciente_media, reciente_max y percentil_max_reciente resumen una ventana
-   completa; el valor de una semana concreta está en la trayectoria o en vs_flota.por_semana.
-10. Tu confianza no puede superar auditoria.techo_confianza. Si hubo brechas de datos o la unidad no tenía datos
-    recientes, dilo en "que_mostro_el_predictivo" y en "limitaciones".
-11. "limitaciones": siempre que no se conoce lo encontrado en la detención (componente y causa inferidos), que el
-    Predictivo no mide fallas eléctricas o estructurales y, solo si los hay, los datos faltantes con sus fechas y los
-    modos sin datos (no escribas que no los hay).
-12. SIN SEÑAL o DATOS INSUFICIENTES: "causa_mas_probable" dice que no se identifica una causa en los datos del
-    Predictivo y que la falla puede estar fuera de lo que mide; ninguna hipótesis es "mas_probable".
-13. veredicto_reglas es una referencia; si tu veredicto difiere, explica por qué en "motivo_si_difiere".
-14. contexto_cliente no está verificado: úsalo para orientar la redacción y contrastar las hipótesis (por ejemplo,
-    si el cliente describe un síntoma compatible con un modo, dilo en "a_favor"), pero no lo cites en "fuentes", no
-    subas la confianza por él y no cambies con él el nivel de ningún modo. Si contradice al Predictivo, dilo en
-    "limitaciones". Sin contexto_cliente, no lo menciones.
-15. MANTENCIONES.
-    - Cítalas en "fuentes" como "detenciones_previas[fecha=AAAA-MM-DD]", "antecedentes_mantencion.recurrencia",
-      "antecedentes_mantencion.rellenos" o "cobertura_mantenciones.estado".
-    - Dos o más correctivas en el subsistema de un modo destacado pueden ir "a favor" de esa hipótesis como falla
-      repetida o causa posiblemente no resuelta, y en el paso "¿Por qué no se detectó antes?".
-    - Una intervención reciente sobre un componente compatible es un antecedente que puede pesar en los dos sentidos
-      (reparado, o mal reparado o con causa no resuelta). Nunca marques una hipótesis como "descartada" solo por un
-      registro de mantención.
-    - Los rellenos repetidos de refrigerante o de aceite son un antecedente para refrigerante, blow-by y lubricación.
-    - Si cobertura_mantenciones.estado no es "completa", no afirmes que no hubo intervenciones: di que no hay registros.
-    - Un registro con cerca_de_la_detencion = true es de los días previos y puede ser parte de esta misma detención:
-      descríbelo así, no como un antecedente independiente.
-    - La relación entre modos y subsistemas es una propuesta sin validar: escribe "relacionado con", nunca "causado
-      por" ni "confirmado por el registro de mantención".
-    - La cobertura de los registros de mantención ya la declara el informe: no la repitas en "limitaciones".
+PASO 1. DETENCIONES ("detenciones"):
+- Diagnóstico: qué muestran las detenciones previas que importa para esta falla (por ejemplo, correctivas
+  repetidas en el mismo sistema o rellenos frecuentes), con una sola cifra.
+- Causa probable: qué sugieren sobre la causa, con su nivel de certeza.
+- Una correctiva reciente sobre un componente relacionado pesa en los dos sentidos (reparado, o mal reparado o con
+  causa no resuelta). La relación entre modos y subsistemas es una propuesta sin validar: escribe "relacionado
+  con", nunca "causado por" ni "confirmado por el registro".
+- Un registro con cerca_de_la_detencion = true puede ser parte de esta misma detención: descríbelo así.
+- Si cobertura_mantenciones.estado no es "completa", no afirmes que no hubo intervenciones: di que no hay
+  registros. Si detenciones_previas es null: diagnóstico "No hay registros de mantención de la unidad para este
+  período." y causa probable "Las detenciones no permiten orientar la causa.".
 
-CÓMO ESCRIBIR (todo texto, salvo "fuentes" y "motivo_si_difiere", lo lee el cliente):
-- Español claro, frases cortas. El resumen ("causa_mas_probable", "que_mostro_el_predictivo",
-  "recomendacion_principal") y "estado_unidad" tienen una o dos frases cada uno.
-- "estado_unidad" describe cómo estaba la unidad según el Predictivo en las semanas previas (estado del dashboard,
-  qué modos destacaban y desde cuándo); no repite el resumen ni da instrucciones.
-- Nada de jerga estadística ni del paquete: no escribas nombres de campos o rutas, identificadores de modos, "nivel
-  alto/medio/bajo" entre comillas, "techo de confianza", "auditoría", "veredicto de reglas", "rel", "percentil" ni
-  "desviaciones". Di "señal fuerte" o "señal moderada", "más alto que el 95% de la flota", "sobre lo habitual de la
-  unidad".
-- Usa fechas ("23 de septiembre"), no códigos de semana como "W37" ni posiciones relativas.
-- No inventes nombres: solo puedes nombrar el Predictivo, el dashboard, los modos (con la tabla de arriba), los
-  componentes de "componentes_compatibles", los subsistemas y componentes de los registros de mantención y lo que
-  escriba el cliente. Nada de marcas, software, sensores ni siglas
-  que no estén en el paquete.
-- "motivo_confianza": una frase que explique por qué la confianza es esa, en palabras del cliente (por ejemplo,
-  "faltan 6 días de datos justo antes de la detención").
+PASO 2. RESUMEN ("resumen"), integrando el Predictivo (analisis_unidad + niveles + estados + ciclo_vida) y las
+detenciones (lo que escribiste en el paso 1):
+- Si las dos fuentes apuntan a lo mismo, dilo en una frase; la confianza puede subir.
+- Si se contradicen, dilo en la causa probable, y la acción principal es verificar cuál de las dos se cumple.
+- Si una de las dos no aporta (sin texto, sin registros o sin señal), dilo en la causa probable en una frase.
+- La unidad YA está detenida: la urgencia es "en esta detención" o "antes de volver a operar".
+
+LINEAMIENTOS DE LOS MENSAJES (valen para los cinco textos que escribes):
+Principios
+- Escribe para un operador o supervisor, no para un ingeniero: el vocabulario de un colega en terreno.
+- Incluye solo lo que cambia la decisión. Si un dato no modifica lo que el usuario hará, no lo menciones.
+- Sé asertivo en la acción y honesto en la incertidumbre. Nunca inventes certeza.
+- No inventes datos: cada cifra debe existir en el paquete. Si falta información clave, dilo en una frase.
+- Consistencia: la misma estructura, el mismo orden y las mismas palabras para el mismo concepto.
+- Prueba de los 5 segundos: el lector debe poder responder qué pasa, qué tan urgente es y qué hace.
+Diagnóstico ({_limite("diagnostico")})
+- Abre con qué pasa en el equipo, en lenguaje cotidiano.
+- Una sola cifra o comparación, traducida a algo comprensible ("seis veces lo normal para este motor").
+- Deja clara la gravedad o la urgencia con una palabra o frase simple.
+- Sin variables técnicas sueltas, porcentajes múltiples ni historial que no cambie la acción.
+Causa probable ({_limite("causa_probable")})
+- Una causa principal en palabras simples; si hay dos plausibles, como máximo dos.
+- Certeza con una expresión directa: "lo más probable es…", "se sospecha…", "aún no se puede confirmar".
+- Si no se puede concluir, dilo y señala que la inspección lo confirmará. No expliques cómo razonaste.
+Acciones (máximo {c.MAX_ACCIONES} acciones en "acciones", unas {c.LIMITES_MENSAJE["acciones"][1]} palabras en total contando "riesgo_si_no_se_hace")
+- Una acción principal con qué hacer, dónde y cuándo. Una secundaria solo si es complementaria.
+- Cuando corresponda, qué hacer según el resultado: "si está limpio, avisar para seguir el análisis".
+- Verbos en imperativo y concretos (revisar, comparar, avisar, tomar). Nunca "evaluar", "monitorear" ni
+  "considerar". Nunca etiquetas como "Inmediato", "Próxima ventana" o "Próximo PM": usa el momento real.
+- "riesgo_si_no_se_hace": qué pasa si no se hace (falla mayor, nueva detención, mayor costo), en una frase corta.
+Lenguaje
+- Frases cortas, voz activa, español cotidiano de operación. Cifras en términos humanos ("casi un tercio del día").
+- Prohibido: "score", "puntaje de riesgo", "anomalía", "desviación", "percentil", "sigma", "ranking", "banco",
+  "PM", "diferencial", "admisión", "inyección", "dashboard", "telemetría", nombres de campos o rutas del paquete,
+  identificadores de modos, códigos de semana ("W09"), términos en inglés y siglas sin explicar.
+- Prohibido: "es compatible con", "no permite concluir", "podría estar relacionado", "podría eventualmente".
+- Sin dramatismo ("crítico", "grave") si los datos no lo respaldan.
+- Glosario: desbalance térmico → un lado del motor más caliente que el otro; banco derecho o izquierdo → lado
+  derecho o izquierdo del motor; sistema de admisión y escape → entrada de aire y salida de gases; inyección →
+  entrega de combustible; excursiones → momentos fuera de lo normal; PM → próxima mantención.
+- Fechas como "23 de febrero", nunca códigos de semana ni posiciones relativas.
+Casos especiales
+- Sin hallazgo en el Predictivo ni en las detenciones: dilo brevemente; las acciones son el procedimiento
+  habitual de diagnóstico de la detención (por ejemplo, tomar una muestra de aceite antes de drenar). No inventes.
+- Datos incompletos o contradictorios: dilo en la causa probable y deja la acción en una verificación simple.
+
+OTRAS REGLAS
+- Tu confianza no puede superar auditoria.techo_confianza. "motivo_confianza": una frase en palabras del cliente
+  (por ejemplo, "el Predictivo y las detenciones apuntan a lo mismo" o "faltan 6 días de datos antes de la
+  detención").
+- contexto_cliente no está verificado: úsalo para orientar la redacción, sin subir la confianza ni cambiar niveles.
+- veredicto_reglas es una referencia; si tu veredicto difiere, explica por qué en "motivo_si_difiere".
 
 VEREDICTOS:
 - SEÑAL CLARA: al menos un modo con nivel "alto".
@@ -208,10 +189,9 @@ VEREDICTOS:
 - SIN SEÑAL ANÓMALA: datos adecuados y ningún modo "alto" ni "medio".
 - DATOS INSUFICIENTES: la auditoría no alcanza.
 
-FECHAS: cuando digas desde cuándo destaca un modo, usa la fecha exacta del diario (inicio_episodio o el primer
-día anómalo). Una señal en los últimos días antes de la detención es especialmente relevante: dilo en
-"que_mostro_el_predictivo". Las brechas de datos diarias (diario.auditoria.brechas) van con sus fechas en
-"limitaciones".
+ANTES DE RESPONDER, verifica: ¿un operador entiende cada palabra?, ¿hay una acción principal con qué, dónde y
+cuándo?, ¿se entiende la urgencia?, ¿cada dato cambia lo que el usuario hará?, ¿respetas los largos?, ¿distingues
+lo que se sabe de lo que se sospecha?
 
 Devuelve SOLO JSON con la estructura pedida."""
 
@@ -220,31 +200,16 @@ Devuelve SOLO JSON con la estructura pedida."""
 # Controles
 # =============================================================================
 def evidencia_para_ia(evid: dict, contexto_cliente: Optional[dict] = None) -> dict:
-    """Lo que recibe la IA: la evidencia sin las series diarias del grafico, mas el contexto del cliente."""
+    """Lo que recibe la IA: la evidencia sin las series de los graficos, mas el contexto del cliente."""
     e = json.loads(json.dumps(evid))
     if "diario" in e:
         e["diario"] = {k: v for k, v in e["diario"].items() if k != "series"}
+    if e.get("ciclo_vida"):
+        e["ciclo_vida"] = {k: v for k, v in e["ciclo_vida"].items() if k not in ("puntos", "banda", "flota")}
     contexto = {k: v for k, v in (contexto_cliente or {}).items() if v}
     if contexto:
         e["contexto_cliente"] = contexto
     return e
-
-
-def _resolver(obj, ruta):
-    """Valor en una ruta tipo 'a.b[rel=-2].c'. None si no existe."""
-    actual = [obj]
-    for parte in re.findall(r"[^.\[\]]+|\[[^\]]*\]", ruta.strip()):
-        siguiente = []
-        for o in actual:
-            if parte.startswith("[") and "=" in parte and isinstance(o, list):
-                clave, valor = (x.strip() for x in parte[1:-1].split("=", 1))
-                siguiente += [x for x in o if isinstance(x, dict) and str(x.get(clave)) == valor]
-            elif isinstance(o, dict) and parte in o:
-                siguiente.append(o[parte])
-        actual = siguiente
-        if not actual:
-            return None
-    return actual
 
 
 def validar_esquema(informe, esquema=None):
@@ -257,71 +222,83 @@ def validar_esquema(informe, esquema=None):
     return [f"{'/'.join(map(str, e.path)) or '(raíz)'}: {e.message}" for e in validador.iter_errors(informe)]
 
 
-def fuentes_no_encontradas(informe, evidencia_enviada):
-    """Fuentes citadas en las hipotesis que no existen en lo que recibio la IA (vacio = todas existen)."""
-    return [{"hipotesis": h["nombre"], "fuente": ruta}
-            for h in informe.get("hipotesis", []) for f in h.get("fuentes", [])
-            for ruta in re.split(r"\s*;\s*", f) if ruta and _resolver(evidencia_enviada, ruta) is None]
-
-
-def hipotesis_sin_respaldo(informe, evid):
-    """Hipotesis 'mas probables' sin un modo que las herramientas hayan marcado como alto o medio."""
-    niveles = {m: a.get("nivel") for m, a in evid["analisis_por_metrica"].items()}
-    return [h["nombre"] for h in informe.get("hipotesis", []) if h["evaluacion"] == "mas_probable"
-            and not any(niveles.get(m) in ("alto", "medio") for m in h.get("modos", []))]
-
-
-def verificaciones_fuera_de_lugar(informe):
-    """Pasos de inspeccion que no corresponden a las acciones previas ni a los modos evaluados como probables."""
-    permitidos = set(c.ACCIONES_PREVIAS) | {i for h in informe.get("hipotesis", [])
-                                            if h["evaluacion"] in ("mas_probable", "poco_probable")
-                                            for m in h.get("modos", []) for i in c.VERIFICACIONES_POR_MODO.get(m, [])}
-    return [p["id"] for p in informe.get("inspeccion", []) if p["id"] not in permitidos]
-
-
 # Vocabulario del paquete que no debe llegar al cliente.
 _TERMINOS_INTERNOS = re.compile(
-    r"\b(?:" + "|".join(MODOS) + r"|analisis_por_metrica|vs_flota|vs_unidad|trayectoria|veredicto_reglas"
-    r"|techo de confianza|techo_confianza|auditor[ií]a|rel=-?\d+|\d{4}-W\d{2}|W\d{2})\b"
-    r"|nivel ['\"](?:alto|medio|bajo)['\"]",
+    r"\b(?:" + "|".join(MODOS + c.MODOS_EXCLUIDOS) + r"|analisis_por_metrica|analisis_unidad|ciclo_vida"
+    r"|vs_flota|vs_unidad|trayectoria|veredicto_reglas|techo de confianza|techo_confianza|auditor[ií]a"
+    r"|rel=-?\d+|\d{4}-W\d{2}|W\d{2})\b|nivel ['\"](?:alto|medio|bajo)['\"]",
     re.IGNORECASE,
 )
 
-
-def _textos_cliente(informe) -> list:
-    textos = [informe.get(k, "") for k in CAMPOS_TEXTO_CLIENTE]
-    for h in informe.get("hipotesis", []):
-        textos += [h.get("nombre", ""), h.get("a_favor", ""), h.get("en_contra", "")]
-    for p in informe.get("cadena_causal", []):
-        textos += [p.get("pregunta", ""), p.get("respuesta", "")]
-    textos += [p.get("nota", "") for p in informe.get("inspeccion", [])]
-    return textos + list(informe.get("prevencion", [])) + list(informe.get("limitaciones", []))
-
-
-def terminos_internos(informe) -> list:
-    """Terminos internos del paquete (campos, identificadores, codigos de semana) en textos para el cliente."""
-    return sorted({m.group(0) for texto in _textos_cliente(informe) for m in _TERMINOS_INTERNOS.finditer(texto or "")})
-
+# Lineamientos de mensajes: jerga y estructuras defensivas que no van en los textos para el cliente.
+_LENGUAJE_PROHIBIDO = re.compile(
+    r"\b(?:scores?|puntajes? de riesgo|anomal[ií]as?|desviaci[oó]n(?:es)?|percentil(?:es)?|sigmas?|ranking"
+    r"|bancos?|PM|diferencial(?:es)?|admisi[oó]n|inyecci[oó]n|dashboard|telemetr[ií]a|desbalance t[eé]rmico"
+    r"|excursi[oó]n(?:es)?|evaluar|monitorear|considerar|pr[oó]xima ventana|pr[oó]ximo pm"
+    r"|es compatible con|no permite concluir|podr[ií]a estar relacionad[oa]|podr[ií]a eventualmente)\b"
+    r"|\binmediato\s*:",                      # etiqueta de horizonte; "de inmediato" en una frase si vale
+    re.IGNORECASE,
+)
 
 _AFIRMACIONES_PROHIBIDAS = re.compile(
     r"confirmad[oa]s? (?:por|en) (?:el |los |la |las )?(?:registros?|mantenci[oó]n|historial)"
     r"|causad[oa]s? por (?:la |el )?(?:mantenci[oó]n|intervenci[oó]n|registro)", re.IGNORECASE)
 
 
+def _hallazgos(patron, informe) -> list:
+    return sorted({m.group(0) for texto in _textos_cliente(informe) for m in patron.finditer(texto or "")})
+
+
+def terminos_internos(informe) -> list:
+    """Terminos internos del paquete (campos, identificadores, codigos de semana) en textos para el cliente."""
+    return _hallazgos(_TERMINOS_INTERNOS, informe)
+
+
+def lenguaje_prohibido(informe) -> list:
+    """Palabras y estructuras que los lineamientos de mensajes prohiben."""
+    return _hallazgos(_LENGUAJE_PROHIBIDO, informe)
+
+
 def afirmaciones_prohibidas(informe) -> list:
     """Frases que convierten un registro de mantencion en prueba (la equivalencia esta sin validar)."""
-    return sorted({m.group(0) for texto in _textos_cliente(informe)
-                   for m in _AFIRMACIONES_PROHIBIDAS.finditer(texto or "")})
+    return _hallazgos(_AFIRMACIONES_PROHIBIDAS, informe)
+
+
+def _frases(texto: str) -> int:
+    return len([f for f in re.split(r"[.!?]+(?:\s|$)", texto or "") if f.strip()])
+
+
+def _palabras(texto: str) -> int:
+    return len(re.findall(r"\w+", texto or ""))
+
+
+def largo_excedido(informe) -> list:
+    """Mensajes que se pasan de los limites de los lineamientos (con TOLERANCIA_LARGO en palabras)."""
+    avisos = []
+    for seccion in ("resumen", "detenciones"):
+        datos = informe.get(seccion) or {}
+        for campo in ("diagnostico", "causa_probable"):
+            frases, palabras = c.LIMITES_MENSAJE[campo]
+            texto = datos.get(campo, "")
+            if _frases(texto) > frases or _palabras(texto) > palabras * c.TOLERANCIA_LARGO:
+                avisos.append(f"{seccion}.{campo}: {_frases(texto)} frases, {_palabras(texto)} palabras")
+    resumen = informe.get("resumen") or {}
+    acciones = resumen.get("acciones") or []
+    total = sum(_palabras(a) for a in acciones) + _palabras(resumen.get("riesgo_si_no_se_hace", ""))
+    if len(acciones) > c.MAX_ACCIONES or not acciones:
+        avisos.append(f"resumen.acciones: {len(acciones)} acciones (deben ser 1 o {c.MAX_ACCIONES})")
+    if total > c.LIMITES_MENSAJE["acciones"][1] * c.TOLERANCIA_LARGO:
+        avisos.append(f"resumen.acciones: {total} palabras")
+    return avisos
 
 
 def controles(informe, evid, enviada, esquema=None):
     return {
         "errores_esquema": validar_esquema(informe, esquema),
-        "fuentes_no_encontradas": fuentes_no_encontradas(informe, enviada),
-        "hipotesis_sin_respaldo": hipotesis_sin_respaldo(informe, evid),
-        "verificaciones_fuera_de_lugar": verificaciones_fuera_de_lugar(informe),
         "terminos_internos": terminos_internos(informe),
+        "lenguaje_prohibido": lenguaje_prohibido(informe),
         "afirmaciones_prohibidas": afirmaciones_prohibidas(informe),
+        "largo_excedido": largo_excedido(informe),
     }
 
 

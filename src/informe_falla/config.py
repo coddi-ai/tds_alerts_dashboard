@@ -9,6 +9,15 @@ variable de entorno (en .env o en docker-compose.yml) sin tocar codigo:
     INFORME_FALLA_TEMPERATURE           temperatura; vacio = no se envia (el modelo usa la suya)
     INFORME_FALLA_SEED                  semilla para respuestas mas repetibles; vacio = no se envia
     INFORME_FALLA_OUTPUT_DIR            carpeta donde quedan los PDF y sus registros JSON
+    INFORME_FALLA_ORIGEN                de donde se leen los datos del Predictivo: "local" (por defecto, la copia
+                                        en data/ que lee el dashboard) o "s3" (el origen; ver fuentes.py)
+    INFORME_FALLA_DATA_DIR              raiz de la copia local de la capa golden (data/{tecnica}/golden/...)
+    ERS_S3_BUCKET                       bucket de la capa golden en S3 (el mismo que usa el pipeline del Predictivo)
+    INFORME_FALLA_S3_PREFIX             carpeta de la capa golden dentro del bucket (default "MultiTechnique Alerts")
+    INFORME_FALLA_S3_REGION             region del bucket; vacio = la de AWS_REGION o AWS_DEFAULT_REGION, y si
+                                        tampoco estan, se consulta al bucket (fuentes.py)
+                                        Credenciales de S3: las de AWS del entorno (AWS_ACCESS_KEY_ID y
+                                        AWS_SECRET_ACCESS_KEY, o el rol de la maquina).
     INFORME_FALLA_DATA_CACHE_SECONDS    vida del historial del Predictivo ya cargado, por cliente
     INFORME_FALLA_MAX_WORKERS           informes que se generan a la vez
     INFORME_FALLA_JOB_TTL_SECONDS       cuanto se recuerda un trabajo terminado en memoria
@@ -45,6 +54,11 @@ class InformeSettings:
     temperature: Optional[float] = None
     seed: Optional[int] = None
     output_dir: Path = PROJECT_ROOT / "outputs" / "informe_falla"
+    data_dir: Path = PROJECT_ROOT / "data"
+    origen: str = "local"
+    s3_bucket: Optional[str] = None
+    s3_prefix: str = "MultiTechnique Alerts"
+    s3_region: Optional[str] = None
     data_cache_seconds: int = 900
     max_workers: int = 2
     job_ttl_seconds: int = 6 * 3600
@@ -60,12 +74,24 @@ class InformeSettings:
             temperature=_env_opcional("INFORME_FALLA_TEMPERATURE", float),
             seed=_env_opcional("INFORME_FALLA_SEED", int),
             output_dir=Path(_env_str("INFORME_FALLA_OUTPUT_DIR") or defaults["output_dir"]),
+            data_dir=Path(_env_str("INFORME_FALLA_DATA_DIR") or defaults["data_dir"]),
+            origen=_origen(_env_str("INFORME_FALLA_ORIGEN") or defaults["origen"]),
+            s3_bucket=_env_str("ERS_S3_BUCKET"),
+            s3_prefix=_env_str("INFORME_FALLA_S3_PREFIX") or defaults["s3_prefix"],
+            s3_region=_env_str("INFORME_FALLA_S3_REGION") or _env_str("AWS_REGION") or _env_str("AWS_DEFAULT_REGION"),
             data_cache_seconds=int(_env_str("INFORME_FALLA_DATA_CACHE_SECONDS") or defaults["data_cache_seconds"]),
             max_workers=int(_env_str("INFORME_FALLA_MAX_WORKERS") or defaults["max_workers"]),
             job_ttl_seconds=int(_env_str("INFORME_FALLA_JOB_TTL_SECONDS") or defaults["job_ttl_seconds"]),
             validar_datos=_env_bool("INFORME_FALLA_VALIDAR_DATOS", defaults["validar_datos"]),
             formulario_completo=_env_bool("INFORME_FALLA_FORMULARIO_COMPLETO", defaults["formulario_completo"]),
         )
+
+
+def _origen(valor: str) -> str:
+    valor = valor.lower()
+    if valor not in ("local", "s3"):
+        raise ValueError(f'INFORME_FALLA_ORIGEN debe ser "local" o "s3", no "{valor}"')
+    return valor
 
 
 def _env_bool(name: str, default: bool) -> bool:

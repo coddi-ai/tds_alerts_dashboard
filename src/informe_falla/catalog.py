@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-VERSION = 2   # 1 = score semanal; 2 = + score diario (risk_scores)
+VERSION = 3   # 1 = score semanal; 2 = + score diario (risk_scores); 3 = formato informe preliminar de fallas
 
 ZONA_HORARIA = "America/Santiago"
 
@@ -80,21 +80,29 @@ COMPONENTES_POR_MODO = {
     "turbocharger_risk": ["turbocargadores", "postenfriador (aftercooler)", "admisión y tubo de escape"],
     "combustion_risk": ["inyectores", "bomba y filtros de combustible", "dosificación de combustible"],
     "abrasive_wear_risk": ["filtros y limpiador de aire", "ductos de admisión (ingreso de polvo)"],
+    # Modo nuevo de Capstone (contrato v2.8): etiqueta y señales por confirmar con el equipo del Predictivo.
+    "accumulated_wear_risk": ["cojinetes de bancada y de biela", "anillos, pistones y camisas",
+                              "metales de desgaste en el aceite"],
 }
 MODOS = ["abrasive_wear_risk", "combustion_risk", "thermal_imbalance_risk", "turbocharger_risk",
          "oil_degradation_risk", "coolant_contamination_risk", "lubrication_failure_risk",
-         "bearing_wear_risk", "blowby_risk"]
+         "bearing_wear_risk", "blowby_risk", "accumulated_wear_risk"]
+# early_oil_change_risk (Capstone, contrato v2.8) no se analiza ni se muestra en el informe: es un aviso de
+# cambio de aceite, no un modo de falla. Un modo de esta lista que el cliente no publica queda "sin_datos"
+# y el informe no lo muestra (CDA no tiene accumulated_wear_risk).
+MODOS_EXCLUIDOS = ["early_oil_change_risk"]
 
 NOMBRE_MODO = {
     "abrasive_wear_risk": "Desgaste abrasivo",
     "combustion_risk": "Combustión",
-    "thermal_imbalance_risk": "Desbalance térmico",
+    "thermal_imbalance_risk": "Temperatura dispareja entre lados del motor",
     "turbocharger_risk": "Turbocargador",
     "oil_degradation_risk": "Degradación del aceite",
     "coolant_contamination_risk": "Contaminación por refrigerante",
     "lubrication_failure_risk": "Falla de lubricación",
     "bearing_wear_risk": "Desgaste de cojinetes",
-    "blowby_risk": "Blow-by",
+    "blowby_risk": "Paso de gases al cárter",
+    "accumulated_wear_risk": "Desgaste acumulado",
 }
 
 # --- Catalogo de verificaciones: id -> (accion, que buscar, tipo).
@@ -170,6 +178,7 @@ VERIFICACIONES_POR_MODO = {
     "turbocharger_risk": ["TUR-1", "TUR-2", "TUR-3", "TUR-4"],
     "combustion_risk": ["COM-1", "COM-2", "TER-2", "TER-4"],
     "abrasive_wear_risk": ["ABR-1", "ABR-2", "ABR-3"],
+    "accumulated_wear_risk": ["COJ-2", "BLW-1", "BLW-3", "COJ-5"],   # propuesta: modo por confirmar
 }
 
 assert set(MODOS) == set(COMPONENTES_POR_MODO) == set(NOMBRE_MODO) == set(VERIFICACIONES_POR_MODO), \
@@ -207,6 +216,7 @@ SUBSISTEMAS_POR_MODO = {
         "thermal_imbalance_risk": ["Sistema de Combustible", "Sistema de entrada y salida de Aire"],
         "turbocharger_risk": ["Sistema de entrada y salida de Aire"],
         "abrasive_wear_risk": ["Sistema de entrada y salida de Aire", "Sistema de Lubricación"],
+        "accumulated_wear_risk": ["Sistema de Motor Básico", "Sistema de Lubricación"],
     },
 }
 
@@ -228,3 +238,21 @@ COMPONENTES_CLAVE_POR_MODO = {
 SISTEMAS_MANTENCION = {
     "motor": {"motor", "sistema motor", "sistema de motor", "sistema de motor básico"},
 }
+
+
+# =============================================================================
+# Mensajes para el cliente (lineamientos del Analisis Inteligente)
+# =============================================================================
+# Limites de largo por mensaje: (maximo de frases, palabras sugeridas). Son sugerencias para calibrar:
+# el control de agent.py avisa recien cuando se pasan las frases o las palabras en mas de TOLERANCIA_LARGO.
+LIMITES_MENSAJE = {"diagnostico": (2, 35), "causa_probable": (2, 30), "acciones": (2, 45)}
+MAX_ACCIONES = 2
+TOLERANCIA_LARGO = 1.25
+
+# Analisis del Predictivo por unidad (unit_failure_analisis): se publica una vez por semana.
+DIAS_ANALISIS_VIEJO = 14        # mas antiguo que esto respecto de la detencion: se advierte junto al texto
+
+# Curva acumulada (cumulative_risk_curve)
+HORAS_MIN_CURVA = 1500          # bajo esto la curva no se evalua (MIN_TRAMO_HORAS upstream)
+MAX_CURVAS_FLOTA = 40           # curvas de la flota que se dibujan de contexto
+MAX_PUNTOS_CURVA = 60           # puntos por curva en el grafico

@@ -6,7 +6,10 @@ cada solicitud corre en un hilo y la vista consulta su estado (`iniciar` / `esta
 trabajos viven en memoria del proceso: el dashboard corre con un solo worker de gunicorn
 (Dockerfile). Con varios workers habria que moverlos a un almacenamiento compartido.
 
-La configuracion (modelo, carpeta de salida, caches, hilos) esta en src/informe_falla/config.py.
+Fuentes: unit_status_summary y risk_scores (src/data/predictive_v2, o S3 con INFORME_FALLA_ORIGEN=s3),
+unit_failure_analisis (analisis_unidad.py), cumulative_risk_curve (curva.py) y las mantenciones
+(mantenciones.py). Origen local o S3: fuentes.py.
+La configuracion (modelo, carpeta de salida y de datos, caches, hilos) esta en src/informe_falla/config.py.
 Cada informe queda en la carpeta de salida (por defecto outputs/informe_falla) como
 `{cliente}/{id}.pdf` mas `{cliente}/{id}.json` con el registro completo: la solicitud
 (sin las imagenes), la evidencia, lo que recibio la IA, su respuesta y los controles.
@@ -31,7 +34,7 @@ from src.informe_falla import catalog as c
 from src.informe_falla.agent import PROMPT_VERSION, LlmFn, correr_agente, openai_llm
 from src.informe_falla.config import get_informe_settings, perfil_cliente
 from src.informe_falla.evidence import armar_evidencia, preparar_risk, preparar_status
-from src.informe_falla import mantenciones
+from src.informe_falla import analisis_unidad, curva, fuentes, mantenciones
 from src.informe_falla.pdf import html_a_pdf, pdf_disponible
 from src.informe_falla.report_html import documento, numero_informe, problemas
 from src.utils.logger import get_logger
@@ -49,6 +52,7 @@ ERROR_NO_API_KEY = "no_api_key"
 ERROR_NO_PDF = "no_pdf"
 ERROR_SYSTEM = "unsupported_system"
 ERROR_NO_DATA = "no_data"
+ERROR_SOURCE = "data_source"        # no se pudo leer el origen de los datos (p. ej. S3 sin bucket o sin credenciales)
 ERROR_UNIT = "unit_not_found"
 ERROR_INSUFFICIENT = "insufficient_data"
 ERROR_LLM = "llm"
@@ -123,22 +127,45 @@ def resolver_unidad(unidad: str, *tablas) -> Optional[str]:
     return None
 
 
-# Historial del Predictivo ya preparado, por cliente. Se publica una vez por semana: leer las
-# ~150 particiones de cada tabla en cada informe es lo mas lento del flujo despues de la IA.
+# Historial del Predictivo ya preparado. Se publica una vez por semana: leer las particiones
+# de cada tabla en cada informe es lo mas lento del flujo despues de la IA.
 _FUENTES: dict = {}
 _FUENTES_LOCK = threading.Lock()
 
 
-def cargar_fuentes(cliente: str):
-    """(status, risk) del motor del cliente, listos para evidence.armar_evidencia."""
+def _cargar_o_error(cliente: str, fecha: Optional[str]):
+    """cargar_fuentes, con los problemas del origen (configuracion, credenciales, red) como InformeError."""
+    try:
+        return cargar_fuentes(cliente, fecha)
+    except (RuntimeError, OSError) as exc:
+        raise InformeError(ERROR_SOURCE, f"{type(exc).__name__}: {exc}", {"origen": fuentes.origen()}) from exc
+
+
+def cargar_fuentes(cliente: str, fecha: Optional[str] = None):
+    """(status, risk) del motor del cliente, listos para evidence.armar_evidencia.
+
+    Origen local (INFORME_FALLA_ORIGEN=local, por defecto): toda la historia, con los lectores del
+    dashboard, en cache por cliente. Origen S3: solo las semanas que usa el informe de esa fecha
+    (fuentes.semanas_del_informe), en cache por cliente y semana.
+    """
     cliente = cliente.lower()
+    if fuentes.origen() == fuentes.ORIGEN_S3:
+        desde, hasta = fuentes.semanas_del_informe(fecha or datetime.now().date().isoformat())
+        clave = (cliente, fuentes.ORIGEN_S3, desde.isoformat())
+    else:
+        clave = (cliente, fuentes.ORIGEN_LOCAL)
     with _FUENTES_LOCK:
-        guardado = _FUENTES.get(cliente)
+        guardado = _FUENTES.get(clave)
         if guardado and time.time() - guardado[0] < get_informe_settings().data_cache_seconds:
             return guardado[1], guardado[2]
-        status = preparar_status(load_unit_status_history(cliente, c.COMPONENTE))
-        risk = preparar_risk(load_risk_scores_history(cliente, c.COMPONENTE))
-        _FUENTES[cliente] = (time.time(), status, risk)
+        if clave[1] == fuentes.ORIGEN_S3:
+            status_crudo = fuentes.leer_particiones(cliente, "unit_status_summary", desde, hasta)
+            risk_crudo = fuentes.leer_particiones(cliente, "risk_scores", desde, hasta)
+        else:
+            status_crudo = load_unit_status_history(cliente, c.COMPONENTE)
+            risk_crudo = load_risk_scores_history(cliente, c.COMPONENTE)
+        status, risk = preparar_status(status_crudo), preparar_risk(risk_crudo)
+        _FUENTES[clave] = (time.time(), status, risk)
         return status, risk
 
 
@@ -196,7 +223,10 @@ def disponibilidad(evid: dict, unidad: str, status, risk) -> dict:
 
 def validar_disponibilidad(cliente: str, unidad: str, fecha: str) -> dict:
     """Validador previo (sin IA): {"ok": bool, "motivo": ..., cifras}. La vista lo llama al elegir unidad y fecha."""
-    status, risk = cargar_fuentes(cliente)
+    try:
+        status, risk = _cargar_o_error(cliente, fecha)
+    except InformeError as exc:
+        return {"ok": False, "motivo": exc.motivo, "detalle": str(exc)}
     if status.empty and risk.empty:
         return {"ok": False, "motivo": ERROR_NO_DATA}
     nombre = resolver_unidad(unidad, status, risk)
@@ -207,6 +237,27 @@ def validar_disponibilidad(cliente: str, unidad: str, fecha: str) -> dict:
     # Las mantenciones no bloquean el informe: solo se informa su cobertura.
     resultado["mantenciones"] = mantenciones.cobertura(cliente, unidad, fecha)
     return resultado
+
+
+def predictivo_de_la_unidad(cliente: str, unidad: str, fecha: str) -> dict:
+    """analisis_unidad (unit_failure_analisis) y ciclo_vida (cumulative_risk_curve) para la evidencia.
+
+    Ninguna de las dos bloquea el informe: si una tabla falta o no se puede leer, el bloque queda como
+    no disponible y el informe lo dice.
+    """
+    salida = {}
+    try:
+        salida["analisis_unidad"] = analisis_unidad.analisis_unidad(analisis_unidad.cargar(cliente), unidad, fecha)
+    except Exception as exc:
+        logger.warning(f"Informe preliminar {cliente}/{unidad}: analisis por unidad no disponible ({type(exc).__name__}: {exc})")
+        salida["analisis_unidad"] = {"disponible": False, "motivo": "error_de_lectura"}
+    try:
+        tabla, meta = curva.cargar(cliente, fecha)
+        salida["ciclo_vida"] = curva.ciclo_vida(tabla, meta, unidad, fecha)
+    except Exception as exc:
+        logger.warning(f"Informe preliminar {cliente}/{unidad}: curva acumulada no disponible ({type(exc).__name__}: {exc})")
+        salida["ciclo_vida"] = {"disponible": False, "motivo": "error_de_lectura"}
+    return salida
 
 
 def _imagenes(request: dict) -> list:
@@ -225,7 +276,7 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         raise InformeError(ERROR_NO_PDF)
 
     perfil = perfil_cliente(cliente)
-    status, risk = cargar_fuentes(cliente)
+    status, risk = _cargar_o_error(cliente, request["event_date"])
     if status.empty and risk.empty:
         raise InformeError(ERROR_NO_DATA)
     unidad = resolver_unidad(request["unit"], status, risk)
@@ -239,6 +290,8 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         datos = disponibilidad(evid, unidad, status, risk)
         if not datos["ok"]:
             raise InformeError(ERROR_INSUFFICIENT, datos=datos)
+    # Seccion Predictivo: el diagnostico publicado para la unidad y el estado del ciclo de vida (sin IA).
+    evid.update(predictivo_de_la_unidad(cliente, unidad, evid["consulta"]["fecha"]))
     # Intervenciones de mantencion previas (sin IA): cobertura, tabla y antecedentes.
     destacados = [r["modo"] for r in evid["ranking_modos"] if r["nivel"] in ("alto", "medio")]
     evid.update(mantenciones.antecedentes_mantencion(cliente, unidad, evid["consulta"]["fecha"],
