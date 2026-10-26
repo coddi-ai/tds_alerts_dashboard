@@ -413,6 +413,8 @@ def _paso_redondo(maximo: float, marcas: int = 5) -> float:
 # Colores del grafico del dashboard: fondo por zona y linea por estado de cada unidad
 FONDO_CURVA = {"Normal": "#DDEBE4", "Alerta": "#FBEFC9", "Anormal": "#F5CFCF"}
 LINEA_CURVA = {"Normal": "#3F9C76", "Alerta": "#E2B23C", "Anormal": "#D2544E"}
+# El resto de la flota va en gris: solo la unidad del informe lleva el color de su estado
+LINEA_FLOTA = "#8E959D"
 TINTA_ZONA = {"Normal": "#1F5E44", "Alerta": "#7A5A00", "Anormal": "#8C2A24"}
 
 
@@ -436,8 +438,8 @@ def _etiquetas_libres(candidatos, ocupado):
 def _grafico_curva(cv: dict, unidad: str) -> str:
     """
     Mismo lenguaje que el grafico del dashboard: fondo verde/amarillo/rojo con la banda de la flota (linea
-    de alerta segmentada, umbral punteado), cada motor con el color de su estado y un punto al final con su
-    nombre. La unidad del informe va mas gruesa y con su nombre destacado; las etiquetas que chocan se omiten.
+    de alerta segmentada, umbral punteado), cada motor en gris con un punto al final con su nombre. La unidad
+    del informe va con el color de su estado, mas gruesa y con su nombre destacado; las etiquetas que chocan se omiten.
     """
     puntos, banda = cv.get("puntos") or [], cv.get("banda") or []
     flota = [o for o in (cv.get("flota") or []) if isinstance(o, dict) and o.get("puntos")]
@@ -459,7 +461,7 @@ def _grafico_curva(cv: dict, unidad: str) -> str:
         return " ".join(f"{x(h):.1f},{y(v):.1f}" for h, v in serie)
 
     s = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Riesgo acumulado de los motores de la flota según '
-         f'sus horas, coloreados por estado, con la banda de referencia de la flota. {_e(unidad)} destacada.">',
+         f'sus horas, con la banda de referencia de la flota. {_e(unidad)} destacada.">',
          f'<rect x="{X0}" y="{Y0}" width="{X1 - X0}" height="{Y1 - Y0}" fill="{FONDO_CURVA["Normal"]}"/>']
 
     zonas = []
@@ -496,18 +498,17 @@ def _grafico_curva(cv: dict, unidad: str) -> str:
     s.append(f'<text x="18" y="{(Y0 + Y1) / 2:.0f}" text-anchor="middle" font-size="13" fill="{TINTA_2}" '
              f'transform="rotate(-90 18 {(Y0 + Y1) / 2:.0f})">Riesgo acumulado</text>')
 
-    # Flota: linea y punto del color de su estado
+    # Flota: linea y punto en gris, para que resalte la unidad del informe
     radio = {"Normal": 3.6, "Alerta": 4.6, "Anormal": 5.6}
     finales = []
     for o in flota:
-        col = LINEA_CURVA.get(o.get("estado"), LINEA_CURVA["Normal"])
-        s.append(f'<polyline points="{linea(o["puntos"])}" fill="none" stroke="{col}" stroke-width="1.5" '
-                 f'stroke-linejoin="round"/>')
+        s.append(f'<polyline points="{linea(o["puntos"])}" fill="none" stroke="{LINEA_FLOTA}" stroke-width="1.3" '
+                 f'stroke-opacity="0.75" stroke-linejoin="round"/>')
         hf, vf = o["puntos"][-1]
         finales.append((o.get("estado"), x(hf), y(vf), o.get("unidad") or ""))
     for est, cx, cy, _ in finales:
         s.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{radio.get(est, 3.6)}" '
-                 f'fill="{LINEA_CURVA.get(est, LINEA_CURVA["Normal"])}" stroke="#FFFFFF" stroke-width="0.8"/>')
+                 f'fill="{LINEA_FLOTA}" stroke="#FFFFFF" stroke-width="0.8"/>')
 
     # Unidad del informe: mas gruesa, con borde blanco y punto grande
     estado = cv.get("estado_final") if cv.get("evaluable") else "Normal"
@@ -587,10 +588,10 @@ def _bloque_ciclo_vida(evid) -> str:
     <p class="tenue">Riesgo acumulado de cada motor de la flota según sus horas de uso. La unidad {_e(unidad)} va
       destacada. Se evalúa desde las {_num(c.HORAS_MIN_CURVA, 0)} horas del motor.</p>
     <div class="tarjeta-int">{_grafico_curva(cv, unidad)}
-      <p class="nota">Color de la línea y del punto según el estado de cada unidad: verde Normal, amarillo Alerta,
-        rojo Anormal. El fondo es la referencia de la flota (verde dentro de lo habitual, amarillo sobre lo habitual,
-        rojo muy sobre lo habitual) y puede no coincidir con el estado, que compara el último tramo de cada motor
-        contra la flota. Donde hay muchas unidades juntas se omiten algunas etiquetas.</p>
+      <p class="nota">En gris, el resto de la flota. La línea de {_e(unidad)} lleva el color de su estado: verde
+        Normal, amarillo Alerta, rojo Anormal. El fondo es la referencia de la flota (verde dentro de lo habitual,
+        amarillo sobre lo habitual, rojo muy sobre lo habitual) y puede no coincidir con el estado, que compara el
+        último tramo del motor contra la flota. Donde hay muchas unidades juntas se omiten algunas etiquetas.</p>
     </div>
     {aviso}
     <div class="cajas cuatro">
