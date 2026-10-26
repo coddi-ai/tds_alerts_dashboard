@@ -22,7 +22,7 @@ from src.informe_falla.catalog import MODOS, NOMBRE_MODO
 from src.informe_falla.config import get_informe_settings
 
 # Cambia cada vez que cambian el prompt o el esquema; queda en el registro de cada informe.
-PROMPT_VERSION = "3.0"
+PROMPT_VERSION = "3.1"
 
 # llm_fn(system, user, esquema) -> str con la respuesta JSON del modelo
 LlmFn = Callable[[str, str, dict], str]
@@ -102,9 +102,17 @@ DATOS (calculados por herramientas; tú no calculas nada):
   "bajo", "ninguno" o "sin_datos"), comparado con lo habitual de la propia unidad. "nivel" es el mayor entre el
   semanal y el diario. diario.analisis_por_modo.<modo> trae los días anómalos y el inicio del episodio.
 - trayectoria: el estado semanal de la unidad ("normal", "alerta", "anormal") en los 3 meses previos.
-- ciclo_vida: la curva acumulada del motor frente a la flota. estado_final ("Normal", "Alerta", "Anormal"),
-  evaluable (false = bajo {c.HORAS_MIN_CURVA} horas: "Normal" no significa sano), fuera_de_normal_desde,
-  horas_motor.
+- ciclo_vida: el estado general del motor según sus horas de uso, comparado con los demás motores de la flota
+  con las mismas horas. No es el modo "desgaste acumulado": no los mezcles. estado_final ("Normal", "Alerta", "Anormal"), evaluable (false = bajo
+  {c.HORAS_MIN_CURVA} horas: "Normal" no significa sano), fuera_de_normal_desde, horas_motor, fecha_ultimo_dato.
+  Cómo usarlo en los textos:
+  · Nunca lo nombres como gráfico ni como herramienta: di "el estado general del motor" o "para sus horas de
+    uso". Ejemplos: "para sus horas de uso, el motor ya estaba por sobre lo habitual de la flota";
+    "para sus horas de uso, el estado general del motor era normal".
+  · Menciónalo solo si cambia la decisión: "Alerta" o "Anormal" refuerza la causa probable o la urgencia;
+    "Normal" solo vale la pena decirlo si es lo único que contradice a las otras señales.
+  · Si fecha_ultimo_dato es anterior a las señales del último mes, o si evaluable es false, no lo menciones:
+    describe un momento anterior y no aporta a esta detención. Nunca escribas su fecha.
 - veredicto_reglas: el veredicto determinista (referencia).
 - Mantenciones (registros ANTERIORES a la detención; no son hallazgos de esta detención):
   cobertura_mantenciones.estado ("completa", "parcial", "unidad_sin_registros", "fuera_de_cobertura",
@@ -165,6 +173,7 @@ Lenguaje
 - Prohibido: "score", "puntaje de riesgo", "anomalía", "desviación", "percentil", "sigma", "ranking", "banco",
   "PM", "diferencial", "admisión", "inyección", "dashboard", "telemetría", nombres de campos o rutas del paquete,
   identificadores de modos, códigos de semana ("W09"), términos en inglés y siglas sin explicar.
+- Prohibido: "curva", "curva acumulada", "ciclo de vida", "riesgo acumulado", "zona normal/alerta/anormal".
 - Prohibido: "es compatible con", "no permite concluir", "podría estar relacionado", "podría eventualmente".
 - Sin dramatismo ("crítico", "grave") si los datos no lo respaldan.
 - Glosario: desbalance térmico → un lado del motor más caliente que el otro; banco derecho o izquierdo → lado
@@ -233,6 +242,7 @@ _TERMINOS_INTERNOS = re.compile(
 # Lineamientos de mensajes: jerga y estructuras defensivas que no van en los textos para el cliente.
 _LENGUAJE_PROHIBIDO = re.compile(
     r"\b(?:scores?|puntajes? de riesgo|anomal[ií]as?|desviaci[oó]n(?:es)?|percentil(?:es)?|sigmas?|ranking"
+    r"|curvas?(?: acumuladas?)?|ciclo de vida|riesgo acumulado|zonas? (?:normal|de alerta|alerta|anormal)"
     r"|bancos?|PM|diferencial(?:es)?|admisi[oó]n|inyecci[oó]n|dashboard|telemetr[ií]a|desbalance t[eé]rmico"
     r"|excursi[oó]n(?:es)?|evaluar|monitorear|considerar|pr[oó]xima ventana|pr[oó]ximo pm"
     r"|es compatible con|no permite concluir|podr[ií]a estar relacionad[oa]|podr[ií]a eventualmente)\b"

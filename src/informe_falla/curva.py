@@ -149,17 +149,24 @@ def ciclo_vida(tabla: pd.DataFrame, meta: dict, unidad: str, fecha) -> dict:
         ciclo = _ciclo_a_la_fecha(filas)
         fin = ciclo.iloc[-1]
         resumen["total"] += 1
-        if bool(fin["evaluable"]) and str(fin["estado"]) in ZONAS_NO_NORMALES:
+        eval_fin = bool(fin["evaluable"]) if pd.notna(fin["evaluable"]) else True
+        estado_fin = str(fin["estado"]) if pd.notna(fin["estado"]) else "Normal"
+        if eval_fin and estado_fin in ZONAS_NO_NORMALES:
             resumen["alerta_o_anormal"] += 1
-        otras.append(_muestrear(ciclo, c.MAX_PUNTOS_CURVA))
+        serie = _muestrear(ciclo, c.MAX_PUNTOS_CURVA)
+        if serie:
+            # Como en el grafico del dashboard: cada motor con su nombre y su estado (color de linea y punto)
+            otras.append({"unidad": str(fin["Unit"]), "estado": estado_fin if eval_fin else "Normal",
+                          "puntos": serie})
     resumen["total"] += 1                    # la unidad analizada cuenta en la flota
     if evaluable and estado in ZONAS_NO_NORMALES:
         resumen["alerta_o_anormal"] += 1
-    paso = max(1, len(otras) // c.MAX_CURVAS_FLOTA)
-    flota = [o for o in otras[::paso] if o][:c.MAX_CURVAS_FLOTA]
+    # Si hay que recortar, primero entran las unidades en alerta o anormal
+    otras.sort(key=lambda o: o["estado"] not in ZONAS_NO_NORMALES)
+    flota = otras[:c.MAX_CURVAS_FLOTA]
 
     puntos = _muestrear(curva, c.MAX_PUNTOS_CURVA * 2)
-    horas_max = max([p[0] for o in flota for p in o] + [p[0] for p in puntos] + [1.0])
+    horas_max = max([p[0] for o in flota for p in o["puntos"]] + [p[0] for p in puntos] + [1.0])
     config = meta.get("config") or {}
     return {
         "disponible": True,
@@ -175,7 +182,7 @@ def ciclo_vida(tabla: pd.DataFrame, meta: dict, unidad: str, fecha) -> dict:
         # Solo para el grafico (no van a la IA):
         "puntos": puntos,
         "banda": _banda(previas, horas_max * 1.02, float(config.get("K_ALERTA", 1.0)), float(config.get("K_SIGMA", 2.0))),
-        "flota": flota,
+        "flota": flota,                      # [{"unidad", "estado", "puntos"}]
     }
 
 

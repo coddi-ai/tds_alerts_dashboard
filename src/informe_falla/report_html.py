@@ -346,7 +346,10 @@ def _bloque_estado_actual(evid) -> str:
 # =============================================================================
 def _tabla_modos(evid) -> str:
     filas = []
-    for r in evid.get("ranking_modos", []):
+    graficados = [m for m in _modos_graficados(evid) if m in _destacados(evid)]
+    orden = sorted(evid.get("ranking_modos", []),       # primero los modos graficados, en el mismo orden
+                   key=lambda r: graficados.index(r["modo"]) if r["modo"] in graficados else len(graficados))
+    for r in orden:
         if r["nivel"] == "sin_datos" or r["modo"] not in NOMBRE_MODO:     # el cliente no publica ese modo
             continue
         if r["nivel"] in ("alto", "medio"):
@@ -362,20 +365,31 @@ def _tabla_modos(evid) -> str:
             '<th scope="col">Desde</th></tr></thead><tbody>' + "".join(filas) + "</tbody></table>")
 
 
+def _modos_graficados(evid) -> list:
+    """Un grafico por cada modo "Sobre lo habitual" (alto o medio), el principal primero. Si no hay
+    ninguno, el modo con alza leve (si existe), para que la seccion muestre algo de contexto."""
+    destacados = _destacados(evid)
+    principal = _modo_principal(evid)
+    if not destacados:
+        return [principal] if principal else []
+    return sorted(destacados, key=lambda m: m != principal)
+
+
 def _bloque_puntajes(evid) -> str:
-    modo = _modo_principal(evid)
+    modos = _modos_graficados(evid)
     hay_diario = bool((evid.get("diario") or {}).get("analisis_por_modo"))
-    if modo:
+    if modos:
         unidad_t = "días" if hay_diario else "semanas"
-        grafico = (f'<div class="tarjeta-int"><div class="fuerte">{_e(NOMBRE_MODO[modo])}</div>{_grafico(evid, modo)}'
-                   f'<p class="nota">Puntos azules: {unidad_t} sobre lo habitual de la unidad.</p></div>')
+        graficos = "".join(f'<div class="tarjeta-int"><div class="fuerte">{_e(NOMBRE_MODO[m])}</div>{_grafico(evid, m)}</div>'
+                           for m in modos)
+        graficos += f'<p class="nota">Puntos azules: {unidad_t} sobre lo habitual de la unidad.</p>'
     else:
-        grafico = ('<div class="tarjeta-int"><p>Ningún modo de falla se salió de lo habitual de la unidad en el '
-                   'período analizado.</p></div>')
+        graficos = ('<div class="tarjeta-int"><p>Ningún modo de falla se salió de lo habitual de la unidad en el '
+                    'período analizado.</p></div>')
     return f"""
-  <div class="sub separada">
+  <div class="sub separada puntajes">
     <div class="sub-cabeza"><h3>Puntajes de riesgo por modo de falla</h3><span class="fuente">Fuente: puntajes de riesgo del Predictivo</span></div>
-    <div class="dos-col grafico-tabla">{grafico}<div>{_tabla_modos(evid)}</div></div>
+    <div class="dos-col grafico-tabla"><div class="graficos">{graficos}</div><div>{_tabla_modos(evid)}</div></div>
   </div>"""
 
 
@@ -396,59 +410,153 @@ def _paso_redondo(maximo: float, marcas: int = 5) -> float:
     return next(m * potencia for m in (1, 2, 2.5, 5, 10) if m * potencia >= crudo)
 
 
+# Colores del grafico del dashboard: fondo por zona y linea por estado de cada unidad
+FONDO_CURVA = {"Normal": "#DDEBE4", "Alerta": "#FBEFC9", "Anormal": "#F5CFCF"}
+LINEA_CURVA = {"Normal": "#3F9C76", "Alerta": "#E2B23C", "Anormal": "#D2544E"}
+TINTA_ZONA = {"Normal": "#1F5E44", "Alerta": "#7A5A00", "Anormal": "#8C2A24"}
+
+
+def _k(v: float) -> str:
+    return f"{v / 1000:.0f}k" if v >= 1000 else f"{v:.0f}"
+
+
+def _etiquetas_libres(candidatos, ocupado):
+    """Coloca etiquetas por prioridad y omite las que chocan con otra (como el dashboard)."""
+    puestas = []
+    for x, y, texto, extra in candidatos:
+        ancho, alto = 6.2 * len(texto) + 6, 14
+        caja = (x + 7, y - alto / 2, x + 7 + ancho, y + alto / 2)
+        if any(not (caja[2] < o[0] or caja[0] > o[2] or caja[3] < o[1] or caja[1] > o[3]) for o in ocupado):
+            continue
+        ocupado.append(caja)
+        puestas.append((caja, texto, extra))
+    return puestas
+
+
 def _grafico_curva(cv: dict, unidad: str) -> str:
-    puntos, banda, flota = cv.get("puntos") or [], cv.get("banda") or [], cv.get("flota") or []
+    """
+    Mismo lenguaje que el grafico del dashboard: fondo verde/amarillo/rojo con la banda de la flota (linea
+    de alerta segmentada, umbral punteado), cada motor con el color de su estado y un punto al final con su
+    nombre. La unidad del informe va mas gruesa y con su nombre destacado; las etiquetas que chocan se omiten.
+    """
+    puntos, banda = cv.get("puntos") or [], cv.get("banda") or []
+    flota = [o for o in (cv.get("flota") or []) if isinstance(o, dict) and o.get("puntos")]
     if not puntos:
         return ""
-    W, H, X0, X1, Y0, Y1 = 1000, 400, 74, 980, 16, 350
-    hx = max([p[0] for p in puntos] + [p[0] for o in flota for p in o] + [1.0])
-    vy = max([p[1] for p in puntos] + [p[1] for o in flota for p in o] + [1.0])
-    paso_x, paso_y = _paso_redondo(hx * 1.03), _paso_redondo(vy * 1.12, 4)
-    xmax = paso_x * (int(hx * 1.03 / paso_x) + 1)
-    ymax = paso_y * (int(vy * 1.12 / paso_y) + 1)
+    W, H, X0, X1, Y0, Y1 = 1000, 430, 70, 940, 12, 372
+    hx = max([p[0] for p in puntos] + [p[0] for o in flota for p in o["puntos"]] + [1.0])
+    vy = max([p[1] for p in puntos] + [p[1] for o in flota for p in o["puntos"]] + [1.0])
+    paso_x, paso_y = _paso_redondo(hx, 6), _paso_redondo(vy, 7)
+    xmax, ymax = hx * 1.04, vy * 1.06
 
     def x(h):
         return X0 + min(h, xmax) / xmax * (X1 - X0)
 
     def y(v):
-        return Y1 - max(0.0, min(v, ymax)) / ymax * (Y1 - Y0)    # se recorta al area del grafico
+        return Y1 - max(0.0, min(v, ymax)) / ymax * (Y1 - Y0)
 
     def linea(serie):
         return " ".join(f"{x(h):.1f},{y(v):.1f}" for h, v in serie)
 
-    s = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Riesgo acumulado de los motores de la flota según sus '
-         f'horas, con las zonas Normal, Alerta y Anormal. {_e(unidad)} destacada.">',
-         f'<rect x="{X0}" y="{Y0}" width="{X1 - X0}" height="{Y1 - Y0}" fill="{ZONAS_CURVA["normal"]}"/>']
+    s = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Riesgo acumulado de los motores de la flota según '
+         f'sus horas, coloreados por estado, con la banda de referencia de la flota. {_e(unidad)} destacada.">',
+         f'<rect x="{X0}" y="{Y0}" width="{X1 - X0}" height="{Y1 - Y0}" fill="{FONDO_CURVA["Normal"]}"/>']
+
+    zonas = []
     if banda:
-        alerta = [(b[0], b[2]) for b in banda]
-        umbral = [(b[0], b[3]) for b in banda]
-        amarillo = alerta + list(reversed(umbral))
-        rojo = umbral + [(umbral[-1][0], ymax), (0, ymax), (0, umbral[0][1])]
-        s.append(f'<polygon points="{linea(amarillo)}" fill="{ZONAS_CURVA["alerta"]}"/>')
-        s.append(f'<polygon points="{linea(rojo)}" fill="{ZONAS_CURVA["anormal"]}"/>')
-        s.append(f'<polyline points="{linea(alerta)}" fill="none" stroke="#6E7781" stroke-width="1.2" stroke-dasharray="6 4"/>')
-        s.append(f'<polyline points="{linea(umbral)}" fill="none" stroke="#6E7781" stroke-width="1.2" stroke-dasharray="2 3"/>')
+        alerta = [(0.0, 0.0)] + [(b[0], b[2]) for b in banda] + [(xmax, banda[-1][2])]
+        umbral = [(0.0, 0.0)] + [(b[0], b[3]) for b in banda] + [(xmax, banda[-1][3])]
+        techo = [(xmax, ymax), (0.0, ymax)]
+        s.append(f'<polygon points="{linea(umbral + techo)}" fill="{FONDO_CURVA["Anormal"]}"/>')
+        s.append(f'<polygon points="{linea(alerta + list(reversed(umbral)))}" fill="{FONDO_CURVA["Alerta"]}"/>')
+        zonas = [alerta, umbral]
+
+    # Grilla
     for i in range(1, int(ymax / paso_y) + 1):
-        v = i * paso_y
-        s.append(f'<line x1="{X0}" x2="{X1}" y1="{y(v):.1f}" y2="{y(v):.1f}" stroke="#FFFFFF" stroke-opacity="0.7"/>')
+        s.append(f'<line x1="{X0}" x2="{X1}" y1="{y(i * paso_y):.1f}" y2="{y(i * paso_y):.1f}" stroke="#FFFFFF" '
+                 f'stroke-opacity="0.6" stroke-width="1"/>')
+    for i in range(1, int(xmax / paso_x) + 1):
+        s.append(f'<line x1="{x(i * paso_x):.1f}" x2="{x(i * paso_x):.1f}" y1="{Y0}" y2="{Y1}" stroke="#FFFFFF" '
+                 f'stroke-opacity="0.6" stroke-width="1"/>')
+    if zonas:
+        s.append(f'<polyline points="{linea(zonas[0])}" fill="none" stroke="#5F6670" stroke-width="1.3" '
+                 f'stroke-dasharray="7 4"/>')
+        s.append(f'<polyline points="{linea(zonas[1])}" fill="none" stroke="#B5655F" stroke-width="1.3" '
+                 f'stroke-dasharray="2 3"/>')
+
+    # Ejes
     for i in range(0, int(ymax / paso_y) + 1):
-        v = i * paso_y
-        s.append(f'<text x="{X0 - 8}" y="{y(v) + 4:.1f}" text-anchor="end" font-size="12" fill="{TINTA_2}">{_compacto(v)}</text>')
+        s.append(f'<text x="{X0 - 8}" y="{y(i * paso_y) + 4:.1f}" text-anchor="end" font-size="12" '
+                 f'fill="{TINTA_2}">{_k(i * paso_y)}</text>')
     for i in range(0, int(xmax / paso_x) + 1):
-        h = i * paso_x
-        s.append(f'<text x="{x(h):.1f}" y="{Y1 + 18}" text-anchor="middle" font-size="12" fill="{TINTA_2}">{_num(h, 0)}</text>')
+        s.append(f'<text x="{x(i * paso_x):.1f}" y="{Y1 + 18}" text-anchor="middle" font-size="12" '
+                 f'fill="{TINTA_2}">{_k(i * paso_x)}</text>')
+    s.append(f'<text x="{(X0 + X1) / 2:.0f}" y="{Y1 + 44}" text-anchor="middle" font-size="13" '
+             f'fill="{TINTA_2}">Horas del motor</text>')
+    s.append(f'<text x="18" y="{(Y0 + Y1) / 2:.0f}" text-anchor="middle" font-size="13" fill="{TINTA_2}" '
+             f'transform="rotate(-90 18 {(Y0 + Y1) / 2:.0f})">Riesgo acumulado</text>')
+
+    # Flota: linea y punto del color de su estado
+    radio = {"Normal": 3.6, "Alerta": 4.6, "Anormal": 5.6}
+    finales = []
     for o in flota:
-        s.append(f'<polyline points="{linea(o)}" fill="none" stroke="{GRIS}" stroke-width="1.2"/>')
-    s.append(f'<polyline points="{linea(puntos)}" fill="none" stroke="{AZUL}" stroke-width="3.5" stroke-linejoin="round"/>')
+        col = LINEA_CURVA.get(o.get("estado"), LINEA_CURVA["Normal"])
+        s.append(f'<polyline points="{linea(o["puntos"])}" fill="none" stroke="{col}" stroke-width="1.5" '
+                 f'stroke-linejoin="round"/>')
+        hf, vf = o["puntos"][-1]
+        finales.append((o.get("estado"), x(hf), y(vf), o.get("unidad") or ""))
+    for est, cx, cy, _ in finales:
+        s.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{radio.get(est, 3.6)}" '
+                 f'fill="{LINEA_CURVA.get(est, LINEA_CURVA["Normal"])}" stroke="#FFFFFF" stroke-width="0.8"/>')
+
+    # Unidad del informe: mas gruesa, con borde blanco y punto grande
+    estado = cv.get("estado_final") if cv.get("evaluable") else "Normal"
+    col = LINEA_CURVA.get(estado, LINEA_CURVA["Normal"])
+    s.append(f'<polyline points="{linea(puntos)}" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round"/>')
+    s.append(f'<polyline points="{linea(puntos)}" fill="none" stroke="{col}" stroke-width="3.5" stroke-linejoin="round"/>')
     hf, vf = puntos[-1]
-    ancho = 14 + 8 * len(unidad)
-    xe = min(x(hf) + 12, X1 - ancho)
-    s.append(f'<circle cx="{x(hf):.1f}" cy="{y(vf):.1f}" r="7" fill="{AZUL}" stroke="#FFFFFF" stroke-width="2"/>')
-    s.append(f'<rect x="{xe:.1f}" y="{y(vf) - 30:.1f}" width="{ancho}" height="24" rx="4" fill="{AZUL}"/>')
-    s.append(f'<text x="{xe + ancho / 2:.1f}" y="{y(vf) - 13:.1f}" text-anchor="middle" font-size="13" font-weight="700" fill="#FFFFFF">{_e(unidad)}</text>')
-    s.append(f'<text x="{(X0 + X1) / 2:.0f}" y="{Y1 + 40}" text-anchor="middle" font-size="12" fill="{TINTA_2}">Horas del motor</text>')
-    s.append(f'<text x="16" y="{(Y0 + Y1) / 2:.0f}" text-anchor="middle" font-size="12" fill="{TINTA_2}" '
-             f'transform="rotate(-90 16 {(Y0 + Y1) / 2:.0f})">Riesgo acumulado</text>')
+    ux, uy = x(hf), y(vf)
+    s.append(f'<circle cx="{ux:.1f}" cy="{uy:.1f}" r="8" fill="{col}" stroke="#FFFFFF" stroke-width="2.5"/>')
+
+    # Etiquetas: primero la unidad (en una placa), luego las zonas, luego la flota por gravedad; se omiten las que chocan
+    texto_u = unidad
+    ancho_u = 9 * len(texto_u) + 16
+    xu = ux + 12 if ux + 12 + ancho_u <= X1 else ux - 12 - ancho_u
+    ocupado = [(xu, uy - 12, xu + ancho_u, uy + 12), (ux - 9, uy - 9, ux + 9, uy + 9)]
+    ocupado += [(cx - r, cy - r, cx + r, cy + r) for est, cx, cy, _ in finales for r in [radio.get(est, 3.6)]]
+
+    def caja_zona(texto, zx, zy, zona):
+        ancho = 8.2 * len(texto) + 14
+        ocupado.append((zx - ancho / 2, zy - 11, zx + ancho / 2, zy + 11))
+        return (f'<rect x="{zx - ancho / 2:.1f}" y="{zy - 11:.1f}" width="{ancho:.0f}" height="22" rx="3" '
+                f'fill="#FFFFFF" fill-opacity="0.6"/><text x="{zx:.1f}" y="{zy + 5:.1f}" text-anchor="middle" '
+                f'font-size="14" fill="{TINTA_ZONA[zona]}">{texto}</text>')
+
+    if zonas:
+        def valor_en(serie, h):
+            for (h0, v0), (h1, v1) in zip(serie, serie[1:]):
+                if h0 <= h <= h1:
+                    return v0 if h1 == h0 else v0 + (v1 - v0) * (h - h0) / (h1 - h0)
+            return serie[-1][1]
+        ha = xmax * 0.12
+        s.append(caja_zona("Anormal", x(ha), (y(valor_en(zonas[1], ha)) + Y0) / 2, "Anormal"))
+        hn = xmax * 0.85
+        s.append(caja_zona("Normal", x(hn), (y(valor_en(zonas[0], hn)) + Y1) / 2 + 40, "Normal"))
+        # Alerta: donde la franja amarilla es mas ancha dentro del grafico
+        mejor = max((r for r in banda if r[3] < ymax * 0.95), key=lambda r: y(r[2]) - y(r[3]), default=None)
+        if mejor:
+            s.append(caja_zona("Alerta", x(mejor[0]), (y(mejor[2]) + y(mejor[3])) / 2, "Alerta"))
+
+    prioridad = {"Anormal": 0, "Alerta": 1}
+    candidatos = sorted(finales, key=lambda f: (prioridad.get(f[0], 2), -f[1]))
+    for caja, texto, _ in _etiquetas_libres([(cx, cy, t, est) for est, cx, cy, t in candidatos if t], ocupado):
+        s.append(f'<rect x="{caja[0]:.1f}" y="{caja[1]:.1f}" width="{caja[2] - caja[0]:.0f}" height="{caja[3] - caja[1]:.0f}" '
+                 f'rx="2" fill="#FFFFFF" fill-opacity="0.55"/>'
+                 f'<text x="{caja[0] + 3:.1f}" y="{caja[3] - 3.5:.1f}" font-size="10.5" fill="#3A424B">{_e(texto)}</text>')
+    s.append(f'<rect x="{xu:.1f}" y="{uy - 12:.1f}" width="{ancho_u:.0f}" height="24" rx="4" fill="{col}" '
+             f'stroke="#FFFFFF" stroke-width="1.5"/>')
+    s.append(f'<text x="{xu + ancho_u / 2:.1f}" y="{uy + 5:.1f}" text-anchor="middle" font-size="14" font-weight="700" '
+             f'fill="#FFFFFF">{_e(texto_u)}</text>')
     s.append("</svg>")
     return "".join(s)
 
@@ -476,13 +584,13 @@ def _bloque_ciclo_vida(evid) -> str:
     return f"""
   <div class="sub separada">
     {cabeza}
-    <p class="tenue">Riesgo acumulado de cada motor de la flota según sus horas de uso. La línea azul es esta unidad.
-      Se evalúa desde las {_num(c.HORAS_MIN_CURVA, 0)} horas del motor.</p>
+    <p class="tenue">Riesgo acumulado de cada motor de la flota según sus horas de uso. La unidad {_e(unidad)} va
+      destacada. Se evalúa desde las {_num(c.HORAS_MIN_CURVA, 0)} horas del motor.</p>
     <div class="tarjeta-int">{_grafico_curva(cv, unidad)}
-      <div class="leyenda"><span><i class="linea-azul"></i>Esta unidad</span><span><i class="linea-gris"></i>Resto de la flota</span>
-        <span><i style="background:{ZONAS_CURVA["normal"]}"></i>Normal: dentro de lo habitual de la flota</span>
-        <span><i style="background:{ZONAS_CURVA["alerta"]}"></i>Alerta: sobre lo habitual</span>
-        <span><i style="background:{ZONAS_CURVA["anormal"]}"></i>Anormal: muy sobre lo habitual</span></div>
+      <p class="nota">Color de la línea y del punto según el estado de cada unidad: verde Normal, amarillo Alerta,
+        rojo Anormal. El fondo es la referencia de la flota (verde dentro de lo habitual, amarillo sobre lo habitual,
+        rojo muy sobre lo habitual) y puede no coincidir con el estado, que compara el último tramo de cada motor
+        contra la flota. Donde hay muchas unidades juntas se omiten algunas etiquetas.</p>
     </div>
     {aviso}
     <div class="cajas cuatro">

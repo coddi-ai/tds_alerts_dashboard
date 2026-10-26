@@ -28,7 +28,6 @@ MIN_SEMANAS_BASE = 4           # minimo de semanas de base para comparar contra 
 MIN_SEMANAS_RECIENTES = 2      # bajo esto: datos insuficientes
 DIAS_SIN_DATOS_MAX = 3         # sobre esto, el valor de esa semana esta congelado (no es dato nuevo)
 DIAS_DATOS_VIEJOS = 14         # ultimo dato mas antiguo que esto: se advierte primero
-MIN_DIAS_MEDIA_30D = 21        # media de 30 dias calculada con menos dias: se advierte
 
 # --- Semana anomala: debe cumplir TODO lo siguiente
 #     (el percentil de flota solo no basta: una unidad que siempre anda alta estaria arriba todas las semanas)
@@ -254,5 +253,5 @@ DIAS_ANALISIS_VIEJO = 14        # mas antiguo que esto respecto de la detencion:
 
 # Curva acumulada (cumulative_risk_curve)
 HORAS_MIN_CURVA = 1500          # bajo esto la curva no se evalua (MIN_TRAMO_HORAS upstream)
-MAX_CURVAS_FLOTA = 40           # curvas de la flota que se dibujan de contexto
+MAX_CURVAS_FLOTA = 60           # curvas de la flota que se dibujan de contexto
 MAX_PUNTOS_CURVA = 60           # puntos por curva en el grafico

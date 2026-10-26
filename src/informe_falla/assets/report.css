@@ -36,6 +36,8 @@
 .informe_falla .tarjeta-int > * + * { margin-top:8px; }
 .informe_falla .dos-col { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .informe_falla .grafico-tabla { grid-template-columns:3fr 2fr; align-items:start; }
+.informe_falla .graficos > * + * { margin-top:10px; }
+.informe_falla .puntajes { break-inside:avoid; }   /* titulo, graficos y tabla en la misma pagina */
 .informe_falla .cajas { display:grid; gap:12px; }
 .informe_falla .cajas.cuatro { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .informe_falla .cajas.tres { grid-template-columns:repeat(3,minmax(0,1fr)); }

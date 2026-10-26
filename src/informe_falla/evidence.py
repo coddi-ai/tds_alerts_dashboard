@@ -83,8 +83,7 @@ def _modos(valor) -> dict:
 # Columnas de unit_status_summary que usa el informe. Las primeras son imprescindibles; las demas, si
 # faltan en las particiones leidas (puede pasar entre la copia local y S3), se agregan vacias.
 COLUMNAS_STATUS_OBLIGATORIAS = ["Unit", "Fecha", "year", "week", "modos_ordenados"]
-COLUMNAS_STATUS_OPCIONALES = ["dias_sin_datos", "dias_media_30d", "estado", "media_30d", "ranking", "peor_modo",
-                              "peor_valor"]
+COLUMNAS_STATUS_OPCIONALES = ["dias_sin_datos", "estado", "ranking", "peor_modo", "peor_valor"]
 
 
 def preparar_status(df: pd.DataFrame) -> pd.DataFrame:
@@ -194,7 +193,6 @@ def auditoria(vista, tray, fecha, inicio_base):
     n_rec = int((ok["zona"] == "reciente").sum())
     ultimo = tray["Fecha"].max() if len(tray) else None
     dias_ultimo = (f - ultimo.date()).days if ultimo is not None else None
-    media_corta = ok.loc[(ok["zona"] == "reciente") & (ok["dias_media_30d"] < c.MIN_DIAS_MEDIA_30D), "rel"].tolist()
 
     advertencias = []
     if dias_ultimo is not None and dias_ultimo > c.DIAS_DATOS_VIEJOS:
@@ -212,9 +210,6 @@ def auditoria(vista, tray, fecha, inicio_base):
                             "no se puede comparar contra la propia unidad.")
     if 0 < n_rec < c.SEMANAS_RECIENTES:
         advertencias.append(f"Último mes con {n_rec} de {c.SEMANAS_RECIENTES} semanas válidas.")
-    if media_corta:
-        advertencias.append(f"Media de 30 días calculada con menos de {c.MIN_DIAS_MEDIA_30D} días "
-                            f"en las semanas {media_corta}.")
 
     return limpio({
         "semanas_validas": {"base": n_base, "reciente": n_rec},
@@ -478,8 +473,8 @@ def _serie_grafico(tabla, unidad, modo, fecha):
 # =============================================================================
 # Evidencia
 # =============================================================================
-COLUMNAS_TRAYECTORIA = ["rel", "zona", "valida", "dias_sin_datos", "estado", "media_30d", "ranking",
-                        "peor_modo", "peor_valor"] + MODOS
+COLUMNAS_TRAYECTORIA = ["rel", "zona", "valida", "dias_sin_datos", "estado", "ranking", "peor_modo",
+                        "peor_valor"] + MODOS
 
 
 def _evidencia_semanal(unidad, fecha, status, inicio_base):
@@ -496,7 +491,6 @@ def _evidencia_semanal(unidad, fecha, status, inicio_base):
         analisis = {m: {**analizar_metrica(vista, unidad, m), "componentes_compatibles": c.COMPONENTES_POR_MODO[m],
                         "verificaciones_sugeridas": c.verificaciones(c.VERIFICACIONES_POR_MODO[m])}
                     for m in MODOS}
-        analisis["media_30d"] = analizar_metrica(vista, unidad, "media_30d")
         ranking = ranking_modos(analisis)
         veredicto = veredicto_reglas(aud, ranking)
 
@@ -517,8 +511,8 @@ def _evidencia_semanal(unidad, fecha, status, inicio_base):
             "semana_de_la_fecha": "excluida por diseño: su dato incluye días posteriores (no es una brecha)",
         },
         "auditoria": aud,
-        "dashboard_ultima_semana": (ultima_valida.reindex(columns=["rel", "estado", "media_30d", "ranking",
-                                                                    "peor_modo", "peor_valor"])
+        "dashboard_ultima_semana": (ultima_valida.reindex(columns=["rel", "estado", "ranking", "peor_modo",
+                                                                    "peor_valor"])
                                     .to_dict("records") or [None])[0],
         "trayectoria": tabla_tray.to_dict("records"),
         "analisis_por_metrica": analisis,
