@@ -11,7 +11,7 @@ from typing import Any, Iterable, Optional
 
 import pandas as pd
 
-from dashboard.components.alerts_charts import FEATURE_NAMES_ES, translate_system_label
+from dashboard.components.alerts_charts import FEATURE_NAMES_ES, NO_SIGNAL_KEY, first_signal_key, translate_system_label
 from dashboard.components.labels import translate_component_label, source_style
 from dashboard.components.alerts_tables import parse_ia_message_sections
 from src.i18n.data_text import localized_series
@@ -82,6 +82,9 @@ def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
     frame["source_display"] = frame.get("Trigger_type", "").map(translate_alert_source)
     frame["component_display"] = frame.get("componente", "").map(translate_alert_component)
     frame["signal_display"] = frame.get("Trigger_Var", "").map(_signal_labels)
+    # The treemap's trigger cells are the *first* signal of each alert (one alert, one
+    # cell), so the trigger filter matches that same key rather than any listed signal.
+    frame["signal_key"] = frame.get("Trigger_Var", pd.Series(None, index=frame.index, dtype=object)).map(first_signal_key).fillna(NO_SIGNAL_KEY)
     messages = localized_series(frame, "mensaje_ia") if "mensaje_ia" in frame.columns else pd.Series("", index=frame.index)
     sections = messages.map(_message_sections)
     frame["diagnosis_display"] = sections.map(lambda item: item.get("diagnostico") or t("alerts_report.sin_diagnostico_ia_disponible"))
@@ -102,8 +105,14 @@ def filter_alert_rows(
     evidence: Optional[Iterable[str]] = None,
     start_date: Optional[Any] = None,
     end_date: Optional[Any] = None,
+    trigger: Optional[Iterable[str]] = None,
 ) -> pd.DataFrame:
-    """Apply report filters to existing alert records."""
+    """Apply report filters to existing alert records.
+
+    ``trigger`` takes raw first-signal codes (``NO_SIGNAL_KEY`` for alerts without one),
+    the same values the General tab's treemap trigger cells carry. Every given filter
+    must hold (AND).
+    """
     frame = prepare_alert_rows(alerts_df)
     if frame.empty:
         return frame
@@ -111,6 +120,8 @@ def filter_alert_rows(
         frame = frame[frame["UnitId"].isin(list(unit))]
     if system:
         frame = frame[frame["system_display"].isin(list(system))]
+    if trigger:
+        frame = frame[frame["signal_key"].isin(list(trigger))]
     if source:
         frame = frame[frame["source_display"].isin(list(source))]
     if evidence:

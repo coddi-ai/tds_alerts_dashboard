@@ -126,21 +126,18 @@ def test_parse_acciones_never_raises_for_malformed_input():
 # parse_ia_message_sections — empty input produces the documented empty shape
 # ---------------------------------------------------------------------------
 
-def test_parse_ia_message_sections_empty_input_produces_three_empty_keys():
+def test_parse_ia_message_sections_empty_input_produces_four_empty_keys():
     sections = parse_ia_message_sections("")
-    assert sections == {"diagnostico": "", "causa_probable": "", "acciones": ""}
+    assert sections == {"diagnostico": "", "causa_probable": "", "acciones": "", "verificacion": ""}
 
 
 def test_parse_ia_message_sections_none_and_nan_produce_the_same_empty_shape():
     """None and float('nan') — the two shapes `mensaje_ia` actually takes for
     a missing value once loaded from CSV via pandas (an object-dtype column's
     missing cell is float NaN, not pandas' nullable pd.NA sentinel)."""
-    assert parse_ia_message_sections(None) == {"diagnostico": "", "causa_probable": "", "acciones": ""}
-    assert parse_ia_message_sections(float("nan")) == {
-        "diagnostico": "",
-        "causa_probable": "",
-        "acciones": "",
-    }
+    empty = {"diagnostico": "", "causa_probable": "", "acciones": "", "verificacion": ""}
+    assert parse_ia_message_sections(None) == empty
+    assert parse_ia_message_sections(float("nan")) == empty
 
 
 def test_parse_ia_message_sections_decodes_structured_capstone_json():

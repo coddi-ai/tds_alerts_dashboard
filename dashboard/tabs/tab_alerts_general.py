@@ -5,20 +5,40 @@ from datetime import date, timedelta
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
-from dashboard.components.labels import SOURCE_STYLE, source_style, light_tint
+from dashboard.components.alerts_charts import FEATURE_NAMES_ES, NO_SIGNAL_KEY
+from dashboard.components.labels import MULTITECHNICAL_KPI_COLOR, SOURCE_STYLE, source_style, light_tint
 
 
 # Fixed heights for the three weekly-analysis cards (Distribución por unidad /
 # Evolución temporal / Distribución por sistema) so the row's height stays
-# constant regardless of fleet size; large unit counts scroll horizontally
-# inside the card instead of growing it vertically.
+# constant regardless of fleet size (the unit chart folds all but its top N
+# units into one bar rather than growing).
 ALERTS_CHART_CARD_HEIGHT = 500
 ALERTS_CHART_CARD_BODY_HEIGHT = 420
 
 
-def _default_alert_dates() -> tuple[str, str]:
+ALERTS_DEFAULT_WINDOW = timedelta(weeks=4)
+
+
+def default_alert_dates() -> tuple[str, str]:
+    """Rolling four-week window ending today: the initial value of the Desde / Hasta
+    inputs and what "Restablecer últimas 4 semanas" puts back."""
     today = date.today()
-    return (today - timedelta(days=27)).isoformat(), today.isoformat()
+    return (today - ALERTS_DEFAULT_WINDOW).isoformat(), today.isoformat()
+
+
+def _date_field(component_id: str, label_key: str, value: str) -> html.Div:
+    """One independently editable date input with its own label."""
+    return html.Div([
+        html.Span(t(label_key), className="alerts-date-field__label"),
+        dcc.DatePickerSingle(
+            id=component_id,
+            date=value,
+            display_format="DD/MM/YYYY",
+            placeholder="DD/MM/YYYY",
+            clearable=False,
+        ),
+    ], className="alerts-date-field")
 
 
 def _build_source_legend() -> html.Div:
@@ -45,7 +65,7 @@ def _build_source_legend() -> html.Div:
 
 
 def create_layout() -> html.Div:
-    start_date, end_date = _default_alert_dates()
+    start_date, end_date = default_alert_dates()
     return html.Div([
         dcc.Store(id="alerts-selected-alert-id"),
         dcc.Store(id="alerts-general-active-filters", data={}),
@@ -57,20 +77,10 @@ def create_layout() -> html.Div:
                         html.Div([
                             html.I(className="fas fa-filter me-2"),
                             html.Span(t("tab_alerts_general.filtro_temporal"), className="fw-bold"),
-                        ], className="d-flex align-items-center mb-2"),
+                        ], className="d-flex align-items-center pb-1"),
                     ], width="auto"),
-                    dbc.Col([
-                        dcc.DatePickerRange(
-                            id="alerts-date-range-picker",
-                            start_date=start_date,
-                            end_date=end_date,
-                            display_format="DD/MM/YYYY",
-                            start_date_placeholder_text=t("tab_lab_compliance.fecha_inicio"),
-                            end_date_placeholder_text=t("tab_lab_compliance.fecha_fin"),
-                            clearable=False,
-                            className="w-100",
-                        ),
-                    ], width="auto"),
+                    dbc.Col(_date_field("alerts-date-start", "tab_alerts_general.fecha_desde", start_date), width="auto"),
+                    dbc.Col(_date_field("alerts-date-end", "tab_alerts_general.fecha_hasta", end_date), width="auto"),
                     dbc.Col([
                         dbc.Button(
                             [html.I(className="fas fa-undo me-1"), t("tab_alerts_general.restablecer_ultimas_4_semanas")],
@@ -79,19 +89,10 @@ def create_layout() -> html.Div:
                             size="sm",
                         )
                     ], width="auto"),
-                ], align="center", className="g-2"),
+                ], align="end", className="g-3"),
                 html.Div(id="alerts-general-filter-summary", className="small text-muted mt-2"),
-                html.Div([
-                    html.Div(id="alerts-general-active-filter-badges", className="d-flex flex-wrap align-items-center"),
-                    dbc.Button(
-                        [html.I(className="fas fa-eraser me-1"), t("tab_alerts_general.limpiar_filtros")],
-                        id="alerts-general-filter-clear-all",
-                        color="link",
-                        size="sm",
-                        className="p-0 ms-1 align-baseline",
-                        style={"display": "none"},
-                    ),
-                ], className="mt-2 d-flex flex-wrap align-items-center"),
+                # Filled by a callback: stays empty (nothing rendered) while no chart filter is active.
+                html.Div(id="alerts-general-active-filters-bar"),
             ])
         ], className="shadow-sm mb-3"),
         html.H4([html.I(className="fas fa-chart-bar me-2"), t("tab_alerts_general.analisis_semanal_de_alertas")], className="text-primary mb-3 mt-4"),
@@ -148,10 +149,9 @@ def create_layout() -> html.Div:
 
 def create_summary_stats_display(total_alerts: int, total_units: int, telemetry_pct: float = 0, oil_pct: float = 0, mixed_count: int = 0) -> html.Div:
     """Render only the three client-facing alert KPIs."""
-    # W34-04: same color as the table's Mixto highlight and the legend above
-    # — this card used to have its own independent accent (#7c6a9a) that had
-    # drifted from the table's border color (#6f42c1).
-    mixto_color = source_style("Mixto")[1]
+    # Not the Multitécnica Fuente color (SOURCE_STYLE["Mixto"]): the card is a count, and
+    # next to the Fuente chips in the table and legend the same purple read as a fourth chip.
+    mixto_color = MULTITECHNICAL_KPI_COLOR
     cards = [
         (t("tab_alerts_general.total_de_alertas"), total_alerts, "fas fa-exclamation-triangle", "#355c7d", "#eef4f8"),
         (t("tab_alerts_general.unidades_afectadas"), total_units, "fas fa-truck", "#4f8a8b", "#edf7f6"),
@@ -173,50 +173,63 @@ def create_summary_stats_display(total_alerts: int, total_units: int, telemetry_
     ])
 
 
-# Icon per cross-filter key; the label is looked up at render time so it follows the language.
-_ACTIVE_FILTER_ICONS = {
-    "unit": "fas fa-truck",
-    "week": "fas fa-calendar-week",
-    "system": "fas fa-cogs",
-}
-
-
 def _format_active_filter_value(key: str, value: str) -> str:
     if key == "week":
         try:
             return date.fromisoformat(value).strftime("%d/%m/%Y")
         except (TypeError, ValueError):
             return str(value)
+    if key == "trigger":
+        # The filter holds the raw signal code; the chip shows the same label as the treemap.
+        if value == NO_SIGNAL_KEY:
+            return t("alerts_report.sin_senal_registrada")
+        return FEATURE_NAMES_ES.get(value, str(value))
     return str(value)
 
 
-def create_active_filter_badges(active_filters: dict | None) -> list:
-    """Render one removable chip per active cross-filter.
-
-    The "Limpiar filtros" button lives permanently in the static layout
-    (just hidden/shown) rather than here: a literal (non-pattern-matching)
-    Dash Input must reference a component that exists in the layout at all
-    times, and this function's output is only mounted conditionally.
-    """
-    active_filters = active_filters or {}
-    chips = []
-    for key, value in active_filters.items():
-        if not value:
-            continue
-        label = t_or(f"alerts_general.filter_{key}", key.title())
-        icon = _ACTIVE_FILTER_ICONS.get(key, "fas fa-filter")
-        chips.append(
-            dbc.Badge(
-                [
-                    html.I(className=f"{icon} me-1"),
-                    f"{label}: {_format_active_filter_value(key, value)}",
-                    html.I(className="fas fa-times ms-2"),
-                ],
+def _active_filter_chip(key: str, value: str) -> html.Span:
+    label = t_or(f"alerts_general.filter_{key}", key.title())
+    return html.Span(
+        [
+            html.Span(
+                [html.Span(f"{label}:", className="alerts-filter-chip__key"), _format_active_filter_value(key, value)],
+                className="alerts-filter-chip__text",
+            ),
+            html.Button(
+                "×",
                 id={"type": "alerts-general-filter-chip", "key": key},
-                color="primary",
-                pill=True,
-                className="me-2 mb-1",
-                style={"cursor": "pointer", "fontSize": "0.85rem"},
-            )
-        )
-    return chips
+                type="button",
+                className="alerts-filter-chip__clear",
+                title=t("tab_alerts_general.quitar_filtro", filter=label),
+                **{"aria-label": t("tab_alerts_general.quitar_filtro", filter=label)},
+            ),
+        ],
+        className="alerts-filter-chip",
+    )
+
+
+def create_active_filters_bar(active_filters: dict | None) -> html.Div | None:
+    """The "Filtros activos" bar: one chip per active chart filter, each with its own ×,
+    plus one "Limpiar todo". One bar for every chart on the view.
+
+    Returns None - nothing rendered - while no filter is active. Both the × buttons and
+    "Limpiar todo" use pattern-matching ids, so they exist only while the bar does and
+    the callback that reads them needs no always-present placeholder component.
+    """
+    chips = [_active_filter_chip(key, value) for key, value in (active_filters or {}).items() if value]
+    if not chips:
+        return None
+    return html.Div(
+        [
+            html.Span(t("tab_alerts_general.filtros_activos"), className="alerts-filters-bar__label"),
+            html.Div(chips, className="alerts-filters-bar__chips"),
+            dbc.Button(
+                [html.I(className="fas fa-eraser me-1"), t("tab_alerts_general.limpiar_todo")],
+                id={"type": "alerts-general-filter-clear-all", "index": 0},
+                color="link",
+                size="sm",
+                className="alerts-filters-bar__clear-all",
+            ),
+        ],
+        className="alerts-filters-bar",
+    )

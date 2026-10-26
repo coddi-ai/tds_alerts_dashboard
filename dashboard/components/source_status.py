@@ -114,6 +114,56 @@ def render_service_source_status(client: str, service_id: str, *, compact: bool 
     )
 
 
+# Icon per aggregate status. Color alone is not enough to tell a chip apart, so the icon
+# and the status word carry the state too.
+_CHIP_ICONS = {
+    "available": "fa-check-circle",
+    "partial": "fa-adjust",
+    "missing": "fa-times-circle",
+}
+
+
+def _source_chip(source: str, probe: SourceProbe | None) -> html.Span:
+    # A source the catalog has no probe for is unavailable, not omitted.
+    status = probe.status if probe is not None and probe.status in _STATUS_STYLE else "missing"
+    status_label, _, _ = _status_view(status)
+    source_label = t_or(f"source_status.source_{source}", SOURCE_LABELS_ES.get(source, source.replace("_", " ").title()))
+    note = (probe.note or probe.path) if probe is not None else None
+    return html.Span(
+        [
+            html.I(className=f"fas {_CHIP_ICONS[status]} source-chip__icon"),
+            html.Span(source_label, className="source-chip__label"),
+            html.Span(status_label, className="source-chip__status"),
+        ],
+        className=f"source-chip source-chip--{status}",
+        title=note or t("source_status.no_compatible_source"),
+        **{"data-source": source, "data-status": status},
+    )
+
+
+def render_source_chips(probes: dict[str, SourceProbe | None]) -> html.Div:
+    """One status chip per data source - a source that is not available gets its own
+    muted, dashed chip, so a gap is visible next to the sources that are there.
+
+    Replaces the left-border banner (`render_service_source_status`), which summed the
+    sources into one aggregate state. The chips come from whatever is passed, so any
+    number of sources, in any state, renders; a ``None`` probe is an unavailable source.
+    """
+    return html.Div(
+        [
+            html.Span(t("source_status.data_sources_title"), className="source-chips__title"),
+            *[_source_chip(source, probe) for source, probe in probes.items()],
+        ],
+        className="source-chips mb-3",
+    )
+
+
+def render_service_source_chips(client: str, service_id: str) -> html.Div:
+    """The chip banner for a dashboard page's sources (see SERVICE_SOURCES)."""
+    availability = build_client_availability(client)
+    return render_source_chips({name: availability.get(name) for name in SERVICE_SOURCES.get(service_id, ())})
+
+
 def render_fleet_overview_source_status(client: str):
     """The Fleet Overview page's own "Fuentes de datos" banner.
 

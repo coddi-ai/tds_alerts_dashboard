@@ -153,6 +153,12 @@ _SOURCE_CANONICAL = {
 }
 
 
+# Accent of the "Alertas multitécnicas" KPI card. It is a count, not a source, so it must
+# not borrow any SOURCE_STYLE color: on the same screen as the Fuente chips (table column,
+# legend), reusing the Multitécnica purple made the card read as one more Fuente chip.
+MULTITECHNICAL_KPI_COLOR = "#a23b72"
+
+
 def source_style(value: Any) -> tuple[str, str]:
     """(label, color) for a raw Trigger_type value.
 

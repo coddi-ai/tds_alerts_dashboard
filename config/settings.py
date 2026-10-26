@@ -13,7 +13,7 @@ from src.data.catalog import dashboard_data_root
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.1.26"
+APP_VERSION = "2.1.28"
 
 # Ranking fields a Short View axis can be configured with (`fleet_scatter_axes`);
 # the chart maps each name to its column (predictive_charts.SCATTER_AXIS_FIELDS).
@@ -47,7 +47,19 @@ class Settings(BaseSettings):
     dashboard_host: str = Field(default="0.0.0.0", description="Dashboard host")
     dashboard_port: int = Field(default=8050, description="Dashboard port")
     debug_mode: bool = Field(default=False, description="Enable debug mode")
-    
+
+    # Alertas -> Detalle -> Evidencia de Telemetría: supporting signals charted up
+    # front next to the trigger signal; the rest sit behind "Mostrar N señales adicionales".
+    alert_supporting_signals_visible: int = Field(
+        default=3, ge=0, description="Supporting telemetry signals shown before the expand toggle"
+    )
+
+    # Alertas -> General -> Distribución por unidad: units drawn as their own bars before
+    # the remainder is folded into one "Otras (n)" bar.
+    alert_unit_chart_top_n: int = Field(
+        default=12, ge=1, description="Units shown individually in the alerts-per-unit Pareto chart"
+    )
+
     # Processing
     max_workers: int = Field(default=18, description="Max parallel workers for AI processing")
     min_machine_samples: int = Field(default=5, description="Minimum samples per machine")

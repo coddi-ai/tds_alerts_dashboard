@@ -127,8 +127,11 @@ def test_full_poc_detail_shows_event_and_maintenance_without_blank_oil_warning(t
     assert row.has_maintenance and not row.has_tribology
     assert evidence_label(row) == "Telemetría + Mantenimiento"
     detail = _visible(callbacks.update_detail_view(row.FusionID, "emin", None))
-    assert "Multitécnica" in detail
-    assert "Telemetría + Mantenimiento" in detail
+    # The header lists the evidence sources as chips; it no longer repeats the
+    # published type ("Multitécnica") or a "Telemetría + Mantenimiento" line.
+    assert "Telemetría" in detail and "Mantenimiento" in detail
+    assert "Multitécnica" not in detail
+    assert "Telemetría + Mantenimiento" not in detail
     assert "Tribología" not in detail
     assert "Evento registrado" not in detail and "TEST-EVENT-REF" not in detail
     assert "Referencia del evento" not in detail
@@ -143,7 +146,7 @@ def test_full_poc_detail_shows_event_and_maintenance_without_blank_oil_warning(t
     table = create_alerts_report_table(pd.DataFrame([row]))
     assert table.data[0]["Fuente"] == "Multitécnica"
     assert table.data[0]["Evidencia"] == "Telemetría + Mantenimiento"
-    summary = callbacks.render_selected_alert_summary({"row": 0}, table.data)
+    summary = callbacks.render_selected_alert_summary({"row": 0, "row_id": table.data[0]["id"]}, table.data)
     assert "mantenimiento preventivo semanal" in _visible(summary)
     assert "Sistema de Motor - Sistema de Enfriamiento" in _visible(summary)
     maintenance = callbacks._maintenance_context_summary(table.data[0])

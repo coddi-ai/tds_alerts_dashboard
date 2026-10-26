@@ -17,12 +17,26 @@ def evidence_flag(value) -> bool:
     return bool(value) if pd.notna(value) else False
 
 
+# (alert column, source id, catalog key) in display order; the one list that
+# decides what counts as an evidence source of an alert.
+_EVIDENCE_SOURCES = (
+    ("has_telemetry", "telemetry", "alert_evidence.telemetry"),
+    ("has_tribology", "tribology", "alert_evidence.tribology"),
+    ("has_maintenance", "maintenance", "alert_evidence.maintenance"),
+)
+
+
+def evidence_sources(row) -> list[tuple[str, str]]:
+    """``(source id, label)`` for every source that contributed evidence to the alert."""
+    return [
+        (source, t(label_key))
+        for column, source, label_key in _EVIDENCE_SOURCES
+        if evidence_flag(row.get(column))
+    ]
+
+
 def evidence_label(row) -> str:
-    labels = [label for column, label in (
-        ("has_telemetry", t("alert_evidence.telemetry")),
-        ("has_tribology", t("alert_evidence.tribology")),
-        ("has_maintenance", t("alert_evidence.maintenance")),
-    ) if evidence_flag(row.get(column))]
+    labels = [label for _, label in evidence_sources(row)]
     return " + ".join(labels) or t("alerts_report.sin_evidencia")
 
 

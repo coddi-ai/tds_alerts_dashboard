@@ -1,0 +1,280 @@
+/* Alertas -> Detalle.
+   Palette follows ui_notes.md: info (#17a2b8 / #f0f8ff) for descriptive items,
+   warning (#ffc107 / #fffcf0) for things to check, primary blue for the trigger
+   signal. Red/amber/green are kept for severity only. */
+
+/* ---- Segmented control (dbc.RadioItems as one joined button group) ---- */
+.segmented-control.btn-group {
+    display: flex;
+}
+
+.segmented-control .form-check {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    padding-left: 0;
+}
+
+.segmented-control .form-check .btn {
+    width: 100%;
+    border-radius: 0;
+    white-space: nowrap;
+}
+
+.segmented-control .form-check:first-child .btn {
+    border-top-left-radius: 0.375rem;
+    border-bottom-left-radius: 0.375rem;
+}
+
+.segmented-control .form-check:last-child .btn {
+    border-top-right-radius: 0.375rem;
+    border-bottom-right-radius: 0.375rem;
+}
+
+.segmented-control .form-check:not(:first-child) .btn {
+    margin-left: -1px;
+}
+
+.segmented-control .btn-check:checked + .btn,
+.segmented-control .btn-check:focus-visible + .btn {
+    position: relative;
+    z-index: 1;
+}
+
+/* ---- Alert header: evidence-source chips ---- */
+.alert-evidence-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid #17a2b8;
+    border-radius: 999px;
+    background: #f0f8ff;
+    color: #0c5460;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+/* ---- Alert header: trigger-signal callout ---- */
+.alert-trigger-callout {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    border-left: 4px solid #2980b9;
+    border-radius: 0.375rem;
+    background: #eaf3fb;
+}
+
+.alert-trigger-callout__label {
+    color: #2980b9;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.alert-trigger-callout__value {
+    margin-top: 0.15rem;
+    color: #1a252f;
+    font-size: 1.15rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+/* ---- Análisis Inteligente: "Verificar" callout ---- */
+.alert-verify-callout {
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.8rem;
+    border-left: 4px solid #ffc107;
+    border-radius: 0.375rem;
+    background: #fffcf0;
+}
+
+.alert-verify-callout__label {
+    color: #856404;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.alert-verify-callout__question {
+    margin-top: 0.15rem;
+    color: #1a252f;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+/* ---- Indicadores de contexto ---- */
+.context-tile__value {
+    color: #1a252f;
+    font-size: 1.5rem;
+}
+
+.context-tile__caption {
+    line-height: 1.35;
+}
+
+/* ---- Evidencia de Telemetría: featured trigger chart + signal grid ---- */
+.alert-signal-evidence {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.alert-signal-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.alert-signal-legend__item {
+    display: inline-flex;
+    align-items: center;
+}
+
+.alert-signal-legend__dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 0.35rem;
+    border: 1px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px #dee2e6;
+}
+
+.alert-signal-legend__dash {
+    display: inline-block;
+    width: 20px;
+    margin-right: 0.35rem;
+    border-top: 2px dashed rgba(231, 76, 60, 0.55);
+}
+
+.alert-signal-featured {
+    padding: 0.75rem 1rem 0.5rem;
+    border: 1px solid #dee2e6;
+    border-left: 4px solid #2980b9;
+    border-radius: 0.5rem;
+    background: #fff;
+}
+
+.alert-signal-featured__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+}
+
+.alert-signal-featured__label {
+    color: #2980b9;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.alert-signal-featured__title {
+    color: #1a252f;
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+/* At most three columns, and never a card narrower than 300px: the track minimum is
+   the larger of 300px and a third of the row, so wide rows stop at three columns and
+   narrow ones drop to two, then one. */
+.alert-signal-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(max(300px, calc((100% - 2rem) / 3)), 1fr));
+}
+
+.alert-signal-card {
+    min-width: 0;
+    padding: 0.5rem 0.5rem 0.25rem;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    background: #fff;
+}
+
+.alert-signal-card__header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0 0.25rem;
+}
+
+.alert-signal-card__title {
+    overflow: hidden;
+    color: #2c3e50;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.alert-signal-card__flag {
+    flex: none;
+    padding: 0.05rem 0.45rem;
+    border: 1px solid #dc3545;
+    border-radius: 999px;
+    background: #fff5f5;
+    color: #dc3545;
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.alert-signals-toggle {
+    align-self: flex-start;
+}
+
+/* ---- Análisis de Aceite: limit legend and empty chart ---- */
+.oil-limit-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.25rem;
+    margin-bottom: 0.75rem;
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.oil-limit-legend__item {
+    display: inline-flex;
+    align-items: center;
+}
+
+.oil-limit-legend__dash {
+    display: inline-block;
+    width: 24px;
+    margin-right: 0.4rem;
+    border-top: 2px dashed;
+}
+
+.oil-empty-state {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px dashed #ced4da;
+    border-radius: 0.5rem;
+    background: #f8f9fa;
+    color: #6c757d;
+}
+
+.oil-empty-state__icon {
+    color: #adb5bd;
+    font-size: 1.25rem;
+}
+
+.oil-empty-state__title {
+    color: #495057;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.oil-empty-state__label {
+    font-size: 0.8rem;
+}

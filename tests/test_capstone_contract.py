@@ -4,6 +4,7 @@ import pandas as pd
 
 from dashboard.components.alerts_charts import (
     FEATURE_NAMES_ES,
+    NO_SIGNAL_KEY,
     PARETO_BAR_COLOR,
     create_alerts_per_unit_chart,
     create_alerts_per_week_chart,
@@ -170,58 +171,70 @@ def test_capstone_system_labels_are_translated_in_alert_charts():
     assert unit_chart.data[0].marker.color == PARETO_BAR_COLOR
     assert unit_chart.data[1].y[-1] == 100
     assert {trace.name for trace in week_chart.data} == {"Motor"}
-    # System/signal treemap: translated Sistema is the sole level-1 node,
-    # colored via the shared system palette, and every node (including its
-    # signal leaf) carries the system in customdata for click-to-filter.
-    assert list(system_chart.data[0].labels) == ["Motor", "Sin señal registrada"]
-    assert list(system_chart.data[0].parents) == ["", "Motor"]
-    assert list(system_chart.data[0].marker.colors) == ["#355c7d", "#355c7d"]
-    assert list(system_chart.data[0].customdata) == ["Motor", "Motor"]
+    # System/subsystem/signal treemap: translated Sistema is the sole level-1 node,
+    # colored via the shared system palette. This alert has neither a subsistema nor
+    # a signal, so both lower levels fall back to their "none" labels; each node says
+    # which filter a click on it applies ([key, value]; subsystems filter nothing).
+    treemap = system_chart.data[0]
+    assert list(treemap.labels) == ["Motor", "Sin subsistema", "Sin señal registrada"]
+    assert list(treemap.parents) == ["", "0", "0/0"]
+    assert treemap.marker.colors[0] == "#355c7d"
+    assert [list(node) for node in treemap.customdata] == [
+        ["system", "Motor"], ["", ""], ["trigger", NO_SIGNAL_KEY],
+    ]
 
 
-def test_capstone_single_system_treemap_groups_by_familia():
-    # Capstone alerts are all "motor" (a single system), so the treemap
-    # should switch to Familia -> Señal/Variable using the real
-    # config/features/capstone.yaml functional_group mapping instead of
-    # collapsing everything under one "Motor" system tile.
+def test_capstone_single_system_treemap_has_three_levels():
+    # Capstone alerts are all "motor" (a single system): the treemap still reads
+    # Sistema -> Subsistema -> Señal gatillo, with the real subsistema ids shown by
+    # their Spanish labels and the signal codes by theirs.
     alerts = pd.DataFrame(
         [
-            {"UnitId": "CA-1", "sistema": "motor", "Timestamp": "2026-07-10T12:00:00", "Trigger_Var": "coolant_temp_c"},
-            {"UnitId": "CA-2", "sistema": "motor", "Timestamp": "2026-07-10T12:05:00", "Trigger_Var": "coolant_pressure_psi"},
-            {"UnitId": "CA-3", "sistema": "motor", "Timestamp": "2026-07-10T12:10:00", "Trigger_Var": "egt_01_c"},
-            # 'egt_lb_c' has no standalone feature entry - it only appears
-            # inside egt_bank_diff's `derived` formula - so this also proves
-            # the derived-formula token fallback resolves to the same
-            # functional_group ('egt') as its sibling source_column.
-            {"UnitId": "CA-4", "sistema": "motor", "Timestamp": "2026-07-10T12:15:00", "Trigger_Var": "egt_lb_c"},
+            {"UnitId": "CA-1", "sistema": "motor", "subsistema": "coolant", "Timestamp": "2026-07-10T12:00:00", "Trigger_Var": "coolant_temp_c"},
+            {"UnitId": "CA-2", "sistema": "motor", "subsistema": "coolant", "Timestamp": "2026-07-10T12:05:00", "Trigger_Var": "coolant_pressure_psi"},
+            {"UnitId": "CA-3", "sistema": "motor", "subsistema": "egt", "Timestamp": "2026-07-10T12:10:00", "Trigger_Var": "egt_01_c"},
+            {"UnitId": "CA-4", "sistema": "motor", "subsistema": "oil_filter", "Timestamp": "2026-07-10T12:15:00", "Trigger_Var": "oil_filter_dp_psi"},
         ]
     )
 
-    system_chart = create_system_signal_treemap(alerts, client="CAPSTONE")
+    treemap = create_system_signal_treemap(alerts).data[0]
 
-    root_labels = set(system_chart.data[0].parents) | set(system_chart.data[0].labels)
-    assert "Refrigerante" in root_labels  # coolant
-    assert "Gases de escape (EGT)" in root_labels  # egt
-    # No raw functional_group identifier (e.g. "coolant", "egt") should leak.
-    assert "coolant" not in root_labels
-    assert "egt" not in root_labels
-    # Every node still carries the (single, constant) owning system in
-    # customdata, so click-to-filter keeps working unchanged.
-    assert set(system_chart.data[0].customdata) == {"Motor"}
+    labels = set(treemap.labels)
+    assert {"Motor", "Refrigerante", "Gases de escape (EGT)", "Filtro de aceite"} <= labels
+    # No raw subsistema id leaks into the UI.
+    assert not labels & {"coolant", "egt", "oil_filter"}
+    # One system, three subsystems, four signals; the areas add up to the alert count.
+    assert len(treemap.labels) == 1 + 3 + 4
+    assert treemap.values[0] == 4
+    # Positional ids keep every node distinct even when names repeat across branches.
+    assert len(set(treemap.ids)) == len(treemap.ids)
+    customdata = [list(node) for node in treemap.customdata]
+    assert customdata.count(["system", "Motor"]) == 1
+    assert customdata.count(["", ""]) == 3
+    assert sorted(node[1] for node in customdata if node[0] == "trigger") == [
+        "coolant_pressure_psi", "coolant_temp_c", "egt_01_c", "oil_filter_dp_psi",
+    ]
 
 
-def test_capstone_treemap_falls_back_to_sistema_without_client_or_mapping():
+def test_treemap_hierarchy_comes_from_the_data_not_a_fixed_list():
     alerts = pd.DataFrame(
-        [{"UnitId": "CA-1", "sistema": "motor", "Timestamp": "2026-07-10T12:00:00", "Trigger_Var": "coolant_temp_c"}]
+        [
+            {"UnitId": "U1", "sistema": "Motor", "subsistema": "Aire", "Timestamp": "2026-07-10T12:00:00", "Trigger_Var": "['EngCoolTemp']"},
+            {"UnitId": "U2", "sistema": "Frenos", "subsistema": "Aire", "Timestamp": "2026-07-10T12:05:00", "Trigger_Var": "['EngCoolTemp', 'Potasio']"},
+            {"UnitId": "U3", "sistema": "Frenos", "subsistema": "Freno Delantero", "Timestamp": "2026-07-10T12:10:00", "Trigger_Var": None},
+        ]
     )
 
-    # No client passed at all.
-    no_client_chart = create_system_signal_treemap(alerts)
-    assert list(no_client_chart.data[0].labels) == ["Motor", "Temperatura del refrigerante"]
+    treemap = create_system_signal_treemap(alerts).data[0]
 
-    # Client with no matching config/features/{client}.yaml.
-    unknown_client_chart = create_system_signal_treemap(alerts, client="UNKNOWN_CLIENT")
-    assert list(unknown_client_chart.data[0].labels) == ["Motor", "Temperatura del refrigerante"]
+    roots = [label for label, parent in zip(treemap.labels, treemap.parents) if parent == ""]
+    assert sorted(roots) == ["Frenos", "Motor"]
+    # "Aire" exists under both systems and stays two separate cells.
+    assert list(treemap.labels).count("Aire") == 2
+    # Only the first signal of an alert counts, so no alert is double-counted.
+    assert sum(value for value, parent in zip(treemap.values, treemap.parents) if parent == "") == 3
+    # An alert without a signal still gets a clickable trigger cell.
+    assert ["trigger", NO_SIGNAL_KEY] in [list(node) for node in treemap.customdata]
 
 
 def test_capstone_state_markers_and_legend_use_semantic_colors():
