@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
+from dashboard.components.erp_chips import nav_badge_children
 from dashboard.components.language_selector import create_language_selector, LANGUAGE_SYNC_STORE_ID
 from dashboard.auth import current_dashboard_user_data, is_admin
 from dashboard.services_registry import (
@@ -26,10 +27,27 @@ from dashboard.services_registry import (
     service_label,
 )
 from dashboard.troubleshooting_handoff import troubleshooting_agent_configured
+from src.data import erp_warning_store
 
 
 # Predictive components that get a sidebar link (icons live in services_registry.NAV_ICONS)
 PREDICTIVE_NAV_COMPONENTS = ("motor", "transmision")
+
+
+ERP_VALIDATION_NAV_ID = "integration-validacion-avisos"
+ERP_PENDING_BADGE_ID = "erp-nav-pending-badge"
+ERP_NAV_REFRESH_STORE_ID = "erp-nav-refresh-store"
+
+
+def _erp_pending_count(client: Optional[str]) -> Optional[int]:
+    """Pending warnings of a client for the badge on Validación de Avisos; None (no badge) when
+    there is no client or its warning files can't be read — a nav link must never fail to render."""
+    if not client:
+        return None
+    try:
+        return len(erp_warning_store.read(client, "pending"))
+    except Exception:  # unreadable parquet, unknown client folder...
+        return None
 
 
 def _campbell_ai_enabled() -> bool:
@@ -457,7 +475,13 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
     navigation_items = []
     for section_def in SERVICE_SECTIONS:
         subsections = [
-            {'id': service_id, 'label': service_label(service_id), 'icon': nav_icon(service_id)}
+            {
+                'id': service_id,
+                'label': service_label(service_id),
+                'icon': nav_icon(service_id),
+                # Only Validación de Avisos carries a count (its pending warnings).
+                **({'badge': _erp_pending_count(selected_client)} if service_id == ERP_VALIDATION_NAV_ID else {}),
+            }
             for service_id in section_def['services']
             if _enabled(service_id)
         ]
@@ -522,11 +546,13 @@ def build_menu_items(navigation_items: list, active_nav_id: Optional[str] = None
         links = [html.Div(section['label'], className="nav-flyout-title")]
         for subsection in section['subsections']:
             is_active = subsection['id'] == active_nav_id
+            badge = subsection.get('badge')
             links.append(
                 dbc.NavLink(
                     [
                         html.I(className=f"{subsection['icon']} nav-link-icon"),
                         html.Span(subsection['label'], className="nav-link-label"),
+                        *([html.Span(nav_badge_children(badge), id=ERP_PENDING_BADGE_ID, className="nav-link-badge")] if badge is not None else []),
                     ],
                     href=dash.get_relative_path(_nav_path(subsection['id'])),
                     active=is_active,
@@ -685,6 +711,9 @@ def create_app_layout() -> html.Div:
 
         # Session-scoped operator name for ERP notice validation (Validación de Avisos)
         dcc.Store(id='erp-validator-operator-store', storage_type='session', data=None),
+        # Bumped after an approve/reject so the sidebar re-renders with the new pending count
+        # (see integration_avisos_callbacks._handle_action and sidebar_callbacks.update_sidebar_nav).
+        dcc.Store(id=ERP_NAV_REFRESH_STORE_ID, storage_type='memory', data=None),
 
         # Store navigation state for cross-page navigation
         dcc.Store(id='navigation-state', storage_type='memory', data=None),

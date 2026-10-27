@@ -87,7 +87,21 @@
             }
         });
 
+        syncCurrentPage();
         bindShell();
+    }
+
+    /** dbc.NavLink can't carry aria-current, so the Conexión ERP links get it here from their `active` class. */
+    function syncCurrentPage() {
+        var links = document.querySelectorAll('.nav-section[data-section="integration"] .nav-menu-item');
+        Array.prototype.forEach.call(links, function (link) {
+            var active = link.classList.contains('active');
+            if (active && link.getAttribute('aria-current') !== 'page') {
+                link.setAttribute('aria-current', 'page');
+            } else if (!active && link.hasAttribute('aria-current')) {
+                link.removeAttribute('aria-current');
+            }
+        });
     }
 
     function schedule() {

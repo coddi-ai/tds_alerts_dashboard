@@ -12,7 +12,7 @@ import dash
 from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from dashboard.layout import build_navigation_items, build_menu_items
+from dashboard.layout import ERP_NAV_REFRESH_STORE_ID, build_navigation_items, build_menu_items
 from dashboard.services_registry import nav_id_for_pathname
 
 
@@ -26,9 +26,10 @@ def register_sidebar_callbacks(app: dash.Dash) -> None:
         Output("sidebar-nav-menu", "children"),
         Input("client-selector", "value"),
         Input("_pages_location", "pathname"),
+        Input(ERP_NAV_REFRESH_STORE_ID, "data"),
         State("user-info-store", "data"),
     )
-    def update_sidebar_nav(selected_client, pathname, user_data):
+    def update_sidebar_nav(selected_client, pathname, _erp_refresh, user_data):
         if not user_data:
             raise PreventUpdate
 
