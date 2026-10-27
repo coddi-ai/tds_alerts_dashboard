@@ -13,22 +13,27 @@ from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from dashboard.layout import build_navigation_items, build_menu_items
+from dashboard.services_registry import nav_id_for_pathname
 
 
 def register_sidebar_callbacks(app: dash.Dash) -> None:
-    """Register the client-selector-driven sidebar refresh callback."""
+    """Register the sidebar refresh callback (client switch and navigation)."""
 
+    # Re-renders on every navigation too, so the active link is decided in one place
+    # (nav_id_for_pathname) for listed pages and drill-downs alike. Section collapse and
+    # flyout state live in the browser (sidebar_nav.js) and survive this re-render.
     @app.callback(
         Output("sidebar-nav-menu", "children"),
         Input("client-selector", "value"),
+        Input("_pages_location", "pathname"),
         State("user-info-store", "data"),
     )
-    def update_sidebar_nav(selected_client, user_data):
+    def update_sidebar_nav(selected_client, pathname, user_data):
         if not user_data:
             raise PreventUpdate
 
         navigation_items = build_navigation_items(selected_client, user_data)
-        return build_menu_items(navigation_items)
+        return build_menu_items(navigation_items, nav_id_for_pathname(pathname))
 
     # Toggle the persisted collapsed flag on button click. Clientside so the
     # sidebar hides/shows instantly with no server round-trip.

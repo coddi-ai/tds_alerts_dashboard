@@ -779,6 +779,17 @@ def _short_view_model(latest, client: str, component: str):
     return drawable, universe, groups
 
 
+def short_view_chart(latest, client: str, component: str, selected_unit=None, units=None):
+    """The Short View's fleet scatter: the units it can draw (`_short_view_model`), only
+    `units` of them when given, with `selected_unit` highlighted. The one place this chart is
+    produced - the Predictivo tab and the General tab's Unit Detail both call it, so axes,
+    values, thresholds and zones are the same in both."""
+    drawable, _universe, _groups = _short_view_model(latest, client, component)
+    if units is not None:
+        drawable = drawable[drawable["Unit"].isin(set(units))]
+    return make_fleet_scatter(drawable, client, component, selected_unit, _SCATTER_STATUS_COLORS, height=None)
+
+
 def _short_view_figure(drawable, selected, client: str, component: str):
     """The fleet scatter of exactly the `selected` units (axes fit to them); an empty
     selection is an empty chart, never the whole fleet."""

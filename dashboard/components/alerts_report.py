@@ -7,6 +7,7 @@ it does not create a new severity score or diagnosis.
 
 from src.i18n import t
 import ast
+import re
 from typing import Any, Iterable, Optional
 
 import pandas as pd
@@ -113,7 +114,24 @@ def filter_alert_rows(
     the same values the General tab's treemap trigger cells carry. Every given filter
     must hold (AND).
     """
-    frame = prepare_alert_rows(alerts_df)
+    return filter_prepared_rows(
+        prepare_alert_rows(alerts_df), unit=unit, system=system, source=source,
+        evidence=evidence, start_date=start_date, end_date=end_date, trigger=trigger,
+    )
+
+
+def filter_prepared_rows(
+    frame: pd.DataFrame,
+    unit: Optional[Iterable[str]] = None,
+    system: Optional[Iterable[str]] = None,
+    source: Optional[Iterable[str]] = None,
+    evidence: Optional[Iterable[str]] = None,
+    start_date: Optional[Any] = None,
+    end_date: Optional[Any] = None,
+    trigger: Optional[Iterable[str]] = None,
+) -> pd.DataFrame:
+    """`filter_alert_rows` over a frame that `prepare_alert_rows` already processed, so a
+    caller that filters the same alerts several ways prepares them once."""
     if frame.empty:
         return frame
     if unit:
@@ -166,3 +184,38 @@ def alert_summary(alerts_df: pd.DataFrame) -> dict:
         "mixed": int((frame.get("Trigger_type", "") == "Mixto").sum()),
         "latest": frame["Timestamp"].max(),
     }
+
+
+def _natural_key(value: Any) -> list:
+    """Sort key putting ``CA-2`` before ``CA-10``."""
+    return [int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)", str(value))]
+
+
+def alert_filter_catalog(alerts_df: pd.DataFrame) -> dict:
+    """What the General tab's filter controls can offer, from every alert of the client.
+
+    Read from the whole alert history, not from the rows currently charted or inside the
+    date range: the Pareto folds its smaller units into "Otras", and none of that may limit
+    what can be selected.
+
+    Returns ``units`` (every unit id, natural order), ``systems`` (every system label,
+    sorted) and ``trigger_systems`` (trigger code -> ``{system label: alert count}``, with
+    the same code and system labels the filters and the treemap use).
+    """
+    catalog = {"units": [], "systems": [], "trigger_systems": {}}
+    if alerts_df is None or alerts_df.empty:
+        return catalog
+    if "UnitId" in alerts_df.columns:
+        catalog["units"] = sorted(alerts_df["UnitId"].dropna().unique().tolist(), key=_natural_key)
+    if "sistema" not in alerts_df.columns:
+        return catalog
+    system_labels = alerts_df["sistema"].map(translate_alert_system)
+    catalog["systems"] = sorted(system_labels.dropna().unique().tolist())
+    trigger_var = alerts_df["Trigger_Var"] if "Trigger_Var" in alerts_df.columns else pd.Series(None, index=alerts_df.index, dtype=object)
+    trigger_systems: dict = {}
+    for system, signal in zip(system_labels, trigger_var):
+        key = first_signal_key(signal) or NO_SIGNAL_KEY
+        counts = trigger_systems.setdefault(key, {})
+        counts[system] = counts.get(system, 0) + 1
+    catalog["trigger_systems"] = trigger_systems
+    return catalog

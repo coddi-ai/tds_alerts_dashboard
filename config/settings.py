@@ -54,10 +54,21 @@ class Settings(BaseSettings):
         default=3, ge=0, description="Supporting telemetry signals shown before the expand toggle"
     )
 
-    # Alertas -> General -> Distribución por unidad: units drawn as their own bars before
-    # the remainder is folded into one "Otras (n)" bar.
-    alert_unit_chart_top_n: int = Field(
-        default=12, ge=1, description="Units shown individually in the alerts-per-unit Pareto chart"
+    # Pareto charts draw units individually, in descending order, until their running total
+    # reaches a share of the grand total; the rest is folded into one "Otras (n)" bar. The cap
+    # keeps a flat distribution from drawing an unreadable number of bars (see
+    # src/utils/pareto.py). Targets and caps are pending team confirmation.
+    pareto_target_pct: float = Field(
+        default=80.0, gt=0, le=100, description="Informe de Confiabilidad Paretos: cumulative share drawn as individual bars"
+    )
+    pareto_max_bars: int = Field(
+        default=15, ge=1, description="Informe de Confiabilidad Paretos: most individual bars before 'Otras'"
+    )
+    alert_unit_chart_target_pct: float = Field(
+        default=80.0, gt=0, le=100, description="Alertas -> Distribución por unidad: cumulative share drawn as individual bars"
+    )
+    alert_unit_chart_max_bars: int = Field(
+        default=15, ge=1, description="Alertas -> Distribución por unidad: most individual bars before 'Otras'"
     )
 
     # Processing

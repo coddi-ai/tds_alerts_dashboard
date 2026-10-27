@@ -22,11 +22,14 @@
         return window.location.pathname.indexOf('/overview/general') !== -1;
     }
 
+    // The user's own choice of collapsed bands, or null when they have made none: the page
+    // then keeps the state it was rendered in (Anormal open, the rest collapsed).
     function getCollapsedBands() {
         try {
-            return JSON.parse(sessionStorage.getItem(STORAGE_KEY_COLLAPSED) || '[]');
+            var raw = sessionStorage.getItem(STORAGE_KEY_COLLAPSED);
+            return raw === null ? null : JSON.parse(raw);
         } catch (e) {
-            return [];
+            return null;
         }
     }
 
@@ -39,51 +42,66 @@
         }
     }
 
+    // While a search is showing, the server decides which bands are open (the ones with
+    // matches); the user's stored choice neither applies nor is overwritten.
+    function searchActive() {
+        return !!document.querySelector('[data-fleet-search="active"]');
+    }
+
+    function setBand(section, collapsed) {
+        var body = section.querySelector('[data-fleet-band-body]');
+        var toggle = section.querySelector('[data-fleet-band-toggle]');
+        if (!body || !toggle) {
+            return;
+        }
+        body.style.display = collapsed ? 'none' : '';
+        toggle.classList.toggle('fleet-band-collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+
     function applyCollapsedState() {
         var collapsed = getCollapsedBands();
+        if (collapsed === null || searchActive()) {
+            return;
+        }
         document.querySelectorAll('[data-fleet-band]').forEach(function (section) {
-            var band = section.getAttribute('data-fleet-band');
-            var body = section.querySelector('[data-fleet-band-body]');
-            var toggle = section.querySelector('[data-fleet-band-toggle]');
-            if (!body || !toggle) {
-                return;
-            }
-            var isCollapsed = collapsed.indexOf(band) !== -1;
-            body.style.display = isCollapsed ? 'none' : '';
-            toggle.classList.toggle('fleet-band-collapsed', isCollapsed);
+            setBand(section, collapsed.indexOf(section.getAttribute('data-fleet-band')) !== -1);
         });
     }
 
     function restoreScroll() {
+        if (searchActive()) {
+            return;
+        }
         var y = parseInt(sessionStorage.getItem(STORAGE_KEY_SCROLL) || '0', 10);
         if (y > 0) {
             window.scrollTo(0, y);
         }
     }
 
-    // Toggle a band on click (event delegation - survives re-renders).
+    // Toggle a band on click (event delegation - survives re-renders). Enter and Space on the
+    // focused <button> arrive here as clicks.
     document.addEventListener('click', function (e) {
         var toggle = e.target.closest('[data-fleet-band-toggle]');
         if (!toggle) {
             return;
         }
         var section = toggle.closest('[data-fleet-band]');
-        var body = section && section.querySelector('[data-fleet-band-body]');
-        if (!section || !body) {
+        if (!section) {
             return;
         }
-        var band = section.getAttribute('data-fleet-band');
-        var collapsed = getCollapsedBands();
-        var idx = collapsed.indexOf(band);
-        var willCollapse = idx === -1;
-        if (willCollapse) {
-            collapsed.push(band);
-        } else {
-            collapsed.splice(idx, 1);
+        setBand(section, toggle.getAttribute('aria-expanded') === 'true');
+        if (searchActive()) {
+            return;
         }
+        var collapsed = [];
+        document.querySelectorAll('[data-fleet-band]').forEach(function (other) {
+            var otherToggle = other.querySelector('[data-fleet-band-toggle]');
+            if (otherToggle && otherToggle.getAttribute('aria-expanded') === 'false') {
+                collapsed.push(other.getAttribute('data-fleet-band'));
+            }
+        });
         setCollapsedBands(collapsed);
-        body.style.display = willCollapse ? 'none' : '';
-        toggle.classList.toggle('fleet-band-collapsed', willCollapse);
     });
 
     // Persist scroll position continuously while on the Fleet Overview page.

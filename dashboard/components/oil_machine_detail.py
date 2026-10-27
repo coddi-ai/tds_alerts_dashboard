@@ -8,12 +8,15 @@ so the two views cannot drift apart.
 """
 
 from src.i18n import t as _t
-from dashboard.components.labels import status_label
+from dataclasses import dataclass
+from typing import Optional
+
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import dash_table, html
+from dash import html
 
 from config.settings import get_settings
+from dashboard.components.labels import display_component_name
 from dashboard.components.tables import create_machine_detail_table
 from src.data.loaders import get_latest_component_hours, load_machine_status_for_client, load_oil_classified
 from src.i18n.data_text import localized_series, localized_value
@@ -22,75 +25,24 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-_STATUS_STYLE = {
-    'Anormal': ('#f8d7da', '#721c24'),
-    'Alerta': ('#fff3cd', '#856404'),
-    'Normal': ('#d4edda', '#155724'),
-}
 _STATUS_ORDER = {'Anormal': 0, 'Alerta': 1, 'Normal': 2}
 
 
-def _compact_table(latest: pd.DataFrame) -> dash_table.DataTable:
-    """Transposed DataTable for already-sorted component rows: one column per
-    component, Estado/Anomalía rows, AI recommendation as hover text."""
-    columns = [{'name': '', 'id': 'row'}]
-    estado = {'row': _t("tab_telemetry_fleet.estado")}
-    anomalia = {'row': _t("oil_machine_detail.anomalia")}
-    tips = {}
-    style_cond = []
-    for i, (_, r) in enumerate(latest.iterrows()):
-        cid = f'c{i}'
-        columns.append({'name': str(r['componentName']).title(), 'id': cid})
-        status = r['report_status']
-        shown_status = status_label(status) if pd.notna(status) else '—'
-        estado[cid] = shown_status
-        anomaly = r.get('anomalyType') if 'anomalyType' in latest.columns else None
-        anomalia[cid] = str(anomaly) if pd.notna(anomaly) and anomaly != 'Normal' else '—'
-        rec = r.get('ai_recommendation') if 'ai_recommendation' in latest.columns else None
-        tips[cid] = {'value': str(rec) if pd.notna(rec) and str(rec).strip() else _t("oil_machine_detail.sin_recomendacion"),
-                     'type': 'text'}
-        if status in _STATUS_STYLE:
-            bg, fg = _STATUS_STYLE[status]
-            style_cond.append({
-                'if': {'filter_query': '{%s} = "%s"' % (cid, shown_status), 'column_id': cid},
-                'backgroundColor': bg, 'color': fg, 'fontWeight': 'bold',
-            })
-
-    row_tip = {'row': {'value': '', 'type': 'text'}, **tips}
-    return dash_table.DataTable(
-        columns=columns,
-        data=[estado, anomalia],
-        tooltip_header={cid: t['value'] for cid, t in tips.items()},
-        tooltip_data=[row_tip, row_tip],
-        tooltip_duration=None,
-        css=[{'selector': '.dash-table-tooltip', 'rule': 'max-width: 400px; white-space: normal;'}],
-        style_table={'overflowX': 'auto'},
-        style_cell={'textAlign': 'center', 'padding': '8px 10px', 'fontSize': '12px',
-                    'minWidth': '90px', 'whiteSpace': 'normal', 'height': 'auto'},
-        style_header={'backgroundColor': '#6c757d', 'color': 'white', 'fontWeight': 'bold',
-                      'textAlign': 'center', 'whiteSpace': 'normal', 'height': 'auto',
-                      'overflowWrap': 'anywhere'},
-        style_cell_conditional=[
-            {'if': {'column_id': 'row'}, 'textAlign': 'left', 'fontWeight': '600', 'minWidth': '80px'},
-        ],
-        style_data_conditional=style_cond,
-    )
+@dataclass(frozen=True)
+class OilComponentRow:
+    """One component's latest oil sample, as the Unit Detail's Tribología table shows it."""
+    component: str
+    status: str
+    anomaly: Optional[str]    # None when the sample has no anomaly
+    diagnosis: Optional[str]  # AI recommendation; None when there is none
+    sample_date: Optional[pd.Timestamp]
 
 
-def build_machine_compact_table(client: str, unit_id: str, top_n: int | None = None):
-    """Compact, transposed per-unit oil view for the Unit Summary card.
+def unit_oil_components(client: str, unit_id: str) -> Optional[list]:
+    """The unit's components with their latest oil sample, worst-first, as `OilComponentRow`s.
 
-    One column per component (worst-first), two rows: Estado and Anomalía.
-    Each component's AI recommendation is the hover text of its header and
-    cells. Returns the DataTable, or None when the unit has no oil data.
-
-    With `top_n`, only the `top_n` worst components are shown by default and
-    the rest sit in a collapsed "show remaining" section underneath (native
-    <details>, no callback), so a unit with many components doesn't need a wide
-    horizontally-scrolling table (10_unit_summary_monitoreo_polish_and_
-    component_source_fix.md Required Changes #4). Worst = the same
-    Anormal > Alerta > Normal ranking used everywhere, ties broken by
-    severity score.
+    Worst = Anormal > Alerta > Normal, ties broken by severity score (the ranking used
+    everywhere). Returns None when the unit has no oil data.
     """
     if not get_settings().get_classified_reports_path(client.lower()).exists():
         return None
@@ -109,20 +61,21 @@ def build_machine_compact_table(client: str, unit_id: str, top_n: int | None = N
             ascending.append(False)
         latest = latest.sort_values(sort_cols, ascending=ascending)
 
-        if top_n is None or len(latest) <= top_n:
-            return _compact_table(latest)
-
-        rest = latest.iloc[top_n:]
-        return html.Div([
-            _compact_table(latest.iloc[:top_n]),
-            html.Details([
-                html.Summary(_t("oil_machine_detail.ver_componentes_restantes", count=len(rest)),
-                             style={'cursor': 'pointer', 'fontSize': '12px', 'padding': '6px 0'}),
-                _compact_table(rest),
-            ], className="mt-2"),
-        ])
+        rows = []
+        for _, r in latest.iterrows():
+            anomaly = r.get('anomalyType') if 'anomalyType' in latest.columns else None
+            diagnosis = localized_value(r, 'ai_recommendation') if 'ai_recommendation' in latest.columns else None
+            sample_date = r.get('sampleDate')
+            rows.append(OilComponentRow(
+                component=display_component_name(r['componentName']),
+                status=r['report_status'] if pd.notna(r['report_status']) else 'Sin Datos',
+                anomaly=str(anomaly) if pd.notna(anomaly) and anomaly != 'Normal' else None,
+                diagnosis=str(diagnosis) if diagnosis is not None and pd.notna(diagnosis) and str(diagnosis).strip() else None,
+                sample_date=None if pd.isna(sample_date) else sample_date,
+            ))
+        return rows
     except Exception as e:
-        logger.error(f"Compact oil table error: {e}")
+        logger.error(f"Unit oil components error: {e}")
         return None
 
 

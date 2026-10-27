@@ -24,7 +24,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import List, Dict, Optional
+from typing import Dict, Iterable, List, Optional
 from datetime import datetime, timedelta
 import dash_bootstrap_components as dbc
 from dash import html
@@ -32,6 +32,7 @@ import plotly.colors
 
 from dashboard.components.labels import light_tint
 from src.utils.logger import get_logger
+from src.utils.pareto import split_pareto, summary_text, with_others
 from src.utils.date_utils import to_local_naive
 
 logger = get_logger(__name__)
@@ -251,39 +252,38 @@ PARETO_LINE_COLOR = '#d08c60'
 # The "Otras (n)" bar stands for several units, so it is drawn neutral instead of
 # looking like one more unit.
 PARETO_OTHERS_COLOR = '#9aa5b1'
-# Units drawn individually before the remainder is folded into "Otras (n)"; the live
-# value comes from Settings.alert_unit_chart_top_n.
-UNIT_CHART_TOP_N = 12
+# Outline drawn around the bars of the units currently filtered on.
+PARETO_SELECTED_OUTLINE = '#1a252f'
+# Weeks other than the filtered one fade to this opacity in the weekly chart.
+WEEK_FADED_OPACITY = 0.3
+# Distribución por unidad draws units individually until their running total reaches
+# UNIT_CHART_TARGET_PCT of all alerts (at most UNIT_CHART_MAX_BARS bars) and folds the
+# rest into "Otras (n)"; the live values come from Settings.alert_unit_chart_*. The
+# rule itself is src/utils/pareto.py, shared with Informe de Confiabilidad.
+UNIT_CHART_TARGET_PCT = 80.0
+UNIT_CHART_MAX_BARS = 15
 
 
-def _pareto_units_with_others(counts: pd.DataFrame, top_n: int) -> pd.DataFrame:
-    """Top ``top_n`` units of a descending ``counts`` frame, plus one aggregated row for
-    the rest. ``Unit`` is None on that row: it stands for several units, so a click on
-    it must not resolve to any one of them. At most ``top_n`` units means no row is added."""
-    if len(counts) <= top_n:
-        return counts.assign(Unit=counts['UnitId'])
-    top = counts.head(top_n)
-    rest = counts.iloc[top_n:]
-    others = pd.DataFrame([{
-        'UnitId': t("alerts_charts.otras_unidades", count=len(rest)),
-        'Count': int(rest['Count'].sum()),
-    }])
-    return pd.concat([top.assign(Unit=top['UnitId']), others.assign(Unit=None)], ignore_index=True)
-
-
-def create_alerts_per_unit_chart(alerts_df: pd.DataFrame, top_n: int = UNIT_CHART_TOP_N) -> go.Figure:
+def create_alerts_per_unit_chart(
+    alerts_df: pd.DataFrame,
+    target_pct: float = UNIT_CHART_TARGET_PCT,
+    max_bars: int = UNIT_CHART_MAX_BARS,
+    selected_units: Iterable[str] = (),
+) -> go.Figure:
     """
     Create a Pareto chart of alerts per unit: units on the X-axis sorted by
     descending alert count (bars, primary Y-axis) with a cumulative-percentage
     line (secondary Y-axis, fixed 0-100%). Units are not segmented/colored by
     system and no legend is shown - the axes and hover text carry that.
 
-    Progressive disclosure: only the ``top_n`` busiest units get their own bar;
-    the rest are summed into a single neutral "Otras (n)" bar so the axis stays
-    legible on large fleets. The cumulative line still runs across every bar,
-    "Otras" included, ending at 100%. A fleet of at most ``top_n`` units is drawn
-    unaggregated. Bars carry the unit id in ``customdata`` (None for "Otras") so
-    clicks can filter by unit.
+    Progressive disclosure: the busiest units get their own bar until their running
+    total reaches ``target_pct`` of all alerts (never more than ``max_bars`` bars);
+    the rest are summed into a single hatched, neutral "Otras (n)" bar so the axis
+    stays legible on large fleets. The cumulative line still runs across every bar,
+    "Otras" included, ending at 100%. A sentence above the plot states how many
+    units concentrate that share (the share actually reached when the cap, not the
+    target, stopped the bars). Bars carry the unit id in ``customdata`` (None for
+    "Otras") so clicks can filter by unit.
 
     The two Y-axes scale independently: the primary axis fits the largest
     unit's count (not the total alert count), so bars stay readable instead
@@ -292,13 +292,16 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame, top_n: int = UNIT_CHAR
     Renders responsively (no fixed pixel width) so the whole Pareto - every
     bar plus the secondary axis - fits inside the fixed-height card without
     horizontal scrolling; tick/label density and on-bar text shrink or drop
-    as the bar count grows (only reachable with a large ``top_n``) so labels
+    as the bar count grows (only reachable with a large ``max_bars``) so labels
     stay readable instead of overlapping - full per-unit detail (count +
     cumulative %) is always available on hover.
 
     Args:
         alerts_df: DataFrame with column ['UnitId']
-        top_n: Units drawn individually; the remainder becomes one "Otras (n)" bar
+        target_pct: Share of all alerts the individual bars should reach.
+        max_bars: Most individual bars, whether or not ``target_pct`` was reached.
+        selected_units: Units currently filtered on. They always get their own bar and
+            are drawn at full strength while the other bars fade back.
 
     Returns:
         Plotly Figure with a bar + line combo chart
@@ -314,9 +317,17 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame, top_n: int = UNIT_CHAR
     try:
         counts = alerts_df.groupby('UnitId').size().reset_index(name='Count')
         # UnitId as tie-break so equal counts keep a stable order between renders.
-        counts = counts.sort_values(['Count', 'UnitId'], ascending=[False, True]).reset_index(drop=True)
-        has_others = len(counts) > top_n
-        counts = _pareto_units_with_others(counts, top_n)
+        present_units = set(counts['UnitId'])
+        selected_units = [unit for unit in selected_units if unit in present_units]
+        split = split_pareto(counts, 'Count', 'UnitId', target_pct=target_pct, max_bars=max_bars, keep=selected_units)
+        counts = with_others(split, 'Count', 'UnitId', t("alerts_charts.otras_unidades", count=split.others_count))
+        counts['Count'] = counts['Count'].astype(int)
+        # ``Unit`` is None on the aggregate: it stands for several units, so a click on
+        # it must not resolve to any one of them.
+        counts['Unit'] = counts['UnitId']
+        has_others = split.has_others
+        if has_others:
+            counts.loc[counts.index[-1], 'Unit'] = None
 
         total = int(counts['Count'].sum())
         counts['CumulativePct'] = (counts['Count'].cumsum() / total * 100) if total else 0.0
@@ -359,16 +370,35 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame, top_n: int = UNIT_CHAR
         # of compressing toward the bottom as total alert count grows.
         axis_max = (max_count * 1.15) if max_count else 1
 
+        if selected_units:
+            # Selected bars keep the full color and an outline; the rest fade back.
+            faded = light_tint(PARETO_BAR_COLOR, 0.6)
+            bar_colors = [
+                PARETO_BAR_COLOR if unit in selected_units else (PARETO_OTHERS_COLOR if pd.isna(unit) else faded)
+                for unit in counts['Unit']
+            ]
+            bar_outline_widths = [2.5 if unit in selected_units else (1.5 if pd.isna(unit) else 0) for unit in counts['Unit']]
+        elif has_others:
+            bar_colors = [PARETO_BAR_COLOR] * (unit_count - 1) + [PARETO_OTHERS_COLOR]
+            bar_outline_widths = [0] * (unit_count - 1) + [1.5]
+        else:
+            bar_colors = PARETO_BAR_COLOR
+        # The aggregate is hatched and outlined so it cannot pass for one more unit
+        # (Plotly bars cannot take a dashed border).
+        others_pattern = dict(
+            shape=['/' if pd.isna(unit) else '' for unit in counts['Unit']],
+            fgcolor=PARETO_OTHERS_COLOR, bgcolor='white', size=7, solidity=0.4,
+        ) if has_others else None
+
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
             go.Bar(
                 x=counts['UnitId'],
                 y=counts['Count'],
                 name=t("erp.source.alertas"),
-                marker_color=(
-                    [PARETO_BAR_COLOR] * (unit_count - 1) + [PARETO_OTHERS_COLOR]
-                    if has_others else PARETO_BAR_COLOR
-                ),
+                marker_color=bar_colors,
+                marker_line=dict(width=bar_outline_widths, color=PARETO_SELECTED_OUTLINE) if (selected_units or has_others) else None,
+                marker_pattern=others_pattern,
                 customdata=unit_customdata,
                 text=bar_text,
                 textposition='auto',
@@ -426,8 +456,13 @@ def create_alerts_per_unit_chart(alerts_df: pd.DataFrame, top_n: int = UNIT_CHAR
             template='plotly_white',
             showlegend=False,
             height=ALERTS_CHART_HEIGHT,
-            margin=dict(l=55, r=55, t=30, b=80),
+            margin=dict(l=55, r=55, t=55, b=80),
             hovermode='x unified',
+        )
+        fig.add_annotation(
+            text=summary_text(split, t("pareto.noun_alerts")),
+            xref="paper", yref="paper", x=0, y=1.0, xanchor="left", yanchor="bottom",
+            showarrow=False, font=dict(size=12, color='#2c3e50'),
         )
 
         logger.info("Created alerts per unit Pareto chart successfully")
@@ -518,8 +553,16 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
         )
 
 
-def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
-    """Create a weekly stacked alert evolution chart."""
+def create_alerts_per_week_chart(
+    alerts_df: pd.DataFrame, selected_week: Optional[str] = None, week_range: Optional[tuple] = None,
+) -> go.Figure:
+    """Create a weekly stacked alert evolution chart.
+
+    ``selected_week`` (the ISO date of the filtered week's Monday) is drawn at full
+    strength while the other weeks fade back. ``week_range`` is a (first, last) pair of
+    timestamps the x axis must cover even where ``alerts_df`` has no alerts, so that
+    filtering on another dimension thins the bars without dropping weeks off the axis.
+    """
     if alerts_df is None or alerts_df.empty:
         return go.Figure().add_annotation(text=t("alerts_charts.no_hay_alertas_para_el_periodo"), x=0.5, y=0.5, showarrow=False)
     frame = alerts_df.copy()
@@ -528,7 +571,13 @@ def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
     frame['_week_start'] = timestamp.loc[frame.index].dt.to_period('W-SUN').dt.start_time
     frame['_system_display'] = frame.get('sistema', '').map(translate_system_label)
     grouped = frame.groupby(['_week_start', '_system_display']).size().reset_index(name='Count')
-    weeks = pd.date_range(frame['_week_start'].min(), frame['_week_start'].max(), freq='7D')
+    first_week, last_week = frame['_week_start'].min(), frame['_week_start'].max()
+    if week_range is not None:
+        extent = pd.to_datetime(list(week_range), errors='coerce').dropna()
+        if len(extent):
+            first_week = min(first_week, extent.min().to_period('W-SUN').start_time)
+            last_week = max(last_week, extent.max().to_period('W-SUN').start_time)
+    weeks = pd.date_range(first_week, last_week, freq='7D')
     systems = sorted(frame['_system_display'].dropna().unique())
     full = pd.MultiIndex.from_product([weeks, systems], names=['_week_start', '_system_display']).to_frame(index=False)
     grouped = full.merge(grouped, how='left', on=['_week_start', '_system_display']).fillna({'Count': 0})
@@ -557,6 +606,11 @@ def create_alerts_per_week_chart(alerts_df: pd.DataFrame) -> go.Figure:
         cliponaxis=False,
         hovertemplate=t("alerts_charts.weekly_hover"),
     )
+    if selected_week:
+        for trace in fig.data:
+            is_selected = [week[0] == selected_week for week in trace.customdata]
+            trace.marker.opacity = [1.0 if chosen else WEEK_FADED_OPACITY for chosen in is_selected]
+            trace.marker.line = dict(width=[2.5 if chosen else 0 for chosen in is_selected], color=PARETO_SELECTED_OUTLINE)
     # A single-system client sees every stacked bar in one color anyway, so
     # the "Sistema" legend is redundant - only show it once there's more
     # than one system to actually distinguish.
@@ -1144,7 +1198,9 @@ def _wrap_cell_label(label: str, width: int = 16) -> str:
     return '<br>'.join(textwrap.wrap(label, width=width, break_long_words=False)) or label
 
 
-def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
+def create_system_signal_treemap(
+    alerts_df: pd.DataFrame, selected_system: Optional[str] = None, selected_trigger: Optional[str] = None,
+) -> go.Figure:
     """
     Create a three-level treemap of alerts, area sized by alert count:
     Sistema -> Subsistema -> Señal gatillo (trigger).
@@ -1162,6 +1218,11 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
     filter by ``system`` (the displayed label) and trigger cells by ``trigger`` (the raw
     signal code, ``NO_SIGNAL_KEY`` when absent). Subsystem cells are a visual grouping
     only - their ``customdata`` is empty, so a click on one filters nothing.
+
+    Selected state: ``selected_system`` / ``selected_trigger`` (the General tab's filters)
+    never remove cells - the whole tree stays drawn so the selection has something to be
+    compared with. The selected cell gets an outline, the cells that lead to or sit under
+    it keep their color and every other cell fades back.
 
     Every cell has a hover with its full system / subsystem / trigger path and count; the
     inline label is drawn only where it fits (``uniformtext`` hides the rest instead of
@@ -1201,8 +1262,16 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
         dim_trigger = t("alerts_general.filter_trigger")
 
         ids, labels, parents, values, colors, hover_text, node_text, node_filter = [], [], [], [], [], [], [], []
+        outline_widths = []
+        has_selection = bool(selected_system or selected_trigger)
 
-        def add_node(node_id, label, parent, count, color, path_lines, text, filter_target):
+        def leaf_in_selection(system, key):
+            return (not selected_system or system == selected_system) and (not selected_trigger or key == selected_trigger)
+
+        def add_node(node_id, label, parent, count, color, path_lines, text, filter_target, active=True, selected=False):
+            if has_selection and not active:
+                color = light_tint(color, 0.7)
+            outline_widths.append(3 if selected else 1)
             share = t("alerts_charts.treemap_hover_tail", count=count, pct=count / total * 100 if total else 0.0)
             ids.append(node_id)
             labels.append(label)
@@ -1220,22 +1289,25 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
             system_id = str(system_index)
             base_color = root_colors.get(system, PARETO_BAR_COLOR)
             system_line = f"<b>{dim_system}:</b> {system}"
+            system_leaves = leaves[leaves['_system'] == system]
+            leaf_active = [leaf_in_selection(system, key) for key in system_leaves['_signal_key']]
             add_node(
                 system_id, system, '', int(system_count), base_color, [system_line],
                 f"{system} ({int(system_count)})", [TREEMAP_FILTER_SYSTEM, system],
+                active=any(leaf_active), selected=bool(selected_system) and system == selected_system and not selected_trigger,
             )
 
-            system_leaves = leaves[leaves['_system'] == system]
             subsystem_totals = system_leaves.groupby('_subsystem', sort=False)['Count'].sum().sort_values(ascending=False)
             for subsystem_index, (subsystem_name, subsystem_count) in enumerate(subsystem_totals.items()):
                 subsystem_id = f"{system_id}/{subsystem_index}"
                 subsystem_line = f"<b>{dim_subsystem}:</b> {subsystem_name}"
+                signal_rows = system_leaves[system_leaves['_subsystem'] == subsystem_name].sort_values('Count', ascending=False)
                 add_node(
                     subsystem_id, subsystem_name, system_id, int(subsystem_count), light_tint(base_color, 0.3),
                     [system_line, subsystem_line], f"{subsystem_name} ({int(subsystem_count)})", ['', ''],
+                    active=any(leaf_in_selection(system, key) for key in signal_rows['_signal_key']),
                 )
 
-                signal_rows = system_leaves[system_leaves['_subsystem'] == subsystem_name].sort_values('Count', ascending=False)
                 for signal_index, signal_row in enumerate(signal_rows.to_dict('records')):
                     key = signal_row['_signal_key']
                     label = signal_label(key)
@@ -1245,6 +1317,8 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
                         light_tint(base_color, 0.62),
                         [system_line, subsystem_line, f"<b>{dim_trigger}:</b> {label}"],
                         f"{_wrap_cell_label(label)}<br>{count}", [TREEMAP_FILTER_TRIGGER, key],
+                        active=leaf_in_selection(system, key),
+                        selected=bool(selected_trigger) and leaf_in_selection(system, key),
                     )
 
         fig = go.Figure(
@@ -1254,7 +1328,11 @@ def create_system_signal_treemap(alerts_df: pd.DataFrame) -> go.Figure:
                 parents=parents,
                 values=values,
                 branchvalues='total',
-                marker=dict(colors=colors, line=dict(width=1, color='white'), pad=dict(t=22, l=3, r=3, b=3)),
+                marker=dict(
+                    colors=colors,
+                    line=dict(width=outline_widths, color=[PARETO_SELECTED_OUTLINE if width > 1 else 'white' for width in outline_widths]),
+                    pad=dict(t=22, l=3, r=3, b=3),
+                ),
                 customdata=node_filter,
                 text=node_text,
                 texttemplate='%{text}',

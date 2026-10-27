@@ -45,7 +45,7 @@ file-existence probe.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Optional
 
@@ -53,22 +53,22 @@ import pandas as pd
 from dash import dcc, html
 
 from config.client_services import KNOWN_SERVICE_IDS, is_service_enabled
+from config.estado_rules import (
+    NO_STATUS_TECHNIQUES,
+    RISK_RANK,
+    STATUS_PRIORITY,
+    band_for_priority,
+    technique_estado,
+    unit_estado,
+)
 from config.freshness_thresholds import FRESHNESS_CRITERIA
 from dashboard.callbacks.data_freshness_callbacks import (
     calculate_freshness_status,
     convert_utc_to_chile,
     load_data_freshness,
 )
-# Monitoring > Oil's table colors (light cell fill for per-component cells,
-# solid fill for the machine-status column) - reused as-is so the Fleet
-# Overview introduces no palette of its own (08, Required Changes #5).
-from dashboard.callbacks.machines_callbacks import (
-    _MACHINE_STATUS_BG,
-    _MACHINE_STATUS_FG,
-    _STATUS_BG,
-    _STATUS_FG,
-)
-from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT, localize_elapsed, status_label
+from dashboard.components.labels import localize_elapsed, status_label
+from dashboard.components.status_chip import STATUS_SOLID_COLORS, canonical_status, status_chip
 from src.i18n import t as _t, t_or as _t_or
 from dashboard.services_registry import relative_path, unit_summary_path
 from src.data.loaders import (
@@ -116,26 +116,8 @@ TECHNIQUE_FRESHNESS_KEY = {
     "predictive": "Predictivo",
 }
 
-# Worst-of priority order shared by every technique's status vocabulary.
-# Crítico (Alerts) is a confirmed synonym for Anormal (§3.1). InsufficientData
-# (Telemetry) and Sin Datos/Sin Fuente all sit at priority 0 - a missing
-# signal is never confused with a checked-and-healthy one (§3.1).
-STATUS_PRIORITY = {
-    "Anormal": 3, "Crítico": 3,
-    "Alerta": 2, "Atención": 2,
-    "Normal": 1,
-    "Sin Datos": 0, "Sin Fuente": 0, "InsufficientData": 0,
-}
-
-_STATUS_COLORS = {
-    "Anormal": {"border": "#e24b4a", "bg": "#fcebeb", "text": "#a32d2d"},
-    "Alerta":  {"border": "#ef9f27", "bg": "#faeeda", "text": "#854f0b"},
-    "Normal":  {"border": "#1d9e75", "bg": "#eaf3de", "text": "#3b6d11"},
-    "Crítico": {"border": "#e24b4a", "bg": "#fcebeb", "text": "#a32d2d"},
-    "DETENIDO": {"border": "#e24b4a", "bg": "#fcebeb", "text": "#a32d2d"},
-    "SANO":     {"border": "#1d9e75", "bg": "#eaf3de", "text": "#3b6d11"},
-}
-_NO_DATA_COLORS = {"border": "var(--border-strong)", "bg": NO_DATA_BG, "text": NO_DATA_TEXT}
+# Worst-of priority (STATUS_PRIORITY) and the Estado rule itself live in
+# config/estado_rules.py, imported above; this module only applies them.
 
 # "Sin Datos" is appended after the three severity bands, never inserted
 # between them - 06_fleet_overview_revision_2.md's Functional Rules keep the
@@ -158,39 +140,28 @@ _BAND_ICONS = {
     "Normal": "fas fa-check-circle",
     "Sin Datos": "fas fa-question-circle",
 }
-
-
-def _status_colors(status: str) -> dict:
-    return _STATUS_COLORS.get(status, _NO_DATA_COLORS)
+# Tint of each band's icon badge (assets/status_chip.css).
+_BAND_CSS = {"Anormal": "anormal", "Alerta": "alerta", "Normal": "normal", "Sin Datos": "nodata"}
 
 
 def status_color(status: str, default: str) -> str:
-    """Public: the solid severity color of `status` - the same mapping
-    `status_badge()` draws from. Charts inside a card that carries a badge
-    must color their severity elements through this, never from a mapping of
-    their own, so the two can't drift apart (10_unit_summary_monitoreo_polish_
-    and_component_source_fix.md, Functional Rules). `default` is for statuses
-    with no severity color (the no-data tone is a CSS variable, which a chart
-    can't use)."""
-    colors = _STATUS_COLORS.get(status)
-    return colors["border"] if colors else default
+    """Public: the solid severity color of `status` - the same tier colors the status
+    chips (dashboard/components/status_chip.py) draw from. Charts inside a card that
+    carries a chip must color their severity elements through this, never from a mapping
+    of their own, so the two can't drift apart (10_unit_summary_monitoreo_polish_and_
+    component_source_fix.md, Functional Rules). `default` is for statuses with no
+    severity color (the no-data tone is a CSS variable, which a chart can't use)."""
+    from dashboard.components.status_chip import canonical_status
+
+    canonical = canonical_status(status)
+    return STATUS_SOLID_COLORS[canonical] if canonical != "Sin Datos" else default
 
 
 # ── max_risk: one shared severity ranking for label and estado_datos ────────
-# (08_fleet_overview_table_format.md, Functional Rules). Both inputs are
-# mapped onto Normal < Alerta < Anormal. Freshness tiers map one-to-one onto
-# the Normal/Alerta/Anormal columns of 00_implementation_guide.md §3.2
-# (Ok/Atención/Preocupante); technique labels use their confirmed synonyms
-# (Crítico == Anormal, §3.1). Maintenance's operational SANO/DETENIDO is not
-# a severity gradient (§3.1), so it ranks as Normal here: it can be degraded
-# by stale data but never contributes severity of its own.
-RISK_RANK = {"Normal": 1, "Alerta": 2, "Anormal": 3}
-_LABEL_TO_RISK = {
-    "Normal": "Normal", "SANO": "Normal", "DETENIDO": "Normal",
-    "Alerta": "Alerta", "Atención": "Alerta",
-    "Anormal": "Anormal", "Crítico": "Anormal",
-}
-_DATA_TO_RISK = {"Ok": "Normal", "Atención": "Alerta", "Preocupante": "Anormal"}
+# The rule (worse of the technique's status and its data age, on Normal < Alerta <
+# Anormal) is `config.estado_rules.technique_estado`; `max_risk` wraps its outcome with
+# the data a cell needs to show and explain itself (08_fleet_overview_table_format.md,
+# Functional Rules).
 # What each freshness tier is called in the tooltip's plain-language text.
 _DATA_STATE_TEXT_KEYS = {
     "Ok": "fleet_overview.data_state_ok", "Atención": "fleet_overview.data_state_attention",
@@ -200,6 +171,13 @@ _DATA_STATE_TEXT_KEYS = {
 
 def _data_state_text(estado_datos: str) -> str:
     return _t(_DATA_STATE_TEXT_KEYS[estado_datos])
+
+
+def _shown_status(label) -> str:
+    """A technique's own status as the General tab names it: Crítico (Alertas) is Anormal,
+    Atención is Alerta. Anything else is left as it is."""
+    canonical = canonical_status(label)
+    return canonical if canonical != "Sin Datos" or str(label).strip().casefold() == "sin datos" else label
 
 
 @dataclass(frozen=True)
@@ -217,12 +195,14 @@ class MergedCell:
     explanation_key: str
     elapsed: Optional[str] = None
     score: Optional[float] = None
+    # Alerts only: (last week, last 4 weeks, last 8 weeks) alert counts.
+    alert_counts: Optional[tuple] = None
 
     @property
     def explanation(self) -> str:
         return _t(
             self.explanation_key,
-            label=status_label(self.label),
+            label=status_label(_shown_status(self.label)),
             estado_datos=status_label(self.estado_datos),
             data_state=_data_state_text(self.estado_datos) if self.estado_datos in _DATA_STATE_TEXT_KEYS else "",
             shown=status_label(self.value),
@@ -234,7 +214,7 @@ class MergedCell:
         if self.elapsed and self.elapsed != "N/A":
             data_text += _t("fleet_overview.tooltip_last_update", elapsed=localize_elapsed(self.elapsed))
         lines = [
-            _t("fleet_overview.tooltip_technique_status", label=status_label(self.label)),
+            _t("fleet_overview.tooltip_technique_status", label=status_label(_shown_status(self.label))),
             _t("fleet_overview.tooltip_data_status", data_text=data_text),
         ]
         if self.score is not None and not pd.isna(self.score):
@@ -242,58 +222,37 @@ class MergedCell:
                 _t("fleet_overview.tooltip_severity_value")
                 + (f"{self.score:.1f}" if isinstance(self.score, float) else str(self.score))
             )
+        if self.alert_counts is not None:
+            week, four_weeks, eight_weeks = self.alert_counts
+            lines.append(_t(
+                "fleet_overview.tooltip_alert_counts",
+                week=week, four_weeks=four_weeks, eight_weeks=eight_weeks,
+            ))
         lines.append(self.explanation)
         return "\n".join(lines)
 
 
 def max_risk(label, estado_datos, elapsed: Optional[str] = None, score=None) -> MergedCell:
     """The worse of a technique's own status `label` and its data-freshness
-    `estado_datos`, on the shared Normal < Alerta < Anormal ranking.
+    `estado_datos` (rule: `config.estado_rules.technique_estado`), as a cell.
 
-    - A technique with no reading for the unit (label Sin Datos/Sin Fuente/
-      InsufficientData/None) is "Sin Datos" whatever its freshness: there is
-      no status to degrade, and a client-wide fresh feed must not turn a
-      missing reading into a healthy-looking cell (Functional Rules: never
-      "Normal" without supporting data).
-    - A freshness state that can't be determined (Sin Datos) leaves the
-      technique's own label in force; the tooltip says so.
-    - Ties show the technique's own label (so Maintenance keeps SANO/
-      DETENIDO while its data is as fresh as the status is benign).
+    The technique's own `score` is kept only while it still explains the shown value:
+    stale data that overrides the status takes it away.
     """
     label = str(label) if label else "Sin Datos"
     estado_datos = str(estado_datos) if estado_datos else "Sin Datos"
-    label_risk = _LABEL_TO_RISK.get(label)
-    data_risk = _DATA_TO_RISK.get(estado_datos)
+    resolution = technique_estado(label, estado_datos)
+    return MergedCell(
+        resolution.value, label, estado_datos, resolution.driver, resolution.explanation_key,
+        elapsed, score if resolution.label_kept else None,
+    )
 
-    if label_risk is None:
-        return MergedCell(
-            "Sin Datos", label, estado_datos, "none",
-            "fleet_overview.explain_none",
-            elapsed, score,
-        )
-    if data_risk is None:
-        return MergedCell(
-            label_risk if label not in ("SANO", "DETENIDO") else label,
-            label, estado_datos, "label",
-            "fleet_overview.explain_label_only",
-            elapsed, score,
-        )
 
-    label_rank, data_rank = RISK_RANK[label_risk], RISK_RANK[data_risk]
-    if data_rank > label_rank:
-        return MergedCell(
-            data_risk, label, estado_datos, "data",
-            "fleet_overview.explain_data_wins",
-            elapsed, None,  # the technique's own score no longer explains the cell
-        )
-    shown = label if label in ("SANO", "DETENIDO") else label_risk
-    if label_rank > data_rank:
-        why = "fleet_overview.explain_label_wins"
-        driver = "label"
-    else:
-        why = "fleet_overview.explain_both"
-        driver = "both"
-    return MergedCell(shown, label, estado_datos, driver, why, elapsed, score)
+def natural_key(unit) -> list:
+    """Sort key for natural ascending order of unit IDs: CA-2 before CA-10, T_9 before T_10.
+    The ID is split into text and number runs, so numbers compare as numbers; the split always
+    alternates text, number, text... so two keys are comparable position by position."""
+    return [int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)", str(unit))]
 
 
 def _normalize_unit_id(uid) -> str:
@@ -305,18 +264,13 @@ def _normalize_unit_id(uid) -> str:
 
 
 def _band_for_priority(priority: int) -> str:
-    """Maps a resolved (non-zero) worst-of priority to its band. Priority 0
-    ("every applicable technique is Sin Datos/Sin Fuente/InsufficientData")
-    is deliberately not handled here - callers must special-case it to the
-    "Sin Datos" band themselves (06_fleet_overview_revision_2.md, Required
-    Changes #4) rather than let it fall through to "Normal": priority 1 is
-    an actually-observed Normal reading, priority 0 is the absence of any
-    reading at all, and those are not the same fact."""
-    if priority >= 3:
-        return "Anormal"
-    if priority >= 2:
-        return "Alerta"
-    return "Normal"
+    """Band of a resolved (non-zero) worst-of priority (config.estado_rules). Priority 0
+    ("every applicable technique is Sin Datos/Sin Fuente/InsufficientData") is deliberately
+    not handled by it - callers special-case it to the "Sin Datos" band
+    (06_fleet_overview_revision_2.md, Required Changes #4) rather than let it fall through
+    to "Normal": priority 1 is an actually-observed Normal reading, priority 0 is the
+    absence of any reading at all, and those are not the same fact."""
+    return band_for_priority(priority)
 
 
 # ── Freshness helpers ────────────────────────────────────────────────────────
@@ -400,6 +354,16 @@ def _alerts_status_map(client: str, days: int = 30) -> tuple[dict, dict, str, st
     max_ts = pd.to_datetime(df_alerts["Timestamp"], errors="coerce").max()
     freshness_label, elapsed = _freshness_from_naive_timestamp(max_ts, "alerts")
     return status_map, value_map, freshness_label, elapsed
+
+
+def _alerts_window_counts(client: str) -> dict:
+    """{unit: (last week, last 4 weeks, last 8 weeks)} alert counts - what
+    breaks ties between units with the same Alertas status (see the sort key in
+    `_compute_unit_entries`) and what the Alertas tooltip lists. {} when the
+    client has no alert feed."""
+    from dashboard.callbacks.overview_general_callbacks import count_alerts_by_window
+
+    return count_alerts_by_window(load_alerts_data(client))
 
 
 def _telemetry_status_map(client: str) -> tuple[dict, dict]:
@@ -586,45 +550,15 @@ def _predictive_status_map(client: str, components: list) -> tuple[dict, dict, s
 # ── Table rendering ──────────────────────────────────────────────────────────
 
 def status_badge(status: str):
-    """Public: reused by the Unit Summary navigation shell's sticky header
-    (Phase 2) so both views render the same overall/maintenance badge."""
-    colors = _status_colors(status)
-    return html.Span(status_label(status), className="status-badge", style={
-        "background": colors["bg"], "color": colors["text"],
-    })
+    """Public: the tinted status chip. Unit Detail draws every technique and section
+    status with it, so a status reads the same in both views."""
+    return status_chip(status)
 
 
-def _cell_colors(value: str) -> dict:
-    """Light cell fill/text for a technique cell - Monitoring > Oil's
-    per-component cell scheme (`_STATUS_BG`/`_STATUS_FG`). Maintenance's
-    operational values borrow the same scheme (SANO as Normal, DETENIDO as
-    Anormal, matching how they were colored on the cards)."""
-    key = {"SANO": "Normal", "DETENIDO": "Anormal"}.get(value, value)
-    if key in _STATUS_BG:
-        return {"bg": _STATUS_BG[key], "text": _STATUS_FG[key]}
-    return {"bg": NO_DATA_BG, "text": NO_DATA_TEXT}
-
-
-def _estado_colors(status: str) -> dict:
-    """Solid fill for the Estado column - Monitoring > Oil's machine-status
-    column scheme (`_MACHINE_STATUS_BG`/`_MACHINE_STATUS_FG`)."""
-    if status in _MACHINE_STATUS_BG:
-        return {"bg": _MACHINE_STATUS_BG[status], "text": _MACHINE_STATUS_FG[status]}
-    return {"bg": NO_DATA_BG, "text": NO_DATA_TEXT}
-
-
-def _row_link(unit: str, child, title: Optional[str] = None, style: Optional[dict] = None):
-    """Every cell's content is a link to the unit's Unit Summary, so the
-    whole row is clickable (08, Required Changes #6; Phase 2's entry point,
-    02_unit_summary_navigation_shell.md #1). A `dcc.Link` (not `html.A`) so
-    navigating goes through Dash Pages' client-side router."""
-    return dcc.Link(
-        child,
-        href=relative_path(unit_summary_path(unit)),
-        title=title,
-        className="fleet-cell-link",
-        style=style,
-    )
+def _unit_link(unit: str):
+    """The row's link to the unit's Unit Detail: a real `<a href>` (a `dcc.Link`, so
+    navigating goes through Dash Pages' client-side router)."""
+    return dcc.Link(unit, href=relative_path(unit_summary_path(unit)), className="fleet-unit-link")
 
 
 def _estado_tooltip(overall_status: str, cells: dict) -> str:
@@ -632,35 +566,42 @@ def _estado_tooltip(overall_status: str, cells: dict) -> str:
         return _t("fleet_overview.estado_tooltip_no_data")
     drivers = [
         technique_label(tech) for tech, c in cells.items()
-        if tech != "maintenance" and c.value == overall_status
+        if tech not in NO_STATUS_TECHNIQUES and c.value == overall_status
     ]
     return _t("fleet_overview.estado_tooltip", overall_status=status_label(overall_status), drivers=", ".join(drivers))
 
 
-def _technique_cell(unit: str, cell: MergedCell):
-    colors = _cell_colors(cell.value)
-    return html.Td(
-        _row_link(unit, status_label(cell.value), title=cell.tooltip),
-        className="fleet-table-cell",
-        style={"backgroundColor": colors["bg"], "color": colors["text"]},
+def chip_button(chip, tip: str, label: str) -> html.Button:
+    """A status chip that explains itself: a real `<button>` whose explanation opens on hover,
+    focus and click/Enter (assets/chip_popover.js) - never on hover alone. `label` is its
+    accessible name."""
+    return html.Button(
+        chip, type="button", className="chip-button",
+        **{"data-tip": tip, "aria-label": label},
     )
+
+
+def _technique_cell(technique: str, cell: MergedCell):
+    label = f"{technique_label(technique)}: {status_label(cell.value)}. {_t('fleet_overview.show_explanation')}"
+    return html.Td(chip_button(status_chip(cell.value), cell.tooltip, label), className="fleet-table-cell")
 
 
 def _unit_row(entry: dict):
     unit = entry["unit"]
     estado = entry["overall_status"]
-    estado_colors = _estado_colors(estado)
     cells = entry["cells"]
     return html.Tr(
         [
-            html.Td(_row_link(unit, unit), className="fleet-table-unit"),
+            html.Td(_unit_link(unit), className="fleet-table-unit"),
             html.Td(
-                _row_link(unit, status_label(estado), title=_estado_tooltip(estado, cells)),
+                chip_button(
+                    status_chip(estado, solid=True), _estado_tooltip(estado, cells),
+                    f"{_t('fleet_overview.col_status')}: {status_label(estado)}. {_t('fleet_overview.show_explanation')}",
+                ),
                 className="fleet-table-cell fleet-table-estado",
-                style={"backgroundColor": estado_colors["bg"], "color": estado_colors["text"]},
             ),
         ]
-        + [_technique_cell(unit, cells[t]) for t in entry["techniques"]],
+        + [_technique_cell(t, cells[t]) for t in entry["techniques"]],
         className="fleet-table-row",
     )
 
@@ -699,11 +640,20 @@ def more_button_label(remaining: int) -> str:
     return _t("fleet_overview.show_more", count=min(PAGE_SIZE, remaining), remaining=remaining)
 
 
-def get_band_rows_chunk(client: str, band: str, page: int) -> tuple:
+def matching_entries(entries: list, query) -> list:
+    """The entries whose unit ID contains `query` (case-insensitive); all of them when the
+    query is empty."""
+    needle = str(query or "").strip().casefold()
+    if not needle:
+        return entries
+    return [e for e in entries if needle in str(e["unit"]).casefold()]
+
+
+def get_band_rows_chunk(client: str, band: str, page: int, query=None) -> tuple:
     """Public: `(rows, remaining)` for chunk number `page` (0 is the first,
     already rendered with the band) of a band - `remaining` counts the units
-    still not shown after this chunk."""
-    entries = _band_snapshot(client).get(band, [])
+    still not shown after this chunk. With a `query`, the band is the units matching it."""
+    entries = matching_entries(_band_snapshot(client).get(band, []), query)
     start = PAGE_SIZE * page
     chunk = entries[start:start + PAGE_SIZE]
     return [_unit_row(e) for e in chunk], max(len(entries) - (start + len(chunk)), 0)
@@ -714,8 +664,11 @@ def _band_table(band: str, entries: list, techniques: list):
     client's technique availability alone, so every row has a cell for every
     column - never hidden or blank for some rows (08, Required Changes #1)."""
     header = html.Thead(html.Tr(
-        [html.Th(_t("fleet_overview.col_unit"), className="fleet-table-unit"), html.Th(_t("fleet_overview.col_status"))]
-        + [html.Th(technique_label(tech)) for tech in techniques]
+        [
+            html.Th(_t("fleet_overview.col_unit"), scope="col", className="fleet-table-unit"),
+            html.Th(_t("fleet_overview.col_status"), scope="col"),
+        ]
+        + [html.Th(technique_label(tech), scope="col") for tech in techniques]
     ))
     table = html.Table(
         [header, html.Tbody(
@@ -738,14 +691,14 @@ def _band_table(band: str, entries: list, techniques: list):
 
 # ── Top-level orchestration ─────────────────────────────────────────────────
 
-def build_fleet_overview(client: str) -> html.Div:
+def build_fleet_overview(client: str, query=None, refresh: bool = True) -> html.Div:
     """Build the full Fleet Overview: bands (Anormal/Alerta/Normal), each
     containing a table of units (one row per unit, one column per applicable
     technique) sorted per the confirmed ranking rule (§3.3)."""
     if not client:
         return html.Div(html.P(_t("fleet_overview.select_client"), className="text-muted text-center p-4"))
     try:
-        return _build_fleet_overview(client)
+        return _build_fleet_overview(client, query, refresh)
     except Exception:
         logger.exception("Error building Fleet Overview for client=%s", client)
         return html.Div(html.P(_t("fleet_overview.build_error"), className="text-danger text-center p-4"))
@@ -780,7 +733,8 @@ def technique_availability(client: str) -> dict:
     technique applicable to this client (§3.1 gate; inapplicable techniques
     are omitted, matching how they get no column at all in the table).
 
-    This reads the exact same per-unit `max_risk` cells the table renders -
+    This reads the exact same per-unit `max_risk` cells the table renders - for
+    Mantención, which has no column, its cell is computed only for this signal -
     used by the "Fuentes de datos" banner
     (dashboard/components/source_status.py) instead of an independent raw
     file-existence probe, so the banner can never claim "Disponible" for a
@@ -836,13 +790,16 @@ def _compute_unit_entries(client: str) -> list:
         _predictive_status_map(client, predictive_components) if applicable["predictive"] else ({}, {}, "Sin Datos", "N/A")
     )
     telem_tribo_freshness = _telemetry_tribologia_freshness_map(client)
+    alerts_counts = _alerts_window_counts(client) if applicable["alerts"] else {}
 
-    # ── Union of units across every technique actually enabled for this client ──
+    # ── Union of units across every technique that carries a status: a unit only
+    # Maintenance knows about has no severity to show or rank, so it is dropped (here
+    # and from the Unit Detail's unit list) rather than listed as an empty "Sin Datos"
+    # row. ──
     units = set()
     units.update(alerts_status.keys())
     units.update(telemetry_status.keys())
     units.update(oil_status.keys())
-    units.update(maintenance_status.keys())
     units.update(predictive_status.keys())
 
     if not units:
@@ -850,7 +807,7 @@ def _compute_unit_entries(client: str) -> list:
 
     # ── One pass per unit: compute each technique's merged cell, the overall
     # band and the §3.3 sort key. ──
-    techniques = [t for t in TECHNIQUE_LABELS if applicable[t]]
+    techniques = [t for t in TECHNIQUE_LABELS if applicable[t] and t not in NO_STATUS_TECHNIQUES]
     entries = []
     for unit in units:
         unit_norm = _normalize_unit_id(unit)
@@ -860,36 +817,41 @@ def _compute_unit_entries(client: str) -> list:
         # record (that reads Sin Datos through max_risk, never blank).
         cells: dict[str, MergedCell] = {}
         # Per-technique status keyed the same as TECHNIQUE_LABELS - what the
-        # Unit Summary content (documentation/general/general_specs/
-        # 05_unit_summary_restructure_and_predictive_comparison.md, Required
-        # Changes #2) reads its per-card status labels from. It is the
+        # Unit Detail reads its status tiles and card chips from. It is the
         # table's merged value, never recomputed: the Fleet Overview and the
-        # Unit Summary are one rule applied to one set of inputs, so they
+        # Unit Detail are one rule applied to one set of inputs, so they
         # stay consistent whatever state the upstream pipelines are in.
+        # Techniques without a status (Mantención) are not in it.
         technique_status: dict[str, str] = {}
 
         def add(technique, raw_status, fresh_label, fresh_elapsed, score=None):
             cells[technique] = max_risk(raw_status, fresh_label, fresh_elapsed, score)
-            technique_status[technique] = cells[technique].value
+            if technique not in NO_STATUS_TECHNIQUES:
+                technique_status[technique] = cells[technique].value
+
+        # (last week, last 4 weeks, last 8 weeks); zeros for a unit with no
+        # alert at all, None when the client has no alert feed to count from.
+        unit_alert_counts = alerts_counts.get(unit, (0, 0, 0)) if alerts_counts else None
 
         if applicable["alerts"]:
             add("alerts", alerts_status.get(unit, "Sin Datos"), alerts_fresh_label,
                 alerts_fresh_elapsed, alerts_value.get(unit))
+            if unit_alert_counts is not None:
+                cells["alerts"] = replace(cells["alerts"], alert_counts=unit_alert_counts)
 
         if applicable["telemetry"]:
             label, elapsed = telem_tribo_freshness.get(("telemetry", unit), ("Sin Datos", "N/A"))
-            add("telemetry", telemetry_status.get(unit, "Sin Datos"), label, elapsed,
-                telemetry_value.get(unit))
+            # The unit's telemetry score is not shown in the General tab: the Estado says it.
+            add("telemetry", telemetry_status.get(unit, "Sin Datos"), label, elapsed)
 
         if applicable["oil"]:
             label, elapsed = telem_tribo_freshness.get(("oil", unit), ("Sin Datos", "N/A"))
             add("oil", oil_status.get(unit, "Sin Datos"), label, elapsed, oil_value.get(unit))
 
-        maintenance_badge_status = None
         if applicable["maintenance"]:
-            raw_maintenance_status = maintenance_status.get(unit, "Sin Datos")
-            add("maintenance", raw_maintenance_status, maint_fresh_label, maint_fresh_elapsed)
-            maintenance_badge_status = technique_status["maintenance"]
+            # Data-availability signal only (see `technique_availability`): Mantención
+            # has no status in the General tab.
+            add("maintenance", maintenance_status.get(unit, "Sin Datos"), maint_fresh_label, maint_fresh_elapsed)
 
         if applicable["predictive"]:
             add(
@@ -899,30 +861,21 @@ def _compute_unit_entries(client: str) -> list:
                 predictive_value.get(unit_norm, predictive_value.get(unit)),
             )
 
-        # Overall status = worst-of the merged cells, Maintenance excluded
-        # (§3.1/§3.3) - so the Estado column is always consistent with the
-        # cells next to it. Priority 0 means every applicable (non-
-        # Maintenance) cell is Sin Datos - or there was no applicable
-        # technique to evaluate at all - never a resolved Normal reading
-        # (that would be priority 1); it must not band/label as "Normal"
+        # Overall status = worst-of the merged cells (config.estado_rules.unit_estado,
+        # which leaves Maintenance out), so the Estado column is always consistent with
+        # the cells next to it. "Sin Datos" means every applicable cell is Sin Datos -
+        # never a resolved Normal reading - and must not band/label as "Normal"
         # (06_fleet_overview_revision_2.md, Required Changes #4).
-        priorities = [
-            STATUS_PRIORITY.get(cell.value, 0)
-            for technique, cell in cells.items() if technique != "maintenance"
-        ]
-        overall_priority = max(priorities) if priorities else 0
-        band = "Sin Datos" if overall_priority == 0 else _band_for_priority(overall_priority)
-        # §3.3: worst-priority (implicit - band already sorts on it), then
-        # count of Alerta/Anormal techniques (desc), then alphabetical.
-        alerta_anormal_count = sum(1 for p in priorities if p >= 2)
-        sort_key = (-alerta_anormal_count, unit)
+        band, _worst, _alerta_or_worse = unit_estado({t: c.value for t, c in cells.items()})
+        # Within a band, units go in natural ascending ID order (CA-2 before CA-10): a
+        # stable place for every unit, whatever its readings.
+        sort_key = natural_key(unit)
 
         entries.append({
             "unit": unit,
             "band": band,
             "sort_key": sort_key,
             "overall_status": band,  # band label doubles as the overall status name
-            "maintenance_status": maintenance_badge_status,
             "technique_status": technique_status,
             "techniques": techniques,
             "cells": cells,
@@ -933,11 +886,11 @@ def _compute_unit_entries(client: str) -> list:
 
 
 def get_ordered_units(client: str) -> list:
-    """Ordered `{unit, band, overall_status, maintenance_status}` list, in
+    """Ordered `{unit, band, overall_status, technique_status}` list, in
     the same order the Fleet Overview renders units - used by the Unit
-    Summary navigation shell (Phase 2) for prev/next lateral navigation and
-    its unit switcher, and for the sticky header's current status. Returns
-    [] if the client has no applicable techniques or no units."""
+    Detail navigation bar for prev/next lateral navigation and its unit
+    switcher, and for the banner's current status. Returns [] if the client
+    has no applicable techniques or no units."""
     if not client:
         return []
     try:
@@ -950,7 +903,6 @@ def get_ordered_units(client: str) -> list:
             "unit": e["unit"],
             "band": e["band"],
             "overall_status": e["overall_status"],
-            "maintenance_status": e["maintenance_status"],
             "technique_status": e["technique_status"],
         }
         for e in entries
@@ -958,17 +910,58 @@ def get_ordered_units(client: str) -> list:
 
 
 def get_unit_snapshot(client: str, unit: str):
-    """A single unit's `{unit, band, overall_status, maintenance_status}`,
-    or None if that unit isn't found for this client (Unit Summary's sticky
-    header, Phase 2)."""
+    """A single unit's `{unit, band, overall_status, technique_status}`,
+    or None if that unit isn't found for this client (Unit Detail's banner)."""
     for entry in get_ordered_units(client):
         if entry["unit"] == unit:
             return entry
     return None
 
 
-def _build_fleet_overview(client: str) -> html.Div:
-    entries = _compute_unit_entries(client)
+def _band_slug(band: str) -> str:
+    return band.lower().replace(" ", "-")
+
+
+def _band_section(band: str, band_entries: list, matches: list, techniques: list, expanded: bool) -> html.Div:
+    """One status band: a toggle button (tinted icon badge, title, unit count) and the
+    band's table. The toggle is a real `<button aria-expanded aria-controls>`. `band_entries`
+    is the whole band (the count in the header never changes with a search); `matches` is what
+    the table lists. `expanded` is the state it is rendered in; the user's own choice is kept
+    client-side afterwards (assets/fleet_overview_state.js)."""
+    css = _BAND_CSS[band]
+    body_id = f"fleet-band-body-{_band_slug(band)}"
+    return html.Div([
+        html.Button([
+            html.Span(html.I(className=_BAND_ICONS[band]), className=f"icon-badge icon-badge--{css}",
+                      **{"aria-hidden": "true"}),
+            html.Span(_t(_BAND_LABEL_KEYS[band]), className="fleet-band-title"),
+            html.Span(f"({len(band_entries)})", className="fleet-band-count"),
+            html.I(className="fas fa-chevron-down fleet-band-chevron", **{"aria-hidden": "true"}),
+        ], type="button", className="fleet-band-header" + ("" if expanded else " fleet-band-collapsed"),
+            **{"data-fleet-band-toggle": "true", "aria-expanded": "true" if expanded else "false",
+               "aria-controls": body_id}),
+        html.Div(
+            _band_table(band, matches, techniques),
+            id=body_id,
+            className="fleet-table-wrap",
+            style=None if expanded else {"display": "none"},
+            **{"data-fleet-band-body": "true"},
+        ),
+    ], **{"data-fleet-band": band.lower()})
+
+
+def _build_fleet_overview(client: str, query=None, refresh: bool = True) -> html.Div:
+    """The bands. `refresh=False` lays them out from the last full build instead of reading the
+    data again (what a search does while typing). With a `query`, every band lists only the
+    units whose ID contains it, the bands with matches are open and the others keep their
+    place; without one only Anormal starts open."""
+    if refresh or client not in _SNAPSHOTS:
+        entries = _compute_unit_entries(client)
+        entries_by_band = _group_by_band(entries)
+        _SNAPSHOTS[client] = entries_by_band
+    else:
+        entries_by_band = _SNAPSHOTS[client]
+        entries = [e for band in _BAND_ORDER for e in entries_by_band[band]]
     if not entries:
         if not any(_applicable_techniques(client).values()):
             return html.Div(html.P(
@@ -980,37 +973,20 @@ def _build_fleet_overview(client: str) -> html.Div:
     # Columns depend only on the client's technique availability, so every
     # band's table shares the same set (08, Required Changes #1).
     techniques = entries[0]["techniques"]
-    entries_by_band = _group_by_band(entries)
-    _SNAPSHOTS[client] = entries_by_band
+    query = str(query or "").strip()
 
     sections = []
+    any_match = False
     for band in _BAND_ORDER:
         band_entries = entries_by_band[band]
         if not band_entries:
             continue
-        colors = _status_colors(band)
-        sections.append(html.Div([
-            html.Div([
-                html.I(className="fas fa-chevron-down me-2 fleet-band-chevron"),
-                html.I(className=f"{_BAND_ICONS[band]} me-2", style={"color": colors["text"]}),
-                html.Span(f"{_t(_BAND_LABEL_KEYS[band])} ({len(band_entries)})", style={
-                    "fontWeight": "700", "fontSize": "13px", "color": colors["text"],
-                    "textTransform": "uppercase", "letterSpacing": "0.04em",
-                }),
-            ], className="fleet-band-header", style={
-                "borderLeft": f"3px solid {colors['border']}",
-                "paddingLeft": "10px", "margin": "18px 0 10px",
-                "display": "flex", "alignItems": "center", "cursor": "pointer", "userSelect": "none",
-            }, **{"data-fleet-band-toggle": "true"}),
-            # Collapse/expand + scroll position are persisted client-side
-            # (dashboard/assets/fleet_overview_state.js) via the
-            # data-fleet-band* hooks above/below - state preservation on
-            # return-to-Fleet-Overview, Phase 2 §Required Changes #5.
-            html.Div(
-                _band_table(band, band_entries, techniques),
-                className="fleet-table-wrap",
-                **{"data-fleet-band-body": "true"},
-            ),
-        ], **{"data-fleet-band": band.lower()}))
+        matches = matching_entries(band_entries, query)
+        any_match = any_match or bool(matches)
+        expanded = bool(matches) if query else band == "Anormal"
+        sections.append(_band_section(band, band_entries, matches, techniques, expanded))
 
-    return html.Div(sections)
+    if query and not any_match:
+        sections.insert(0, html.P(_t("fleet_overview.search_no_results", query=query),
+                                  className="text-muted p-2", role="status"))
+    return html.Div(sections, **({"data-fleet-search": "active"} if query else {}))

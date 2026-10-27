@@ -1,0 +1,61 @@
+/* Fuentes de datos: shared indicator (dashboard/components/data_sources.py).
+   Status colors are the severity tokens from predictive_styles.css (:root):
+   available = green, partial/stale = amber, unavailable = red. */
+
+.source-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.5rem;
+}
+
+.source-chips__title {
+    margin-right: 0.25rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.source-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+.source-chip__label {
+    font-weight: 600;
+}
+
+.source-chip__status {
+    font-weight: 400;
+    opacity: 0.85;
+}
+
+.source-chip__freshness {
+    font-weight: 400;
+    opacity: 0.85;
+}
+
+.source-chip--available {
+    border-color: color-mix(in srgb, var(--green-text) 25%, transparent);
+    background: var(--green-light);
+    color: var(--green-text);
+}
+
+.source-chip--partial {
+    border-color: color-mix(in srgb, var(--amber-text) 25%, transparent);
+    background: var(--amber-light);
+    color: var(--amber-text);
+}
+
+.source-chip--unavailable {
+    border-color: color-mix(in srgb, var(--red-text) 25%, transparent);
+    background: var(--red-light);
+    color: var(--red-text);
+}

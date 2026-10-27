@@ -12,6 +12,7 @@ from dash import callback, callback_context, clientside_callback, ALL, Input, Ou
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 import numpy as np
 import plotly.graph_objects as go
 from src.data.emin_alert_evidence import (
@@ -60,8 +61,9 @@ from dashboard.components.alerts_tables import (
     parse_ia_message_sections,
 )
 from dashboard.components.alerts_report import (
+    alert_filter_catalog,
     alert_summary,
-    filter_alert_rows,
+    filter_prepared_rows,
     prepare_alert_rows,
     translate_alert_component,
     translate_alert_system,
@@ -79,9 +81,16 @@ from dashboard.components.alert_case_header import (
     trigger_signal_callout,
 )
 from dashboard.tabs.tab_alerts_general import (
+    SYSTEM_DROPDOWN_ID,
+    TRIGGER_DROPDOWN_ID,
+    UNIT_CHECKLIST_ID,
+    UNIT_CLEAR_ID,
+    UNIT_TOGGLE_ID,
     create_summary_stats_display,
     create_active_filters_bar,
     default_alert_dates,
+    trigger_options,
+    unit_filter_summary,
     create_layout as create_general_layout,
 )
 from dashboard.tabs.tab_alerts_detail import (
@@ -92,7 +101,7 @@ from dashboard.tabs.tab_alerts_detail import (
     create_oil_status_display,
     create_layout as create_detail_layout
 )
-from dashboard.components.source_status import render_service_source_chips
+from dashboard.components.source_status import render_service_data_sources
 from src.utils.logger import get_logger
 from src.utils.date_utils import format_local, to_utc_naive
 from config.settings import Settings
@@ -180,8 +189,51 @@ def render_tab_content(active_tab):
 )
 def update_alerts_source_status(client):
     if not client:
-        return html.Div()
-    return render_service_source_chips(client, "monitoring-alerts")
+        return None
+    return render_service_data_sources(client, "monitoring-alerts")
+
+GENERAL_FILTER_KEYS = ('unit', 'week', 'system', 'trigger')
+
+
+def _normalise_filters(active_filters) -> dict:
+    """The shared filter state in its one canonical shape: ``unit`` is a list of unit ids
+    (the only multi-value filter), ``week`` / ``system`` / ``trigger`` are single values,
+    and a dimension with nothing selected is absent."""
+    active_filters = active_filters or {}
+    filters = {}
+    units = active_filters.get('unit') or []
+    units = [units] if isinstance(units, str) else list(units)
+    units = list(dict.fromkeys(unit for unit in units if unit))
+    if units:
+        filters['unit'] = units
+    for key in ('week', 'system', 'trigger'):
+        if active_filters.get(key):
+            filters[key] = active_filters[key]
+    return filters
+
+
+def _restrict_to_week(frame: pd.DataFrame, week_value) -> pd.DataFrame:
+    if not week_value or frame.empty:
+        return frame
+    week_start = pd.to_datetime(week_value)
+    return frame[(frame['Timestamp'] >= week_start) & (frame['Timestamp'] < week_start + pd.Timedelta(days=7))]
+
+
+def _filtered_alerts(prepared: pd.DataFrame, start_date, end_date, filters: dict, skip=()) -> pd.DataFrame:
+    """The prepared alerts inside the date range that satisfy every filter in ``filters``
+    (AND across dimensions, OR among the selected units), except the dimensions in
+    ``skip``. A chart skips its own dimension(s) so it keeps its full set of categories
+    while every other filter still narrows its values."""
+    active = {key: value for key, value in filters.items() if key not in skip}
+    frame = filter_prepared_rows(
+        prepared,
+        unit=active.get('unit'),
+        system=[active['system']] if 'system' in active else None,
+        trigger=[active['trigger']] if 'trigger' in active else None,
+        start_date=start_date, end_date=end_date,
+    )
+    return _restrict_to_week(frame, active.get('week'))
+
 
 @callback(
     [
@@ -201,18 +253,20 @@ def update_alerts_source_status(client):
 )
 def update_general_tab(client: str, start_date: str, end_date: str, active_filters: dict):
     """
-    Update all components in the General Tab when client changes or filters are applied.
+    Update every component of the General Tab from the one shared filter state.
 
     Args:
         client: Selected client identifier
         start_date, end_date: Desde / Hasta date inputs (None leaves that side open)
-        active_filters: Cross-filter selections from clicking the charts
-            (keys: 'unit', 'week', 'system', 'trigger'), combined with AND.
+        active_filters: The shared filter state (keys: 'unit' - a list -, 'week',
+            'system', 'trigger'), set by the explicit controls and the chart clicks alike
+            and combined with the date range by AND.
 
     Returns:
         Tuple of (unit_chart, month_chart, system_chart, stats, table, filter_summary).
-        The summary describes the same rows as the charts and table: date range and
-        chart filters together.
+        The KPIs, table and summary describe the rows that pass every filter. Each chart
+        applies every filter except its own dimension's, so it keeps its full set of
+        categories with the selected one marked instead of collapsing to it.
     """
     if not client:
         raise PreventUpdate
@@ -227,45 +281,47 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
         empty_alert = dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, ""
 
-    active_filters = active_filters or {}
+    filters = _normalise_filters(active_filters)
 
     try:
-        # Apply the same presentation filter set to KPIs, charts and table,
-        # combining the date range with any active chart cross-filters (AND).
-        unit_filter = [active_filters['unit']] if active_filters.get('unit') else None
-        system_filter = [active_filters['system']] if active_filters.get('system') else None
-        trigger_filter = [active_filters['trigger']] if active_filters.get('trigger') else None
-        filtered_df = filter_alert_rows(
-            alerts_df, unit=unit_filter, system=system_filter, trigger=trigger_filter,
-            start_date=start_date, end_date=end_date,
-        )
+        prepared = prepare_alert_rows(alerts_df)
+        in_range = _filtered_alerts(prepared, start_date, end_date, {})
 
-        week_value = active_filters.get('week')
-        if week_value and not filtered_df.empty:
-            week_start = pd.to_datetime(week_value)
-            week_end = week_start + pd.Timedelta(days=7)
-            filtered_df = filtered_df[(filtered_df['Timestamp'] >= week_start) & (filtered_df['Timestamp'] < week_end)]
-
-        if filtered_df.empty:
+        if in_range.empty:
             logger.warning("No data after applying filters")
             empty_fig = {'data': [], 'layout': {'title': t("alerts_callbacks.no_hay_datos_con_los_filtros")}}
             empty_alert = dbc.Alert(t("alerts_callbacks.no_hay_datos_con_los_filtros"), color="info")
             return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, t("alerts_callbacks.no_hay_alertas_para_los_filtros")
 
-        # Create charts (using filtered data for visualization) - removed trigger_chart
-        unit_chart = create_alerts_per_unit_chart(filtered_df, top_n=settings.alert_unit_chart_top_n)
-        month_chart = create_alerts_per_week_chart(filtered_df)
-        system_chart = create_system_signal_treemap(filtered_df)
+        # Everything that passes every filter: the KPIs, the table and the caption.
+        filtered_df = _filtered_alerts(prepared, start_date, end_date, filters)
 
-        # Calculate summary statistics
+        # Charts: each skips the dimension(s) it draws itself.
+        unit_chart = create_alerts_per_unit_chart(
+            _filtered_alerts(prepared, start_date, end_date, filters, skip=('unit',)),
+            target_pct=settings.alert_unit_chart_target_pct, max_bars=settings.alert_unit_chart_max_bars,
+            selected_units=filters.get('unit', []),
+        )
+        month_chart = create_alerts_per_week_chart(
+            _filtered_alerts(prepared, start_date, end_date, filters, skip=('week',)),
+            selected_week=filters.get('week'),
+            week_range=(in_range['Timestamp'].min(), in_range['Timestamp'].max()),
+        )
+        system_chart = create_system_signal_treemap(
+            _filtered_alerts(prepared, start_date, end_date, filters, skip=('system', 'trigger')),
+            selected_system=filters.get('system'), selected_trigger=filters.get('trigger'),
+        )
+
         summary = alert_summary(filtered_df)
         stats = create_summary_stats_display(summary['total'], summary['units'], mixed_count=summary['mixed'])
 
-        # Create table
-        table = create_alerts_report_table(filtered_df)
-
-        latest = format_local(summary['latest'])  # W34-06: local wall-clock time
-        filter_summary = t("alerts_callbacks.mostrando_alertas_de_unidades_ultima_alert", summary_total=summary['total'], summary_units=summary['units'], latest=latest)
+        if filtered_df.empty:
+            table = dbc.Alert(t("alerts_callbacks.no_hay_datos_con_los_filtros"), color="info")
+            filter_summary = t("alerts_callbacks.no_hay_alertas_para_los_filtros")
+        else:
+            table = create_alerts_report_table(filtered_df)
+            latest = format_local(summary['latest'])  # W34-06: local wall-clock time
+            filter_summary = t("alerts_callbacks.mostrando_alertas_de_unidades_ultima_alert", summary_total=summary['total'], summary_units=summary['units'], latest=latest)
         logger.info(f"General tab updated successfully with {summary['total']} alerts")
         return unit_chart, month_chart, system_chart, stats, table, filter_summary
 
@@ -311,52 +367,170 @@ def _chart_click_filter(chart_id: str, click_data) -> tuple[str, str] | None:
     return (key, value) if key and value else None
 
 
+@lru_cache(maxsize=8)
+def _cached_alert_catalog(client: str, _mtime_ns: int, _size: int) -> dict:
+    return alert_filter_catalog(load_alerts_data(client))
+
+
+def _alert_catalog(client: str) -> dict:
+    """`alert_filter_catalog` of the client's alerts, reloaded only when the alerts file
+    changes: every filter change reads it, and the alerts themselves are costly to load."""
+    try:
+        stat = _data_path("alerts", "golden", (client or '').lower(), "consolidated_alerts.csv").stat()
+    except OSError:
+        return alert_filter_catalog(pd.DataFrame())
+    return _cached_alert_catalog(client, stat.st_mtime_ns, stat.st_size)
+
+
+def _reconcile_filters(filters: dict, changed: str | None, catalog: dict) -> dict:
+    """Keep the shared state coherent after a change to the ``changed`` dimension.
+
+    Selected units follow the roster's order, so the same selection is always the same
+    state. A Sistema and a Trigger that do not belong together would match no alert at
+    all, so the one changed last wins: choosing a Sistema drops a Trigger outside it, and
+    choosing a Trigger (a treemap leaf under another system) drops a Sistema it is not in.
+    """
+    filters = dict(filters)
+    if filters.get('unit'):
+        order = {unit: index for index, unit in enumerate(catalog.get('units', []))}
+        filters['unit'] = sorted(filters['unit'], key=lambda unit: order.get(unit, len(order)))
+    owners = catalog.get('trigger_systems', {}).get(filters.get('trigger'))
+    if filters.get('system') and owners is not None and filters['system'] not in owners:
+        filters.pop('system' if changed == 'trigger' else 'trigger')
+    return filters
+
+
 @callback(
     Output('alerts-general-active-filters', 'data', allow_duplicate=True),
     [
         Input('alerts-unit-distribution-chart', 'clickData'),
         Input('alerts-month-distribution-chart', 'clickData'),
         Input('alerts-system-distribution-chart', 'clickData'),
-        Input({'type': 'alerts-general-filter-chip', 'key': ALL}, 'n_clicks'),
+        Input({'type': 'alerts-general-filter-chip', 'key': ALL, 'value': ALL}, 'n_clicks'),
         Input({'type': 'alerts-general-filter-clear-all', 'index': ALL}, 'n_clicks'),
+        Input(UNIT_CHECKLIST_ID, 'value'),
+        Input(UNIT_CLEAR_ID, 'n_clicks'),
+        Input(SYSTEM_DROPDOWN_ID, 'value'),
+        Input(TRIGGER_DROPDOWN_ID, 'value'),
     ],
-    State('alerts-general-active-filters', 'data'),
+    [
+        State('alerts-general-active-filters', 'data'),
+        State('client-selector', 'value'),
+    ],
     prevent_initial_call=True,
 )
-def update_active_filters(_unit_click, _week_click, _system_click, _chip_clicks, _clear_clicks, current):
+def update_active_filters(
+    _unit_click, _week_click, _system_click, _chip_clicks, _clear_clicks,
+    units_value, _unit_clear_clicks, system_value, trigger_value, current, client,
+):
     """
-    Maintain the shared cross-filter state for the General tab's charts.
+    The one writer of the shared filter state (``alerts-general-active-filters``).
 
-    Clicking a bar/point/cell sets (or, if already active, clears) that dimension's
-    filter; dimensions combine with AND. A chip's own × removes just that dimension;
-    "Limpiar todo" clears all.
+    The explicit controls, the chart clicks and the chips of "Filtros activos" all land
+    here, so there is a single state to keep consistent; the controls and the charts only
+    display it (see `sync_filter_controls` and `update_general_tab`).
+
+    Clicking a bar/point/cell sets (or, if already active, clears) that value; a unit
+    click adds the unit to / removes it from the selected ones. A chip's own × removes just
+    that value; "Limpiar todo" clears all. Dimensions combine with AND.
     """
     triggered = callback_context.triggered[0] if callback_context.triggered else None
     trigger = callback_context.triggered_id
-    # A chip or button that was just mounted reports n_clicks 0/None, and an untouched
-    # chart reports no click: neither is a user action.
-    if not triggered or not triggered.get('value'):
+    if not triggered:
         raise PreventUpdate
 
-    current = dict(current or {})
+    before = _normalise_filters(current)
+    after = dict(before)
+    changed = None
 
-    if isinstance(trigger, dict) and trigger.get('type') == 'alerts-general-filter-clear-all':
-        return {}
-
-    if isinstance(trigger, dict) and trigger.get('type') == 'alerts-general-filter-chip':
-        current.pop(trigger.get('key'), None)
-        return current
-
-    target = _chart_click_filter(trigger, triggered['value'])
-    if target is None:
-        raise PreventUpdate
-
-    key, value = target
-    if current.get(key) == value:
-        current.pop(key, None)
+    if trigger in (UNIT_CHECKLIST_ID, UNIT_CLEAR_ID, SYSTEM_DROPDOWN_ID, TRIGGER_DROPDOWN_ID):
+        # A control reports its new value even when that is "nothing selected".
+        if trigger == UNIT_CHECKLIST_ID:
+            changed, value = 'unit', units_value
+        elif trigger == UNIT_CLEAR_ID:
+            changed, value = 'unit', []
+        elif trigger == SYSTEM_DROPDOWN_ID:
+            changed, value = 'system', system_value
+        else:
+            changed, value = 'trigger', trigger_value
+        if value:
+            after[changed] = value
+        else:
+            after.pop(changed, None)
     else:
-        current[key] = value
-    return current
+        # A chip or button that was just mounted reports n_clicks 0/None, and an untouched
+        # chart reports no click: neither is a user action.
+        if not triggered.get('value'):
+            raise PreventUpdate
+
+        if isinstance(trigger, dict) and trigger.get('type') == 'alerts-general-filter-clear-all':
+            return {}
+
+        if isinstance(trigger, dict) and trigger.get('type') == 'alerts-general-filter-chip':
+            changed = trigger.get('key')
+            if changed == 'unit':
+                after['unit'] = [unit for unit in after.get('unit', []) if unit != trigger.get('value')]
+            else:
+                after.pop(changed, None)
+        else:
+            target = _chart_click_filter(trigger, triggered['value'])
+            if target is None:
+                raise PreventUpdate
+            changed, value = target
+            if changed == 'unit':
+                units = list(after.get('unit', []))
+                if value in units:
+                    units.remove(value)
+                else:
+                    units.append(value)
+                after['unit'] = units
+            elif after.get(changed) == value:
+                after.pop(changed)
+            else:
+                after[changed] = value
+
+    after = _normalise_filters(_reconcile_filters(_normalise_filters(after), changed, _alert_catalog(client)))
+    if after == before:
+        # The controls echo the state they were just given; that is not a change.
+        raise PreventUpdate
+    return after
+
+
+@callback(
+    [
+        Output(UNIT_CHECKLIST_ID, 'options'),
+        Output(UNIT_CHECKLIST_ID, 'value'),
+        Output(UNIT_TOGGLE_ID, 'children'),
+        Output(SYSTEM_DROPDOWN_ID, 'options'),
+        Output(SYSTEM_DROPDOWN_ID, 'value'),
+        Output(TRIGGER_DROPDOWN_ID, 'options'),
+        Output(TRIGGER_DROPDOWN_ID, 'value'),
+    ],
+    [
+        Input('client-selector', 'value'),
+        Input('alerts-general-active-filters', 'data'),
+    ],
+)
+def sync_filter_controls(client, active_filters):
+    """Show the shared filter state on the explicit controls, whoever set it.
+
+    The Unidad roster and the Sistema list are the client's complete ones (not the units
+    the Pareto happens to chart); the Trigger list narrows to the selected Sistema.
+    """
+    if not client:
+        raise PreventUpdate
+    catalog = _alert_catalog(client)
+    filters = _normalise_filters(active_filters)
+    units = filters.get('unit', [])
+    return (
+        [{'label': unit, 'value': unit} for unit in catalog['units']],
+        units,
+        unit_filter_summary(units),
+        [{'label': system, 'value': system} for system in catalog['systems']],
+        filters.get('system'),
+        trigger_options(catalog['trigger_systems'], filters.get('system')),
+        filters.get('trigger'),
+    )
 
 
 @callback(

@@ -19,6 +19,17 @@ ALERTS_CHART_CARD_BODY_HEIGHT = 420
 
 ALERTS_DEFAULT_WINDOW = timedelta(weeks=4)
 
+# Ids of the explicit filter controls. They are views of the one shared filter store,
+# `alerts-general-active-filters`, never state of their own.
+UNIT_TOGGLE_ID = "alerts-filter-unit-toggle"
+UNIT_CHECKLIST_ID = "alerts-filter-unit-checklist"
+UNIT_CLEAR_ID = "alerts-filter-unit-clear"
+SYSTEM_DROPDOWN_ID = "alerts-filter-system"
+TRIGGER_DROPDOWN_ID = "alerts-filter-trigger"
+
+# Value of the disabled option that heads each system's group in the trigger dropdown.
+TRIGGER_GROUP_PREFIX = "__group__"
+
 
 def default_alert_dates() -> tuple[str, str]:
     """Rolling four-week window ending today: the initial value of the Desde / Hasta
@@ -27,18 +38,92 @@ def default_alert_dates() -> tuple[str, str]:
     return (today - ALERTS_DEFAULT_WINDOW).isoformat(), today.isoformat()
 
 
-def _date_field(component_id: str, label_key: str, value: str) -> html.Div:
-    """One independently editable date input with its own label."""
-    return html.Div([
-        html.Span(t(label_key), className="alerts-date-field__label"),
-        dcc.DatePickerSingle(
-            id=component_id,
-            date=value,
-            display_format="DD/MM/YYYY",
-            placeholder="DD/MM/YYYY",
-            clearable=False,
+def unit_filter_summary(units) -> str:
+    """Text on the closed Unidad control: all units, the one unit's id, or a count."""
+    units = list(units or [])
+    if not units:
+        return t("tab_alerts_general.todas_las_unidades")
+    if len(units) == 1:
+        return str(units[0])
+    return t("tab_alerts_general.unidades_seleccionadas", count=len(units))
+
+
+def trigger_label(key: str) -> str:
+    """Display label of a raw trigger signal code (the treemap's and the chips' label)."""
+    if key == NO_SIGNAL_KEY:
+        return t("alerts_report.sin_senal_registrada")
+    return FEATURE_NAMES_ES.get(key, str(key))
+
+
+def trigger_options(trigger_systems: dict, system: str | None = None) -> list[dict]:
+    """Options of the Señal / Trigger dropdown.
+
+    ``trigger_systems`` maps each trigger code to ``{system label: alert count}``. With a
+    ``system`` selected only that system's triggers are listed, flat. Without one every
+    trigger is listed once, under the system it fires in most (a trigger seen in several
+    systems must not repeat: a repeated value would select all its copies at once), each
+    group headed by a disabled option naming the system.
+    """
+    if system:
+        keys = sorted((key for key, systems in trigger_systems.items() if system in systems), key=trigger_label)
+        return [{"label": trigger_label(key), "value": key} for key in keys]
+    groups: dict[str, list[str]] = {}
+    for key, systems in trigger_systems.items():
+        owner = min(systems, key=lambda name: (-systems[name], name))
+        groups.setdefault(owner, []).append(key)
+    options: list[dict] = []
+    for owner in sorted(groups):
+        options.append({"label": owner, "value": f"{TRIGGER_GROUP_PREFIX}{owner}", "disabled": True})
+        options.extend({"label": trigger_label(key), "value": key} for key in sorted(groups[owner], key=trigger_label))
+    return options
+
+
+def _filter_field(label: str, control, label_extra=None) -> html.Div:
+    """One cell of the filter row: a label over its control. ``label_extra`` sits on the
+    label line, after the label (the date reset next to "Hasta")."""
+    controls = control if isinstance(control, list) else [control]
+    return html.Div(
+        [
+            html.Div([html.Span(label, className="alerts-filter-field__label"), label_extra], className="alerts-filter-field__head"),
+            *controls,
+        ],
+        className="alerts-filter-field",
+    )
+
+
+def _date_field(component_id: str, label_key: str, value: str, label_extra=None) -> html.Div:
+    """Desde / Hasta: each its own cell of the filter row, independently editable."""
+    return _filter_field(t(label_key), dcc.DatePickerSingle(
+        id=component_id,
+        date=value,
+        display_format="DD/MM/YYYY",
+        placeholder="DD/MM/YYYY",
+        clearable=False,
+    ), label_extra)
+
+
+def _build_unit_filter() -> html.Div:
+    """Unidad: a button that opens a checklist of every unit (multi-select). Its text is
+    set by a callback, so it always summarises the shared filter state."""
+    return _filter_field(t("alerts_general.filter_unit"), [
+        dbc.Button(
+            t("tab_alerts_general.todas_las_unidades"), id=UNIT_TOGGLE_ID,
+            color="light", size="sm", className="alerts-unit-toggle",
         ),
-    ], className="alerts-date-field")
+        dbc.Popover(
+            dbc.PopoverBody([
+                html.Div(
+                    dbc.Checklist(id=UNIT_CHECKLIST_ID, options=[], value=[], className="alerts-unit-checklist"),
+                    className="alerts-unit-checklist-scroll",
+                ),
+                dbc.Button(
+                    [html.I(className="fas fa-eraser me-1"), t("tab_alerts_general.limpiar_unidades")],
+                    id=UNIT_CLEAR_ID, color="link", size="sm", className="alerts-unit-clear p-0 mt-2",
+                ),
+            ]),
+            target=UNIT_TOGGLE_ID, trigger="legacy", placement="bottom-start", className="alerts-unit-popover",
+        ),
+    ])
 
 
 def _build_source_legend() -> html.Div:
@@ -72,26 +157,31 @@ def create_layout() -> html.Div:
         html.Div(id="alerts-summary-stats", className="mb-3"),
         dbc.Card([
             dbc.CardBody([
-                dbc.Row([
-                    dbc.Col([
-                        html.Div([
-                            html.I(className="fas fa-filter me-2"),
-                            html.Span(t("tab_alerts_general.filtro_temporal"), className="fw-bold"),
-                        ], className="d-flex align-items-center pb-1"),
-                    ], width="auto"),
-                    dbc.Col(_date_field("alerts-date-start", "tab_alerts_general.fecha_desde", start_date), width="auto"),
-                    dbc.Col(_date_field("alerts-date-end", "tab_alerts_general.fecha_hasta", end_date), width="auto"),
-                    dbc.Col([
-                        dbc.Button(
-                            [html.I(className="fas fa-undo me-1"), t("tab_alerts_general.restablecer_ultimas_4_semanas")],
-                            id="alerts-date-range-clear",
-                            color="outline-secondary",
-                            size="sm",
-                        )
-                    ], width="auto"),
-                ], align="end", className="g-3"),
-                html.Div(id="alerts-general-filter-summary", className="small text-muted mt-2"),
-                # Filled by a callback: stays empty (nothing rendered) while no chart filter is active.
+                html.Div([
+                    html.I(className="fas fa-filter me-2"),
+                    html.Span(t("tab_alerts_general.filtros"), className="fw-bold"),
+                ], className="d-flex align-items-center"),
+                html.Div(id="alerts-general-filter-summary", className="small text-muted mb-2"),
+                html.Div([
+                    _build_unit_filter(),
+                    _date_field("alerts-date-start", "tab_alerts_general.fecha_desde", start_date),
+                    _date_field("alerts-date-end", "tab_alerts_general.fecha_hasta", end_date, dbc.Button(
+                        f"↺ {t('tab_alerts_general.ultimas_4_semanas')}",
+                        id="alerts-date-range-clear",
+                        color="link",
+                        size="sm",
+                        className="alerts-date-reset",
+                    )),
+                    _filter_field(t("alerts_general.filter_system"), dcc.Dropdown(
+                        id=SYSTEM_DROPDOWN_ID, options=[], value=None, clearable=True,
+                        placeholder=t("tab_alerts_general.todos_los_sistemas"), maxHeight=320,
+                    )),
+                    _filter_field(t("alerts_general.filter_trigger"), dcc.Dropdown(
+                        id=TRIGGER_DROPDOWN_ID, options=[], value=None, clearable=True,
+                        placeholder=t("tab_alerts_general.todas_las_senales"), maxHeight=320,
+                    )),
+                ], className="alerts-filter-row"),
+                # Filled by a callback: stays empty (nothing rendered) while no filter is active.
                 html.Div(id="alerts-general-active-filters-bar"),
             ])
         ], className="shadow-sm mb-3"),
@@ -181,13 +271,12 @@ def _format_active_filter_value(key: str, value: str) -> str:
             return str(value)
     if key == "trigger":
         # The filter holds the raw signal code; the chip shows the same label as the treemap.
-        if value == NO_SIGNAL_KEY:
-            return t("alerts_report.sin_senal_registrada")
-        return FEATURE_NAMES_ES.get(value, str(value))
+        return trigger_label(value)
     return str(value)
 
 
 def _active_filter_chip(key: str, value: str) -> html.Span:
+    """One chip for one filter value; a multi-value filter (unit) gets one chip per value."""
     label = t_or(f"alerts_general.filter_{key}", key.title())
     return html.Span(
         [
@@ -197,7 +286,7 @@ def _active_filter_chip(key: str, value: str) -> html.Span:
             ),
             html.Button(
                 "×",
-                id={"type": "alerts-general-filter-chip", "key": key},
+                id={"type": "alerts-general-filter-chip", "key": key, "value": str(value)},
                 type="button",
                 className="alerts-filter-chip__clear",
                 title=t("tab_alerts_general.quitar_filtro", filter=label),
@@ -209,14 +298,19 @@ def _active_filter_chip(key: str, value: str) -> html.Span:
 
 
 def create_active_filters_bar(active_filters: dict | None) -> html.Div | None:
-    """The "Filtros activos" bar: one chip per active chart filter, each with its own ×,
-    plus one "Limpiar todo". One bar for every chart on the view.
+    """The "Filtros activos" bar: one chip per active filter value (a unit filter holding
+    three units shows three chips), each with its own ×, plus one "Limpiar todo". One bar
+    for the explicit controls and every chart alike.
 
     Returns None - nothing rendered - while no filter is active. Both the × buttons and
     "Limpiar todo" use pattern-matching ids, so they exist only while the bar does and
     the callback that reads them needs no always-present placeholder component.
     """
-    chips = [_active_filter_chip(key, value) for key, value in (active_filters or {}).items() if value]
+    chips = [
+        _active_filter_chip(key, item)
+        for key, value in (active_filters or {}).items() if value
+        for item in (value if isinstance(value, (list, tuple)) else [value])
+    ]
     if not chips:
         return None
     return html.Div(

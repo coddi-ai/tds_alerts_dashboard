@@ -326,7 +326,8 @@ def test_switching_language_does_not_change_any_navigation_target():
     user = {"username": "u", "role": "admin", "clients": ["CDA"]}
 
     def hrefs():
-        return [item.href for item in build_menu_items(build_navigation_items("CDA", user)) if hasattr(item, "href")]
+        menu = build_menu_items(build_navigation_items("CDA", user))
+        return [item.href for section in menu for item in _walk(section) if hasattr(item, "href")]
 
     spanish = hrefs()
     with _request_in("en"):

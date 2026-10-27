@@ -1,77 +1,4 @@
-/* Alertas -> Vista General: data-source chips, temporal filter, active-filters bar. */
-
-/* ---- Fuentes de datos: one chip per source ---- */
-.source-chips {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.4rem 0.5rem;
-}
-
-.source-chips__title {
-    margin-right: 0.25rem;
-    color: #6c757d;
-    font-size: 0.78rem;
-    font-weight: 600;
-}
-
-.source-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.2rem 0.65rem;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    line-height: 1.2;
-    white-space: nowrap;
-}
-
-.source-chip__label {
-    font-weight: 600;
-}
-
-.source-chip__status {
-    font-weight: 400;
-    opacity: 0.85;
-}
-
-.source-chip--available {
-    border-color: #a3d9b5;
-    background: #edf8f0;
-    color: #146c43;
-}
-
-.source-chip--partial {
-    border-color: #f0d28a;
-    background: #fff8e6;
-    color: #946200;
-}
-
-/* Unavailable: muted, dashed and struck through, so it cannot pass for a loaded source. */
-.source-chip--missing {
-    border-style: dashed;
-    border-color: #adb5bd;
-    background: #f8f9fa;
-    color: #6c757d;
-}
-
-.source-chip--missing .source-chip__label {
-    text-decoration: line-through;
-}
-
-/* ---- Filtro temporal: Desde / Hasta ---- */
-.alerts-date-field {
-    display: flex;
-    flex-direction: column;
-}
-
-.alerts-date-field__label {
-    margin-bottom: 0.2rem;
-    color: #6c757d;
-    font-size: 0.78rem;
-    font-weight: 600;
-}
+/* Alertas -> Vista General: temporal filter, active-filters bar. */
 
 /* ---- Filtros activos ---- */
 .alerts-filters-bar {
@@ -143,5 +70,71 @@
 
 .alerts-filters-bar__clear-all {
     padding: 0;
+    font-size: 0.82rem;
+}
+
+/* ---- Filtros: Unidad / Desde / Hasta / Sistema / Señal ---- */
+/* One responsive row: as many cells per line as fit, wrapping to fewer on narrow widths. */
+.alerts-filter-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+    align-items: end;
+}
+
+.alerts-filter-field {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.alerts-filter-field__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 1.4rem;
+    margin-bottom: 0.2rem;
+}
+
+.alerts-filter-field__label {
+    color: #6c757d;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.alerts-date-reset {
+    padding: 0;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+/* Controls fill their cell instead of keeping their own intrinsic width. */
+.alerts-filter-field .dash-datepicker,
+.alerts-filter-field .dash-dropdown,
+.alerts-filter-field .dash-datepicker-input-wrapper,
+.alerts-filter-field .alerts-unit-toggle {
+    width: 100%;
+}
+
+.alerts-unit-toggle {
+    min-height: 35px;
+    border: 1px solid #ced4da;
+    background: #fff;
+    text-align: left;
+}
+
+.alerts-unit-toggle::after {
+    float: right;
+    margin-top: 0.5rem;
+}
+
+.alerts-unit-checklist-scroll {
+    max-height: 18rem;
+    min-width: 11rem;
+    overflow-y: auto;
+}
+
+.alerts-unit-clear {
     font-size: 0.82rem;
 }

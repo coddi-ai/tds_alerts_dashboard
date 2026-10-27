@@ -14,7 +14,7 @@ from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_data,
 )
 from src.utils.logger import get_logger
-from dashboard.components.source_status import render_service_source_status
+from dashboard.components.source_status import render_service_data_sources
 
 logger = get_logger(__name__)
 
@@ -111,7 +111,7 @@ def layout(client: str, component: str):
             ], className="page-title", style={"display": "flex", "alignItems": "center"}),
             html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
         ], style={"marginBottom": "16px"}),
-        render_service_source_status(client, "predictive"),
+        render_service_data_sources(client, f"predictive-{component}"),
 
         # Internal tabs: Resumen / Evidencia
         dcc.Tabs(

@@ -32,13 +32,24 @@ def create_layout() -> html.Div:
                     t("tab_overview_general.estado_y_frescura_de_datos_de"),
                     className="text-muted mb-0"
                 ),
-                html.Small([
-                    t("tab_overview_general.ultima_actualizacion"),
-                    html.Span(id='overview-last-update', children=t("common.loading"))
-                ], className="text-muted")
+                # Metadata caption under the subtitle (ui_notes_improved.md §5): the last
+                # update and the data sources are context, not content competing for
+                # attention with the units.
+                html.Div([
+                    html.Small([
+                        t("tab_overview_general.ultima_actualizacion"),
+                        html.Span(id='overview-last-update', children=t("common.loading"))
+                    ], className="text-muted"),
+                    html.Div(id="overview-source-status"),
+                ], className="overview-meta"),
             ], md=12),
         ], className="mb-3"),
-        html.Div(id="overview-source-status"),
+
+        html.Div([
+            html.Label(t("tab_overview_general.buscar_unidad"), htmlFor="fleet-search", className="fleet-search__label"),
+            dcc.Input(id="fleet-search", type="search", value="", debounce=0.4, autoComplete="off",
+                      placeholder=t("tab_overview_general.buscar_unidad_placeholder"), className="form-control form-control-sm"),
+        ], className="fleet-search"),
 
         dcc.Loading(
             id="loading-overview-fleet-cards",

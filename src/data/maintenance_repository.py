@@ -36,10 +36,8 @@ logger = logging.getLogger(__name__)
 
 # Production files label the target as ``Sistema de Motor`` while compact
 # fixtures and some client extracts use ``Motor``/``Sistema Motor``.  These
-# CDA keeps this focused Summary Pareto scope. EMIN and CAPSTONE opt into all
-# source systems through ``ALL_SYSTEMS_CLIENTS`` below.
+# aliases drive the motor-share KPI; the Summary Paretos cover every system.
 MOTOR_SYSTEM_ALIASES = frozenset({"motor", "sistema motor", "sistema de motor"})
-ALL_SYSTEMS_CLIENTS = frozenset({"emin", "capstone"})
 TRAIN_FORCE_SYSTEM_ALIASES = frozenset(
     {
         "tren de fuerza",
@@ -88,8 +86,8 @@ def _normalize_unit_key(value) -> Optional[str]:
     return code
 
 
-def _emin_system_values(values: pd.Series) -> pd.Series:
-    """Give EMIN actions without a technical-system value a selectable label."""
+def _system_values(values: pd.Series) -> pd.Series:
+    """Give actions without a technical-system value a selectable label."""
     normalized = values.fillna("Sin sistema").astype(str).str.strip()
     return normalized.mask(normalized.eq(""), "Sin sistema")
 
@@ -560,12 +558,7 @@ class MaintenanceRepository:
             return df
 
         if systems:
-            system_values = (
-                _emin_system_values(df["action_system_name"])
-                if self.client == "emin"
-                else df["action_system_name"]
-            )
-            df = df[system_values.isin(systems)]
+            df = df[_system_values(df["action_system_name"]).isin(systems)]
         if equipment:
             df = df[df["machine_code"].isin(equipment)]
         if fleets:
@@ -610,11 +603,7 @@ class MaintenanceRepository:
         df_actions = self._get_parquet_data()["actions"]
         if df_actions.empty:
             return set()
-        system_values = (
-            _emin_system_values(df_actions["action_system_name"])
-            if self.client == "emin"
-            else df_actions["action_system_name"]
-        )
+        system_values = _system_values(df_actions["action_system_name"])
         return set(
             df_actions.loc[system_values.isin(systems), "machine_code"]
             .dropna()
@@ -679,12 +668,7 @@ class MaintenanceRepository:
             if systems:
                 if actions.empty:
                     return []
-                system_values = (
-                    _emin_system_values(actions["action_system_name"])
-                    if self.client == "emin"
-                    else actions["action_system_name"]
-                )
-                actions = actions[system_values.isin(systems)]
+                actions = actions[_system_values(actions["action_system_name"]).isin(systems)]
                 machines = actions["machine_code"]
             else:
                 status = data.get("equipment_status", pd.DataFrame())
@@ -1658,14 +1642,7 @@ class MaintenanceRepository:
             **PARETO_SCOPE,
             "system_aliases": list(PARETO_SCOPE["system_aliases"]),
         }
-        if self.client in ALL_SYSTEMS_CLIENTS:
-            scope.update(
-                {
-                    "mode": "all_systems",
-                    "system_filter": None,
-                    "system_aliases": [],
-                }
-            )
+        scope.update({"mode": "all_systems", "system_filter": None, "system_aliases": []})
         return scope
 
     def _pareto_system_options(self) -> list[str]:
@@ -1695,20 +1672,16 @@ class MaintenanceRepository:
         return selected
 
     def _default_pareto_systems(self, options: list[str]) -> list[str]:
-        if self.client in ALL_SYSTEMS_CLIENTS:
-            return list(options)
-        return [value for value in options if value.strip().casefold() in MOTOR_SYSTEM_ALIASES]
+        return list(options)
 
-    def _emin_hours_pareto(self, period: str, equipment: Optional[List[str]]) -> pd.DataFrame:
+    def _hours_pareto(self, period: str, equipment: Optional[List[str]]) -> pd.DataFrame:
         """Keep equipment hours independent of the action-system selection."""
         result = pd.DataFrame(columns=["equipment", "value"])
-        if self.client != "emin":
-            return result
         monthly = self._get_parquet_data().get("hours_monthly", pd.DataFrame()).copy()
         if not {"machine_code", "year_month", "intervention_hours"}.issubset(monthly.columns):
             return result
         if "source_system" in monthly.columns:
-            monthly = monthly[monthly["source_system"].astype("string").str.upper().eq("EMIN")]
+            monthly = monthly[monthly["source_system"].astype("string").str.upper().eq(self.client.upper())]
         monthly = monthly[monthly["year_month"].astype("string").str.strip().eq(str(period))]
         if equipment is not None:
             monthly = monthly[monthly["machine_code"].astype(str).isin([str(value) for value in equipment])]
@@ -1731,7 +1704,7 @@ class MaintenanceRepository:
         options = self._pareto_system_options()
         selected = (
             self._default_pareto_systems(options)
-            if requested_systems is None or self.client == "emin" and not requested_systems
+            if not requested_systems
             else self._resolve_pareto_systems(options, requested_systems)
         )
         hours = self._get_parquet_data().get("hours_monthly", pd.DataFrame())
@@ -1749,8 +1722,7 @@ class MaintenanceRepository:
                 lambda value: math.isfinite(float(value)) if pd.notna(value) else False
             )
         hours_available = (
-            self.client == "emin"
-            and required.issubset(hours.columns)
+            required.issubset(hours.columns)
             and not hours.empty
             and bool(valid_hours.any())
         )
@@ -1801,20 +1773,13 @@ class MaintenanceRepository:
         months = self.get_available_months()
         selected = period or (months[-1] if months else None)
         empty = self._empty_month_data()
-        filter_systems = self._pareto_system_options() if self.client == "emin" else self.get_available_systems()
-        system_filter_partial = (
-            self.client == "emin"
-            and bool(systems)
-            and set(systems) != set(filter_systems)
-        )
-        effective_systems = (
-            None
-            if self.client == "emin" and not system_filter_partial
-            else systems
-        )
-        reported_systems = (
-            filter_systems if self.client == "emin" and not systems else systems
-        )
+        # Sistema is one page-wide filter. An empty or complete selection is the
+        # all-systems scope; only a partial one narrows actions and withholds the
+        # hours-based figures, since hours are not attributed to technical systems.
+        filter_systems = self._pareto_system_options()
+        system_filter_partial = bool(systems) and set(systems) != set(filter_systems)
+        effective_systems = systems if system_filter_partial else None
+        reported_systems = systems if systems else filter_systems
         base = self._get_parquet_data()["actions"] if self.mode == "parquet" else pd.DataFrame()
         source_status, source_error = ("ok", None)
         if self.mode == "parquet" and base.empty:
@@ -1948,7 +1913,7 @@ class MaintenanceRepository:
                 ).fillna("Sin dato")
             unit_status = unit_status.sort_values("equipment", kind="mergesort")
         pareto_meta = self._pareto_metadata(
-            reported_systems if self.client == "emin" else pareto_systems,
+            reported_systems,
             pareto_metric,
             selected,
             equipment_filter,
@@ -2006,13 +1971,12 @@ class MaintenanceRepository:
                 "pareto": [],
                 "unit_status": self._json_records(unit_status) if not unit_status.empty else [],
             })
-            if self.client == "emin":
-                empty["emin_action_systems"] = []
-                empty["emin_hours_pareto"] = (
-                    []
-                    if system_filter_partial
-                    else self._json_records(self._emin_hours_pareto(selected, equipment_filter))
-                )
+            empty["action_systems"] = []
+            empty["hours_pareto"] = (
+                []
+                if system_filter_partial
+                else self._json_records(self._hours_pareto(selected, equipment_filter))
+            )
             return {
                 "status": "ok",
                 "meta": {
@@ -2045,11 +2009,7 @@ class MaintenanceRepository:
             "equipment": int(df["machine_code"].nunique()),
             "actions": total_actions,
             "records": int(df["record_id"].nunique()),
-            "systems": int(
-                _emin_system_values(df["action_system_name"]).nunique()
-                if self.client == "emin"
-                else df["action_system_name"].dropna().nunique()
-            ),
+            "systems": int(_system_values(df["action_system_name"]).nunique()),
             "activity_days": int(df["change_date"].dt.strftime("%Y-%m-%d").nunique()),
             "motor_share_pct": round(motor_actions / total_actions * 100, 1) if total_actions else None,
         }
@@ -2098,6 +2058,8 @@ class MaintenanceRepository:
         daily["hours_out_of_service"] = pd.to_numeric(
             daily["hours_out_of_service"], errors="coerce"
         ).round(3)
+        if system_filter_partial:
+            daily["hours_out_of_service"] = pd.NA
         daily = daily.sort_values("date").reset_index(drop=True)
         if self.client == "emin":
             if system_filter_partial:
@@ -2118,6 +2080,13 @@ class MaintenanceRepository:
                     if not canonical_daily.empty
                     else None
                 )
+        elif system_filter_partial:
+            time_kpis = _empty_estimated_kpis()
+            time_meta = _estimated_kpi_meta(
+                selected,
+                reason="Las horas no se atribuyen a sistemas técnicos.",
+            )
+            daily_time_source = None
         elif canonical_monthly_source:
             time_kpis, time_meta = self._calculate_canonical_monthly_time_kpis(
                 canonical_monthly,
@@ -2140,11 +2109,7 @@ class MaintenanceRepository:
         if system_filter_partial:
             kpis.update(_empty_estimated_kpis())
 
-        system_values = (
-            _emin_system_values(df["action_system_name"])
-            if self.client == "emin"
-            else df["action_system_name"].fillna("Sin sistema")
-        )
+        system_values = _system_values(df["action_system_name"])
         system_mix = (
             df.assign(system_name=system_values)
             .groupby("system_name", as_index=False)["action_id"]
@@ -2183,11 +2148,7 @@ class MaintenanceRepository:
             return result
 
         def _system_pareto(system_frame: pd.DataFrame) -> pd.DataFrame:
-            system_values = (
-                _emin_system_values(system_frame["action_system_name"])
-                if self.client == "emin"
-                else system_frame["action_system_name"].fillna("Sin sistema")
-            )
+            system_values = _system_values(system_frame["action_system_name"])
             result = (
                 system_frame.assign(system_name=system_values)
                 .groupby("system_name", as_index=False)["action_id"]
@@ -2206,7 +2167,7 @@ class MaintenanceRepository:
             return result
 
         pareto_base = self._filtered_actions(
-            systems=effective_systems if self.client == "emin" else None,
+            systems=effective_systems,
             equipment=equipment,
             date_start=start.isoformat(),
             date_end=(end - timedelta(days=1)).date().isoformat(),
@@ -2216,15 +2177,8 @@ class MaintenanceRepository:
         if pareto_base.empty or not pareto_sources:
             selected_actions = pareto_base.iloc[0:0].copy()
         else:
-            pareto_system_values = (
-                _emin_system_values(pareto_base["action_system_name"])
-                if self.client == "emin"
-                else pareto_base["action_system_name"].fillna("Sin sistema").astype(str).str.strip()
-            )
-            if self.client != "emin":
-                pareto_system_values = pareto_system_values.mask(pareto_system_values.eq(""), "Sin sistema")
+            pareto_system_values = _system_values(pareto_base["action_system_name"])
             selected_actions = pareto_base.loc[pareto_system_values.isin(pareto_sources)].copy()
-        all_systems_mode = self.client in ALL_SYSTEMS_CLIENTS
         if pareto_meta["metric"] == "hours":
             monthly = self._get_parquet_data().get("hours_monthly", pd.DataFrame()).copy()
             if "source_system" in monthly.columns:
@@ -2252,25 +2206,25 @@ class MaintenanceRepository:
         )
         if not pareto.empty and pareto["value"].sum() > 0:
             pareto.loc[pareto.index[-1], "cumulative_pct"] = 100.0
-        emin_action_systems = pd.DataFrame()
-        emin_hours_pareto = pd.DataFrame()
-        if self.client == "emin":
-            # Count each action once for its equipment, even when joined source
-            # rows repeat the same action or assign more than one system.
-            unique_actions = (
-                selected_actions.dropna(subset=["action_id"])
-                .assign(system_name=lambda rows: _emin_system_values(rows["action_system_name"]))
-                .sort_values(["machine_code", "action_id", "system_name"], kind="mergesort")
-                .drop_duplicates(["machine_code", "action_id"])
-            )
-            emin_action_systems = (
-                unique_actions.groupby(["machine_code", "system_name"], as_index=False)["action_id"]
-                .nunique()
-                .rename(columns={"machine_code": "equipment", "action_id": "count"})
-            )
-            if not system_filter_partial:
-                emin_hours_pareto = self._emin_hours_pareto(selected, equipment_filter)
-        system_pareto = _system_pareto(df) if all_systems_mode else pd.DataFrame()
+        # Count each action once for its equipment, even when joined source
+        # rows repeat the same action or assign more than one system.
+        unique_actions = (
+            selected_actions.dropna(subset=["action_id"])
+            .assign(system_name=lambda rows: _system_values(rows["action_system_name"]))
+            .sort_values(["machine_code", "action_id", "system_name"], kind="mergesort")
+            .drop_duplicates(["machine_code", "action_id"])
+        )
+        action_systems = (
+            unique_actions.groupby(["machine_code", "system_name"], as_index=False)["action_id"]
+            .nunique()
+            .rename(columns={"machine_code": "equipment", "action_id": "count"})
+        )
+        hours_pareto = (
+            pd.DataFrame()
+            if system_filter_partial
+            else self._hours_pareto(selected, equipment_filter)
+        )
+        system_pareto = _system_pareto(df)
         train_force_df = df[self._is_train_force_system(df["action_system_name"])].copy()
         train_force_pareto = _equipment_pareto(train_force_df)
 
@@ -2353,11 +2307,7 @@ class MaintenanceRepository:
                 "action_detail_clean": "detail",
             }
         )
-        detail["system_name"] = (
-            _emin_system_values(detail["system_name"])
-            if self.client == "emin"
-            else detail["system_name"].fillna("Sin sistema")
-        )
+        detail["system_name"] = _system_values(detail["system_name"])
         detail["subsystem_name"] = detail["subsystem_name"].fillna("Sin subsistema")
         detail["detail"] = detail["detail"].fillna("Sin detalle")
         detail = detail.sort_values(["change_date", "event_ts"], ascending=False).head(detail_limit)
@@ -2400,10 +2350,8 @@ class MaintenanceRepository:
                 "system_mix": self._json_records(system_mix),
                 "system_mix_detail": self._json_records(system_mix_detail),
                 "pareto": self._json_records(pareto),
-                **({
-                    "emin_action_systems": self._json_records(emin_action_systems),
-                    "emin_hours_pareto": self._json_records(emin_hours_pareto),
-                } if self.client == "emin" else {}),
+                "action_systems": self._json_records(action_systems),
+                "hours_pareto": self._json_records(hours_pareto),
                 "system_pareto": self._json_records(system_pareto),
                 "train_force_pareto": self._json_records(train_force_pareto),
                 "equipment": self._json_records(equipment_df),
@@ -2987,10 +2935,6 @@ class MaintenanceRepository:
             # TODO: Implement SQL query for production
             raise NotImplementedError("Production mode not yet implemented")
     
-    # CDA's legacy by-system Pareto omits these generic categories; EMIN and
-    # CAPSTONE retain every source system, including these labels.
-    _PARETO_EXCLUDED_SYSTEMS = {"Equipo", "Estación del Operador - Cabina"}
-
     def get_maintenance_by_system(
         self,
         systems: Optional[List[str]] = None,
@@ -3037,8 +2981,6 @@ class MaintenanceRepository:
             # TODO: Implement SQL query for production
             raise NotImplementedError("Production mode not yet implemented")
 
-        if self.client not in ALL_SYSTEMS_CLIENTS:
-            counts = counts[~counts["system_name"].isin(self._PARETO_EXCLUDED_SYSTEMS)]
         counts = counts.sort_values("count", ascending=False).reset_index(drop=True)
         total = int(counts["count"].sum())
         counts["cumulative_pct"] = (counts["count"].cumsum() / total * 100) if total else 0.0
