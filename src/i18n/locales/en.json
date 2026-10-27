@@ -521,6 +521,8 @@
  "login.title": "Sign In",
  "login.username": "Username",
  "login.username_placeholder": "Enter your username",
+ "login.welcome_tagline": "Technology driving the mining industry into the future",
+ "login.welcome_title": "Welcome back",
  "machines_callbacks.estado_maquina": "MACHINE STATUS",
  "machines_callbacks.maquinas": "{len_records} machines",
  "machines_callbacks.seleccione_una_flota_para_ver_el": "Select a fleet to see the status map by component.",

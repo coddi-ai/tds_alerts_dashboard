@@ -48,172 +48,142 @@ def _discover_predictive_components(client: str) -> list:
     return sorted([f.replace(".csv", "") for f in os.listdir(data_dir) if f.endswith(".csv")])
 
 
-def create_login_page() -> dbc.Container:
+def _asset_url(filename: str) -> str:
+    """`dash.get_asset_url`, tolerant of running before the Dash app exists (unit tests)."""
+    try:
+        return dash.get_asset_url(filename)
+    except AttributeError:
+        return f"/assets/{filename}"
+
+
+def _login_field(label: str, input_id: str, icon: str, **input_kwargs) -> html.Div:
+    """A labelled field: label above, then icon + rounded input."""
+    return html.Div(
+        [
+            html.Label(label, htmlFor=input_id, className="login-label"),
+            dbc.InputGroup(
+                [
+                    dbc.InputGroupText(html.I(className=icon)),
+                    dbc.Input(id=input_id, **input_kwargs),
+                ],
+                className="login-input-group",
+            ),
+        ],
+        className="login-field",
+    )
+
+
+def create_login_page() -> html.Div:
     """
-    Create redesigned login page with improved spacing, logo visibility, and form usability.
+    Login page: a split card (hero image | branding, language, welcome text and form) over a
+    light, wave-patterned page. Authentication itself is in dashboard/callbacks/auth_callbacks.py
+    and keys off the ids below (username-input, password-input, login-button, login-alert), so
+    those must not change. Styling is in dashboard/assets/login.css; under the tablet
+    breakpoint the hero is hidden and the form panel takes the full card.
 
     Returns:
-        Bootstrap container with professional login form
+        The login page, with the version label at its bottom left
     """
-    return dbc.Container([
-        html.Div(
-            create_language_selector(),
-            style={"position": "fixed", "top": "16px", "right": "24px", "zIndex": 1000},
-        ),
-        dbc.Row([
-            dbc.Col([
-                # Login card with integrated branding
-                dbc.Card([
-                    dbc.CardBody([
-                        # Branding section
-                        html.Div([
+    return html.Div(
+        [
+            html.Div(
+                [
+                    # Hero image: decorative, so no alt text
+                    html.Div(
+                        html.Img(src=_asset_url("login_image.png"), alt="", className="login-hero-img"),
+                        className="login-hero",
+                    ),
+
+                    # Form panel
+                    html.Div(
+                        [
                             html.Div(
-                                html.Img(
-                                    src="https://raw.githubusercontent.com/coddi-ai/tds_alerts_dashboard/refs/heads/dev/dashboard/assets/logo.svg",
-                                    style={
-                                        "height": "64px",
-                                        "width": "auto",
-                                        "padding": "8px 16px",
-                                        "backgroundColor": "white",
-                                        "borderRadius": "8px",
-                                        "border": "2px solid #e0e0e0",
-                                        "boxShadow": "0 2px 8px rgba(0,0,0,0.08)"
-                                    }
-                                ),
-                                className="text-center"
-                            ),
-                            html.H3(
-                                t("app.platform_title"),
-                                className="text-center mt-3 mb-1",
-                                style={"fontWeight": "600", "color": "#1a252f", "fontSize": "1.4rem"}
-                            ),
-                            html.P(
-                                t("app.platform_subtitle"),
-                                className="text-center mb-0 text-muted",
-                                style={"fontSize": "0.9rem"}
-                            )
-                        ], style={
-                            "padding": "32px 32px 24px 32px",
-                            "borderBottom": "2px solid #f0f0f0",
-                            "backgroundColor": "#fafafa"
-                        }),
-                        
-                        # Login form section
-                        html.Div([
-                            html.H4(
-                                t("login.title"),
-                                className="mb-1 text-center",
-                                style={"fontWeight": "600", "fontSize": "1.3rem"}
-                            ),
-                            # html.P(
-                            #     "Enter your credentials to access the platform",
-                            #     className="text-center text-muted mb-4",
-                            #     style={"fontSize": "0.85rem"}
-                            # ),
-
-                            dbc.Alert(
-                                id='login-alert',
-                                is_open=False,
-                                color='danger',
-                                duration=4000,
-                                className="mb-3"
-                            ),
-
-                            # Username field
-                            html.Div([
-                                html.Label(
-                                    t("login.username"),
-                                    className="form-label fw-500 mb-2",
-                                    style={"fontSize": "0.9rem", "color": "#495057"}
-                                ),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText(
-                                        html.I(className="fas fa-user"),
-                                        style={"backgroundColor": "#f8f9fa"}
+                                [
+                                    html.Div(
+                                        [
+                                            html.Img(
+                                                src=_asset_url("logo.svg"),
+                                                alt="CODDI",
+                                                className="login-brand-logo",
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Div(t("app.product_name"), className="login-brand-name"),
+                                                    html.Div(t("app.platform_subtitle"), className="login-brand-subtitle"),
+                                                ],
+                                                className="login-brand-text",
+                                            ),
+                                        ],
+                                        className="login-brand",
                                     ),
-                                    dbc.Input(
-                                        id='username-input',
+                                    html.Div(create_language_selector(on_dark_background=False), className="login-lang"),
+                                ],
+                                className="login-panel-header",
+                            ),
+
+                            html.Div(
+                                [
+                                    html.H1(t("login.welcome_title"), className="login-welcome"),
+                                    html.P(t("login.welcome_tagline"), className="login-tagline"),
+
+                                    dbc.Alert(
+                                        id='login-alert',
+                                        is_open=False,
+                                        color='danger',
+                                        duration=4000,
+                                        className="mb-3"
+                                    ),
+
+                                    _login_field(
+                                        t("login.username"),
+                                        'username-input',
+                                        "fas fa-user",
                                         placeholder=t("login.username_placeholder"),
                                         type='text',
-                                        style={"fontSize": "0.95rem"},
-                                        autoComplete="username"
-                                    )
-                                ], className="mb-3")
-                            ]),
-
-                            # Password field
-                            html.Div([
-                                html.Label(
-                                    t("login.password"),
-                                    className="form-label fw-500 mb-2",
-                                    style={"fontSize": "0.9rem", "color": "#495057"}
-                                ),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText(
-                                        html.I(className="fas fa-lock"),
-                                        style={"backgroundColor": "#f8f9fa"}
+                                        autoComplete="username",
                                     ),
-                                    dbc.Input(
-                                        id='password-input',
+                                    _login_field(
+                                        t("login.password"),
+                                        'password-input',
+                                        "fas fa-lock",
                                         placeholder=t("login.password_placeholder"),
                                         type='password',
-                                        style={"fontSize": "0.95rem"},
-                                        autoComplete="current-password"
-                                    )
-                                ], className="mb-4")
-                            ]),
+                                        autoComplete="current-password",
+                                    ),
 
-                            # Login button with loading state
-                            dbc.Button(
-                                [
-                                    html.I(className="fas fa-sign-in-alt me-2"),
-                                    t("login.title")
+                                    dbc.Button(
+                                        [html.I(className="fas fa-sign-in-alt me-2"), t("login.title")],
+                                        id='login-button',
+                                        n_clicks=0,
+                                        color='primary',
+                                        size="lg",
+                                        className='w-100 login-submit',
+                                    ),
+
+                                    # Loading indicator (hidden by default)
+                                    dbc.Spinner(
+                                        id="login-spinner",
+                                        size="sm",
+                                        color="primary",
+                                        spinner_style={"display": "none"},
+                                        spinnerClassName="mt-3 text-center"
+                                    ),
                                 ],
-                                id='login-button',
-                                n_clicks=0,
-                                color='primary',
-                                size="lg",
-                                className='w-100',
-                                style={
-                                    "fontWeight": "600",
-                                    "padding": "12px",
-                                    "fontSize": "1rem"
-                                }
+                                className="login-form-area",
                             ),
-                            
-                            # Loading indicator (hidden by default)
-                            dbc.Spinner(
-                                id="login-spinner",
-                                size="sm",
-                                color="primary",
-                                spinner_style={"display": "none"},
-                                spinnerClassName="mt-3 text-center"
-                            )
-                        ], style={"padding": "32px"})
-                    ], style={"padding": "0"})
-                ], className='shadow-lg', style={
-                    "borderRadius": "12px",
-                    "border": "none",
-                    "overflow": "hidden"
-                })
-            ], width=12, lg=5, xl=4, className='mx-auto')
-        ], className="align-items-center min-vh-100"),
+                        ],
+                        className="login-panel",
+                    ),
+                ],
+                className="login-card",
+            ),
 
-        # Version footnote, bottom-left of the screen
-        html.Div(
-            f"v{APP_VERSION}",
-            style={
-                "position": "fixed",
-                "bottom": "12px",
-                "left": "16px",
-                "color": "rgba(255, 255, 255, 0.5)",
-                "fontSize": "0.75rem"
-            }
-        )
-    ], fluid=True, style={
-        "background": "#00173b",
-        "minHeight": "100vh"
-    })
+            # Version footnote, bottom-left of the screen
+            html.Div(f"v{APP_VERSION}", className="login-version"),
+        ],
+        className="login-page",
+    )
+
 
 def _user_initials(label: str) -> str:
     """Two-letter avatar text from a user name (or the first two letters of a single word)."""

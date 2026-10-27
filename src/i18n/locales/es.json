@@ -521,6 +521,8 @@
  "login.title": "Iniciar Sesión",
  "login.username": "Usuario",
  "login.username_placeholder": "Ingrese su usuario",
+ "login.welcome_tagline": "Tecnología que impulsa la industria minera hacia el futuro",
+ "login.welcome_title": "Bienvenid@ de vuelta",
  "machines_callbacks.estado_maquina": "ESTADO MÁQUINA",
  "machines_callbacks.maquinas": "{len_records} máquinas",
  "machines_callbacks.seleccione_una_flota_para_ver_el": "Seleccione una flota para ver el mapa de estado por componente.",
