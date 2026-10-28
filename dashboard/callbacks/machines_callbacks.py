@@ -13,6 +13,7 @@ from dash.exceptions import PreventUpdate
 import pandas as pd
 from config.settings import get_settings
 from src.data.loaders import load_oil_classified, load_machine_status_for_client
+from src.i18n.data_text import localized_series
 from src.utils.logger import get_logger
 from dashboard.components.oil_machine_detail import build_machine_detail
 import dash_bootstrap_components as dbc
@@ -222,8 +223,10 @@ def register_machines_callbacks(app):
             df['sampleDate'] = pd.to_datetime(df['sampleDate'])
             latest = df.loc[df.groupby(['unitId', 'componentName'])['sampleDate'].idxmax()]
 
-            # Also get ai_recommendation for tooltips
+            # Also get ai_recommendation for tooltips (English text when that language is selected)
             rec_col = 'ai_recommendation' if 'ai_recommendation' in latest.columns else None
+            if rec_col:
+                latest = latest.assign(ai_recommendation=localized_series(latest, 'ai_recommendation'))
 
             machine_file = settings.get_machine_status_path(client.lower())
             ms_map = {}

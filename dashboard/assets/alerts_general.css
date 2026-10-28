@@ -1,0 +1,140 @@
+/* Alertas -> Vista General: temporal filter, active-filters bar. */
+
+/* ---- Filtros activos ---- */
+.alerts-filters-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.75rem;
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #cfe2ff;
+    border-radius: 0.5rem;
+    background: #f1f7ff;
+}
+
+.alerts-filters-bar__label {
+    color: #0a58ca;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.alerts-filters-bar__chips {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.alerts-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    border: 1px solid #9ec5fe;
+    border-radius: 999px;
+    background: #fff;
+    color: #0a58ca;
+    font-size: 0.82rem;
+    line-height: 1.2;
+}
+
+.alerts-filter-chip__text {
+    padding: 0.2rem 0.4rem 0.2rem 0.7rem;
+    overflow-wrap: anywhere;
+}
+
+.alerts-filter-chip__key {
+    margin-right: 0.25rem;
+    color: #6c757d;
+}
+
+.alerts-filter-chip__clear {
+    align-self: stretch;
+    padding: 0 0.6rem 0 0.3rem;
+    border: 0;
+    border-radius: 0 999px 999px 0;
+    background: transparent;
+    color: #6c757d;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.alerts-filter-chip__clear:hover,
+.alerts-filter-chip__clear:focus-visible {
+    background: #e7f1ff;
+    color: #b02a37;
+}
+
+.alerts-filters-bar__clear-all {
+    padding: 0;
+    font-size: 0.82rem;
+}
+
+/* ---- Filtros: Unidad / Desde / Hasta / Sistema / Señal ---- */
+/* One responsive row: as many cells per line as fit, wrapping to fewer on narrow widths. */
+.alerts-filter-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+    align-items: end;
+}
+
+.alerts-filter-field {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.alerts-filter-field__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 1.4rem;
+    margin-bottom: 0.2rem;
+}
+
+.alerts-filter-field__label {
+    color: #6c757d;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.alerts-date-reset {
+    padding: 0;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+/* Controls fill their cell instead of keeping their own intrinsic width. */
+.alerts-filter-field .dash-datepicker,
+.alerts-filter-field .dash-dropdown,
+.alerts-filter-field .dash-datepicker-input-wrapper,
+.alerts-filter-field .alerts-unit-toggle {
+    width: 100%;
+}
+
+.alerts-unit-toggle {
+    min-height: 35px;
+    border: 1px solid #ced4da;
+    background: #fff;
+    text-align: left;
+}
+
+.alerts-unit-toggle::after {
+    float: right;
+    margin-top: 0.5rem;
+}
+
+.alerts-unit-checklist-scroll {
+    max-height: 18rem;
+    min-width: 11rem;
+    overflow-y: auto;
+}
+
+.alerts-unit-clear {
+    font-size: 0.82rem;
+}

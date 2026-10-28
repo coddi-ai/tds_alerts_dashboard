@@ -9,34 +9,112 @@
    NAVIGATION MENU STYLING
    ======================================== */
 
-/* Navigation Menu Items - Hover State */
-.nav-menu-item:hover {
-    background-color: rgba(52, 152, 219, 0.2) !important;
-    color: #3498db !important;
-    transform: translateX(4px);
+/* Sidebar sections. Each one is a header <button> (aria-expanded) over its links; the
+   expand/collapse, rail and flyout state is driven by dashboard/assets/sidebar_nav.js. */
+.nav-section {
+    margin-top: 12px;
 }
 
-/* Navigation Menu Items - Active State */
-.nav-menu-item.active {
-    background-color: rgba(52, 152, 219, 0.3) !important;
-    color: #3498db !important;
-    font-weight: 600 !important;
-    border-left: 3px solid #3498db;
+.nav-section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    background: transparent;
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-align: left;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
 }
 
-/* Navigation Chevron - Hover Animation */
-.nav-menu-item:hover .nav-chevron {
-    transform: translateX(3px);
+.nav-section-header:hover {
+    background-color: rgba(255, 255, 255, 0.07);
 }
 
-/* Navigation Chevron - Base Transition */
-.nav-chevron {
+.nav-section-header:focus-visible,
+.nav-section-links .nav-menu-item:focus-visible {
+    outline: 2px solid #7fc3f2;
+    outline-offset: 2px;
+}
+
+.nav-section-icon {
+    flex: none;
+    width: 1.25rem;
+    font-size: 1.05rem;
+    text-align: center;
+}
+
+.nav-section-label {
+    flex: 1 1 auto;
+}
+
+.nav-section-chevron {
+    flex: none;
+    font-size: 0.7rem;
+    opacity: 0.7;
     transition: transform 0.2s ease;
 }
 
-/* Smooth transitions for menu items */
-.nav-menu-item {
-    transition: all 0.2s ease;
+.nav-section-header[aria-expanded="false"] .nav-section-chevron {
+    transform: rotate(-90deg);
+}
+
+/* The section holding the current page: its icon is tinted, in the rail too */
+.nav-section--active .nav-section-icon {
+    color: #7fc3f2;
+}
+
+.nav-section-links {
+    padding: 8px 0 4px;
+}
+
+/* Flyout heading: only shown when the links are a flyout panel (rail mode) */
+.nav-flyout-title {
+    display: none;
+}
+
+/* Links: own icon + label */
+.nav-section-links .nav-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 2px;
+    padding: 8px 12px 8px 14px;
+    border-left: 3px solid transparent;
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.9rem;
+    font-weight: 400;
+    text-decoration: none;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.nav-link-icon {
+    flex: none;
+    width: 1.1rem;
+    font-size: 0.95rem;
+    text-align: center;
+}
+
+.nav-section-links .nav-menu-item:hover {
+    background-color: rgba(52, 152, 219, 0.2);
+    color: #fff;
+}
+
+/* Active link: accent bar + tint + bold, readable without parsing the label */
+.nav-section-links .nav-menu-item.active {
+    background-color: rgba(52, 152, 219, 0.3);
+    border-left-color: #3498db;
+    color: #7fc3f2;
+    font-weight: 700;
 }
 
 /* ========================================
@@ -183,6 +261,180 @@
     box-shadow: none;
 }
 
+/* ========================================
+   TOP BAR - BRAND, CLIENT LOGO, ACCOUNT
+   ======================================== */
+
+.topbar-brand-logo {
+    height: 48px;
+    width: auto;
+    padding: 4px 12px;
+    border-radius: 6px;
+    background-color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Visual divider between the platform mark and the client's logo */
+.topbar-brand-divider {
+    align-self: center;
+    flex: none;
+    width: 1px;
+    height: 36px;
+    margin: 0 16px;
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+/* Client logo: a read-only display for every role (visibility and source are set by
+   update_client_logo in navigation_callbacks.py). */
+.topbar-client-logo-wrap {
+    display: flex;
+    align-items: center;
+    cursor: default;
+    user-select: none;
+}
+
+.topbar-client-logo {
+    height: 48px;
+    width: auto;
+    max-width: 120px;
+    padding: 4px 12px;
+}
+
+/* Fallback when the logo asset cannot be loaded: bordered initials, same footprint */
+.topbar-client-logo-placeholder {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-width: 64px;
+    height: 48px;
+    padding: 0 14px;
+    border: 2px solid rgba(255, 255, 255, 0.45);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.topbar-client-logo-wrap[data-logo-state="fallback"] .topbar-client-logo-placeholder {
+    display: inline-flex;
+}
+
+.topbar-client-logo-wrap[data-logo-state="fallback"] #client-logo-img {
+    display: none !important;
+}
+
+/* Product name block: one regular-weight title over a quieter tagline. It sits centered
+   against the logo boxes and stays within their 48px; the tagline gives way (ellipsis)
+   before the title does. Both colors clear WCAG AA on the #1a252f bar. */
+/* One line, always: the brand column is the only part that gives way (the tagline first,
+   via its ellipsis); the logos and the right-hand controls keep their size. */
+.topbar-row {
+    flex-wrap: nowrap;
+}
+
+.topbar-brand {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+.topbar-brand-logo,
+.topbar-client-logo-wrap,
+.topbar-brand-divider {
+    flex: none;
+}
+
+.topbar-brand-text {
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* With the admin's extra selector there is no room left for the title below this width:
+   drop the text block rather than show a clipped title. */
+@media (max-width: 1099px) {
+    .topbar-row:has(.topbar-client-label) .topbar-brand-text {
+        display: none;
+    }
+}
+
+.topbar-brand-title {
+    font-family: inherit;
+    font-size: 1.3rem;
+    font-weight: 400;
+    line-height: 1.2;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.topbar-brand-tagline {
+    display: block;
+    max-width: 340px;
+    overflow: hidden;
+    color: #b8c0c8;
+    font-size: 0.72rem;
+    line-height: 1.3;
+    letter-spacing: 0.08em;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.topbar-client-icon {
+    margin-right: 0.4rem;
+    font-size: 0.95rem;
+    color: #fff;
+}
+
+.topbar-client-label {
+    font-size: 0.75rem;
+}
+
+/* Account: a plain display of who is signed in, next to a direct logout button. The display
+   is not interactive; the button is as neutral as the other controls in the bar. */
+.user-display {
+    display: flex;
+    align-items: center;
+    margin-right: 16px;
+    color: #fff;
+    cursor: default;
+}
+
+.user-display-avatar {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-right: 10px;
+    border-radius: 50%;
+    background-color: #3498db;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.user-display-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+}
+
+.user-display-name {
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.user-display-role {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.75rem;
+}
+
+.topbar-logout {
+    font-weight: 500;
+    white-space: nowrap;
+}
+
 /* Alert detail selector: keep the searchable option list above nearby content
    without creating a sticky layer that can cover the fixed application banner. */
 .alerts-detail-selector-card {
@@ -211,20 +463,84 @@
     transition: width 0.25s ease, margin-left 0.25s ease;
 }
 
-/* Collapsed state: sidebar shrinks to nothing and content reclaims the space */
+/* Collapsed state: the sidebar becomes an icon-only rail (one icon per section). A section's
+   links open as a flyout beside its icon - see the rail rules below and sidebar_nav.js. */
 #dashboard-shell.sidebar-collapsed #app-sidebar {
-    width: 0 !important;
+    width: 68px !important;
     min-width: 0;
-    overflow: hidden;
-    box-shadow: none !important;
 }
 
 #dashboard-shell.sidebar-collapsed #app-content-wrapper {
-    margin-left: 0 !important;
+    margin-left: 68px !important;
+}
+
+#dashboard-shell.sidebar-collapsed .sidebar-header {
+    display: none;
+}
+
+/* Top padding keeps the first icon clear of the floating toggle button. */
+#dashboard-shell.sidebar-collapsed .sidebar-menu {
+    height: calc(100vh - 80px) !important;
+    padding: 48px 0 12px !important;
+    overflow-x: hidden;
+}
+
+#dashboard-shell.sidebar-collapsed .nav-section {
+    margin-top: 4px;
+}
+
+#dashboard-shell.sidebar-collapsed .nav-section-header {
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin: 0 auto;
+    padding: 0;
+    border-bottom: 0;
+}
+
+#dashboard-shell.sidebar-collapsed .nav-section-label,
+#dashboard-shell.sidebar-collapsed .nav-section-chevron {
+    display: none;
+}
+
+/* Rail version of the "you are here" cue: tinted tile with the accent bar */
+#dashboard-shell.sidebar-collapsed .nav-section--active .nav-section-header {
+    background-color: rgba(52, 152, 219, 0.3);
+    box-shadow: inset 3px 0 0 #3498db;
+}
+
+/* Flyout: the section's links as a panel beside its icon. Hidden until sidebar_nav.js
+   opens one (it also sets `top` from the icon's position). */
+#dashboard-shell.sidebar-collapsed .nav-section-links {
+    display: none;
+    position: fixed;
+    top: 96px;
+    left: 72px;
+    z-index: 1002;
+    min-width: 220px;
+    max-height: calc(100vh - 96px);
+    padding: 8px;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    background-color: #34495e;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+#dashboard-shell.sidebar-collapsed .nav-flyout-title {
+    display: block;
+    margin-bottom: 6px;
+    padding: 4px 10px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
 }
 
 /* Floating toggle button - sits on the sidebar's right edge and slides to
-   the far left (staying reachable) once the sidebar is hidden. */
+   the rail's edge once the sidebar is collapsed (staying reachable). */
 .sidebar-toggle-btn {
     position: fixed;
     top: 96px;
@@ -256,7 +572,7 @@
 }
 
 #dashboard-shell.sidebar-collapsed .sidebar-toggle-btn {
-    left: 6px;
+    left: 54px;
 }
 
 #dashboard-shell.sidebar-collapsed .sidebar-toggle-btn #sidebar-toggle-icon {
@@ -265,15 +581,56 @@
 
 /* ========================================
    FLEET OVERVIEW - UNIT TABLE & COLLAPSIBLE BANDS
-   (08_fleet_overview_table_format.md). Header/cell metrics mirror the
-   Monitoring > Oil table (machines_callbacks.py: #343a40 header, centered
-   11-12px cells); the severity colors are set inline from that same table's
-   palette.
+   (08_fleet_overview_table_format.md). Statuses are chips (status_chip.css): a
+   shape and the status word, tinted per technique and solid for the Estado.
    ======================================== */
 
-/* Band header toggles its band's table (collapsed state persisted
-   client-side, see dashboard/assets/fleet_overview_state.js). */
+/* Band header: a real <button aria-expanded> that toggles its band's table
+   (collapsed state persisted client-side, see
+   dashboard/assets/fleet_overview_state.js). */
+.fleet-band-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    margin: 18px 0 10px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.fleet-band-header:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.fleet-band-header:focus-visible,
+.fleet-more-btn:focus-visible,
+.fleet-unit-link:focus-visible {
+    outline: 2px solid var(--blue, #2563eb);
+    outline-offset: 2px;
+}
+
+.fleet-band-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.fleet-band-count {
+    color: var(--text-muted, #6c757d);
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .fleet-band-chevron {
+    margin-left: auto;
+    color: var(--text-muted, #6c757d);
     transition: transform 0.2s ease;
 }
 
@@ -308,7 +665,7 @@
 }
 
 .fleet-table td {
-    padding: 0;
+    padding: 7px 10px;
     border-bottom: 1px solid var(--border-strong, #dee2e6);
     text-align: center;
     white-space: nowrap;
@@ -318,31 +675,20 @@
     font-weight: 600;
 }
 
-.fleet-table-estado {
-    font-weight: 700;
-}
-
-/* The whole cell is the link, so the entire row opens the Unit Summary
-   (08, Required Changes #6) and the hover tooltip (title) is available
-   anywhere over a cell. */
-.fleet-cell-link {
-    display: block;
-    padding: 7px 10px;
+/* The unit id is the row's link to the Unit Detail. */
+.fleet-unit-link {
     color: inherit;
+    font-weight: 600;
     text-decoration: none;
 }
 
-.fleet-cell-link:hover {
-    color: inherit;
-    text-decoration: none;
-}
-
-.fleet-table-row {
-    cursor: pointer;
+.fleet-unit-link:hover {
+    color: var(--blue-text, #1d4ed8);
+    text-decoration: underline;
 }
 
 .fleet-table-row:hover td {
-    filter: brightness(0.95);
+    background-color: rgba(0, 0, 0, 0.035);
 }
 
 /* "Mostrar siguientes N unidades" - loads the band's next page of rows. */
@@ -372,16 +718,6 @@
    UNIT SUMMARY - NAVIGATION SHELL
    ======================================== */
 
-.unit-summary-back-link:hover,
-.unit-summary-sticky-header a:hover {
-    background-color: rgba(52, 152, 219, 0.08);
-}
-
-.unit-summary-switcher .dropdown-menu {
-    max-height: 320px;
-    overflow-y: auto;
-}
-
 /* Monitoreo 2x2 grid (spec 09): two columns when all 4 techniques apply,
    collapsing to one column on narrow viewports. minmax(0, 1fr) lets wide
    cards (oil table) scroll inside instead of stretching their column. */
@@ -401,26 +737,26 @@
 /* EMIN reliability report: keep the mobile layout usable without changing
    the shell behavior for other clients or dashboard sections. */
 @media (max-width: 900px) {
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-sidebar {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #app-sidebar {
         width: 0 !important;
         min-width: 0;
         overflow: hidden;
         box-shadow: none !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-content-wrapper {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #app-content-wrapper {
         width: 100%;
         min-width: 0;
         margin-left: 0 !important;
         padding: 16px 12px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .sidebar-toggle-btn {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .sidebar-toggle-btn {
         left: 6px;
         top: 88px;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) > div:first-child .container-fluid > .row {
         display: flex;
         flex-wrap: nowrap;
         justify-content: space-between;
@@ -428,7 +764,7 @@
         padding: 8px 12px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) > div:first-child .container-fluid > .row > div {
         flex: 0 1 auto;
         min-width: 0;
         width: auto;
@@ -436,209 +772,168 @@
         margin-right: 0 !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child > div > div:last-child {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-brand-text,
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-brand-divider,
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-client-label,
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-logout-label,
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .user-display-text {
         display: none;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child img {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-brand-logo {
         height: 36px !important;
         max-width: 105px !important;
         padding: 3px 8px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-logo-img {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #client-logo-img {
         height: 36px !important;
         max-width: 84px !important;
-        margin-left: 6px !important;
+        margin-left: 6px;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-selector {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-client-logo-placeholder {
+        height: 36px;
+        min-width: 48px;
+        margin-left: 6px;
+        padding: 0 8px;
+        font-size: 0.85rem;
+    }
+
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #client-selector {
         width: 100px !important;
         font-size: 0.8rem !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(2) > div > span {
-        display: none;
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .user-display {
+        margin-right: 8px;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(3) > div > div:first-child > div:last-child,
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:nth-child(3) > div > div:nth-child(2) {
-        display: none;
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .user-display-avatar {
+        margin-right: 0;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #logout-button {
-        padding: 6px 9px;
-        font-size: 0;
-    }
-
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #logout-button i {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-logout .fa-sign-out-alt {
         margin-right: 0 !important;
-        font-size: 14px;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-view-root {
         min-width: 0;
         overflow-x: clip;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-kpi-availability-est) > [class*="col-md-3"] {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-view-root .row:has(#maintenance-kpi-availability-est) > [class*="col-md-3"] {
         flex: 0 0 50%;
         max-width: 50%;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-daily) > [class*="col-md-6"],
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-system-mix) > [class*="col-md-6"],
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .row:has(#maintenance-chart-pareto) > [class*="col-md-6"] {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-view-root .row:has(#maintenance-chart-pareto) > [class*="col-md-6"] {
         flex: 0 0 100%;
         max-width: 100%;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .js-plotly-plot {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-view-root .js-plotly-plot {
         max-width: 100%;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open #app-sidebar {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report).mobile-nav-open #app-sidebar {
         width: 260px !important;
-        min-width: 260px;
+        min-width: 320px;
         overflow-y: auto;
         box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2) !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open .sidebar-toggle-btn {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report).mobile-nav-open .sidebar-toggle-btn {
         left: 246px;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin):not(.mobile-nav-open) #sidebar-toggle-icon {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report):not(.mobile-nav-open) #sidebar-toggle-icon {
         transform: rotate(180deg);
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin).mobile-nav-open #sidebar-toggle-icon {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report).mobile-nav-open #sidebar-toggle-icon {
         transform: none;
     }
 }
 
 @media (max-width: 480px) {
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #app-content-wrapper {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #app-content-wrapper {
         padding: 14px 8px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) > div:first-child .container-fluid > .row > div:first-child img {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .topbar-brand-logo {
         height: 32px !important;
         max-width: 92px !important;
         padding: 2px 6px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-logo-img {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #client-logo-img {
         height: 32px !important;
         max-width: 72px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) #client-selector {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) #client-selector {
         width: 84px !important;
     }
 
-    #dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-view-root .card-body {
+    #dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-view-root .card-body {
         padding: 0.75rem;
     }
 }
 
-#dashboard-shell:has(#maintenance-view-root.maintenance-emin) .maintenance-context-scope {
+#dashboard-shell:has(#maintenance-view-root.maintenance-report) .maintenance-context-scope {
     display: none;
 }
 
 /* Keep the partial-system notice readable against the white report background. */
-#maintenance-view-root.maintenance-emin .text-warning[role="status"] {
+#maintenance-view-root.maintenance-report .text-warning[role="status"] {
     color: #854d0e !important;
 }
 
-@media (min-width: 768px) {
-    #maintenance-view-root.maintenance-emin .maintenance-global-filters > .col-md-4 {
-        flex: 0 0 25%;
-        max-width: 25%;
-    }
-}
 
-#maintenance-view-root.maintenance-emin #maintenance-chart-system-mix,
-#dashboard-shell:has(#maintenance-view-root.maintenance-emin) #maintenance-chart-equipment {
+#maintenance-view-root.maintenance-report #maintenance-chart-system-mix {
     height: 360px !important;
 }
 
-#maintenance-view-root:not(.maintenance-emin) .maintenance-emin-only,
-#maintenance-view-root.maintenance-emin .maintenance-non-emin-only,
-#maintenance-view-root.maintenance-emin #maintenance-source-alert,
-#maintenance-view-root.maintenance-emin .maintenance-pareto-metric-control {
-    display: none !important;
-}
 
 /* Reserve room for the real seven-system legend without shrinking the plot. */
-#maintenance-view-root.maintenance-emin #maintenance-chart-pareto,
-#maintenance-view-root.maintenance-emin #maintenance-chart-pareto-tren-fuerza {
+#maintenance-view-root.maintenance-report #maintenance-chart-pareto,
+#maintenance-view-root.maintenance-report #maintenance-chart-pareto-tren-fuerza {
     height: 520px !important;
 }
 
 @media (max-width: 900px) {
-    #maintenance-view-root.maintenance-emin {
+    #maintenance-view-root.maintenance-report {
         padding: 12px !important;
     }
 }
 
 @media (max-width: 480px) {
-    #maintenance-view-root.maintenance-emin .row:has(#maintenance-kpi-availability-est) .card-body p {
+    #maintenance-view-root.maintenance-report .row:has(#maintenance-kpi-availability-est) .card-body p {
         font-size: 0.8rem;
         overflow-wrap: normal;
         word-break: normal;
     }
-    #maintenance-view-root.maintenance-emin .row:has(#maintenance-kpi-availability-est) h3 {
+    #maintenance-view-root.maintenance-report .row:has(#maintenance-kpi-availability-est) h3 {
         font-size: clamp(1.1rem, 4.8vw, 1.4rem);
         white-space: nowrap;
     }
 }
 
-/* Reportes > Informe preliminar de falla (dashboard/pages/reporting_informe_falla.py) */
-.informe-upload {
-    display: block;
-    padding: 24px 16px;
-    border: 2px dashed var(--border-strong, #adb5bd);
-    border-radius: 6px;
-    text-align: center;
-    cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
+/* Unit search ("Buscar Unidad") above the bands. */
+.fleet-search {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    margin: 14px 0 4px;
 }
-
-.informe-upload:hover {
-    border-color: #0d6efd;
-    background-color: rgba(52, 152, 219, 0.06);
+.fleet-search__label {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
 }
-
-.informe-thumb {
-    display: block;
-    width: 100%;
-    height: 140px;
-    object-fit: cover;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    background-color: #f8f9fa;
-}
-
-.informe-thumb-remove {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    padding: 0 7px;
-    opacity: 0.9;
-}
-
-/* Bloque reservado para funcionalidad que aun no esta disponible. */
-.informe-in-development {
-    margin: 12px;
-    border: 1px dashed var(--border-strong, #adb5bd);
-    border-radius: 6px;
-    opacity: 0.75;
-}
-
-.informe-preview {
-    width: 100%;
-    height: 80vh;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
+.fleet-search .form-control {
+    width: 320px;
+    max-width: 100%;
 }

@@ -237,10 +237,10 @@ def test_t_or_uses_the_default_for_unknown_keys_only():
 
 def test_page_title_is_evaluated_per_request():
     title = page_title("page.title.monitoring_oil")
-    assert title() == "Aceite | Multi-Technical Alerts"
+    assert title() == "Aceite | CODDI ASSET HEALTH"
     with _request_in("en"):
-        assert title() == "Oil | Multi-Technical Alerts"
-        assert title(unit_id="T_1") == "Oil | Multi-Technical Alerts"
+        assert title() == "Oil | CODDI ASSET HEALTH"
+        assert title(unit_id="T_1") == "Oil | CODDI ASSET HEALTH"
 
 
 def test_lazy_labels_follow_the_request_language():
@@ -326,7 +326,8 @@ def test_switching_language_does_not_change_any_navigation_target():
     user = {"username": "u", "role": "admin", "clients": ["CDA"]}
 
     def hrefs():
-        return [item.href for item in build_menu_items(build_navigation_items("CDA", user)) if hasattr(item, "href")]
+        menu = build_menu_items(build_navigation_items("CDA", user))
+        return [item.href for section in menu for item in _walk(section) if hasattr(item, "href")]
 
     spanish = hrefs()
     with _request_in("en"):

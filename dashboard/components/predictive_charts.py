@@ -1,8 +1,17 @@
 """
 Componentes de gráficos para la página de evidencia.
 """
+import json
+import logging
+import math
+from functools import lru_cache
+from pathlib import Path
+from typing import NamedTuple
+
 from src.i18n import t as _t
 from dashboard.components.labels import status_label
+logger = logging.getLogger(__name__)
+import numpy as np
 import plotly.graph_objects as go
 import pandas as pd
 
@@ -10,6 +19,14 @@ from dashboard.components.oil_charts import (
     get_essay_limits_four,
     consolidate_limit_entries,
     limit_line_color,
+)
+from dashboard.components.predictive_state import (
+    STATE_COLORS,
+    STATE_SEVERITY,
+    STATE_ZONE_FILL,
+    STATE_ZONE_TEXT,
+    normalize_state,
+    state_marker_size,
 )
 
 
@@ -23,15 +40,36 @@ def _oil_date_col(df) -> str:
     return "Fecha"
 
 
-# Zone fills/labels share a hue per zone (green healthy, orange mixed, red
-# critical); the fill is strong enough to tell the zones apart at a glance and
-# the label is a dark shade of the same hue so it stays legible on that fill.
-_ZONE_STYLE = {
-    "critical": ("rgba(226,75,74,0.22)", "#8a1f1e"),
-    "worsened": ("rgba(239,159,39,0.22)", "#7a4508"),
-    "improved": ("rgba(239,159,39,0.22)", "#7a4508"),
-    "healthy": ("rgba(29,158,117,0.22)", "#0b5a43"),
+# Short View quadrants in the red / yellow / green state language: the critical
+# quadrant is Anormal (red), the two mixed ones Alerta (yellow), the healthy one
+# Normal (green). Fill and label come from predictive_state, shared with the
+# Long View's reference band.
+_ZONE_STATE = {
+    "critical": "Anormal",
+    "worsened": "Alerta",
+    "improved": "Alerta",
+    "healthy": "Normal",
 }
+
+
+# Short View axis fields (config.settings.FLEET_SCATTER_AXIS_FIELDS): name -> (column
+# of the per-unit frame, axis-title i18n key). 60d / 90d are the loader's rolling means.
+SCATTER_AXIS_FIELDS = {
+    "ranking_today": ("ranking", "predictive_charts.ranking_hoy"),
+    "ranking_7d": ("avg_ranking_7d", "predictive_charts.ranking_7_dias"),
+    "ranking_30d": ("avg_ranking_30d", "predictive_charts.ranking_30_dias"),
+    "ranking_60d": ("avg_ranking_60d", "predictive_charts.ranking_60_dias"),
+    "ranking_90d": ("ranking_acum_90d", "predictive_charts.ranking_90_dias"),
+}
+
+
+def scatter_axis_columns(axes):
+    """Frame columns of the configured (x, y) axis fields. Raises on a missing or
+    unknown pair: there is no default pairing to fall back to."""
+    try:
+        return tuple(SCATTER_AXIS_FIELDS[field][0] for field in axes)
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"fleet scatter axes {axes!r} must be two of {list(SCATTER_AXIS_FIELDS)}") from exc
 
 
 def _axis_range(values, thresh, min_pad):
@@ -49,25 +87,216 @@ def _axis_range(values, thresh, min_pad):
     return (lo, hi)
 
 
-def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=None, meter_by_unit=None):
+# ── Scatter-style charts: state-scaled markers and aligned unit labels ─────────
+
+# Normal (baseline) marker of every scatter-style chart; Alerta/Anormal scale
+# from it by predictive_state.STATE_SIZE_FACTOR.
+SCATTER_BASE_MARKER = 8
+# Selected-unit highlight: the state's own marker, enlarged and ringed in blue
+# (8px Normal -> 14px, as before) so the state color/size rule still holds.
+SELECTED_MARKER_SCALE = 1.75
+SELECTED_COLOR = "#2563EB"
+# Unit labels are always neutral gray, whatever the unit's state: only the marker
+# carries the state color.
+LABEL_COLOR = "#4b5563"
+LABEL_FONT_PX = 9
+# What a label shrinks to where the normal size would crowd a neighbour.
+LABEL_FONT_SMALL_PX = 7
+
+# Plotly `textposition` -> direction of the label from its point (x, y in {-1, 0, 1}).
+_TEXT_DIRECTION = {
+    "top center": (0, 1), "bottom center": (0, -1),
+    "middle right": (1, 0), "middle left": (-1, 0),
+    "top right": (1, 1), "top left": (-1, 1),
+    "bottom right": (1, -1), "bottom left": (-1, -1),
+}
+_SCATTER_LABEL_ORDER = (
+    "top center", "bottom center", "middle right", "middle left",
+    "top right", "top left", "bottom right", "bottom left",
+)
+_LABEL_GAP_PX = 3
+# A label sits `_LABEL_GAP_PX` from its own marker and must stay this far from
+# every OTHER marker and label, so it always reads as belonging to the nearest
+# point - its own. Where no position keeps that clearance the label is omitted:
+# the point is still drawn, and a connector line to a far-off label is never used.
+_OTHER_MARKER_CLEARANCE_PX = 5
+_OTHER_LABEL_CLEARANCE_PX = 1
+# Past this many points the pairwise search is skipped and no labels are drawn -
+# far more points than any readable chart carries.
+_LABEL_SEARCH_LIMIT = 400
+
+
+class LabelPlacement(NamedTuple):
+    """Where one point's label goes. `position` is the Plotly `textposition` of
+    the direction; (`dx`, `dy`) is the pixel offset (y up) from the point's
+    centre to the label's anchor corner/edge; `font_px` the size it is drawn at."""
+    position: str
+    dx: float
+    dy: float
+    font_px: float
+
+
+def _rect_overlap(a, b) -> float:
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0.0
+
+
+def _anchor_offset(position, distance):
+    ux, uy = _TEXT_DIRECTION[position]
+    norm = math.hypot(ux, uy) or 1.0
+    return ux / norm * distance, uy / norm * distance
+
+
+def _label_box(anchor_x, anchor_y, ux, uy, width, height):
+    """Label rectangle whose nearest side/corner (by direction) sits on the anchor."""
+    left = anchor_x if ux > 0 else anchor_x - width if ux < 0 else anchor_x - width / 2
+    bottom = anchor_y if uy > 0 else anchor_y - height if uy < 0 else anchor_y - height / 2
+    return (left, bottom, left + width, bottom + height)
+
+
+def _grow(box, margin):
+    return (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+
+
+def place_labels(xs, ys, sizes, labels, x_range, y_range, plot_px, *,
+                 priority=None, order=_SCATTER_LABEL_ORDER, bleed_px=(0, 0, 0, 0),
+                 font_px=LABEL_FONT_PX, small_font_px=LABEL_FONT_SMALL_PX, blocked=()):
+    """A `LabelPlacement` per point - or None where the label is left out - so a
+    label always sits right next to its own point and never crowds another.
+
+    Plotly offsets a label by its own point's marker radius, so differing marker
+    sizes alone never detach it; what breaks alignment is a neighbour sitting
+    where a fixed position puts the label. Labels are placed most-severe first
+    (`priority`), each taking the first of `order`'s eight adjacent positions that
+    is clear of every other marker, every label already placed and the plot's
+    edge. Everything is tried at `font_px` first; a label that fits nowhere at that
+    size gets a second chance at the smaller `small_font_px`; one that still fits
+    nowhere is omitted (None) and its point is drawn without a label. There is no
+    connector line to a far-away label: ambiguity about whose label it is is worse
+    than no label.
+
+    Geometry is estimated in pixels from `plot_px` (width, height of the plot
+    area); the chart is responsive, so the estimate degrades gracefully with
+    width. `sizes`: marker diameter per point. `bleed_px`: (left, right, top,
+    bottom) room the figure margins leave outside the axes. `blocked`: further
+    rectangles (left, bottom, right, top; plot pixels, y up) no label may cover,
+    e.g. the chart's own zone captions. NaN/inf points are not obstacles and get no
+    label.
     """
-    Crear scatter de ranking vs avg_ranking_30d con todos los equipos.
-    Destaca el equipo seleccionado.
+    n = len(labels)
+    placements = [None] * n
+    if n == 0 or n > _LABEL_SEARCH_LIMIT:
+        return placements
+
+    width, height = plot_px
+    x0, x1 = x_range
+    y0, y1 = y_range
+    sx = width / (x1 - x0) if x1 > x0 else 0.0
+    sy = height / (y1 - y0) if y1 > y0 else 0.0
+    px = (np.asarray(xs, dtype=float) - x0) * sx
+    py = (np.asarray(ys, dtype=float) - y0) * sy
+    finite = np.isfinite(px) & np.isfinite(py)
+    radius = np.asarray(sizes, dtype=float) / 2.0
+
+    # Obstacles for OTHER points' labels: every marker, grown by the clearance.
+    obstacles = [
+        _grow((px[i] - radius[i], py[i] - radius[i], px[i] + radius[i], py[i] + radius[i]), _OTHER_MARKER_CLEARANCE_PX)
+        if finite[i] else None
+        for i in range(n)
+    ]
+    bleed_l, bleed_r, bleed_t, bleed_b = bleed_px
+    bounds = (-bleed_l, -bleed_b, width + bleed_r, height + bleed_t)
+
+    ranks = priority if priority is not None else [0] * n
+    pending = [i for i in sorted(range(n), key=lambda k: (-ranks[k], k)) if finite[i]]
+    placed = []  # boxes of the labels already placed
+    sizes_to_try = (font_px,) if small_font_px >= font_px else (font_px, small_font_px)
+    for size in sizes_to_try:
+        label_h = size * 1.3
+        still_pending = []
+        for i in pending:
+            label_w = len(str(labels[i])) * size * 0.6
+            for position in order:
+                ux, uy = _TEXT_DIRECTION[position]
+                dx, dy = _anchor_offset(position, radius[i] + _LABEL_GAP_PX)
+                box = _label_box(px[i] + dx, py[i] + dy, ux, uy, label_w, label_h)
+                inside = box[0] >= bounds[0] and box[1] >= bounds[1] and box[2] <= bounds[2] and box[3] <= bounds[3]
+                if (inside
+                        and not any(_rect_overlap(box, o) for o in blocked)
+                        and not any(_rect_overlap(box, o) for j, o in enumerate(obstacles) if o is not None and j != i)
+                        and not any(_rect_overlap(_grow(box, _OTHER_LABEL_CLEARANCE_PX), other) for other in placed)):
+                    placements[i] = LabelPlacement(position, dx, dy, size)
+                    placed.append(box)
+                    break
+            else:
+                still_pending.append(i)
+        pending = still_pending
+    return placements
+
+
+def _hex_to_rgba(color, alpha):
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _label_annotation(unit, x, y, placement):
+    """Annotation for one unit label, anchored to its data point and shifted by
+    pixels so it stays glued to the point at any chart width. Gray, at the size
+    `place_labels` settled on, on a light backing so curves running under it do not
+    strike it through; never carries a connector line."""
+    ux, uy = _TEXT_DIRECTION[placement.position]
+    return dict(
+        x=x, y=y, xref="x", yref="y", text=unit, name="unit-label", showarrow=False,
+        xanchor="left" if ux > 0 else "right" if ux < 0 else "center",
+        yanchor="bottom" if uy > 0 else "top" if uy < 0 else "middle",
+        xshift=placement.dx, yshift=placement.dy,
+        font=dict(size=placement.font_px, color=LABEL_COLOR, family="DM Sans, sans-serif"),
+        bgcolor="rgba(255,255,255,0.6)", borderpad=0,
+    )
+
+
+def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=None, meter_by_unit=None,
+                         height=380, *, axes):
+    """
+    Crear scatter con todos los equipos. Destaca el equipo seleccionado. El tooltip
+    muestra el ranking de hoy, el de 7, 30 y 90 días y las horas de componente, sea
+    cual sea el par de ejes.
+
+    `axes` es el (x, y) de campos de ranking configurado para el cliente/componente
+    (Settings.get_fleet_scatter_axes; claves de SCATTER_AXIS_FIELDS). Es obligatorio:
+    no hay un par por defecto, y uno ausente o desconocido lanza ValueError.
+
+    `height` en px; None deja que el gráfico tome el alto de su contenedor
+    (General lo dimensiona 2.5:1 por CSS).
+
+    Cada punto se colorea y dimensiona por el `status` (`unit_status_summary.estado`)
+    de esta vista: verde Normal, amarillo Alerta, rojo Anormal; Anormal 1.5x, Alerta
+    1.2x y Normal 1x el tamaño base. Las etiquetas de unidad son grises y se ubican
+    con `place_labels`: junto a su punto, más chicas donde hay aglomeración y
+    omitidas (sin línea de conexión) donde ni así caben.
 
     `thresholds` es el (x, y) configurado para el cliente/componente
     (Settings.get_fleet_scatter_threshold): divide los ejes en las cuatro
     regiones. Con None no hay regiones, líneas ni etiquetas: scatter simple.
-    `meter_by_unit` ({Unit: horas}) agrega el horómetro al tooltip; None lo omite
-    y una unidad sin lectura muestra "—".
+    `meter_by_unit` ({Unit: horas}) agrega las horas de componente al tooltip; None
+    lo omite y una unidad sin lectura muestra "—".
     """
-    x_all = df_latest["ranking"].astype(float)
-    y_all = df_latest["avg_ranking_30d"].astype(float)
+    x_col, y_col = scatter_axis_columns(axes)
+    x_title, y_title = (_t(SCATTER_AXIS_FIELDS[field][1]) for field in axes)
+    x_all = df_latest[x_col].astype(float)
+    y_all = df_latest[y_col].astype(float)
 
     x_thresh, y_thresh = thresholds if thresholds is not None else (None, None)
     x0, x1 = _axis_range(x_all, x_thresh, 5)
     y0, y1 = _axis_range(y_all, y_thresh, 2)
 
     fig = go.Figure()
+
+    # Plot-area size the label placement assumes: General's 2.5:1 chart at ~1100px
+    # wide (l=60, r=20, t=20, b=50 margins), or the fixed height given.
+    plot_px = (1020, 370) if height is None else (900, height - 70)
+    caption_boxes = []  # the zone captions, in plot pixels: unit labels keep off them
 
     if thresholds is not None:
         zones = {
@@ -77,13 +306,19 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
             "healthy": (x0, y0, x_thresh, y_thresh, "predictive_charts.zona_saludable"),
         }
         for zone, (qx0, qy0, qx1, qy1, label_key) in zones.items():
-            fill, text_color = _ZONE_STYLE[zone]
+            caption = _t(label_key)
+            cx = ((qx0 + qx1) / 2 - x0) / (x1 - x0) * plot_px[0] if x1 > x0 else 0.0
+            cy = ((qy0 + qy1) / 2 - y0) / (y1 - y0) * plot_px[1] if y1 > y0 else 0.0
+            half_w, half_h = len(caption) * 11 * 0.6 / 2, 11 * 1.3 / 2
+            caption_boxes.append((cx - half_w, cy - half_h, cx + half_w, cy + half_h))
+            state = _ZONE_STATE[zone]
+            fill, text_color = STATE_ZONE_FILL[state], STATE_ZONE_TEXT[state]
             fig.add_shape(
                 type="rect", x0=qx0, y0=qy0, x1=qx1, y1=qy1,
                 fillcolor=fill, line_width=0, layer="below"
             )
             fig.add_annotation(
-                x=(qx0 + qx1) / 2, y=(qy0 + qy1) / 2, text=_t(label_key),
+                x=(qx0 + qx1) / 2, y=(qy0 + qy1) / 2, text=caption,
                 showarrow=False, xanchor="center", yanchor="middle",
                 font=dict(size=11, color=text_color, family="DM Sans"),
             )
@@ -112,72 +347,311 @@ def create_fleet_scatter(df_latest, selected_unit, status_colors, thresholds=Non
         # The meter line goes right before the closing <extra> of the base tooltip.
         return template.replace("<extra></extra>", meter_line + "<extra></extra>")
 
-    # Fleet points (all units except selected)
-    for st, color in status_colors.items():
-        mask = (df_latest["status"] == st) & (df_latest["Unit"] != selected_unit)
-        subset = df_latest[mask]
-        if subset.empty:
-            continue
-        meter_text, meter_line = _meter_hover(subset["Unit"])
-        fig.add_trace(go.Scatter(
-            x=subset["ranking"].astype(float),
-            y=subset["avg_ranking_30d"].astype(float),
-            mode="markers+text",
-            name=status_label(st),
-            text=subset["Unit"],
-            customdata=subset["Unit"],  # read back by click-to-Evidence
-            textposition="top center",
-            textfont=dict(size=9, color=color),
-            marker=dict(
-                color=color, size=8,
-                line=dict(color="white", width=1.2), opacity=0.5
-            ),
-            hovertext=meter_text,
-            hovertemplate=_hover_template(_t("predictive_charts.b_b_br_ranking_br_prom"), meter_line),
-        ))
+    # One group per state (colored and sized by it), then the selected unit on
+    # top. Label positions are solved over every group at once so labels never
+    # collide across states.
+    groups = []  # (state, color, frame, is_selected)
+    def _shown(column, spec):
+        """{Unit: text} of a ranking column, as the tooltip shows it."""
+        if column not in df_latest.columns:
+            return {}
+        return {u: (format(v, spec) if pd.notna(v) else "—") for u, v in zip(df_latest["Unit"], df_latest[column].astype(float))}
 
-    # Selected unit — highlighted
+    # The tooltip's ranking values do not depend on which two are plotted.
+    today, r7, r30, r90 = (_shown("ranking", ".0f"), _shown("avg_ranking_7d", ".1f"),
+                           _shown("avg_ranking_30d", ".1f"), _shown("ranking_acum_90d", ".1f"))
+    for st, color in status_colors.items():
+        subset = df_latest[(df_latest["status"] == st) & (df_latest["Unit"] != selected_unit)]
+        if not subset.empty:
+            groups.append((st, color, subset, False))
     sel = df_latest[df_latest["Unit"] == selected_unit]
     if not sel.empty:
-        meter_text, meter_line = _meter_hover(sel["Unit"])
+        sel_state = sel.iloc[0]["status"]
+        groups.append((sel_state, status_colors.get(sel_state, SELECTED_COLOR), sel.iloc[:1], True))
+
+    def _group_size(state, is_selected):
+        size = state_marker_size(state, SCATTER_BASE_MARKER)
+        return size * SELECTED_MARKER_SCALE if is_selected else size
+
+    all_units, all_x, all_y, all_sizes, all_priority = [], [], [], [], []
+    for st, _color, frame, is_selected in groups:
+        all_units += list(frame["Unit"])
+        all_x += list(frame[x_col].astype(float))
+        all_y += list(frame[y_col].astype(float))
+        all_sizes += [_group_size(st, is_selected)] * len(frame)
+        # most severe first; the selected unit ahead of all so it keeps its label
+        all_priority += [(len(STATE_SEVERITY) if is_selected else STATE_SEVERITY.get(normalize_state(st), -1))] * len(frame)
+    placements = dict(zip(all_units, place_labels(
+        all_x, all_y, all_sizes, all_units, (x0, x1), (y0, y1), plot_px, priority=all_priority,
+        blocked=caption_boxes,
+    )))
+
+    for st, color, frame, is_selected in groups:
+        meter_text, meter_line = _meter_hover(frame["Unit"])
+        units = list(frame["Unit"])
+        if is_selected:
+            template = _t("predictive_charts.hover_fleet_selected", selected_unit=selected_unit)
+            marker = dict(color=color, size=_group_size(st, True), line=dict(color=SELECTED_COLOR, width=3), opacity=1.0)
+            name = selected_unit
+        else:
+            template = _t("predictive_charts.hover_fleet")
+            marker = dict(color=color, size=_group_size(st, False), line=dict(color="white", width=1.2), opacity=0.85)
+            name = status_label(st)
+        unit_placements = [placements[u] for u in units]
         fig.add_trace(go.Scatter(
-            x=sel["ranking"].astype(float),
-            y=sel["avg_ranking_30d"].astype(float),
+            x=frame[x_col].astype(float),
+            y=frame[y_col].astype(float),
             mode="markers+text",
-            name=selected_unit,
-            text=[selected_unit],
-            customdata=[selected_unit],
-            textposition="top center",
-            textfont=dict(size=11, color="#2563EB", family="DM Sans"),
-            marker=dict(
-                color="#2563EB", size=14,
-                line=dict(color="white", width=2), opacity=1.0
-            ),
+            name=name,
+            text=units,
+            # [unit, today's, 7-day, 30-day and 90-day ranking]: click-to-Evidence reads the
+            # unit from index 0; the tooltip reads the rest (not the plotted x / y)
+            customdata=[[u, today.get(u, "—"), r7.get(u, "—"), r30.get(u, "—"), r90.get(u, "—")] for u in units],
+            # A label that fits nowhere is left out (blank template) but the point
+            # is still drawn; `text` stays for the tooltip and click handler.
+            textposition=[p.position if p else _SCATTER_LABEL_ORDER[0] for p in unit_placements],
+            texttemplate=["%{text}" if p else "" for p in unit_placements],
+            textfont=dict(size=[p.font_px if p else LABEL_FONT_PX for p in unit_placements], color=LABEL_COLOR),
+            cliponaxis=False,
+            marker=marker,
             hovertext=meter_text,
-            hovertemplate=_hover_template(
-                _t("predictive_charts.b_b_br_ranking_br_prom_2", selected_unit=selected_unit), meter_line),
+            hovertemplate=_hover_template(template, meter_line),
         ))
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="DM Sans, sans-serif", size=11, color="#6C7280"),
-        height=380,
+        height=height,
         margin=dict(l=60, r=20, t=20, b=50),
         showlegend=False,
         xaxis=dict(
-            title=_t("tab_predictive_evidence.ranking_actual"),
+            title=x_title,
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[x0, x1]
         ),
         yaxis=dict(
-            title=_t("predictive_charts.ranking_30_dias"),
+            title=y_title,
             showgrid=True, gridcolor="rgba(0,0,0,0.05)",
             zeroline=False, tickfont=dict(size=10), range=[y0, y1]
         ),
         hovermode="closest",
     )
 
+    return fig
+
+
+# Terminal-point labels prefer the right of the point (the line's own end); the
+# right margin below leaves room for them.
+_LONG_LABEL_ORDER = (
+    "middle right", "top center", "bottom center", "middle left",
+    "top right", "bottom right", "top left", "bottom left",
+)
+_LONG_RIGHT_MARGIN_PX = 70
+
+
+def _long_view_band(active, df):
+    """(hours, media, umbral) of the fleet reference band. Prefers the `banda`
+    metadata the curve reader keeps (the exact grid the classification used);
+    falls back to the per-row `banda_media`/`banda_umbral`, which are the same
+    function of hours. None when neither exists."""
+    banda = (getattr(active, "attrs", None) or {}).get("banda") or {}
+    try:
+        grid = np.asarray(banda["grid"], dtype=float)
+        media = np.asarray(banda["media"], dtype=float)
+        umbral = np.asarray(banda["umbral"], dtype=float)
+        if grid.size and grid.size == media.size == umbral.size:
+            return grid, media, umbral
+    except (KeyError, TypeError, ValueError):
+        pass
+    if {"banda_media", "banda_umbral"}.issubset(df.columns):
+        pts = (df[["componentHours_filled", "banda_media", "banda_umbral"]]
+               .dropna().drop_duplicates(subset=["componentHours_filled"])
+               .sort_values("componentHours_filled"))
+        if not pts.empty:
+            return (pts["componentHours_filled"].to_numpy(dtype=float),
+                    pts["banda_media"].to_numpy(dtype=float),
+                    pts["banda_umbral"].to_numpy(dtype=float))
+    return None
+
+
+def _long_view_alert_fraction(active):
+    """Where the Normal/Alerta edge sits between `media` and `umbral`:
+    K_ALERTA / K_SIGMA of the way, i.e. median + K_ALERTA*sigma given that
+    `umbral` = median + K_SIGMA*sigma. Both come from the curve's `config`
+    (upstream defaults 1 and 2 -> one sigma, halfway) when it did not survive."""
+    config = (getattr(active, "attrs", None) or {}).get("config") or {}
+    try:
+        k_sigma, k_alerta = float(config.get("K_SIGMA", 2.0)), float(config.get("K_ALERTA", 1.0))
+    except (TypeError, ValueError):
+        return 0.5
+    if not (k_sigma > 0 and 0 < k_alerta <= k_sigma):
+        return 0.5
+    return k_alerta / k_sigma
+
+
+def create_empty_selection_figure(message_key="predictive_charts.selection_empty"):
+    """A blank chart (no points, no axes) saying that no unit is selected - what an
+    empty unit selection shows on either chart. Never a fallback to the whole fleet.
+    `message_key` swaps the message (the Short View's "axes not configured" case)."""
+    message = _t(message_key)
+    fig = go.Figure()
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="DM Sans, sans-serif", size=11, color="#6C7280"),
+        margin=dict(l=70, r=_LONG_RIGHT_MARGIN_PX, t=20, b=50), showlegend=False,
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        annotations=[dict(
+            text=message, showarrow=False, xref="paper", yref="paper", x=0.5, y=0.5,
+            font=dict(size=13, color="#6C7280", family="DM Sans, sans-serif"),
+        )],
+    )
+    return fig
+
+
+def create_long_view_chart(active, selected_units=None):
+    """Long View: ranking acumulado ajustado vs horas de componente.
+
+    `active` is `predictive_v2.load_active_cycle_curve` (active-cycle rows only,
+    `attrs["banda"]` kept). `selected_units` limits which units are drawn:
+    None draws every unit, a list draws exactly those, and an EMPTY list draws an
+    empty chart - an empty selection never falls back to the fleet. Both axes
+    auto-fit to the units drawn.
+
+    One series per drawn unit: the connecting line is its whole active cycle. Line
+    and end dot share one color rule - green Normal, yellow Alerta, red Anormal,
+    by `cumulative_risk_curve.estado` of the unit's current (last) row - so two
+    units in the same state look alike and are told apart by their gray label,
+    which sits at the end dot where it fits (smaller where crowded, omitted where
+    even that would crowd; never a connector line). The dot is sized Anormal 1.5x,
+    Alerta 1.2x, Normal 1x. The background shades the fleet reference band
+    (Normal below median + 1 sigma, Alerta up to median + 2 sigma, Anormal above)
+    in the same colors and is independent of the
+    units' own `estado`. None when `active` has nothing to plot at all.
+
+    The height is left to the container (General sizes it 2.5:1).
+    """
+    if active is None or active.empty:
+        return None
+    df = (active.dropna(subset=["componentHours_filled", "ranking_acumulado_ajustado"])
+          .sort_values(["Unit", "Fecha", "componentHours_filled"]))
+    if df.empty:
+        return None
+    if selected_units is not None:
+        df = df[df["Unit"].isin(set(selected_units))]
+        if df.empty:
+            return create_empty_selection_figure()
+
+    x_max = float(df["componentHours_filled"].max())
+    y_max = float(df["ranking_acumulado_ajustado"].max())
+    x_up = max(math.ceil(x_max / 100.0) * 100.0, 100.0)
+    y_up = max(math.ceil(y_max * 1.06 / 100.0) * 100.0, 100.0)
+
+    fig = go.Figure()
+    annotations = []
+
+    # ── Reference band: three zones, then the Alerta/Anormal edges ──
+    band = _long_view_band(active, df)
+    if band is not None:
+        grid, media, umbral = band
+        order = np.argsort(grid)
+        grid, media, umbral = grid[order], media[order], umbral[order]
+        if grid[-1] < x_up:  # hold the last band value out to the axis end
+            grid = np.append(grid, x_up)
+            media, umbral = np.append(media, media[-1]), np.append(umbral, umbral[-1])
+        # Normal < median + 1 sigma <= Alerta < median + 2 sigma (= umbral) <= Anormal
+        alerta = media + _long_view_alert_fraction(active) * (umbral - media)
+        alerta_c, umbral_c = np.minimum(alerta, y_up), np.minimum(umbral, y_up)
+        loop_x = np.concatenate([grid, grid[::-1]])
+        for zone, lower, upper in (
+            ("Normal", np.zeros_like(grid), alerta_c),
+            ("Alerta", alerta_c, umbral_c),
+            ("Anormal", umbral_c, np.full_like(grid, y_up)),
+        ):
+            fig.add_trace(go.Scatter(
+                x=loop_x, y=np.concatenate([upper, lower[::-1]]), mode="lines",
+                fill="toself", fillcolor=STATE_ZONE_FILL[zone], line=dict(width=0),
+                hoverinfo="skip", showlegend=False,
+            ))
+        fig.add_trace(go.Scatter(
+            x=grid, y=alerta_c, mode="lines", hoverinfo="skip", showlegend=False,
+            line=dict(color="rgba(17,24,39,0.55)", width=1.4, dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=grid, y=umbral_c, mode="lines", hoverinfo="skip", showlegend=False,
+            line=dict(color="rgba(200,60,40,0.6)", width=1.2, dash="dot"),
+        ))
+        for zone, x_frac, y_of in (
+            ("Anormal", 0.12, lambda xv: np.interp(xv, grid, umbral_c) + (y_up - np.interp(xv, grid, umbral_c)) * 0.6),
+            ("Alerta", 0.85, lambda xv: (np.interp(xv, grid, alerta_c) + np.interp(xv, grid, umbral_c)) / 2),
+            ("Normal", 0.85, lambda xv: np.interp(xv, grid, alerta_c) * 0.25),
+        ):
+            xv = x_up * x_frac
+            annotations.append(dict(
+                x=xv, y=float(y_of(xv)), xref="x", yref="y", text=status_label(zone),
+                showarrow=False, font=dict(size=11, color=STATE_ZONE_TEXT[zone], family="DM Sans, sans-serif"),
+                bgcolor="rgba(255,255,255,0.6)", borderpad=3,
+            ))
+
+    # ── Units: severe ones last so they draw on top ──
+    series = {unit: g for unit, g in df.groupby("Unit", sort=True)}
+    terminal = {  # where each unit stands now: its last row
+        unit: (float(g["componentHours_filled"].iloc[-1]),
+               float(g["ranking_acumulado_ajustado"].iloc[-1]),
+               normalize_state(g["estado"].iloc[-1]))
+        for unit, g in series.items()
+    }
+    units = list(series)
+    sizes = {u: state_marker_size(terminal[u][2], SCATTER_BASE_MARKER) for u in units}
+    # Plot area the label placement assumes: General's 2.5:1 chart at ~1100px wide.
+    placements = dict(zip(units, place_labels(
+        [terminal[u][0] for u in units], [terminal[u][1] for u in units],
+        [sizes[u] for u in units], units, (0.0, x_up), (0.0, y_up), (960, 370),
+        priority=[STATE_SEVERITY.get(terminal[u][2], -1) for u in units],
+        order=_LONG_LABEL_ORDER, bleed_px=(0, _LONG_RIGHT_MARGIN_PX, 0, 0),
+    )))
+    estado_text = {e: status_label(e) for e in df["estado"].dropna().unique()}
+    for unit in sorted(units, key=lambda u: (STATE_SEVERITY.get(terminal[u][2], -1), u)):
+        g = series[unit]
+        x_last, y_last, state = terminal[unit]
+        state_color = STATE_COLORS.get(state, "#6b7280")
+        n = len(g)
+        fig.add_trace(go.Scatter(
+            # Rounded to what the tooltip shows (whole hours' tenths / whole ranking):
+            # the active curves are ~16k points, so full-precision floats double the payload.
+            x=g["componentHours_filled"].round(1), y=g["ranking_acumulado_ajustado"].round(0),
+            mode="lines+markers", name=unit,
+            line=dict(color=_hex_to_rgba(state_color, 0.85), width=1.6),
+            # Only the current point is drawn (and labeled, below), in the state's
+            # color and size; the earlier rows are the line's vertices and stay hoverable.
+            marker=dict(color=state_color, size=[0] * (n - 1) + [sizes[unit]],
+                        line=dict(color="white", width=1.2), opacity=1),
+            cliponaxis=False,
+            customdata=g["estado"].map(estado_text).fillna("—").tolist(),
+            hovertemplate=_t("predictive_charts.long_hover", unit=unit),
+        ))
+        if placements[unit] is not None:  # a label that fits nowhere is left out, the dot stays
+            annotations.append(_label_annotation(unit, x_last, y_last, placements[unit]))
+
+    fig.update_layout(
+        annotations=annotations,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="DM Sans, sans-serif", size=11, color="#6C7280"),
+        margin=dict(l=70, r=_LONG_RIGHT_MARGIN_PX, t=20, b=50),
+        showlegend=False,
+        hovermode="closest",
+        xaxis=dict(
+            title=_t("predictive_charts.long_x_axis"),
+            showgrid=True, gridcolor="rgba(0,0,0,0.05)", zeroline=False,
+            tickfont=dict(size=10), range=[0, x_up], rangemode="tozero",
+        ),
+        yaxis=dict(
+            title=_t("predictive_charts.long_y_axis"),
+            showgrid=True, gridcolor="rgba(0,0,0,0.05)", zeroline=False,
+            tickfont=dict(size=10), range=[0, y_up], rangemode="tozero",
+        ),
+    )
     return fig
 
 
@@ -189,15 +663,15 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
     fm_keys = list(failure_modes.keys())
     fm_labels = [failure_modes[k] for k in fm_keys]
     
-    # Valores del equipo seleccionado (use 30d averages for consistency)
+    # Valores del equipo seleccionado (7-day means, the Calendario de estado's window)
     unit_vals = [
-        float(unit_row[f"{k}_30d"]) if f"{k}_30d" in unit_row.index and pd.notna(unit_row[f"{k}_30d"]) else 0.0
+        float(unit_row[f"{k}_7d"]) if f"{k}_7d" in unit_row.index and pd.notna(unit_row[f"{k}_7d"]) else 0.0
         for k in fm_keys
     ]
-    
-    # Valores promedio de la flota (use 30d averages)
+
+    # Valores promedio de la flota (7-day means)
     fleet_vals = [
-        float(df_latest[f"{k}_30d"].mean()) if f"{k}_30d" in df_latest.columns else 0.0
+        float(df_latest[f"{k}_7d"].mean()) if f"{k}_7d" in df_latest.columns else 0.0
         for k in fm_keys
     ]
     
@@ -293,19 +767,63 @@ _NO_DATA_COLOR = "#e5e7eb"
 _WEAR_PALETTE = ["#2563EB", "#E24B4A", "#1D9E75", "#7C3AED", "#EF9F27", "#0891B2"]
 
 
-def classify_criticidad(value):
+_THRESHOLDS_DIR = Path(__file__).resolve().parents[2] / "config" / "umbrales_criticidad"
+_MEAN_WINDOW_DAYS = 7
+
+
+@lru_cache(maxsize=8)
+def _load_mode_thresholds(client_key: str) -> dict:
+    """{mode: (p75, p90, p98)} from config/umbrales_criticidad/<client>.json
+    (the `umbrales_criticidad` dictionary written by the calibration script),
+    or {} when the client has no file or it can't be parsed. Edges are the
+    lower bounds of Monitoreo / Prioridad alta / Crítico."""
+    if not client_key:
+        return {}
+    path = _THRESHOLDS_DIR / f"{client_key}.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("No se pudo leer %s", path)
+        return {}
+    modes = (data.get("umbrales_criticidad", data) or {}).get("modos") or {}
+    edges = {}
+    for mode, v in modes.items():
+        try:
+            e = (float(v["p75"]), float(v["p90"]), float(v["p98"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if e[0] <= e[1] <= e[2]:
+            edges[mode] = e
+    return edges
+
+
+def get_mode_thresholds(client) -> dict:
+    """Calibrated criticidad edges per failure mode for `client` ({} if none)."""
+    return _load_mode_thresholds((client or "").lower())
+
+
+def classify_criticidad(value, edges=_CRITICIDAD_EDGES):
     """Band index (0..3) of a risk score, or None when there is no score -
-    a missing day is "no data", never implicitly Saludable."""
+    a missing day is "no data", never implicitly Saludable. `edges` are the
+    lower bounds of bands 1..3 (the fixed 35/55/75 unless a mode is calibrated)."""
     if value is None or pd.isna(value):
         return None
-    return sum(float(value) >= edge for edge in _CRITICIDAD_EDGES)
+    return sum(float(value) >= edge for edge in edges)
 
 
-def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90):
+def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90, client=None):
     """Calendar heatmap: one row per failure mode, one column per day over the
     `days` days ending at `end_date`, coloured by the criticidad band of that
-    day's `risk_value`. `df_unit` is the unit's wide risk frame (Fecha + one
-    column per mode); a mode/day with no value renders as "Sin datos".
+    day's value. `df_unit` is the unit's wide risk frame (Fecha + one column
+    per mode); a mode/day with no value renders as "Sin datos".
+
+    A mode with calibrated thresholds for `client` (config/umbrales_criticidad)
+    is classified on its trailing 7-day mean - the series the P75/P90/P98 edges
+    were computed on - against its own edges. Any other mode keeps the daily
+    `risk_value` against the fixed 35/55/75 bands. A day without a reading stays
+    "Sin datos" in both cases, so the mean never paints a day the unit skipped.
     Dotted vertical lines mark each Monday (week start).
     """
     if df_unit is None or df_unit.empty or end_date is None:
@@ -316,25 +834,34 @@ def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90):
 
     end = pd.Timestamp(end_date).normalize()
     dates = pd.date_range(end=end, periods=days, freq="D")
-    daily = (
+    unit_days = (
         df_unit.assign(Fecha=pd.to_datetime(df_unit["Fecha"]).dt.normalize())
         .drop_duplicates(subset="Fecha", keep="last")
         .set_index("Fecha")
-        .reindex(dates)[modes]
     )
+    daily = unit_days.reindex(dates)[modes]
+    # The mean needs the days before the window too; calendar days, so a gap
+    # lowers the divisor instead of stretching the mean over older readings.
+    lead = pd.date_range(end=end, periods=days + _MEAN_WINDOW_DAYS - 1, freq="D")
+    mean_7d = unit_days.reindex(lead)[modes].rolling(_MEAN_WINDOW_DAYS, min_periods=1).mean().reindex(dates)
+    thresholds = get_mode_thresholds(client)
     # Worst mode on top: order by mean over the window, ties by catalogue order.
     order = sorted(modes, key=lambda m: (-(daily[m].mean() if daily[m].notna().any() else -1.0), modes.index(m)))
 
     z, hover = [], []
     for m in order:
+        edges = thresholds.get(m)
+        series = mean_7d[m].where(daily[m].notna()) if edges else daily[m]
         row_z, row_h = [], []
-        for d, v in zip(dates, daily[m]):
-            band = classify_criticidad(v)
+        for d, v in zip(dates, series):
+            band = classify_criticidad(v, edges or _CRITICIDAD_EDGES)
             row_z.append(_NO_DATA_CODE if band is None else band)
-            row_h.append(
-                _t("predictive_charts.sin_datos", d=d) if band is None
-                else f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}"
-            )
+            if band is None:
+                row_h.append(_t("predictive_charts.sin_datos", d=d))
+            elif edges:
+                row_h.append(_t("predictive_charts.hover_mean_7d", d=d, v=float(v), band=_band_label(band)))
+            else:
+                row_h.append(f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}")
         z.append(row_z)
         hover.append(row_h)
 

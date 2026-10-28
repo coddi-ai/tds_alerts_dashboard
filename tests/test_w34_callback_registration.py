@@ -242,6 +242,9 @@ KNOWN_DYNAMIC_IDS = {
     "alert-oil-tendencia-date-range",
     "alert-oil-tendencia-date-clear",
     "alert-oil-view-selector",
+    "alert-signals-toggle",          # create_signal_evidence (only with signals beyond the visible N)
+    "alert-signals-collapse",
+    "alert-signals-toggle-labels",
     "telemetry-fleet-status-table",  # _fleet_status_table (telemetry-fleet-table-container)
 }
 

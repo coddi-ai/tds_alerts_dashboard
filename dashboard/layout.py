@@ -13,19 +13,41 @@ import dash_bootstrap_components as dbc
 import dash
 import os
 from pathlib import Path
+from typing import Optional
 from config.settings import get_settings, APP_VERSION
 from config.client_services import is_service_enabled
+from dashboard.components.erp_chips import nav_badge_children
 from dashboard.components.language_selector import create_language_selector, LANGUAGE_SYNC_STORE_ID
 from dashboard.auth import current_dashboard_user_data, is_admin
-from dashboard.services_registry import SERVICE_SECTIONS, nav_path as _nav_path, section_label, service_label
+from dashboard.services_registry import (
+    SERVICE_SECTIONS,
+    nav_icon,
+    nav_path as _nav_path,
+    section_label,
+    service_label,
+)
 from dashboard.troubleshooting_handoff import troubleshooting_agent_configured
+from src.data import erp_warning_store
 
 
-# Component icon map for predictive nav sections
-PREDICTIVE_COMPONENT_ICONS = {
-    "motor": "fas fa-cog",
-    "transmision": "fas fa-exchange-alt",
-}
+# Predictive components that get a sidebar link (icons live in services_registry.NAV_ICONS)
+PREDICTIVE_NAV_COMPONENTS = ("motor", "transmision")
+
+
+ERP_VALIDATION_NAV_ID = "integration-validacion-avisos"
+ERP_PENDING_BADGE_ID = "erp-nav-pending-badge"
+ERP_NAV_REFRESH_STORE_ID = "erp-nav-refresh-store"
+
+
+def _erp_pending_count(client: Optional[str]) -> Optional[int]:
+    """Pending warnings of a client for the badge on Validación de Avisos; None (no badge) when
+    there is no client or its warning files can't be read — a nav link must never fail to render."""
+    if not client:
+        return None
+    try:
+        return len(erp_warning_store.read(client, "pending"))
+    except Exception:  # unreadable parquet, unknown client folder...
+        return None
 
 
 def _campbell_ai_enabled() -> bool:
@@ -44,300 +66,328 @@ def _discover_predictive_components(client: str) -> list:
     return sorted([f.replace(".csv", "") for f in os.listdir(data_dir) if f.endswith(".csv")])
 
 
-def create_login_page() -> dbc.Container:
+def _asset_url(filename: str) -> str:
+    """`dash.get_asset_url`, tolerant of running before the Dash app exists (unit tests)."""
+    try:
+        return dash.get_asset_url(filename)
+    except AttributeError:
+        return f"/assets/{filename}"
+
+
+def _login_field(label: str, input_id: str, icon: str, **input_kwargs) -> html.Div:
+    """A labelled field: label above, then icon + rounded input."""
+    return html.Div(
+        [
+            html.Label(label, htmlFor=input_id, className="login-label"),
+            dbc.InputGroup(
+                [
+                    dbc.InputGroupText(html.I(className=icon)),
+                    dbc.Input(id=input_id, **input_kwargs),
+                ],
+                className="login-input-group",
+            ),
+        ],
+        className="login-field",
+    )
+
+
+def create_login_page() -> html.Div:
     """
-    Create redesigned login page with improved spacing, logo visibility, and form usability.
+    Login page: a split card (hero image | branding, language, welcome text and form) over a
+    light, wave-patterned page. Authentication itself is in dashboard/callbacks/auth_callbacks.py
+    and keys off the ids below (username-input, password-input, login-button, login-alert), so
+    those must not change. Styling is in dashboard/assets/login.css; under the tablet
+    breakpoint the hero is hidden and the form panel takes the full card.
 
     Returns:
-        Bootstrap container with professional login form
+        The login page, with the version label at its bottom left
     """
-    return dbc.Container([
-        html.Div(
-            create_language_selector(),
-            style={"position": "fixed", "top": "16px", "right": "24px", "zIndex": 1000},
-        ),
-        dbc.Row([
-            dbc.Col([
-                # Login card with integrated branding
-                dbc.Card([
-                    dbc.CardBody([
-                        # Branding section
-                        html.Div([
+    return html.Div(
+        [
+            html.Div(
+                [
+                    # Hero image: decorative, so no alt text
+                    html.Div(
+                        html.Img(src=_asset_url("login_image.png"), alt="", className="login-hero-img"),
+                        className="login-hero",
+                    ),
+
+                    # Form panel
+                    html.Div(
+                        [
                             html.Div(
-                                html.Img(
-                                    src="https://raw.githubusercontent.com/coddi-ai/tds_alerts_dashboard/refs/heads/dev/dashboard/assets/logo.svg",
-                                    style={
-                                        "height": "64px",
-                                        "width": "auto",
-                                        "padding": "8px 16px",
-                                        "backgroundColor": "white",
-                                        "borderRadius": "8px",
-                                        "border": "2px solid #e0e0e0",
-                                        "boxShadow": "0 2px 8px rgba(0,0,0,0.08)"
-                                    }
-                                ),
-                                className="text-center"
-                            ),
-                            html.H3(
-                                t("app.platform_title"),
-                                className="text-center mt-3 mb-1",
-                                style={"fontWeight": "600", "color": "#1a252f", "fontSize": "1.4rem"}
-                            ),
-                            # html.P(
-                            #     "Technical Alerts Dashboard",
-                            #     className="text-center mb-0 text-muted",
-                            #     style={"fontSize": "0.9rem"}
-                            # )
-                        ], style={
-                            "padding": "32px 32px 24px 32px",
-                            "borderBottom": "2px solid #f0f0f0",
-                            "backgroundColor": "#fafafa"
-                        }),
-                        
-                        # Login form section
-                        html.Div([
-                            html.H4(
-                                t("login.title"),
-                                className="mb-1 text-center",
-                                style={"fontWeight": "600", "fontSize": "1.3rem"}
-                            ),
-                            # html.P(
-                            #     "Enter your credentials to access the platform",
-                            #     className="text-center text-muted mb-4",
-                            #     style={"fontSize": "0.85rem"}
-                            # ),
-
-                            dbc.Alert(
-                                id='login-alert',
-                                is_open=False,
-                                color='danger',
-                                duration=4000,
-                                className="mb-3"
-                            ),
-
-                            # Username field
-                            html.Div([
-                                html.Label(
-                                    t("login.username"),
-                                    className="form-label fw-500 mb-2",
-                                    style={"fontSize": "0.9rem", "color": "#495057"}
-                                ),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText(
-                                        html.I(className="fas fa-user"),
-                                        style={"backgroundColor": "#f8f9fa"}
+                                [
+                                    html.Div(
+                                        [
+                                            html.Img(
+                                                src=_asset_url("logo.svg"),
+                                                alt="CODDI",
+                                                className="login-brand-logo",
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Div(t("app.product_name"), className="login-brand-name"),
+                                                    html.Div(t("app.platform_subtitle"), className="login-brand-subtitle"),
+                                                ],
+                                                className="login-brand-text",
+                                            ),
+                                        ],
+                                        className="login-brand",
                                     ),
-                                    dbc.Input(
-                                        id='username-input',
+                                    html.Div(create_language_selector(on_dark_background=False), className="login-lang"),
+                                ],
+                                className="login-panel-header",
+                            ),
+
+                            html.Div(
+                                [
+                                    html.H1(t("login.welcome_title"), className="login-welcome"),
+                                    html.P(t("login.welcome_tagline"), className="login-tagline"),
+
+                                    dbc.Alert(
+                                        id='login-alert',
+                                        is_open=False,
+                                        color='danger',
+                                        duration=4000,
+                                        className="mb-3"
+                                    ),
+
+                                    _login_field(
+                                        t("login.username"),
+                                        'username-input',
+                                        "fas fa-user",
                                         placeholder=t("login.username_placeholder"),
                                         type='text',
-                                        style={"fontSize": "0.95rem"},
-                                        autoComplete="username"
-                                    )
-                                ], className="mb-3")
-                            ]),
-
-                            # Password field
-                            html.Div([
-                                html.Label(
-                                    t("login.password"),
-                                    className="form-label fw-500 mb-2",
-                                    style={"fontSize": "0.9rem", "color": "#495057"}
-                                ),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText(
-                                        html.I(className="fas fa-lock"),
-                                        style={"backgroundColor": "#f8f9fa"}
+                                        autoComplete="username",
                                     ),
-                                    dbc.Input(
-                                        id='password-input',
+                                    _login_field(
+                                        t("login.password"),
+                                        'password-input',
+                                        "fas fa-lock",
                                         placeholder=t("login.password_placeholder"),
                                         type='password',
-                                        style={"fontSize": "0.95rem"},
-                                        autoComplete="current-password"
-                                    )
-                                ], className="mb-4")
-                            ]),
+                                        autoComplete="current-password",
+                                    ),
 
-                            # Login button with loading state
-                            dbc.Button(
-                                [
-                                    html.I(className="fas fa-sign-in-alt me-2"),
-                                    t("login.title")
+                                    dbc.Button(
+                                        [html.I(className="fas fa-sign-in-alt me-2"), t("login.title")],
+                                        id='login-button',
+                                        n_clicks=0,
+                                        color='primary',
+                                        size="lg",
+                                        className='w-100 login-submit',
+                                    ),
+
+                                    # Loading indicator (hidden by default)
+                                    dbc.Spinner(
+                                        id="login-spinner",
+                                        size="sm",
+                                        color="primary",
+                                        spinner_style={"display": "none"},
+                                        spinnerClassName="mt-3 text-center"
+                                    ),
                                 ],
-                                id='login-button',
-                                n_clicks=0,
-                                color='primary',
-                                size="lg",
-                                className='w-100',
-                                style={
-                                    "fontWeight": "600",
-                                    "padding": "12px",
-                                    "fontSize": "1rem"
-                                }
+                                className="login-form-area",
                             ),
-                            
-                            # Loading indicator (hidden by default)
-                            dbc.Spinner(
-                                id="login-spinner",
-                                size="sm",
-                                color="primary",
-                                spinner_style={"display": "none"},
-                                spinnerClassName="mt-3 text-center"
-                            )
-                        ], style={"padding": "32px"})
-                    ], style={"padding": "0"})
-                ], className='shadow-lg', style={
-                    "borderRadius": "12px",
-                    "border": "none",
-                    "overflow": "hidden"
-                })
-            ], width=12, lg=5, xl=4, className='mx-auto')
-        ], className="align-items-center min-vh-100"),
+                        ],
+                        className="login-panel",
+                    ),
+                ],
+                className="login-card",
+            ),
 
-        # Version footnote, bottom-left of the screen
+            # Version footnote, bottom-left of the screen
+            html.Div(f"v{APP_VERSION}", className="login-version"),
+        ],
+        className="login-page",
+    )
+
+
+def _user_initials(label: str) -> str:
+    """Two-letter avatar text from a user name (or the first two letters of a single word)."""
+    parts = [p for p in str(label).replace('_', ' ').replace('.', ' ').split() if p]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[1][0]).upper()
+
+
+def _client_mark(client: Optional[str]) -> str:
+    """Short text for the logo placeholder (shared with update_client_logo)."""
+    return (client or "")[:3].upper()
+
+
+def _client_logo(client: Optional[str]) -> html.Div:
+    """
+    The current client's logo, a read-only display for every role.
+
+    dashboard/callbacks/navigation_callbacks.py::update_client_logo swaps the image when the
+    client changes - for an admin that re-render is the only confirmation of a switch. If the
+    asset cannot be loaded, dashboard/assets/client_logo_handler.js flips the wrapper to
+    data-logo-state="fallback", which shows the bordered initials placeholder instead of a
+    broken image.
+    """
+    return html.Div(
+        [
+            html.Img(
+                id='client-logo-img',
+                src='',
+                alt='',
+                className="topbar-client-logo",
+                style={"display": "none"},  # Shown by update_client_logo once a client is set
+            ),
+            html.Span(
+                _client_mark(client),
+                id='client-logo-placeholder',
+                className="topbar-client-logo-placeholder",
+            ),
+        ],
+        id='client-logo',
+        className="topbar-client-logo-wrap",
+    )
+
+
+def _client_switcher(user_data: dict, available_clients: list[str]) -> html.Div:
+    """
+    The admin-only client selector (the logo it drives lives on the left, see _client_logo).
+
+    #client-selector stays in the DOM for every role because the page callbacks read it as
+    their client context. For anyone but an admin it is rendered hidden and without
+    persistence, holding the user's own client - the server decides that here, at render time,
+    like every other role-gated element (see build_navigation_items for the admin section).
+    """
+    admin = is_admin(user_data)
+    selector = dcc.Dropdown(
+        id='client-selector',
+        options=[{'label': client, 'value': client} for client in available_clients],
+        value=available_clients[0] if available_clients else None,
+        clearable=False,
+        # The chosen client survives the page reload that applying a language
+        # needs (sessionStorage, keyed by user so another account starts clean).
+        persistence=(user_data.get('username') or True) if admin else False,
+        persistence_type='session',
+        style={"width": "140px", "fontSize": "0.85rem"},
+        className="client-compact-selector",
+    )
+
+    if not admin:
+        return html.Div(html.Div(selector, hidden=True, style={"display": "none"}), className="topbar-client")
+
+    return html.Div(
         html.Div(
-            f"v{APP_VERSION}",
-            style={
-                "position": "fixed",
-                "bottom": "12px",
-                "left": "16px",
-                "color": "rgba(255, 255, 255, 0.5)",
-                "fontSize": "0.75rem"
-            }
-        )
-    ], fluid=True, style={
-        "background": "#00173b",
-        "minHeight": "100vh"
-    })
+            [
+                html.Span(
+                    [
+                        html.I(className="fas fa-building topbar-client-icon"),
+                        html.Span(t("nav.client_label"), className="topbar-client-label"),
+                    ],
+                    className="text-white-50 me-2",
+                    title=t("nav.client_switch"),
+                ),
+                selector,
+            ],
+            className="d-flex align-items-center",
+        ),
+        className="topbar-client",
+    )
+
+
+def _brand_lockup() -> html.Div:
+    """Product name + tagline. "CODDI" is not repeated here: the platform mark already says it."""
+    return html.Div(
+        [
+            html.H5(t("app.product_name"), className="topbar-brand-title mb-0"),
+            html.Small(t("app.platform_subtitle"), className="topbar-brand-tagline"),
+        ],
+        className="ms-3 topbar-brand-text",
+    )
+
+
+def _user_display(user_data: dict) -> html.Div:
+    """Avatar + name + role: a plain display, not a control."""
+    username = user_data.get('username', 'Unknown')
+    return html.Div(
+        [
+            html.Span(_user_initials(username), className="user-display-avatar", **{"aria-hidden": "true"}),
+            html.Span(
+                [
+                    html.Span(username, className="user-display-name"),
+                    html.Span(user_data.get('role', 'N/A').title(), className="user-display-role"),
+                ],
+                className="user-display-text",
+            ),
+        ],
+        className="user-display",
+    )
+
+
+def _logout_button() -> dbc.Button:
+    """Direct, one-click logout. A routine action, so a neutral button like the other bar controls."""
+    return dbc.Button(
+        [html.I(className="fas fa-sign-out-alt me-2"), html.Span(t("nav.logout"), className="topbar-logout-label")],
+        id='logout-button',
+        color="outline-light",
+        size="sm",
+        n_clicks=0,
+        className="topbar-logout",
+    )
+
 
 def create_navbar(user_data: dict, available_clients: list[str] = None) -> html.Div:
     """
-    Create redesigned navbar with improved logo visibility, client selector, and professional styling.
-    
+    Create the top bar: platform mark + client logo + product name on the left, global
+    controls on the right.
+
+    The client logo is shown to every user; only the selector that changes it is admin-only
+    (see _client_switcher).
+
     Args:
         user_data: User information dictionary
         available_clients: List of clients user has access to
-    
+
     Returns:
         Modern header with integrated global controls
     """
     if available_clients is None:
         available_clients = user_data.get('clients', [])
-    
+
     return html.Div([
         # Main header bar
         html.Div([
             dbc.Container([
                 dbc.Row([
-                    # Logo and brand section
+                    # Platform mark | client logo, then the product name
                     dbc.Col([
                         html.Div([
-                            # CODDI Logo
                             html.Img(
                                 src='https://raw.githubusercontent.com/coddi-ai/tds_alerts_dashboard/refs/heads/dev/dashboard/assets/logo.svg',
-                                style={
-                                    "height": "48px",
-                                    "width": "auto",
-                                    "padding": "4px 12px",
-                                    "backgroundColor": "white",
-                                    "borderRadius": "6px",
-                                    "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
-                                }
+                                alt='CODDI',
+                                className="topbar-brand-logo",
                             ),
-                            # Client Logo (dynamically loaded)
-                            html.Img(
-                                id='client-logo-img',
-                                src='',
-                                alt='',  # Empty alt to prevent text showing on error
-                                style={
-                                    "height": "48px",
-                                    "width": "auto",
-                                    "maxWidth": "120px",
-                                    "padding": "4px 12px",
-                                    "marginLeft": "12px",
-                                    "display": "none"  # Hidden by default, shown when logo loads successfully
-                                }
-                            ),
-                            # Platform title
-                            html.Div([
-                                html.H5(
-                                    t("app.platform_title"),
-                                    className="mb-0 text-white",
-                                    style={"fontWeight": "600", "letterSpacing": "-0.3px"}
-                                ),
-                                html.Small(
-                                    t("app.platform_subtitle"),
-                                    className="text-white-50",
-                                    style={"fontSize": "0.8rem"}
-                                )
-                            ], className="ms-3")
+                            html.Span(className="topbar-brand-divider", **{"aria-hidden": "true"}),
+                            _client_logo(available_clients[0] if available_clients else None),
+                            _brand_lockup(),
                         ], className="d-flex align-items-center")
-                    ], width="auto"),
-                    
-                    # Client selector - Compact global control
-                    dbc.Col([
-                        html.Div([
-                            html.Span(
-                                [html.I(className="fas fa-building me-2", style={"fontSize": "0.75rem"}), t("nav.client_label")],
-                                className="text-white-50 me-2",
-                                style={"fontSize": "0.75rem", "fontWeight": "400"}
-                            ),
-                            dcc.Dropdown(
-                                id='client-selector',
-                                options=[{'label': client, 'value': client} for client in available_clients],
-                                value=available_clients[0] if available_clients else None,
-                                clearable=False,
-                                # The chosen client survives the page reload that applying a language
-                                # needs (sessionStorage, keyed by user so another account starts clean).
-                                persistence=user_data.get('username') or True,
-                                persistence_type='session',
-                                style={
-                                    "width": "140px",
-                                    "fontSize": "0.85rem"
-                                },
-                                className="client-compact-selector"
-                            )
-                        ], className="d-flex align-items-center")
-                    ], width="auto", className="ms-auto me-4"),
+                    ], width="auto", className="topbar-brand"),
+
+                    # Admin-only client switcher
+                    dbc.Col(
+                        _client_switcher(user_data, available_clients),
+                        width="auto",
+                        className="ms-auto me-4",
+                    ),
 
                     # Language selector (Español / English)
                     dbc.Col(create_language_selector(), width="auto", className="me-4"),
 
-                    # User info section
-                    dbc.Col([
-                        html.Div([
-                            html.Div([
-                                html.I(className="fas fa-user-circle fa-lg me-2 text-white-50"),
-                                html.Div([
-                                    html.Div(
-                                        user_data.get('username', 'Unknown'),
-                                        className="text-white",
-                                        style={"fontSize": "0.9rem", "fontWeight": "500"}
-                                    ),
-                                    html.Div(
-                                        user_data.get('role', 'N/A').title(),
-                                        className="text-white-50",
-                                        style={"fontSize": "0.75rem"}
-                                    )
-                                ])
-                            ], className="d-flex align-items-center me-3"),
-                            html.Div(
-                                style={"width": "1px", "height": "40px", "backgroundColor": "rgba(255,255,255,0.2)"},
-                                className="me-3"
-                            ),
-                            dbc.Button(
-                                [html.I(className="fas fa-sign-out-alt me-2"), t("nav.logout")],
-                                id='logout-button',
-                                color="danger",
-                                size="sm",
-                                className="px-3",
-                                style={"fontWeight": "500"},
-                                n_clicks=0
-                            )
-                        ], className="d-flex align-items-center")
-                    ], width="auto")
-                ], align="center", className="g-0 py-3")
+                    # Account: who is signed in, and the way out
+                    dbc.Col(
+                        html.Div([_user_display(user_data), _logout_button()], className="d-flex align-items-center"),
+                        width="auto",
+                        className="topbar-user",
+                    ),
+                ], align="center", className="g-0 py-3 topbar-row")
             ], fluid=True)
         ], style={
             "backgroundColor": "#1a252f",
@@ -410,7 +460,7 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
     # so a client can be granted some components but not others. Statically-known
     # component list for navigation (data availability checked at runtime).
     predictive_nav_components = [
-        comp for comp in PREDICTIVE_COMPONENT_ICONS
+        comp for comp in PREDICTIVE_NAV_COMPONENTS
         if _enabled(f'predictive-{comp}')
     ]
 
@@ -425,7 +475,13 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
     navigation_items = []
     for section_def in SERVICE_SECTIONS:
         subsections = [
-            {'id': service_id, 'label': service_label(service_id)}
+            {
+                'id': service_id,
+                'label': service_label(service_id),
+                'icon': nav_icon(service_id),
+                # Only Validación de Avisos carries a count (its pending warnings).
+                **({'badge': _erp_pending_count(selected_client)} if service_id == ERP_VALIDATION_NAV_ID else {}),
+            }
             for service_id in section_def['services']
             if _enabled(service_id)
         ]
@@ -443,7 +499,11 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
                 'label': section_label('predictive'),
                 'icon': 'fas fa-brain',
                 'subsections': [
-                    {'id': f'predictive-{comp}', 'label': t(f'nav.service.predictive-{comp}.short')}
+                    {
+                        'id': f'predictive-{comp}',
+                        'label': t(f'nav.service.predictive-{comp}.short'),
+                        'icon': nav_icon(f'predictive-{comp}'),
+                    }
                     for comp in predictive_nav_components
                 ]
             })
@@ -453,63 +513,77 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
         navigation_items.append({
             'section': 'admin',
             'label': section_label('admin'),
-            'icon': 'fas fa-cog',
+            'icon': 'fas fa-user-shield',
             'subsections': [
-                {'id': 'admin-main', 'label': service_label('admin-main')},
-                {'id': 'admin-user-registry', 'label': service_label('admin-user-registry')},
+                {'id': 'admin-main', 'label': service_label('admin-main'), 'icon': nav_icon('admin-main')},
+                {
+                    'id': 'admin-user-registry',
+                    'label': service_label('admin-user-registry'),
+                    'icon': nav_icon('admin-user-registry'),
+                },
             ]
         })
 
     return navigation_items
 
 
-def build_menu_items(navigation_items: list) -> list:
-    """Render navigation_items (see build_navigation_items) into sidebar components."""
+def build_menu_items(navigation_items: list, active_nav_id: Optional[str] = None) -> list:
+    """
+    Render navigation_items (see build_navigation_items) into sidebar components.
+
+    Each section is a header button plus its links. Expanding/collapsing a section, the
+    icon-only rail and its flyouts are all driven in the browser by
+    dashboard/assets/sidebar_nav.js off the classes and data-* attributes set here.
+    `active_nav_id` (see services_registry.nav_id_for_pathname) marks the link of the
+    current page, and tints the section that holds it so the rail still shows where you are.
+    """
     menu_items = []
     for section in navigation_items:
-        # Section header - improved typography and spacing
-        menu_items.append(
-            html.Div([
-                html.I(
-                    className=f"{section['icon']} me-3",
-                    style={"fontSize": "1.1rem"}
-                ),
-                html.Span(
-                    section['label'],
-                    style={
-                        "fontWeight": "600",
-                        "fontSize": "0.95rem",
-                        "letterSpacing": "0.3px",
-                        "textTransform": "uppercase"
-                    }
-                )
-            ],
-            className="text-white mb-3 mt-4 pb-2",
-            style={"borderBottom": "2px solid rgba(255,255,255,0.1)"}
-            )
-        )
+        section_id = section['section']
+        links_id = f"nav-links-{section_id}"
+        is_active_section = any(sub['id'] == active_nav_id for sub in section['subsections'])
 
-        # Subsections - improved interaction states
+        links = [html.Div(section['label'], className="nav-flyout-title")]
         for subsection in section['subsections']:
-            menu_items.append(
+            is_active = subsection['id'] == active_nav_id
+            badge = subsection.get('badge')
+            links.append(
                 dbc.NavLink(
                     [
-                        html.I(className="fas fa-chevron-right me-2 nav-chevron", style={"fontSize": "0.7rem"}),
-                        subsection['label']
+                        html.I(className=f"{subsection['icon']} nav-link-icon"),
+                        html.Span(subsection['label'], className="nav-link-label"),
+                        *([html.Span(nav_badge_children(badge), id=ERP_PENDING_BADGE_ID, className="nav-link-badge")] if badge is not None else []),
                     ],
                     href=dash.get_relative_path(_nav_path(subsection['id'])),
-                    active="exact",
-                    className="nav-menu-item text-start w-100 mb-1 px-3 py-2",
-                    style={
-                        "textDecoration": "none",
-                        "fontSize": "0.9rem",
-                        "color": "rgba(255,255,255,0.7)",
-                        "borderRadius": "6px",
-                        "transition": "all 0.2s ease",
-                        "fontWeight": "400"
-                    }
+                    active=is_active,
+                    className="nav-menu-item text-start w-100",
                 )
             )
+
+        menu_items.append(
+            html.Div(
+                [
+                    html.Button(
+                        [
+                            html.I(className=f"{section['icon']} nav-section-icon"),
+                            html.Span(section['label'], className="nav-section-label"),
+                            html.I(className="fas fa-chevron-down nav-section-chevron"),
+                        ],
+                        type="button",
+                        className="nav-section-header",
+                        title=section['label'],
+                        **{
+                            "data-section": section_id,
+                            "aria-expanded": "true",
+                            "aria-controls": links_id,
+                        },
+                    ),
+                    html.Div(links, id=links_id, className="nav-section-links"),
+                ],
+                className="nav-section nav-section--active" if is_active_section else "nav-section",
+                **{"data-section": section_id},
+            )
+        )
     return menu_items
 
 
@@ -548,7 +622,7 @@ def create_main_dashboard(user_data: dict) -> html.Div:
                     }
                 )
             ], className="text-white d-flex align-items-center")
-        ], style={
+        ], className="sidebar-header", style={
             "padding": "24px 20px",
             "backgroundColor": "rgba(0,0,0,0.2)",
             "borderBottom": "2px solid rgba(255,255,255,0.1)"
@@ -637,6 +711,9 @@ def create_app_layout() -> html.Div:
 
         # Session-scoped operator name for ERP notice validation (Validación de Avisos)
         dcc.Store(id='erp-validator-operator-store', storage_type='session', data=None),
+        # Bumped after an approve/reject so the sidebar re-renders with the new pending count
+        # (see integration_avisos_callbacks._handle_action and sidebar_callbacks.update_sidebar_nav).
+        dcc.Store(id=ERP_NAV_REFRESH_STORE_ID, storage_type='memory', data=None),
 
         # Store navigation state for cross-page navigation
         dcc.Store(id='navigation-state', storage_type='memory', data=None),

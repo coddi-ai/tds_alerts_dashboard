@@ -5,10 +5,12 @@ Supports multi-component model: auto-discovers component CSVs (motor, transmisio
 
 from src.i18n import t
 from dash import html, dcc
+import numpy as np
 import pandas as pd
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 from src.utils.logger import get_logger
 from dashboard.components.predictive_config import (
     get_failure_modes_dict,
@@ -16,9 +18,19 @@ from dashboard.components.predictive_config import (
 )
 from src.data import predictive_v2
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
-from dashboard.components.predictive_charts import create_fleet_scatter
+from dashboard.components.predictive_charts import (
+    SCATTER_AXIS_FIELDS,
+    create_empty_selection_figure,
+    create_fleet_scatter,
+    classify_criticidad,
+    create_long_view_chart,
+    get_mode_thresholds,
+    scatter_axis_columns,
+)
+from dashboard.components.predictive_state import STATE_COLORS, combine_states, normalize_state
+from dashboard.components import predictive_long_selection as long_sel
 from config.settings import get_settings
-from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date, load_component_hours
+from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date
 from src.data.fast_io import read_csv as fast_read_csv
 from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT, status_label
 
@@ -151,6 +163,20 @@ def _load_component_data_cached(
     new_cols["avg_ranking_60d"] = latest_rolling["ranking_60d"].values if "ranking_60d" in latest_rolling.columns else df_latest["ranking"].values
     new_cols["ranking_acum_90d"] = latest_rolling["ranking_90d"].values if "ranking_90d" in latest_rolling.columns else df_latest["ranking"].values
 
+    # 7-day mean of the daily ranking (Short View's x axis): the real calendar days
+    # up to each unit's own last reading - the same anchoring unit_status_summary
+    # uses for media_30d. The upstream tables publish no 7-day figure, so this is
+    # computed here; a day with no row is skipped, never counted as zero.
+    last_day = df_sorted.groupby("Unit")["Fecha"].transform("max")
+    last_week = df_sorted[df_sorted["Fecha"] > last_day - pd.Timedelta(days=7)]
+    new_cols["avg_ranking_7d"] = df_latest["Unit"].map(last_week.groupby("Unit")["ranking"].mean()).astype(float).values
+
+    # Same 7-day window per failure mode (Evidence's Perfil de riesgo, aligned with
+    # the Calendario de estado's trailing 7-day mean).
+    week_by_mode = last_week.groupby("Unit")[[c for c in fm_keys if c in last_week.columns]].mean()
+    for col in week_by_mode.columns:
+        new_cols[f"{col}_7d"] = df_latest["Unit"].map(week_by_mode[col]).astype(float).values
+
     # Compute max failure mode 30d average per unit (for status classification)
     fm_30d_cols = [f"{col}_30d" for col in fm_keys if f"{col}_30d" in latest_rolling.columns]
     if fm_30d_cols:
@@ -221,43 +247,66 @@ def _norm_unit_id(uid) -> str:
     return f"{m.group(1)}{m.group(2)}" if m else str(uid)
 
 
-@lru_cache(maxsize=16)
-def _latest_component_meter_cached(client: str, component: str, mtime_ns: int, size: int) -> dict:
-    settings = get_settings()
-    hours = load_component_hours(settings.get_component_hours_path(client.lower()))
-    if hours.empty:
-        return {}
-    hours = hours[
-        (hours["componentName"] == settings.get_component_hours_name(client, component))
-        & hours["componentHours_cleaned"].notna()
-    ]
-    latest = hours.sort_values("sampleDate").groupby("unitId").tail(1)
-    return {_norm_unit_id(u): float(h) for u, h in zip(latest["unitId"], latest["componentHours_cleaned"])}
+def load_active_curve(client: str, component: str):
+    """Active-cycle rows of `cumulative_risk_curve` for this client/component,
+    read with the metadata-preserving reader, or None when the client has no
+    curve data (the Long View's "working on it" case)."""
+    if not client:
+        return None
+    return predictive_v2.load_active_cycle_curve(client, component)
 
 
 def load_latest_component_meter(client: str, component: str, units) -> dict | None:
-    """Latest `componentHours_cleaned` (horómetro) of each unit in `units` for this
-    predictive component, from `cleaned_component_hours` of the client's oil golden
-    layer ({Unit: hours}; a unit with no reading is absent). None when the client
-    has no such source, so callers can leave the meter out altogether."""
-    settings = get_settings()
-    if not client or str(client).upper() not in [c.upper() for c in settings.component_hours_allowed_clients]:
+    """Component hours of each unit in `units` ({Unit: hours}; a unit with no
+    reading is absent), from the Predictivo section's single source:
+    `cumulative_risk_curve.componentHours_filled` at the last point of the
+    unit's active cycle. The same value feeds the table's Component Hour
+    column, the Long View's X axis and the fleet scatter's tooltip. None when
+    the client has no curve, so callers can leave the figure out altogether."""
+    active = load_active_curve(client, component)
+    if active is None:
         return None
-    path = settings.get_component_hours_path(client.lower())
-    if not path.exists():
-        return None
-    stat = path.stat()
-    by_norm = _latest_component_meter_cached(client, component, stat.st_mtime_ns, stat.st_size)
+    by_norm = {_norm_unit_id(u): h for u, h in predictive_v2.active_cycle_component_hours(active).items()}
     return {u: by_norm[_norm_unit_id(u)] for u in units if _norm_unit_id(u) in by_norm}
 
 
-def make_fleet_scatter(latest, client: str, component: str, selected_unit, status_colors):
-    """`create_fleet_scatter` with this client/component's configured quadrant
-    thresholds (None -> plain scatter) and each unit's horómetro in the tooltip."""
+def load_unit_component_hours(client: str, component: str, unit):
+    """(hours, date) of `unit`'s last active-cycle reading in the same single
+    source as `load_latest_component_meter`, for the Evidence unit banner. None
+    when the client has no curve or the unit has no reading."""
+    active = load_active_curve(client, component)
+    if active is None:
+        return None
+    rows = active[active["Unit"].map(_norm_unit_id) == _norm_unit_id(unit)].dropna(subset=["componentHours_filled"])
+    if rows.empty:
+        return None
+    last = rows.sort_values(["Fecha", "componentHours_filled"]).iloc[-1]
+    return float(last["componentHours_filled"]), last["Fecha"]
+
+
+def attach_component_hours(latest: pd.DataFrame, active) -> pd.DataFrame:
+    """Add `component_hours` (NaN where the unit has no reading, or the client no
+    curve) to the per-unit frame, from the same source as the Long View."""
+    by_norm = {_norm_unit_id(u): h for u, h in predictive_v2.active_cycle_component_hours(active).items()}
+    latest = latest.copy()
+    latest["component_hours"] = latest["Unit"].map(lambda u: by_norm.get(_norm_unit_id(u))).astype(float)
+    return latest
+
+
+def make_fleet_scatter(latest, client: str, component: str, selected_unit, status_colors, height=380):
+    """`create_fleet_scatter` with this client/component's configured axes, quadrant
+    thresholds (None -> plain scatter) and each unit's component hours in the tooltip.
+    A pair with no configured axes has nothing to plot: a "not configured" message
+    figure, never a default pairing."""
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    if axes is None:
+        logger.warning("No fleet_scatter_axes configured for %s/%s; Short View scatter not drawn", client, component)
+        return create_empty_selection_figure("predictive_charts.ejes_sin_configurar")
     return create_fleet_scatter(
-        latest, selected_unit, status_colors,
+        latest, selected_unit, status_colors, axes=axes,
         thresholds=get_settings().get_fleet_scatter_threshold(client, component),
         meter_by_unit=load_latest_component_meter(client, component, latest["Unit"]),
+        height=height,
     )
 
 
@@ -274,8 +323,8 @@ def _status_colors(status: str) -> dict:
 # Status sort order: Anormal, then Alerta, then Normal (REQ-PR-07)
 _STATUS_RANK = {"Anormal": 0, "Alerta": 1, "Normal": 2}
 
-# Fleet scatter point colors by status (same palette Evidence used for it)
-_SCATTER_STATUS_COLORS = {"Anormal": "#e24b4a", "Alerta": "#ef9f27", "Normal": "#1d9e75"}
+# Fleet scatter point colors by status (the palette every Predictivo chart shares)
+_SCATTER_STATUS_COLORS = STATE_COLORS
 
 
 def _normalize_unit_id(uid) -> str:
@@ -360,6 +409,43 @@ def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataF
     return latest
 
 
+def general_states(latest: pd.DataFrame, active) -> pd.Series:
+    """Per-unit "general state": the worse of the short-view `status`
+    (`unit_status_summary.estado`) and the long-view `estado` of the unit's
+    active cycle. Only for the KPI card counts - neither source value is
+    overwritten (`latest["status"]` stays the short view's own).
+
+    A unit missing from the curve contributes only its short-view state; with no
+    curve at all the general state is just the short view's. None where neither
+    source has the unit.
+    """
+    long_by_unit = {_normalize_unit_id(u): e for u, e in predictive_v2.active_cycle_estado(active).items()}
+    return pd.Series(
+        [combine_states(s, long_by_unit.get(_normalize_unit_id(u))) for u, s in zip(latest["Unit"], latest["status"])],
+        index=latest.index, dtype=object,
+    )
+
+
+def attach_general_status(latest: pd.DataFrame, active) -> pd.DataFrame:
+    """Add `general_status`: the worse of the short-view `status` and the long-view
+    estado of the unit's active cycle (see `general_states`). It is the Estado the
+    failure-mode table and the Evidencia banner show, so both cross-reference the
+    two views. `status` stays the short view's own (the Short View scatter keys off
+    it); a unit with no curve, or a client with none, keeps its short-view state."""
+    latest = latest.copy()
+    latest["general_status"] = general_states(latest, active).fillna(latest["status"])
+    return latest
+
+
+def units_missing_from_curve(units, active) -> list:
+    """Units with no active-cycle row in the curve - true missing data, not the
+    same thing as `evaluable = False` (those arrive as Normal and are trusted)."""
+    if active is None:
+        return []
+    present = {_normalize_unit_id(u) for u in active["Unit"].unique()}
+    return sorted(u for u in units if _normalize_unit_id(u) not in present)
+
+
 def _score_cell_style(value) -> dict:
     """Cell style for a ranking/score value. `None`/NaN get their own
     neutral style (W34-10) — a missing value must never look like the
@@ -378,6 +464,25 @@ def _score_cell_style(value) -> dict:
     return {"background": "#eaf3de", "text": "#3b6d11"}
 
 
+# Cell tones of the four criticidad bands (Saludable, Monitoreo, Prioridad alta,
+# Crítico), the light-background counterparts of the Calendario de estado's colours.
+_BAND_CELL_STYLES = (
+    {"background": "#eaf3de", "text": "#3b6d11"},
+    {"background": "#fdf3c4", "text": "#7a5f00"},
+    {"background": "#fde4cf", "text": "#9a4a0a"},
+    {"background": "#fcebeb", "text": "#a32d2d"},
+)
+
+
+def _mode_cell_style(value, edges=None) -> dict:
+    """Cell style of a failure-mode score. With the mode's calibrated `edges`
+    (P75/P90/P98, see predictive_charts.get_mode_thresholds) the cell takes its
+    criticidad band; without them it keeps the fixed 40/70 style."""
+    if edges is None or value is None or pd.isna(value):
+        return _score_cell_style(value)
+    return _BAND_CELL_STYLES[classify_criticidad(value, edges)]
+
+
 # ── Components ────────────────────────────────────────────────────────────────
 
 # Ranking window options for the bottom table's single ranking column (REQ-PR-09)
@@ -394,16 +499,28 @@ WINDOW_SUFFIX = {
     "ranking_acum_90d": "_90d",
 }
 
+# Window the bottom table opens on (dropdown value, first sort and stored state)
+FAILURE_TABLE_DEFAULT_WINDOW = "ranking_acum_90d"
 
-def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
+# Failure modes the data scores but the bottom table does not show a column for
+FAILURE_TABLE_HIDDEN_MODES = frozenset({"early_oil_change_risk"})
+
+
+def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client=None):
     """Bottom ranking table: one ranking column driven by `window`, plus one
     column per failure mode. `sort_by` is either `window` itself or a failure
     mode key - clicking a failure-mode header sorts by that column (REQ-PR-10)
     while the ranking column stays a single value driven by the window
     dropdown (REQ-PR-09, option ii).
+
+    A failure-mode cell is coloured by the mode's calibrated criticidad edges
+    for `client` when it has them (same ones as the Calendario de estado),
+    applied to the value shown for the chosen window.
     """
-    fm_keys = list(failure_modes.keys())
-    fm_labels = list(failure_modes.values())
+    thresholds = get_mode_thresholds(client)
+    shown = {k: lbl for k, lbl in failure_modes.items() if k not in FAILURE_TABLE_HIDDEN_MODES}
+    fm_keys = list(shown.keys())
+    fm_labels = list(shown.values())
     fm_suffix = WINDOW_SUFFIX.get(window, "_30d")
 
     def _arrow(is_active):
@@ -442,12 +559,14 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
         html.Th(t("alerts_general.filter_unit"), className="fm-th fm-th-unit"),
         ranking_th,
         html.Th(t("tab_telemetry_fleet.estado"), className="fm-th"),  # W34-10: was "Status" (English)
+        html.Th(t("tab_predictive_overview.component_hour"), className="fm-th"),
         *[_fm_th(lbl, key) for key, lbl in zip(fm_keys, fm_labels)],
     ]))
 
     rows = []
     for _, r in sorted_df.iterrows():
-        status = r["status"]
+        # Estado is the general state (short + long view) when the caller attached it
+        status = r["general_status"] if "general_status" in r.index else r["status"]
         colors = _status_colors(status)
         # W34-10: `pd.notna` before the cast, not a bare `.get(key, 0)` —
         # that only defaults when the KEY is absent, not when the row's
@@ -457,6 +576,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
         # distinguishable all the way to render time.
         ranking_val = float(r[window]) if window in r.index and pd.notna(r[window]) else None
 
+        hours = r["component_hours"] if "component_hours" in r.index else None
         style = _score_cell_style(ranking_val)
         cells = [
             html.Td(r["Unit"], className="fm-td fm-td-unit"),
@@ -471,6 +591,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
                           style={"background": colors["bg"], "color": colors["text"]}),
                 className="fm-td",
             ),
+            html.Td(f"{hours:,.0f}" if pd.notna(hours) else "—", className="fm-td fm-td-score"),
         ]
 
         for key in fm_keys:
@@ -479,7 +600,7 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
             # is NaN — a missing failure-mode score must not render "0" in
             # the same green a genuinely healthy 0 score gets.
             val = float(r[col_name]) if col_name in r.index and pd.notna(r[col_name]) else None
-            fm_style = _score_cell_style(val)
+            fm_style = _mode_cell_style(val, thresholds.get(key))
             is_sort = key == sort_by
             cells.append(html.Td(
                 f"{val:.0f}" if val is not None else "—",
@@ -497,6 +618,308 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes):
     return html.Div([
         html.Table([header, html.Tbody(rows)], className="fm-table"),
     ], className="fm-table-wrapper")
+
+
+# ── Layer 2: Short View / Long View ───────────────────────────────────────────
+
+LAYER2_TABS_ID = "predictive-layer2-tabs"
+LAYER2_CONTENT_ID = "predictive-layer2-content"
+LAYER2_SHORT, LAYER2_LONG = "short", "long"
+CHART_ASPECT_CLASS = "predictive-chart-ratio"  # predictive_styles.css: aspect-ratio 5 / 2 (2.5:1)
+
+
+class SelectionPanel(NamedTuple):
+    """Component ids of one unit-selection panel: the dropdown, the risk badges, the
+    risk-grouped chips and the chart they drive, plus the store holding its
+    selection. Short View and Long View each get their own, so selecting units on
+    one never touches the other (see `register_selection_callback`)."""
+    graph_id: str
+    state_id: str
+    dropdown_id: str
+    chip: str    # pattern-matching `type` of the chips
+    badge: str   # pattern-matching `type` of the risk badges
+
+    @property
+    def risk_id(self) -> str:
+        """Id of the container holding the badges and chips (see `RISK_IDLE_CLASS`)."""
+        return f"{self.state_id}-risk"
+
+
+LONG_PANEL = SelectionPanel(
+    "predictive-long-view-graph", "predictive-long-state", "predictive-long-units",
+    "predictive-long-chip", "predictive-long-badge",
+)
+# The Short View's graph keeps its original id: click-to-Evidence listens to it.
+SHORT_PANEL = SelectionPanel(
+    "predictive-fleet-scatter", "predictive-short-state", "predictive-short-units",
+    "predictive-short-chip", "predictive-short-badge",
+)
+LONG_GRAPH_ID, LONG_STATE_ID, LONG_DROPDOWN_ID, LONG_CHIP, LONG_BADGE = LONG_PANEL
+SHORT_GRAPH_ID, SHORT_STATE_ID, SHORT_DROPDOWN_ID, SHORT_CHIP, SHORT_BADGE = SHORT_PANEL
+
+
+# Badges and chips are relative events ("toggle this unit", "this group"): each is
+# applied to the selection stored when its callback starts, so a click made while the
+# previous one is still being answered would overwrite it. The container holding them
+# is therefore locked (RISK_BUSY_CLASS) for exactly as long as the panel's callback is
+# running, so those clicks cannot overlap. The dropdown is not locked: it always sends
+# the whole selection, which makes it safe at any speed.
+RISK_IDLE_CLASS = "unit-sel-risk"
+RISK_BUSY_CLASS = "unit-sel-risk unit-sel-risk--busy"
+
+
+def _chip_class(selected: bool, state) -> str:
+    """A chip is colored by the risk group (state) it sits in; filled when selected."""
+    return f"unit-chip unit-chip--{str(state).lower()}" + (" unit-chip--on" if selected else "")
+
+
+def _badge_class(badge: str, active: bool) -> str:
+    return f"unit-badge unit-badge--{badge.lower()}" + (" unit-badge--active" if active else "")
+
+
+def _selection_controls(panel: SelectionPanel, universe, groups, sel, note_key: str):
+    """Dropdown, risk badges and risk-grouped chips, all rendered from one
+    `Selection`. Badge counts and group headings are fleet-wide totals: they are
+    built once here and never touched by a selection change. `note_key` is the
+    i18n key of the note saying the grouping is this chart's own state."""
+    selected = set(sel.selected)
+    dropdown = dcc.Dropdown(
+        id=panel.dropdown_id, options=[{"label": u, "value": u} for u in universe],
+        value=list(sel.selected), multi=True, searchable=True, clearable=True,
+        placeholder=t("tab_predictive_overview.sel_dd_search"),
+        labels={
+            "select_all": t("tab_predictive_overview.sel_dd_select_all"),
+            "deselect_all": t("tab_predictive_overview.sel_dd_deselect_all"),
+            "selected_count": t("tab_predictive_overview.sel_dd_selected_count"),
+            "search": t("tab_predictive_overview.sel_dd_search"),
+            "clear_search": t("tab_predictive_overview.sel_dd_clear_search"),
+            "clear_selection": t("tab_predictive_overview.sel_dd_clear_selection"),
+            "no_options_found": t("tab_predictive_overview.sel_dd_no_options"),
+        },
+    )
+
+    def heading(badge):
+        return t("tab_predictive_overview.sel_group_heading", state=status_label(badge), count=len(groups[badge]))
+
+    badges = html.Div([
+        html.Button(heading(badge), id={"type": panel.badge, "badge": badge}, n_clicks=0,
+                    className=_badge_class(badge, sel.badge == badge))
+        for badge in long_sel.DEFAULT_BADGE_ORDER
+    ], className="unit-sel-badges")
+    chip_groups = html.Div([
+        html.Div([
+            html.Div(heading(badge), className="unit-chip-heading"),
+            html.Div([
+                html.Button(u, id={"type": panel.chip, "unit": u}, n_clicks=0,
+                            className=_chip_class(u in selected, badge))
+                for u in groups[badge]
+            ], className="unit-chip-row"),
+        ], className="unit-chip-group")
+        for badge in long_sel.DEFAULT_BADGE_ORDER if groups[badge]
+    ], className="unit-chip-groups")
+    return html.Div([
+        html.Div([html.Label(t("tab_predictive_overview.sel_units_label"), className="unit-sel-label"), dropdown]),
+        html.Div([
+            badges,
+            html.Div(t(note_key), className="unit-sel-note"),
+            chip_groups,
+        ], id=panel.risk_id, className=RISK_IDLE_CLASS),
+    ], className="unit-sel")
+
+
+def _apply_selection_event(event, state, universe, groups):
+    """One interaction -> the new `Selection`. `event` is ("dropdown", values) |
+    ("chip", unit) | ("badge", badge) | None (None just reads `state`). Every
+    path goes through the same rules, so the dropdown, chips, badges and chart come
+    out of one value and cannot disagree."""
+    sel = long_sel.from_dict(state, universe)
+    kind, arg = event if event else (None, None)
+    if kind == "dropdown":
+        sel = long_sel.pick_from_dropdown(sel, arg, universe)
+    elif kind == "chip":
+        sel = long_sel.toggle_unit(sel, arg, universe)
+    elif kind == "badge":
+        sel = long_sel.click_badge(sel, arg, groups, universe)
+    return sel
+
+
+def _selection_result(sel, groups, figure) -> dict:
+    """What the front end needs after a selection change: `state` (store contents),
+    `selected`, `badge`, the className of every chip and badge, and `figure`."""
+    selected = set(sel.selected)
+    group_of = {u: badge for badge, units in groups.items() for u in units}
+    return {
+        "state": long_sel.to_dict(sel),
+        "selected": list(sel.selected),
+        "badge": sel.badge,
+        "chip_classes": {u: _chip_class(u in selected, badge) for u, badge in group_of.items()},
+        "badge_classes": {b: _badge_class(b, sel.badge == b) for b in long_sel.DEFAULT_BADGE_ORDER},
+        "figure": figure,
+    }
+
+
+# ── Short View ──
+
+def _short_view_model(latest, client: str, component: str):
+    """What the Short View's panel and chart work from, fleet-wide: the units it can
+    actually draw (a recognised `unit_status_summary` state and a value on both
+    configured axis fields), their fleet order and the risk group per badge. A unit
+    outside this set has no point on the chart, so it is not offered in the panel
+    either. With no axes configured for the pair nothing can be drawn."""
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    ok = latest["status"].map(normalize_state).notna() & (axes is not None)
+    for column in (scatter_axis_columns(axes) if axes is not None else ()):
+        ok &= np.isfinite(latest[column].astype(float))
+    drawable = latest[ok].sort_values("Unit")
+    universe = list(drawable["Unit"])
+    groups = {
+        badge: [u for u, s in zip(drawable["Unit"], drawable["status"].map(normalize_state)) if s == badge]
+        for badge in long_sel.DEFAULT_BADGE_ORDER
+    }
+    return drawable, universe, groups
+
+
+def short_view_chart(latest, client: str, component: str, selected_unit=None, units=None):
+    """The Short View's fleet scatter: the units it can draw (`_short_view_model`), only
+    `units` of them when given, with `selected_unit` highlighted. The one place this chart is
+    produced - the Predictivo tab and the General tab's Unit Detail both call it, so axes,
+    values, thresholds and zones are the same in both."""
+    drawable, _universe, _groups = _short_view_model(latest, client, component)
+    if units is not None:
+        drawable = drawable[drawable["Unit"].isin(set(units))]
+    return make_fleet_scatter(drawable, client, component, selected_unit, _SCATTER_STATUS_COLORS, height=None)
+
+
+def _short_view_figure(drawable, selected, client: str, component: str):
+    """The fleet scatter of exactly the `selected` units (axes fit to them); an empty
+    selection is an empty chart, never the whole fleet."""
+    if not selected:
+        return create_empty_selection_figure()
+    return make_fleet_scatter(
+        drawable[drawable["Unit"].isin(set(selected))], client, component, None, _SCATTER_STATUS_COLORS, height=None,
+    )
+
+
+def short_view_update(event, state, latest, client: str, component: str) -> dict:
+    """One interaction on the Short View's panel -> everything that must change with
+    it (see `_selection_result`)."""
+    drawable, universe, groups = _short_view_model(latest, client, component)
+    sel = _apply_selection_event(event, state, universe, groups)
+    return _selection_result(sel, groups, _short_view_figure(drawable, sel.selected, client, component))
+
+
+def load_status_frame(client: str, component: str):
+    """Per-unit frame of the Short View (`status` = `unit_status_summary.estado`
+    attached), or None when the client/component has no data."""
+    filepath = _discover_components(client).get(component) if client else None
+    if not filepath:
+        return None
+    _, df_latest, _ = _load_component_data(filepath, component, client)
+    if df_latest is None or df_latest.empty:
+        return None
+    return attach_status(df_latest, client, component)
+
+
+def render_short_view(latest, client: str, component: str):
+    """Short View Analysis: the fleet scatter (the ranking fields configured as its
+    axes for this client/component, with its thresholds), points colored/sized by
+    `unit_status_summary.estado`,
+    with its own unit selection (dropdown, risk-grouped chips, risk badges) that
+    picks which units are drawn. Clicking a point opens that unit in Evidence
+    (navigate_to_evidence_from_overview)."""
+    drawable, universe, groups = _short_view_model(latest, client, component)
+    axes = get_settings().get_fleet_scatter_axes(client, component)
+    subtitle = t("tab_predictive_overview.short_view_subtitle",
+                 x_label=t(SCATTER_AXIS_FIELDS[axes[0]][1]), y_label=t(SCATTER_AXIS_FIELDS[axes[1]][1]).lower()
+                 ) if axes is not None else ""
+    sel = long_sel.initial_selection(universe)
+    if universe:
+        fig = _short_view_figure(drawable, sel.selected, client, component)
+    else:  # nothing drawable: the plain (empty) scatter, not the "select a unit" message
+        fig = make_fleet_scatter(drawable, client, component, None, _SCATTER_STATUS_COLORS, height=None)
+    return html.Div([
+        html.Div([
+            html.Span([html.I(className="fas fa-dot-circle me-1"), t("tab_predictive_overview.posicion_en_la_flota")],
+                      className="card-subtitle fw-500"),
+            html.Span(subtitle,
+                      style={"fontSize": "11px", "color": "var(--text-light)", "marginLeft": "8px"}),
+        ], style={"marginBottom": "8px"}),
+        dcc.Store(id=SHORT_STATE_ID, data=long_sel.to_dict(sel)),
+        _selection_controls(SHORT_PANEL, universe, groups, sel, "tab_predictive_overview.short_risk_note") if universe else None,
+        dcc.Graph(id=SHORT_GRAPH_ID, figure=fig, className=CHART_ASPECT_CLASS,
+                  responsive=True, config={"displayModeBar": False}),
+        html.Div(t("tab_predictive_overview.short_view_color_note"),
+                 style={"fontSize": "11px", "color": "var(--text-light)", "marginTop": "4px"}),
+    ], className="card shadow-sm", style={"padding": "16px"})
+
+
+# ── Long View ──
+
+def _long_view_model(active):
+    """What the Long View's controls need, all fleet-wide (independent of the
+    current selection): fleet order and the risk group per badge."""
+    universe = sorted(active["Unit"].unique())
+    states = {u: normalize_state(e) for u, e in predictive_v2.active_cycle_estado(active).items()}
+    groups = {badge: [u for u in universe if states.get(u) == badge] for badge in long_sel.DEFAULT_BADGE_ORDER}
+    return universe, groups
+
+
+def long_view_update(event, state, active) -> dict:
+    """One interaction on the Long View's panel -> everything that must change with
+    it (see `_selection_result`)."""
+    universe, groups = _long_view_model(active)
+    sel = _apply_selection_event(event, state, universe, groups)
+    return _selection_result(sel, groups, create_long_view_chart(active, list(sel.selected)))
+
+
+def render_long_view(client: str, component: str, units=()):
+    """Long View Analysis: the fleet's active-cycle accumulated risk curves from
+    `cumulative_risk_curve`, with a unit selection (dropdown, risk-grouped chips,
+    risk badges) that picks which curves are drawn. Points are colored/sized by
+    that table's own `estado`, which is also what the badges and chips group by.
+
+    A client with no curve data gets a "working on it" placeholder instead of an
+    empty chart. `units` (the fleet shown in Resumen) only feeds the note listing
+    units that are missing from the curve."""
+    placeholder = html.Div([
+        html.I(className="fas fa-tools fa-2x mb-3"),
+        html.P(t("tab_predictive_overview.long_view_working"), className="mb-0"),
+    ], className="card shadow-sm text-center text-muted", style={"padding": "40px"})
+
+    active = load_active_curve(client, component)
+    if active is None:
+        return placeholder
+    try:
+        universe, groups = _long_view_model(active)
+        sel = long_sel.initial_selection(universe)
+        fig = create_long_view_chart(active, list(sel.selected))
+        controls = _selection_controls(LONG_PANEL, universe, groups, sel, "tab_predictive_overview.long_risk_note")
+    except Exception:  # noqa: BLE001 - one bad curve must not take the whole tab down
+        logger.exception("No se pudo construir la vista larga de %s/%s", client, component)
+        return html.Div(html.P(t("tab_predictive_overview.long_view_error"), className="mb-0"),
+                        className="card shadow-sm text-center text-muted", style={"padding": "40px"})
+    if fig is None:
+        return placeholder
+
+    missing = units_missing_from_curve(units, active)
+    if missing:
+        logger.warning("Vista larga %s/%s: %d unidades sin curva: %s", client, component, len(missing), missing)
+    return html.Div([
+        html.Div([
+            html.Span([html.I(className="fas fa-chart-line me-1"), t("tab_predictive_overview.long_view_header")],
+                      className="card-subtitle fw-500"),
+            html.Span(t("tab_predictive_overview.long_view_subtitle"),
+                      style={"fontSize": "11px", "color": "var(--text-light)", "marginLeft": "8px"}),
+        ], style={"marginBottom": "8px"}),
+        dcc.Store(id=LONG_STATE_ID, data=long_sel.to_dict(sel)),
+        controls,
+        dcc.Graph(id=LONG_GRAPH_ID, figure=fig, className=CHART_ASPECT_CLASS, responsive=True,
+                  config={"displayModeBar": False}),
+        html.Div(t("tab_predictive_overview.long_view_color_note"),
+                 style={"fontSize": "11px", "color": "var(--text-light)", "marginTop": "4px"}),
+        html.Div(t("tab_predictive_overview.long_view_missing_units", count=len(missing), units=", ".join(missing)),
+                 style={"fontSize": "11px", "color": "var(--text-light)", "marginTop": "2px"}) if missing else None,
+    ], className="card shadow-sm", style={"padding": "16px"})
 
 
 # ── Component Overview Renderer ───────────────────────────────────────────────
@@ -517,16 +940,24 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     """
     failure_modes = resolve_failure_modes(component, client)
 
-    latest = attach_status(df_latest, client, component)
+    active = load_active_curve(client, component)
+    latest = attach_general_status(
+        attach_component_hours(attach_status(df_latest, client, component), active), active
+    )
     avg_ranking = float(latest["ranking"].mean())
 
-    counts = latest["status"].value_counts()
+    # KPI counts and the table's Estado use the "general state" (worse of short and
+    # long view); the per-unit `status` column keeps the short view's own estado.
+    counts = latest["general_status"].value_counts()
     n_anormal = counts.get("Anormal", 0)
     n_alert = counts.get("Alerta", 0)
     n_normal = counts.get("Normal", 0)
 
     model_run_date = get_model_run_date(client, component) if client else None
     model_run_date_str = model_run_date.strftime("%d %b %Y") if model_run_date is not None else "—"
+
+    # Only labelled as combined when a long view actually contributes to it.
+    state_sub = t("tab_predictive_overview.estado_general_subtitle") if active is not None else None
 
     hero = html.Div([
         html.Div([
@@ -538,32 +969,32 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
         ], style={"marginBottom": "16px"}),
         create_kpi_row([
             create_kpi_card(f"{avg_ranking:.1f}", t("tab_predictive_overview.ranking_flota"), "fas fa-tachometer-alt", "primary", t("tab_predictive_overview.promedio_actual")),
-            create_kpi_card(n_anormal, t("tab_predictive_overview.unidades_anormales"), "fas fa-exclamation-triangle", "danger"),
-            create_kpi_card(n_alert, t("tab_predictive_overview.unidades_en_alerta"), "fas fa-exclamation-circle", "warning"),
-            create_kpi_card(n_normal, t("tab_predictive_overview.unidades_normales"), "fas fa-check-circle", "success"),
+            create_kpi_card(n_anormal, t("tab_predictive_overview.unidades_anormales"), "fas fa-exclamation-triangle", "danger", state_sub),
+            create_kpi_card(n_alert, t("tab_predictive_overview.unidades_en_alerta"), "fas fa-exclamation-circle", "warning", state_sub),
+            create_kpi_card(n_normal, t("tab_predictive_overview.unidades_normales"), "fas fa-check-circle", "success", state_sub),
             create_kpi_card(model_run_date_str, t("tab_predictive_overview.fecha_ejecucion_modelo"), "fas fa-calendar-check", "info"),
         ])
     ])
 
-    # Layer 2: the fleet-wide scatter (one point per unit) that used to live in
-    # Evidence's "Comparación Flota" - same figure builder, same data, no unit
-    # highlighted since no unit is selected on this page.
-    scatter_fig = make_fleet_scatter(latest, client, component, None, _SCATTER_STATUS_COLORS)
+    # Layer 2: Short View / Long View submenu. The Short View is the fleet-wide
+    # scatter that used to be this layer on its own; the Long View is rendered on
+    # demand by switch_layer2_view (predictive_callbacks) when its tab is picked.
+    tab_kwargs = dict(className="custom-tab", selected_className="custom-tab--selected")
     risk_section = html.Div([
         html.H4([
             html.I(className="fas fa-shield-alt me-2"),
             t("tab_predictive_overview.analisis_de_riesgo")
         ], className="text-primary mb-3 mt-4"),
-        html.Div([
-            html.Div([
-                html.Span([html.I(className="fas fa-dot-circle me-1"), t("tab_predictive_overview.posicion_en_la_flota")],
-                          className="card-subtitle fw-500"),
-                html.Span(t("tab_predictive_overview.ranking_actual_vs_riesgo_acumulado_30"),
-                          style={"fontSize": "11px", "color": "var(--text-light)"}),
-            ], style={"marginBottom": "8px"}),
-            # Clicking a point opens that unit in Evidence (navigate_to_evidence_from_overview)
-            dcc.Graph(id="predictive-fleet-scatter", figure=scatter_fig, config={"displayModeBar": False}),
-        ], className="card shadow-sm", style={"padding": "16px"}),
+        dcc.Tabs(
+            id=LAYER2_TABS_ID,
+            value=LAYER2_SHORT,
+            children=[
+                dcc.Tab(label=t("tab_predictive_overview.short_view_tab"), value=LAYER2_SHORT, **tab_kwargs),
+                dcc.Tab(label=t("tab_predictive_overview.long_view_tab"), value=LAYER2_LONG, **tab_kwargs),
+            ],
+            className="mb-3",
+        ),
+        html.Div(render_short_view(latest, client, component), id=LAYER2_CONTENT_ID),
     ])
 
     # Failure mode table
@@ -571,7 +1002,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     # renders — plain `sort_values` on one column falls back to an unstable
     # quicksort for ties, so two identical-input renders could otherwise show
     # tied units in a different order.
-    sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
+    sorted_df = latest.sort_values([FAILURE_TABLE_DEFAULT_WINDOW, "Unit"], ascending=[False, True])
     table_section = html.Div([
         html.Div([
             html.Div([
@@ -590,7 +1021,7 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                             {"label": t("tab_predictive_overview.60_dias"), "value": "avg_ranking_60d"},
                             {"label": t("tab_predictive_overview.90_dias"), "value": "ranking_acum_90d"},
                         ],
-                        value="avg_ranking_30d",
+                        value=FAILURE_TABLE_DEFAULT_WINDOW,
                         clearable=False,
                         style={"width": "140px", "fontSize": "0.85rem"},
                     ),
@@ -604,12 +1035,12 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                    className="text-muted mb-3", style={"fontSize": "0.85rem"}),
         ]),
         html.Div(
-            _failure_table(sorted_df, "avg_ranking_30d", "avg_ranking_30d", False, failure_modes),
+            _failure_table(sorted_df, FAILURE_TABLE_DEFAULT_WINDOW, FAILURE_TABLE_DEFAULT_WINDOW, False, failure_modes, client),
             id="predictive-fm-table-container",
         ),
         dcc.Store(
             id="predictive-fm-table-state",
-            data={"window": "avg_ranking_30d", "sort_by": "avg_ranking_30d", "ascending": False},
+            data={"window": FAILURE_TABLE_DEFAULT_WINDOW, "sort_by": FAILURE_TABLE_DEFAULT_WINDOW, "ascending": False},
         ),
     ], className="card", style={"marginTop": "16px"})
 

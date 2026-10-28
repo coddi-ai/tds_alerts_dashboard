@@ -13,7 +13,11 @@ from src.data.catalog import dashboard_data_root
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.1.24"
+APP_VERSION = "2.1.31"
+
+# Ranking fields a Short View axis can be configured with (`fleet_scatter_axes`);
+# the chart maps each name to its column (predictive_charts.SCATTER_AXIS_FIELDS).
+FLEET_SCATTER_AXIS_FIELDS = ("ranking_today", "ranking_7d", "ranking_30d", "ranking_60d", "ranking_90d")
 
 
 class Settings(BaseSettings):
@@ -43,7 +47,30 @@ class Settings(BaseSettings):
     dashboard_host: str = Field(default="0.0.0.0", description="Dashboard host")
     dashboard_port: int = Field(default=8050, description="Dashboard port")
     debug_mode: bool = Field(default=False, description="Enable debug mode")
-    
+
+    # Alertas -> Detalle -> Evidencia de Telemetría: supporting signals charted up
+    # front next to the trigger signal; the rest sit behind "Mostrar N señales adicionales".
+    alert_supporting_signals_visible: int = Field(
+        default=3, ge=0, description="Supporting telemetry signals shown before the expand toggle"
+    )
+
+    # Pareto charts draw units individually, in descending order, until their running total
+    # reaches a share of the grand total; the rest is folded into one "Otras (n)" bar. The cap
+    # keeps a flat distribution from drawing an unreadable number of bars (see
+    # src/utils/pareto.py). Targets and caps are pending team confirmation.
+    pareto_target_pct: float = Field(
+        default=80.0, gt=0, le=100, description="Informe de Confiabilidad Paretos: cumulative share drawn as individual bars"
+    )
+    pareto_max_bars: int = Field(
+        default=15, ge=1, description="Informe de Confiabilidad Paretos: most individual bars before 'Otras'"
+    )
+    alert_unit_chart_target_pct: float = Field(
+        default=80.0, gt=0, le=100, description="Alertas -> Distribución por unidad: cumulative share drawn as individual bars"
+    )
+    alert_unit_chart_max_bars: int = Field(
+        default=15, ge=1, description="Alertas -> Distribución por unidad: most individual bars before 'Otras'"
+    )
+
     # Processing
     max_workers: int = Field(default=18, description="Max parallel workers for AI processing")
     min_machine_samples: int = Field(default=5, description="Minimum samples per machine")
@@ -94,11 +121,23 @@ class Settings(BaseSettings):
         overrides = self.component_hours_name_overrides.get(str(client or "").upper(), {})
         return overrides.get(component, component)
 
-    # Predictivo > "Posición en la flota" scatter: (x, y) split of the quadrants,
-    # i.e. (ranking today, ranking 30d average), keyed client -> component.
-    # Backend-only (override via env FLEET_SCATTER_THRESHOLDS as JSON, never from
-    # the UI). There is deliberately no global fallback: a pair without an entry
-    # renders the scatter with no quadrants at all.
+    # Predictivo > Short View "Posición en la flota" scatter. Two per-pair settings,
+    # keyed client -> component and kept together here so a change of window or of
+    # threshold is one edit in this block (Long View's axes are fixed, not configured):
+    #   - fleet_scatter_axes: which ranking field feeds (x, y);
+    #   - fleet_scatter_thresholds: (x, y) split of the quadrants, in the units of
+    #     those two fields, so retune it whenever the axes of the pair change.
+    # Backend-only (override via env FLEET_SCATTER_AXES / FLEET_SCATTER_THRESHOLDS as
+    # JSON, never from the UI). There is deliberately no global fallback in either: a
+    # pair without a threshold renders the scatter with no quadrants, and a pair
+    # without axes renders no scatter at all (a "not configured" message).
+    fleet_scatter_axes: Dict[str, Dict[str, Tuple[str, str]]] = Field(
+        default_factory=lambda: {
+            "CAPSTONE": {"motor": ("ranking_7d", "ranking_90d")},
+            "CDA": {"motor": ("ranking_7d", "ranking_90d"), "transmision": ("ranking_7d", "ranking_90d")},
+        },
+        description=f"Ranking fields (x, y) of the fleet scatter per client and predictive component; one of {FLEET_SCATTER_AXIS_FIELDS}"
+    )
     fleet_scatter_thresholds: Dict[str, Dict[str, Tuple[float, float]]] = Field(
         default_factory=lambda: {
             "CAPSTONE": {"motor": (50.0, 50.0)},
@@ -106,6 +145,25 @@ class Settings(BaseSettings):
         },
         description="Quadrant thresholds (x, y) of the fleet scatter per client and predictive component"
     )
+
+    @field_validator("fleet_scatter_axes")
+    @classmethod
+    def validate_fleet_scatter_axes(cls, v):
+        """A misspelled field would otherwise only surface as a missing column at render time."""
+        for client, by_component in v.items():
+            for component, axes in by_component.items():
+                unknown = [f for f in axes if f not in FLEET_SCATTER_AXIS_FIELDS]
+                if unknown:
+                    raise ValueError(
+                        f"fleet_scatter_axes[{client}][{component}]: unknown ranking field(s) {unknown}; "
+                        f"valid: {list(FLEET_SCATTER_AXIS_FIELDS)}"
+                    )
+        return v
+
+    def get_fleet_scatter_axes(self, client: str, component: str) -> Optional[Tuple[str, str]]:
+        """Configured (x, y) ranking fields for the pair, or None when it has no entry."""
+        by_component = self.fleet_scatter_axes.get(str(client or "").upper(), {})
+        return by_component.get(str(component or "").lower())
 
     def get_fleet_scatter_threshold(self, client: str, component: str) -> Optional[Tuple[float, float]]:
         """Configured (x, y) quadrant threshold for the pair, or None when it has no entry."""

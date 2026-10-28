@@ -5,6 +5,7 @@ Functions to create Dash DataTables for alerts listings.
 """
 
 from src.i18n import t
+from src.i18n.data_text import localized_value
 import pandas as pd
 import re
 import ast
@@ -35,6 +36,16 @@ def _translate_signal_text(value: object) -> str:
     return text
 
 
+def _clean_text(value: object) -> str:
+    """Text of a nullable string field; null, NaN and the usual null spellings give ''."""
+    if value is None or isinstance(value, (list, tuple, dict)):
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "null", "<na>"} else text
+
+
 def _translate_system(value: object) -> str:
     mapping = {"motor": "Motor", "Motor": "Motor"}
     key = str(value or "").strip()
@@ -53,13 +64,17 @@ def parse_ia_message_sections(mensaje_ia: str) -> Dict[str, str]:
         mensaje_ia: Texto completo generado por la IA
         
     Returns:
-        dict con diagnóstico, causa probable y acciones.
-        El nivel de riesgo no se calcula ni se expone en Alertas.
+        dict con diagnóstico, causa probable, acciones y verificación.
+        ``verificacion`` es la pregunta de verificación que el generador publica
+        en su propio campo (``verification_question`` del JSON estructurado);
+        queda vacía cuando el mensaje no la trae y nunca se extrae del texto de
+        ``acciones``. El nivel de riesgo no se calcula ni se expone en Alertas.
     """
     sections = {
         'diagnostico': '',
         'causa_probable': '',
-        'acciones': ''
+        'acciones': '',
+        'verificacion': ''
     }
     
     if not mensaje_ia or pd.isna(mensaje_ia):
@@ -83,6 +98,9 @@ def parse_ia_message_sections(mensaje_ia: str) -> Dict[str, str]:
                 )
             else:
                 sections['acciones'] = _translate_signal_text(str(actions).strip())
+            sections['verificacion'] = _translate_signal_text(
+                _clean_text(parsed.get('verification_question'))
+            )
             sections['causa_probable'] = (
                 t("alerts_tables.no_se_infiere_una_causa_probable")
             )
@@ -264,16 +282,41 @@ def create_alerts_datatable(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         ])
 
 
+SELECTED_ROW_COLOR = "#dbeafe"
+
+
+def alerts_report_table_styles(selected_id: str | None = None) -> list[dict]:
+    """``style_data_conditional`` of the executive alerts table: the Fuente colors, the
+    Multitécnica row tint and, when ``selected_id`` is given, the highlight of the row of
+    that alert (the detail card below the table describes the same alert). The row is
+    found by id, not by position: a position drifts as soon as the table is sorted or paged.
+
+    W34-04: the Mixto rule's match text and color come from the same source of truth the
+    cells use - a hardcoded '{Fuente} = "Mixto"' would silently stop matching if the
+    provisional "Mixto" label is ever renamed."""
+    mixto_label, mixto_color = source_style("Mixto")
+    styles = [
+        {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"'}, "backgroundColor": light_tint(mixto_color)},
+        *[
+            {"if": {"filter_query": f'{{Fuente}} = "{label}"', "column_id": "Fuente"},
+             "color": color, "fontWeight": "bold"}
+            for label, color in (source_style(raw) for raw in ("Telemetria", "Tribologia", "Mixto"))
+        ],
+        {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"', "column_id": "Fecha"}, "borderLeft": f"4px solid {mixto_color}"},
+    ]
+    if selected_id is not None:
+        # After the Mixto tint so the selection wins over it.
+        escaped = str(selected_id).replace("\\", "\\\\").replace('"', '\\"')
+        styles.append({"if": {"filter_query": f'{{id}} = "{escaped}"'}, "backgroundColor": SELECTED_ROW_COLOR, "color": "#12344d"})
+    styles.append({"if": {"state": "active"}, "backgroundColor": SELECTED_ROW_COLOR, "color": "#12344d", "border": "1px solid #4f8fc0"})
+    return styles
+
+
 def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     """Create the executive alerts table with client-facing fields only."""
     if alerts_df is None or alerts_df.empty:
         return html.Div([dbc.Alert(t("alerts_callbacks.no_hay_alertas_para_los_filtros"), color="info")])
     try:
-        # W34-04: derive both the highlight rule's match text and its color
-        # from the same source of truth the cells themselves use — a
-        # hardcoded '{Fuente} = "Mixto"' would silently stop matching if the
-        # provisional "Mixto" label is ever renamed.
-        mixto_label, mixto_color = source_style("Mixto")
         sorted_alerts_df = alerts_df.sort_values("Timestamp", ascending=False).copy()
         # Critical-review follow-up: assign the formatted column once,
         # directly on the frame — same pattern alerts_report.py::
@@ -284,7 +327,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
         sorted_alerts_df["_fecha_local"] = format_local(sorted_alerts_df["Timestamp"])
         rows = []
         for _, row in sorted_alerts_df.iterrows():
-            sections = parse_ia_message_sections(row.get("mensaje_ia", ""))
+            sections = parse_ia_message_sections(localized_value(row, "mensaje_ia", ""))
             trigger_vars = row.get("Trigger_Var", t("alerts_report.sin_senal_registrada"))
             # Mixed alerts store Trigger_Var as a serialized list. Preserve
             # that representation so each telemetry/oil variable is translated.
@@ -305,9 +348,12 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
             # W34-04: single source of truth for the label (SOURCE_STYLE in
             # labels.py), instead of an inline dict duplicating the one in
             # alerts_report.py's translate_alert_source.
-            source, _source_color = source_style(row.get("Trigger_type", ""))
+            source, source_color = source_style(row.get("Trigger_type", ""))
             evidence = evidence_label(row)
             rows.append({
+                # "id" is what Dash reports back as active_cell["row_id"], which is how a
+                # click is matched to its alert however the table is sorted or paged.
+                "id": row.get("FusionID", "-"),
                 "ID": row.get("FusionID", "-"),
                 # W34-06: local wall-clock time (Timestamp is already
                 # UTC-naive by the time it reaches here — no re-parse).
@@ -317,6 +363,8 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 "Componente": _translate_component(row.get("componente", "-")),
                 "Señal / variable": signal_label,
                 "Fuente": source,
+                # The selected-row card paints its Fuente with this same color.
+                "fuente_color": source_color,
                 "Diagnóstico": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
                 "diagnostico_completo": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
                 "causa_completa": sections.get("causa_probable", t("alerts_report.sin_causa_probable_registrada")),
@@ -360,16 +408,7 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
                 {"if": {"column_id": "Señal / variable"}, "minWidth": "150px"},
                 {"if": {"column_id": "Fuente"}, "minWidth": "120px", "width": "120px", "maxWidth": "140px"},
             ],
-            style_data_conditional=[
-                {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"'}, "backgroundColor": light_tint(mixto_color)},
-                *[
-                    {"if": {"filter_query": f'{{Fuente}} = "{label}"', "column_id": "Fuente"},
-                     "color": color, "fontWeight": "bold"}
-                    for label, color in (source_style(raw) for raw in ("Telemetria", "Tribologia", "Mixto"))
-                ],
-                {"if": {"filter_query": f'{{Fuente}} = "{mixto_label}"', "column_id": "Fecha"}, "borderLeft": f"4px solid {mixto_color}"},
-                {"if": {"state": "active"}, "backgroundColor": "#dbeafe", "color": "#12344d", "border": "1px solid #4f8fc0"},
-            ],
+            style_data_conditional=alerts_report_table_styles(),
         )
         return table
     except Exception as exc:

@@ -86,7 +86,7 @@ def test_failure_table_renders_dash_for_missing_ranking_not_the_text_nan():
 def test_failure_table_renders_dash_for_missing_failure_mode_score():
     """_failure_table returns Div([Table([Thead, Tbody(rows)])]) — navigate
     down to the single data row's cells: Unit, ranking (window-driven),
-    Estado, fm1, fm2."""
+    Estado, Component Hour, fm1, fm2."""
     row = _unit_row("U1")
     row["fm1_30d"] = float("nan")
     df = pd.DataFrame([row])
@@ -95,7 +95,7 @@ def test_failure_table_renders_dash_for_missing_failure_mode_score():
     tbody = table.children[1]
     data_row = tbody.children[0]
     cells = data_row.children
-    assert len(cells) == 5  # Unit, ranking (window), Estado, fm1, fm2
+    assert len(cells) == 6  # Unit, ranking (window), Estado, Component Hour, fm1, fm2
     fm1_cell = str(cells[-2])
     fm2_cell = str(cells[-1])
     assert "—" in fm1_cell
@@ -154,3 +154,13 @@ def test_non_tied_units_still_sort_by_score_first():
     ])
     ordered = df.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])["Unit"].tolist()
     assert ordered == ["U_high", "U_low"]
+
+
+def test_failure_table_has_no_early_oil_change_column():
+    row = _unit_row("U1")
+    row["early_oil_change_risk_30d"] = 55.0
+    modes = {**FAILURE_MODES, "early_oil_change_risk": "Early Oil Change"}
+    table = _failure_table(pd.DataFrame([row]), "avg_ranking_30d", "avg_ranking_30d", False, modes)
+    assert "Early Oil Change" not in str(table)
+    assert "early_oil_change_risk" not in str(table)
+    assert len(table.children[0].children[1].children[0].children) == 6  # same cells as without the mode

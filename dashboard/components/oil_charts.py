@@ -289,6 +289,42 @@ def classify_four_limit_value(value: float, LIC, LIM, LSM: float, LSC: float) ->
     return classify_four_limit(value, LIC, LIM, LSM, LSC)
 
 
+def build_limit_legend(has_lower_limit: bool) -> html.Div:
+    """Key to the dashed limit lines drawn over the Tendencia charts.
+
+    Only the lines the charts actually draw are listed: the upper critical
+    (condenatorio) limit in red and, when any essay has one, the lower critical
+    limit in purple. The colors come from UPPER_LIMIT_COLOR / LOWER_LIMIT_COLOR,
+    the same constants the lines use, so key and chart cannot drift apart.
+    """
+    entries = [(UPPER_LIMIT_COLOR, _t("oil_charts.legend_critical_upper"))]
+    if has_lower_limit:
+        entries.append((LOWER_LIMIT_COLOR, _t("oil_charts.legend_critical_lower")))
+    return html.Div(
+        [
+            html.Span([
+                html.Span(className="oil-limit-legend__dash", style={'borderTopColor': color}),
+                label,
+            ], className="oil-limit-legend__item")
+            for color, label in entries
+        ],
+        className="oil-limit-legend",
+    )
+
+
+def _empty_chart_card(title: str, col_width: int) -> dbc.Col:
+    """Compact placeholder for a chart whose essays have no data in the period."""
+    return dbc.Col([
+        html.Div([
+            html.I(className="fas fa-chart-line oil-empty-state__icon"),
+            html.Div([
+                html.Div(title, className="oil-empty-state__title"),
+                html.Div(_t("oil_machine_detail.sin_datos"), className="oil-empty-state__label"),
+            ]),
+        ], className="oil-empty-state"),
+    ], md=col_width, className="mb-3 align-self-start")
+
+
 def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oil_hour_range: str):
     """
     Build the 9-chart oil analysis time-series grid.
@@ -305,8 +341,8 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
             used for stratified limit lookup via get_essay_limits_four.
 
     Returns:
-        A dbc.Row of chart columns, or an html.P placeholder if there is
-        nothing to plot.
+        A Div with the limit legend above a dbc.Row of chart columns, or an
+        html.P placeholder if there is nothing to plot.
     """
     if history.empty:
         return html.P(_t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
@@ -339,6 +375,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
 
     # Generate charts in a 2-column grid, with any full-width charts spanning both columns
     chart_elements = []
+    lower_limit_drawn = False
     for chart_config in charts_to_render:
         essays = chart_config['essays']
         title = vocab(chart_config['title'])
@@ -349,16 +386,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         available_essays = [e for e in essays if e in history.columns and history[e].notna().any()]
         if not available_essays:
             # Show empty placeholder
-            chart_elements.append(
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.H6(title, className="text-muted text-center mb-2", style={'fontSize': '0.85rem'}),
-                            html.P(_t("oil_machine_detail.sin_datos"), className="text-muted text-center small")
-                        ])
-                    ], className="h-100")
-                ], md=col_width, className="mb-3")
-            )
+            chart_elements.append(_empty_chart_card(title, col_width))
             continue
 
         # Create figure
@@ -407,6 +435,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
             )
 
         for line in consolidate_limit_entries(lower_entries):
+            lower_limit_drawn = True
             fig.add_hline(
                 y=line['value'],
                 line=dict(color=LOWER_LIMIT_COLOR, width=1.5, dash='dash'),
@@ -442,7 +471,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
     if not chart_elements:
         return html.P(_t("oil_charts.sin_datos_de_ensayos_disponibles"), className="text-muted")
 
-    return dbc.Row(chart_elements)
+    return html.Div([build_limit_legend(lower_limit_drawn), dbc.Row(chart_elements)])
 
 
 def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour_range: str, essays_df: pd.DataFrame):
@@ -548,6 +577,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
                 '_color': color
             })
 
+        table_data_in_axis_order = list(table_data)
         table_data.sort(key=lambda x: (FOUR_LIMIT_STATUS_ORDER.get(x['status'], 9), x['essay']))
 
         fig = go.Figure()
@@ -593,6 +623,24 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
             hovertemplate=_t("oil_charts.b_b_br_valor_real_br"),
             customdata=actual_values
         ))
+
+        # Axes outside their normal band get a marker in their own status color, so
+        # an out-of-limit element reads off the chart itself, not from the table.
+        flagged = [
+            (row['essay'], norm, row['_color'])
+            for row, norm in zip(table_data_in_axis_order, normalized_values)
+            if row['status'] != 'Normal'
+        ]
+        if flagged:
+            fig.add_trace(go.Scatterpolar(
+                r=[norm for _, norm, _ in flagged],
+                theta=[vocab(essay) for essay, _, _ in flagged],
+                mode='markers',
+                name=_t("oil_charts.fuera_de_limite"),
+                marker=dict(size=12, color=[color for _, _, color in flagged],
+                            line=dict(width=2, color='white')),
+                hoverinfo='skip',
+            ))
 
         fig.update_layout(
             polar=dict(

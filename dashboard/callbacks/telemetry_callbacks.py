@@ -1,6 +1,7 @@
 """Callbacks for the reportable telemetry fleet and unit views."""
 
 from src.i18n import t
+from src.i18n.data_text import localized_value
 from dashboard.components.labels import status_label
 from datetime import date, datetime, timedelta
 from functools import lru_cache
@@ -33,7 +34,7 @@ from dashboard.components.telemetry_report import (
 )
 from dashboard.tabs.tab_telemetry_fleet import create_telemetry_fleet_layout
 from dashboard.tabs.tab_telemetry_unit_detail import create_telemetry_unit_detail_layout
-from dashboard.components.source_status import render_service_source_status
+from dashboard.components.source_status import render_service_data_sources
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,7 +45,7 @@ def update_telemetry_availability(client):
     if not client:
         return html.Div()
     snapshot = load_telemetry_snapshot(client)
-    source_status = render_service_source_status(client, "monitoring-telemetry")
+    source_status = render_service_data_sources(client, "monitoring-telemetry")
     if snapshot.unit_health.empty and snapshot.system_health.empty:
         return html.Div([
             source_status,
@@ -468,7 +469,7 @@ def _text_value(row, *fields):
         return None
     for field in fields:
         try:
-            value = row.get(field, '')
+            value = localized_value(row, field, '')
         except AttributeError:
             value = ''
         if value is not None and not pd.isna(value) and str(value).strip():

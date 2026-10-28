@@ -1,34 +1,31 @@
-"""Client-facing source availability and provenance components."""
+"""Resolve each tab's data-source statuses and hand them to the shared indicator.
+
+The drawing lives in `dashboard/components/data_sources.py`; which sources a tab has lives
+in `config/service_data_sources.py`. This module only turns what the backend knows (catalog
+probes, the Fleet Overview's per-technique readings) into `DataSource` rows.
+"""
 
 from __future__ import annotations
 
-from src.i18n import t, t_or
+from typing import Optional
+
 from dash import html
 
+from config.service_data_sources import SOURCE_DATE_FIELDS, TECHNIQUE_SOURCE, data_sources_for_service
+from dashboard.components.data_sources import (
+    AVAILABLE,
+    PARTIAL,
+    UNAVAILABLE,
+    DataSource,
+    render_data_sources,
+)
 from src.data.catalog import SourceProbe, build_client_availability
+from src.data.source_freshness import days_since, latest_data_date
+from src.i18n import t, t_or
 
-
-SERVICE_SOURCES = {
-    # The Fleet Overview page no longer uses this raw file-existence probe
-    # for its own "Fuentes de datos" banner - see render_fleet_overview_source_status
-    # below, which reads dashboard.components.fleet_overview.technique_availability
-    # instead, because a file merely existing on disk was proven to disagree
-    # with what the unit cards actually show (06_fleet_overview_revision_2.md,
-    # Required Changes #5: the banner can't read "Disponible" while every
-    # unit's row for that source reads "Sin Datos"). This dict/mechanism is
-    # kept for the other pages below, which still want a lighter-weight
-    # existence probe rather than the full per-unit aggregation.
-    "monitoring-alerts": ("alerts_consolidated", "telemetry_alert_detail", "oil_classified"),
-    "monitoring-telemetry": ("telemetry_unit_health", "telemetry_system_health", "telemetry_manifest"),
-    "monitoring-oil": ("oil_classified", "oil_machine_status", "oil_limits_four"),
-    "predictive": ("predictive_components", "predictive_ai"),
-}
-
-# Spanish display labels for the raw probe/source ids above - these used to
-# leak into the UI as English title-cased ids (e.g. "Oil Machine Status",
-# "Alerts Consolidated") via a plain `.replace("_", " ").title()`
-# (06_fleet_overview_revision_2.md, Required Changes #1). Falls back to that
-# same title-casing for any source id not listed here.
+# Spanish display labels for the raw probe/source ids - these used to leak into the UI as
+# English title-cased ids (06_fleet_overview_revision_2.md, Required Changes #1). Falls
+# back to that same title-casing for any source id not listed here.
 SOURCE_LABELS_ES: dict[str, str] = {
     "oil_classified": "Clasificación de Aceite",
     "oil_machine_status": "Estado de Máquina (Aceite)",
@@ -44,138 +41,79 @@ SOURCE_LABELS_ES: dict[str, str] = {
     "predictive_ai": "IA Predictiva",
 }
 
-# Colors per aggregate status; the label is looked up per render (see `_status_view`).
-_STATUS_STYLE = {
-    "available": ("#198754", "var(--green-light)"),
-    "partial": ("#946200", "var(--amber-light)"),
-    "missing": ("#6c757d", "var(--surface-2)"),
-}
+# Catalog probe status -> shared component status. A source the catalog has no probe for
+# is unavailable, not omitted.
+_PROBE_STATUS = {"available": AVAILABLE, "partial": PARTIAL, "missing": UNAVAILABLE}
 
 
-def _status_view(status: str) -> tuple[str, str, str]:
-    """(label, color, background) for a source status, label in the current language."""
-    status = status if status in _STATUS_STYLE else "missing"
-    color, background = _STATUS_STYLE[status]
-    return t(f"source_status.status_{status}"), color, background
+def source_days_since_update(source: str, probe: Optional[SourceProbe]) -> Optional[int]:
+    """Days between today and the most recent date in the source's data, or ``None`` when
+    the source has no configured date field or it cannot be read (no freshness text)."""
+    field = SOURCE_DATE_FIELDS.get(source)
+    if field is None or probe is None or probe.status == "missing":
+        return None
+    days = days_since(latest_data_date(probe.path, field))
+    return None if days is None else max(days, 0)
 
 
-def service_source_status(client: str, service_id: str) -> tuple[str, dict[str, SourceProbe]]:
-    """Return the aggregate status and the probes relevant to a service."""
-
-    availability = build_client_availability(client)
-    names = SERVICE_SOURCES.get(service_id, ())
-    selected = {name: availability[name] for name in names if name in availability}
-    if not selected:
-        return "missing", selected
-    statuses = {probe.status for probe in selected.values()}
-    if statuses == {"available"}:
-        return "available", selected
-    if "available" in statuses or "partial" in statuses:
-        return "partial", selected
-    return "missing", selected
+def _source_label(source: str) -> str:
+    return t_or(f"source_status.source_{source}", SOURCE_LABELS_ES.get(source, source.replace("_", " ").title()))
 
 
-def render_service_source_status(client: str, service_id: str, *, compact: bool = False):
-    """Render a small, non-blocking provenance banner for a dashboard page."""
-
-    aggregate, probes = service_source_status(client, service_id)
-    label, color, background = _status_view(aggregate)
-    children = [
-        html.Strong(t("source_status.data_sources", label=label)),
-        html.Span(" · " if compact else "  "),
-    ]
-    for source, probe in probes.items():
-        source_label = t_or(f"source_status.source_{source}", SOURCE_LABELS_ES.get(source, source.replace("_", " ").title()))
-        status_label, status_color, status_bg = _status_view(probe.status)
-        children.append(
-            html.Span(
-                f"{source_label}: {status_label}",
-                title=probe.note or probe.path or t("source_status.no_compatible_source"),
-                style={
-                    "display": "inline-block",
-                    "marginRight": "8px",
-                    "padding": "2px 7px",
-                    "borderRadius": "4px",
-                    "backgroundColor": status_bg,
-                    "color": status_color,
-                    "fontSize": "11px",
-                },
-            )
-        )
-    return html.Div(
-        children,
-        className="mb-3",
-        style={
-            "padding": "8px 12px",
-            "borderLeft": f"4px solid {color}",
-            "backgroundColor": background,
-            "fontSize": "12px",
-        },
+def data_source_from_probe(source: str, probe: Optional[SourceProbe]) -> DataSource:
+    if probe is None:
+        return DataSource(source, _source_label(source), UNAVAILABLE, detail=t("source_status.no_compatible_source"))
+    return DataSource(
+        source,
+        _source_label(source),
+        _PROBE_STATUS.get(probe.status, UNAVAILABLE),
+        detail=probe.note or probe.path or t("source_status.no_compatible_source"),
+        days_since_update=source_days_since_update(source, probe),
     )
 
 
-def render_fleet_overview_source_status(client: str):
-    """The Fleet Overview page's own "Fuentes de datos" banner.
+def service_data_sources(client: str, service_id: str) -> list[DataSource]:
+    """The configured sources of a tab, each with its current status for `client`."""
+    names = data_sources_for_service(service_id)
+    if not names:
+        return []
+    availability = build_client_availability(client)
+    return [data_source_from_probe(name, availability.get(name)) for name in names]
 
-    Unlike `render_service_source_status` above (a raw file-existence
-    probe), this reads `dashboard.components.fleet_overview.technique_availability`
-    - the exact same per-unit technique-status computation backing every
-    card row. That's what makes it impossible for this banner to claim
-    "Disponible" for a technique whose rows the user is looking at right
-    below it all read "Sin Datos" (06_fleet_overview_revision_2.md, Required
-    Changes #5); a file merely existing on disk doesn't guarantee that, but
-    an actual resolved per-unit reading does.
 
-    Deferred import: fleet_overview.py doesn't import this module, so there
-    is no cycle - this is just kept local to avoid the two modules taking on
-    an eager top-level dependency on each other for what is a single
-    call site.
+def render_service_data_sources(client: str, service_id: str) -> Optional[html.Div]:
+    """The "Fuentes de datos" indicator for a tab, or ``None`` when it has no sources."""
+    return render_data_sources(service_data_sources(client, service_id))
+
+
+def fleet_overview_data_sources(client: str) -> list[DataSource]:
+    """Resumen > General: one source per technique, from the same per-unit reading the
+    Fleet Overview cards use.
+
+    A file merely existing on disk does not mean the cards have data: the banner cannot
+    read "Disponible" while every unit's row for that technique reads "Sin Datos"
+    (06_fleet_overview_revision_2.md, Required Changes #5). Deferred import:
+    fleet_overview.py does not import this module, this just avoids an eager dependency.
     """
     from dashboard.components.fleet_overview import technique_availability, technique_label
 
-    availability = technique_availability(client)
-    if not availability:
-        aggregate = "missing"
-    elif all(availability.values()):
-        aggregate = "available"
-    elif any(availability.values()):
-        aggregate = "partial"
-    else:
-        aggregate = "missing"
+    availability = build_client_availability(client)
 
-    label, color, background = _status_view(aggregate)
-    children = [
-        html.Strong(t("source_status.data_sources", label=label)),
-        html.Span("  "),
-    ]
-    for technique, available in availability.items():
-        item_label, item_color, item_bg = _status_view("available" if available else "missing")
-        children.append(
-            html.Span(
-                f"{technique_label(technique)}: {item_label}",
-                title=(
-                    t("source_status.technique_has_reading")
-                    if available
-                    else t("source_status.technique_no_reading")
-                ),
-                style={
-                    "display": "inline-block",
-                    "marginRight": "8px",
-                    "padding": "2px 7px",
-                    "borderRadius": "4px",
-                    "backgroundColor": item_bg,
-                    "color": item_color,
-                    "fontSize": "11px",
-                },
-            )
+    def freshness(technique: str) -> Optional[int]:
+        source = TECHNIQUE_SOURCE.get(technique, "")
+        return source_days_since_update(source, availability.get(source))
+
+    return [
+        DataSource(
+            technique,
+            technique_label(technique),
+            AVAILABLE if available else UNAVAILABLE,
+            detail=t("source_status.technique_has_reading" if available else "source_status.technique_no_reading"),
+            days_since_update=freshness(technique),
         )
-    return html.Div(
-        children,
-        className="mb-3",
-        style={
-            "padding": "8px 12px",
-            "borderLeft": f"4px solid {color}",
-            "backgroundColor": background,
-            "fontSize": "12px",
-        },
-    )
+        for technique, available in technique_availability(client).items()
+    ]
+
+
+def render_fleet_overview_data_sources(client: str) -> Optional[html.Div]:
+    return render_data_sources(fleet_overview_data_sources(client))

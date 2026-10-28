@@ -134,7 +134,7 @@ app = dash.Dash(
     pages_folder="",  # Pages are registered explicitly below, no folder auto-discovery
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True,
-    title="Multi-Technical Alerts",
+    title="CODDI ASSET HEALTH",
     url_base_pathname=PATH_PREFIX,
     serve_locally=True
 )
@@ -324,6 +324,3 @@ if __name__ == '__main__':
         debug=debug,
         threaded=True,
     )
-    
-    
-    

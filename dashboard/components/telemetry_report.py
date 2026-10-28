@@ -5,7 +5,8 @@ AI datasets needed by the dashboard.  This module only joins and orders those
 results for display; it does not recalculate health scores or diagnostics.
 """
 
-from src.i18n import t
+from src.i18n import current_language, t, vocab
+from src.i18n.data_text import localized_value
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -294,7 +295,7 @@ def _text(row: Any, *fields: str) -> Optional[str]:
         return None
     for field in fields:
         try:
-            value = row.get(field, "")
+            value = localized_value(row, field, "")
         except AttributeError:
             value = ""
         if value is not None and not pd.isna(value) and str(value).strip():
@@ -302,55 +303,71 @@ def _text(row: Any, *fields: str) -> Optional[str]:
     return None
 
 
+# Rewrites that keep internal score/confidence numbers out of client-facing IA text. Each rule is
+# (pattern, Spanish replacement, English replacement); the replacement follows the UI language, so a
+# match never injects a word of the other language into the sentence.
+_SCORE = r"\d+(?:[.,]\d+)?"
+_OF_SCORE_ES = rf"(?:\s*(?:/|sobre|de)\s*{_SCORE})?"
+_OF_SCORE_EN = rf"(?:\s*(?:/|out\s+of)\s*{_SCORE})?"
+_SHARED_RULES = (
+    (rf"\b(?:un|una)\s+puntaje\s+de\s+prioridad\s*(?:de|del|:)?\s*{_SCORE}", "una prioridad asignada", "an assigned priority"),
+    (rf"\bpuntaje\s+de\s+prioridad\s*(?:de|del|:)?\s*{_SCORE}", "prioridad asignada", "assigned priority"),
+    (rf"\b(?:puntaje\s+de\s+riesgo|puntaje\s+riesgo|risk\s+score)\s*(?:de|del|:)?\s*{_SCORE}{_OF_SCORE_ES}",
+     "nivel de riesgo", "risk level"),
+    (rf"\bscores?\s+de\s+riesgo\b[^.;]*?{_SCORE}{_OF_SCORE_ES}", "niveles de riesgo", "risk levels"),
+    (rf"\b(?:riesgo|risk)\s+(?:constante\s+|alto\s+|elevado\s+|crítico\s+)?(?:de|del|en)\s*{_SCORE}{_OF_SCORE_ES}",
+     "riesgo elevado", "elevated risk"),
+    (rf"\b(?:confianza|confidence)\s*(?:(?:del|de)\s*)?{_SCORE}(?:\s*(?:/|sobre)\s*{_SCORE}|\s*%)?"
+     rf"(?:\s*(?:y|a)\s*{_SCORE}\s*%)?", "evidencia disponible", "available evidence"),
+    (r"\b(?:criticidad|criticality)(?:\s+es|\s+de|\s*:)?\s*\d+",
+     "criticidad definida por el análisis", "criticality defined by the analysis"),
+    (rf"\briesgos?\s+(?:de\s+)?{_SCORE}(?:\s+y\s+{_SCORE})+(?:\s+respectivamente)?", "niveles de riesgo", "risk levels"),
+    (rf"\b(?:oscila(?:ndo)?|varía)\s+entre\s+{_SCORE}\s*%?\s*(?:y|a)\s*{_SCORE}\s*%?",
+     "se mantiene en un rango", "stays within a range"),
+)
+# English phrasings of the same things; only used when the UI is in English (they would never match
+# the Spanish text, and Spanish output must stay exactly as before).
+_ENGLISH_RULES = (
+    (rf"\b(?:a|an)\s+priority\s+score\s*(?:of|:)?\s*{_SCORE}", "an assigned priority"),
+    (rf"\bpriority\s+score\s*(?:of|:)?\s*{_SCORE}", "assigned priority"),
+    (rf"\b(?:risk\s+score|risk\s+rating)\s*(?:of|:|is|was)?\s*{_SCORE}{_OF_SCORE_EN}", "risk level"),
+    (rf"\brisk\s+scores?\b[^.;]*?{_SCORE}{_OF_SCORE_EN}", "risk levels"),
+    (rf"\b(?:(?:constant|high|elevated|critical)\s+)?risk\s+(?:of|at|in)\s*{_SCORE}{_OF_SCORE_EN}", "elevated risk"),
+    (rf"\bconfidence\s*(?:of\s*)?{_SCORE}(?:\s*(?:/|out\s+of)\s*{_SCORE}|\s*%)?(?:\s*(?:and|to)\s*{_SCORE}\s*%)?",
+     "available evidence"),
+    (r"\bcriticality(?:\s+is|\s+of|\s*:)?\s*\d+", "criticality defined by the analysis"),
+    (rf"\brisks?\s+(?:of\s+)?{_SCORE}(?:\s+and\s+{_SCORE})+(?:\s+respectively)?", "risk levels"),
+    (rf"\b(?:ranges?|ranging|oscillat(?:es|ing)|varies)\s+between\s+{_SCORE}\s*%?\s*(?:and|to)\s*{_SCORE}\s*%?",
+     "stays within a range"),
+)
+
+
 def client_facing_text(value: Any, signal_registry: Optional[Dict[str, str]] = None) -> str:
     """Hide internal score/confidence numbers from materialized IA text."""
     text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value)
     if not text.strip():
         return ""
-    text = re.sub(
-        r"\b(?:un|una)\s+puntaje\s+de\s+prioridad\s*(?:de|del|:)?\s*\d+(?:[.,]\d+)?",
-        "una prioridad asignada", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bpuntaje\s+de\s+prioridad\s*(?:de|del|:)?\s*\d+(?:[.,]\d+)?",
-        "prioridad asignada", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:puntaje\s+de\s+riesgo|puntaje\s+riesgo|risk\s+score)"
-        r"\s*(?:de|del|:)?\s*\d+(?:[.,]\d+)?(?:\s*(?:/|sobre|de)\s*\d+(?:[.,]\d+)?)?",
-        "nivel de riesgo", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\bscores?\s+de\s+riesgo\b[^.;]*?\d+(?:[.,]\d+)?(?:\s*(?:/|sobre|de)\s*\d+(?:[.,]\d+)?)?",
-        "niveles de riesgo", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:riesgo|risk)\s+(?:constante\s+|alto\s+|elevado\s+|crítico\s+)?"
-        r"(?:de|del|en)\s*\d+(?:[.,]\d+)?(?:\s*(?:/|sobre|de)\s*\d+(?:[.,]\d+)?)?",
-        "riesgo elevado", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:confianza|confidence)\s*(?:(?:del|de)\s*)?\d+(?:[.,]\d+)?"
-        r"(?:\s*(?:/|sobre)\s*\d+(?:[.,]\d+)?|\s*%)?"
-        r"(?:\s*(?:y|a)\s*\d+(?:[.,]\d+)?\s*%)?",
-        "evidencia disponible", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:criticidad|criticality)(?:\s+es|\s+de|\s*:)?\s*\d+",
-        "criticidad definida por el análisis", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\briesgos?\s+(?:de\s+)?\d+(?:[.,]\d+)?(?:\s+y\s+\d+(?:[.,]\d+)?)+(?:\s+respectivamente)?",
-        "niveles de riesgo", text, flags=re.IGNORECASE,
-    )
-    text = re.sub(
-        r"\b(?:oscila(?:ndo)?|varía)\s+entre\s+\d+(?:[.,]\d+)?\s*%?\s*(?:y|a)\s*\d+(?:[.,]\d+)?\s*%?",
-        "se mantiene en un rango", text, flags=re.IGNORECASE,
-    )
+    english = current_language() == "en"
+    if english:
+        for pattern, replacement in _ENGLISH_RULES:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    for pattern, spanish, english_replacement in _SHARED_RULES:
+        text = re.sub(pattern, english_replacement if english else spanish, text, flags=re.IGNORECASE)
     text = re.sub(r"\s+([,.;])", r"\1", text)
     text = re.sub(r"\.{2,}", ".", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
-    text = re.sub(r"\b(?:confianza|confidence)\b", "consistencia de la evidencia", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(?:confianza|confidence)\b",
+                  "evidence consistency" if english else "consistencia de la evidencia", text, flags=re.IGNORECASE)
+    if english:
+        # The comment is already English: signal names get their English label and the Spanish
+        # "Engine -> Motor" style rewrites below must not run on it.
+        for raw, label in sorted((signal_registry or {}).items(), key=lambda item: len(str(item[0])), reverse=True):
+            if raw and label and raw != vocab(label):
+                text = re.sub(rf"\b{re.escape(str(raw))}\b", str(vocab(label)), text)
+        for label in set(vocab(v) for v in (signal_registry or {}).values()):
+            if label:
+                text = text.replace(f"{label} ({label})", str(label))
+        return text
     # Algunos comentarios materializados conservan el nombre legible en inglés
     # aunque la tabla ya utilice la traducción del registro de señales.
     english_signal_aliases = {
