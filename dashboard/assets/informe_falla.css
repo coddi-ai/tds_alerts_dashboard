@@ -1,0 +1,48 @@
+/* Reportes > Informe preliminar de falla (dashboard/pages/reporting_informe_falla.py) */
+.informe-upload {
+    display: block;
+    padding: 24px 16px;
+    border: 2px dashed var(--border-strong, #adb5bd);
+    border-radius: 6px;
+    text-align: center;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.informe-upload:hover {
+    border-color: #0d6efd;
+    background-color: rgba(52, 152, 219, 0.06);
+}
+
+.informe-thumb {
+    display: block;
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    background-color: #f8f9fa;
+}
+
+.informe-thumb-remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    padding: 0 7px;
+    opacity: 0.9;
+}
+
+/* Bloque reservado para funcionalidad que aun no esta disponible. */
+.informe-in-development {
+    margin: 12px;
+    border: 1px dashed var(--border-strong, #adb5bd);
+    border-radius: 6px;
+    opacity: 0.75;
+}
+
+.informe-preview {
+    width: 100%;
+    height: 80vh;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+}
