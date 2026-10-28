@@ -303,6 +303,35 @@ def load_unit_state_history(client: str, component: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def read_all_partitions(base: Path) -> pd.DataFrame:
+    """Every week partition under `base`, concatenated, with its `year`/`week`.
+
+    For callers that need the whole history rather than the latest run or the
+    last ~3 months - the preliminary failure report (src/informe_falla) looks months back from an
+    arbitrary past date. Each partition goes through the same cache as the
+    other readers."""
+    frames = []
+    for year, week, path in _list_week_partitions(base):
+        df = _read_partition(path)
+        if df.empty:
+            continue
+        df["year"], df["week"] = year, week
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_unit_status_history(client: str, component: str) -> pd.DataFrame:
+    """`unit_status_summary` from every run (one partition per week), not only the latest."""
+    return read_all_partitions(unit_status_summary_base_path(client, component))
+
+
+def load_risk_scores_history(client: str, component: str) -> pd.DataFrame:
+    """Long-format `risk_scores` from every available week."""
+    return read_all_partitions(risk_scores_base_path(client, component))
+
+
 def load_signal_daily_status(client: str, component: str) -> pd.DataFrame:
     return read_last_n_weeks(signal_daily_status_base_path(client, component))
 

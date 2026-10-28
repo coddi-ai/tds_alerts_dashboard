@@ -125,3 +125,5 @@ outputs/*
 
 # .pyc files
 *.pyc
+# Informes preliminares de falla generados (src/informe_falla/service.py)
+outputs/
