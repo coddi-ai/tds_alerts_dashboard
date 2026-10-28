@@ -179,7 +179,7 @@ def prompt_observaciones(perfil: dict, sistema: str) -> str:
     return f"""Eres un ingeniero de confiabilidad. Recibes las muestras de aceite del {sistema} de una unidad
 ({perfil["equipo"]}) tomadas en los 3 meses previos a una detención. Cada muestra trae su resultado, los ensayos que
 salieron de límite con su nivel cualitativo y la recomendación que el laboratorio escribió para esa muestra. También
-recibes los modos de falla que el sistema predictivo destacó antes de la detención.
+recibes los modos de falla que el monitoreo de riesgo destacó antes de la detención.
 
 Resume lo más relevante de esas recomendaciones para un informe preliminar de falla dirigido al cliente, en tres
 párrafos cortos (2 o 3 frases y como máximo {MAX_PALABRAS_PARRAFO} palabras cada uno):

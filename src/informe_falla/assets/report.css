@@ -49,13 +49,8 @@
 .informe_falla .fuente { font-size:13px; color:var(--tinta-2); }
 
 /* Encabezado */
-.informe_falla .barra-sup { display:flex; align-items:center; justify-content:space-between; }
-.informe_falla .marca { font-family:"Barlow Condensed","Arial Narrow",sans-serif; font-weight:700; font-size:24px; }
-.informe_falla .cabecera { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:end; gap:24px 36px; }
-.informe_falla .cab-unidad .tenue { display:block; font-size:14px; margin-bottom:6px; }
-.informe_falla .unidad { display:block; font-family:"Barlow Condensed","Arial Narrow",sans-serif; font-weight:700;
-  font-size:84px; line-height:.85; }
-.informe_falla .cab-datos > * + * { margin-top:10px; }
+.informe_falla .cabecera > * + * { margin-top:16px; }
+.informe_falla .cabecera .cajas { border-top:1px solid var(--linea-2); padding-top:14px; }
 .informe_falla .contexto { margin-top:4px; } .informe_falla .contexto > * + * { margin-top:10px; }
 .informe_falla .contexto .texto { white-space:pre-wrap; }
 

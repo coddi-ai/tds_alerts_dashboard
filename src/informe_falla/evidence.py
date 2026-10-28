@@ -197,7 +197,7 @@ def auditoria(vista, tray, fecha, inicio_base):
     advertencias = []
     if dias_ultimo is not None and dias_ultimo > c.DIAS_DATOS_VIEJOS:
         advertencias.append(f"La unidad no tiene datos nuevos desde {ultimo.date().isoformat()} "
-                            f"({dias_ultimo} días antes de la fecha): el Predictivo no estaba mirando esta unidad.")
+                            f"({dias_ultimo} días antes de la fecha): el monitoreo de riesgo no estaba mirando esta unidad.")
     if n_rec < c.MIN_SEMANAS_RECIENTES:
         techo = "insuficiente"
         advertencias.append(f"Solo {n_rec} semanas válidas en el último mes.")

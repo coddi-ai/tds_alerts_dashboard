@@ -2,8 +2,8 @@
 Informe preliminar de falla, paso 2: la IA redacta sus textos sobre la evidencia y los controles los revisan.
 
 La IA escribe el diagnostico y la causa probable de la seccion Detenciones y, al final, el Resumen
-(diagnostico, causa probable y acciones) integrando el Predictivo y las detenciones. El diagnostico
-y la causa probable de la seccion Predictivo no los escribe: vienen de unit_failure_analisis.
+(diagnostico, causa probable y acciones) integrando el monitoreo de riesgo (el Predictivo) y las detenciones.
+El diagnostico y la causa probable de la seccion Monitoreo de riesgo no los escribe: vienen de unit_failure_analisis.
 Todos los textos siguen los lineamientos de mensajes del Analisis Inteligente (largos, vocabulario,
 glosario). Los controles verifican el esquema, el largo de cada mensaje, el vocabulario prohibido,
 los terminos internos del paquete y las afirmaciones que los registros de mantencion no permiten.
@@ -22,7 +22,7 @@ from src.informe_falla.catalog import MODOS, NOMBRE_MODO
 from src.informe_falla.config import get_informe_settings
 
 # Cambia cada vez que cambian el prompt o el esquema; queda en el registro de cada informe.
-PROMPT_VERSION = "3.1"
+PROMPT_VERSION = "3.2"
 
 # llm_fn(system, user, esquema) -> str con la respuesta JSON del modelo
 LlmFn = Callable[[str, str, dict], str]
@@ -33,8 +33,8 @@ LlmFn = Callable[[str, str, dict], str]
 # =============================================================================
 # La IA escribe dos de las tres secciones del informe, en este orden:
 #   1. detenciones: diagnostico y causa probable a partir de las mantenciones previas;
-#   2. resumen: diagnostico, causa probable y acciones, integrando el Predictivo y las detenciones.
-# El diagnostico y la causa probable de la seccion Predictivo NO los escribe: vienen de
+#   2. resumen: diagnostico, causa probable y acciones, integrando el monitoreo de riesgo y las detenciones.
+# El diagnostico y la causa probable de la seccion Monitoreo de riesgo NO los escribe: vienen de
 # unit_failure_analisis (analisis_unidad.py), el mismo texto que el cliente ve en la plataforma.
 def _obj(props):
     """Objeto estricto: todos los campos obligatorios y ninguno extra (requisito de Structured Outputs)."""
@@ -88,15 +88,20 @@ def prompt_informe(perfil: dict) -> str:
 agrega un relato escrito (contexto_cliente) que nadie verificó. No hay resultados de inspección confirmados. Todo lo
 que concluyas es PROBABLE, nunca confirmado. Nunca lo llames "RCA" ni "análisis de causa raíz".
 
-El informe tiene tres secciones:
-1. Resumen: diagnóstico, causa probable y acciones. Lo escribes tú, AL FINAL, integrando las otras dos.
-2. Predictivo: gráficos y tablas del sistema predictivo, más su diagnóstico y causa probable, que YA EXISTEN
-   (analisis_unidad: el texto que el Predictivo publicó para esta unidad la semana previa). No los reescribas.
-3. Detenciones: las detenciones previas de la unidad. Escribes su diagnóstico y su causa probable.
+El informe tiene estas secciones:
+1. Resumen: diagnóstico, causa probable y acciones. Lo escribes tú, AL FINAL, integrando el monitoreo de riesgo y
+   las detenciones.
+2. Aceite: muestras de laboratorio con su propio resumen. No recibes esos datos: no la menciones.
+3. Monitoreo de riesgo: gráficos y tablas del monitoreo de riesgo, más su diagnóstico y causa probable, que YA
+   EXISTEN (analisis_unidad: el texto publicado para esta unidad la semana previa). No los reescribas.
+4. Detenciones: las detenciones previas de la unidad. Escribes su diagnóstico y su causa probable.
+Al sistema que entrega niveles, estados, ciclo_vida y analisis_unidad llámalo siempre "el monitoreo de riesgo",
+nunca "Predictivo", "sistema predictivo" ni "ERS". Cuando no muestra nada, dilo sin alarma: "el monitoreo de
+riesgo no mostraba señales fuera de lo normal".
 
 DATOS (calculados por herramientas; tú no calculas nada):
-- analisis_unidad: diagnóstico, causa probable, acciones y limitación que el Predictivo publicó para la unidad,
-  con su fecha. "con_texto": false = la unidad estaba normal y el Predictivo no escribió nada; "disponible":
+- analisis_unidad: diagnóstico, causa probable, acciones y limitación que el monitoreo de riesgo publicó para la
+  unidad, con su fecha. "con_texto": false = la unidad estaba normal y el monitoreo de riesgo no escribió nada; "disponible":
   false = no hay análisis previo. "antiguo": true = tiene más de {c.DIAS_ANALISIS_VIEJO} días antes de la detención.
 - analisis_por_metrica.<modo> y ranking_modos: el nivel de cada modo de falla en el último mes ("alto", "medio",
   "bajo", "ninguno" o "sin_datos"), comparado con lo habitual de la propia unidad. "nivel" es el mayor entre el
@@ -138,7 +143,7 @@ PASO 1. DETENCIONES ("detenciones"):
   registros. Si detenciones_previas es null: diagnóstico "No hay registros de mantención de la unidad para este
   período." y causa probable "Las detenciones no permiten orientar la causa.".
 
-PASO 2. RESUMEN ("resumen"), integrando el Predictivo (analisis_unidad + niveles + estados + ciclo_vida) y las
+PASO 2. RESUMEN ("resumen"), integrando el monitoreo de riesgo (analisis_unidad + niveles + estados + ciclo_vida) y las
 detenciones (lo que escribiste en el paso 1):
 - Si las dos fuentes apuntan a lo mismo, dilo en una frase; la confianza puede subir.
 - Si se contradicen, dilo en la causa probable, y la acción principal es verificar cuál de las dos se cumple.
@@ -181,13 +186,13 @@ Lenguaje
   entrega de combustible; excursiones → momentos fuera de lo normal; PM → próxima mantención.
 - Fechas como "23 de febrero", nunca códigos de semana ni posiciones relativas.
 Casos especiales
-- Sin hallazgo en el Predictivo ni en las detenciones: dilo brevemente; las acciones son el procedimiento
+- Sin hallazgo en el monitoreo de riesgo ni en las detenciones: dilo brevemente; las acciones son el procedimiento
   habitual de diagnóstico de la detención (por ejemplo, tomar una muestra de aceite antes de drenar). No inventes.
 - Datos incompletos o contradictorios: dilo en la causa probable y deja la acción en una verificación simple.
 
 OTRAS REGLAS
 - Tu confianza no puede superar auditoria.techo_confianza. "motivo_confianza": una frase en palabras del cliente
-  (por ejemplo, "el Predictivo y las detenciones apuntan a lo mismo" o "faltan 6 días de datos antes de la
+  (por ejemplo, "el monitoreo de riesgo y las detenciones apuntan a lo mismo" o "faltan 6 días de datos antes de la
   detención").
 - contexto_cliente no está verificado: úsalo para orientar la redacción, sin subir la confianza ni cambiar niveles.
 - veredicto_reglas es una referencia; si tu veredicto difiere, explica por qué en "motivo_si_difiere".
@@ -248,7 +253,7 @@ _LENGUAJE_PROHIBIDO = re.compile(
     r"\b(?:scores?|puntajes? de riesgo|anomal[ií]as?|desviaci[oó]n(?:es)?|percentil(?:es)?|sigmas?|ranking"
     r"|curvas?(?: acumuladas?)?|ciclo de vida|riesgo acumulado|zonas? (?:normal|de alerta|alerta|anormal)"
     r"|bancos?|PM|diferencial(?:es)?|admisi[oó]n|inyecci[oó]n|dashboard|telemetr[ií]a|desbalance t[eé]rmico"
-    r"|excursi[oó]n(?:es)?|evaluar|monitorear|considerar|pr[oó]xima ventana|pr[oó]ximo pm"
+    r"|predictivos?|ERS|excursi[oó]n(?:es)?|evaluar|monitorear|considerar|pr[oó]xima ventana|pr[oó]ximo pm"
     r"|es compatible con|no permite concluir|podr[ií]a estar relacionad[oa]|podr[ií]a eventualmente)\b"
     r"|\binmediato\s*:",                      # etiqueta de horizonte; "de inmediato" en una frase si vale
     re.IGNORECASE,

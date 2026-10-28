@@ -1,16 +1,18 @@
 """
 Informe preliminar de falla, paso 3: el informe para el cliente como HTML (pdf.py lo pasa a PDF).
 
-Tres secciones, como la plantilla aprobada (Claude Design, "Informe preliminar de fallas"):
-  1. Resumen: diagnostico, causa probable y acciones. Lo escribe la IA al final, integrando 2 y 3.
-  2. Predictivo: estado actual semana a semana (unit_status_summary), puntajes por modo (risk_scores),
-     estado del ciclo de vida (cumulative_risk_curve) y el diagnostico y la causa probable que el
-     Predictivo publico para la unidad la semana previa (unit_failure_analisis).
-  Aceite (sin numero, entre 2 y 3): las muestras de aceite del sistema en los 3 meses previos (aceite.py):
-     cuantas, cuantas fuera de lo normal y la ultima; linea de tiempo; las ultimas muestras con el nivel de los
-     ensayos fuera de limite (sin concentraciones) y las observaciones del laboratorio en tres parrafos.
-  3. Detenciones: las intervenciones previas (mantenciones.py) en cifras, linea de tiempo y listado,
+Secciones, numeradas en el orden en que aparecen (Aceite solo si el cliente tiene muestras de aceite):
+  1. Resumen: diagnostico, causa probable y acciones. Lo escribe la IA al final, integrando el monitoreo de
+     riesgo y las detenciones.
+  2. Aceite: las muestras de aceite del sistema en los 3 meses previos (aceite.py): cuantas, cuantas fuera de
+     lo normal y la ultima; linea de tiempo; las ultimas muestras con el nivel de los ensayos fuera de limite
+     (sin concentraciones) y las observaciones del laboratorio en tres parrafos.
+  3. Monitoreo de riesgo (el Predictivo; en el PDF nunca se llama asi): estado actual semana a semana
+     (unit_status_summary), puntajes por modo (risk_scores), estado del ciclo de vida (cumulative_risk_curve) y
+     el diagnostico y la causa probable publicados para la unidad la semana previa (unit_failure_analisis).
+  4. Detenciones: las intervenciones previas (mantenciones.py) en cifras, linea de tiempo y listado,
      con un diagnostico y una causa probable escritos por la IA.
+Sin Aceite, Monitoreo de riesgo pasa a ser la 2 y Detenciones la 3.
 
 Lo que se puede calcular sale de la evidencia, nunca de la IA. El PDF es para el cliente: no lleva
 avisos internos de los controles ni el veredicto de las reglas (quedan en el registro JSON y en la
@@ -38,7 +40,7 @@ _MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agost
           "noviembre", "diciembre"]
 
 # Alcance del informe: va al pie.
-ALCANCE = ("Informe preliminar elaborado con los datos del Predictivo de los 3 meses previos a la detención. "
+ALCANCE = ("Informe preliminar elaborado con los datos del monitoreo de riesgo de los 3 meses previos a la detención. "
            "Indica la falla más probable; la causa debe confirmarse con la inspección de la unidad.")
 
 # Colores (iguales a report.css; los SVG los necesitan como atributos).
@@ -288,7 +290,7 @@ def _fotos(imagenes, numero_seccion):
 
 
 # =============================================================================
-# 2.1 Estado actual, semana a semana (unit_status_summary)
+# 3.1 Monitoreo de riesgo: estado actual, semana a semana (unit_status_summary)
 # =============================================================================
 def _semanas(evid) -> list:
     """[(lunes, estado o None)] de las semanas del periodo; None = semana sin datos validos."""
@@ -328,7 +330,7 @@ def _bloque_estado_actual(evid) -> str:
     estado_txt = _pill(ultimo.capitalize(), estilo[ultimo]) if ultimo else "Sin datos"
     return f"""
   <div class="sub">
-    <div class="sub-cabeza"><h3>Estado actual de la unidad</h3><span class="fuente">Fuente: estado semanal del Predictivo</span></div>
+    <div class="sub-cabeza"><h3>Estado actual de la unidad</h3><span class="fuente">Fuente: estado semanal del monitoreo de riesgo</span></div>
     <p class="nota">Cada cuadro es una semana; la fecha indica el lunes en que empieza.</p>
     <div class="semanas" style="grid-template-columns:repeat({max(len(semanas), 1)},minmax(0,1fr))">{"".join(celdas)}</div>
     <div class="leyenda"><span><i style="background:{COLOR_ESTADO["normal"]}"></i>Normal</span>
@@ -345,7 +347,7 @@ def _bloque_estado_actual(evid) -> str:
 
 
 # =============================================================================
-# 2.2 Puntajes de riesgo por modo (risk_scores)
+# 3.2 Monitoreo de riesgo: puntajes de riesgo por modo (risk_scores)
 # =============================================================================
 def _tabla_modos(evid) -> str:
     filas = []
@@ -391,13 +393,13 @@ def _bloque_puntajes(evid) -> str:
                     'período analizado.</p></div>')
     return f"""
   <div class="sub separada puntajes">
-    <div class="sub-cabeza"><h3>Puntajes de riesgo por modo de falla</h3><span class="fuente">Fuente: puntajes de riesgo del Predictivo</span></div>
+    <div class="sub-cabeza"><h3>Puntajes de riesgo por modo de falla</h3><span class="fuente">Fuente: puntajes de riesgo del monitoreo de riesgo</span></div>
     <div class="dos-col grafico-tabla"><div class="graficos">{graficos}</div><div>{_tabla_modos(evid)}</div></div>
   </div>"""
 
 
 # =============================================================================
-# 2.3 Estado del ciclo de vida (cumulative_risk_curve)
+# 3.3 Monitoreo de riesgo: estado del ciclo de vida (cumulative_risk_curve)
 # =============================================================================
 def _compacto(v: float) -> str:
     if v >= 1_000_000:
@@ -569,10 +571,10 @@ def _bloque_ciclo_vida(evid) -> str:
     cv = evid.get("ciclo_vida") or {}
     unidad = evid["consulta"]["unidad"]
     cabeza = ('<div class="sub-cabeza"><h3>Estado del ciclo de vida del motor</h3>'
-              '<span class="fuente">Fuente: curva acumulada del Predictivo</span></div>')
+              '<span class="fuente">Fuente: curva acumulada del monitoreo de riesgo</span></div>')
     if not cv.get("disponible"):
         texto = ("La unidad no tiene curva acumulada antes de la detención." if cv.get("motivo") == "unidad_sin_curva"
-                 else "La curva acumulada del Predictivo no está disponible para este informe.")
+                 else "La curva acumulada del monitoreo de riesgo no está disponible para este informe.")
         return f'<div class="sub separada">{cabeza}<p class="tenue">{_e(texto)}</p></div>'
     if not cv.get("evaluable"):
         zona = _pill("No evaluable", "borde")
@@ -607,21 +609,22 @@ def _bloque_ciclo_vida(evid) -> str:
 
 
 # =============================================================================
-# 2.4 Diagnostico y causa probable del Predictivo (unit_failure_analisis)
+# 3.4 Monitoreo de riesgo: diagnostico y causa probable (unit_failure_analisis)
 # =============================================================================
 def _textos_predictivo(evid) -> tuple:
     """(diagnostico, causa probable, nota de fecha) del analisis publicado; textos fijos si no lo hay."""
     a = evid.get("analisis_unidad") or {}
     if a.get("disponible") and a.get("con_texto"):
-        nota = "Análisis del Predictivo del " + _fecha_media(a["fecha"])
+        nota = "Análisis del monitoreo de riesgo del " + _fecha_media(a["fecha"])
         if a.get("antiguo"):
             nota += f", {a['dias_antes']} días antes de la detención"
         return a["diagnostico"], a.get("causa_probable") or "—", nota + "."
     if a.get("disponible"):
-        return ("El Predictivo no mostraba señales fuera de lo normal en la semana previa a la detención.",
-                "Sin una causa identificada por el Predictivo.", "Análisis del Predictivo del " + _fecha_media(a["fecha"]) + ".")
-    return ("No hay un análisis del Predictivo para esta unidad antes de la detención.",
-            "Sin una causa identificada por el Predictivo.", "")
+        return ("El monitoreo de riesgo no mostraba señales fuera de lo normal en la semana previa a la detención.",
+                "Sin una causa identificada por el monitoreo de riesgo.",
+                "Análisis del monitoreo de riesgo del " + _fecha_media(a["fecha"]) + ".")
+    return ("No hay un análisis del monitoreo de riesgo para esta unidad antes de la detención.",
+            "Sin una causa identificada por el monitoreo de riesgo.", "")
 
 
 def _cierre(diagnostico: str, causa: str, nota: str = "", pendiente: bool = False) -> str:
@@ -632,7 +635,7 @@ def _cierre(diagnostico: str, causa: str, nota: str = "", pendiente: bool = Fals
 
 
 # =============================================================================
-# 3. Detenciones (mantenciones.py)
+# 4. Detenciones (mantenciones.py)
 # =============================================================================
 def _linea_detenciones(evid, previas) -> str:
     desde, fecha = _d(evid["ventanas"]["periodo_desde"]), _d(evid["consulta"]["fecha"])
@@ -673,13 +676,13 @@ def _fila_detencion(fecha, titulo, pill, detalle, duracion) -> str:
             f'{pill}</div><div class="tenue chica">{_e(detalle)}</div></div><span class="tenue chica">{_e(duracion)}</span></li>')
 
 
-def _bloque_detenciones(evid, inf) -> str:
+def _bloque_detenciones(evid, inf, numero: int = 3) -> str:
     cob = evid.get("cobertura_mantenciones") or {}
     previas = evid.get("detenciones_previas")
     intro = '<p class="tenue">Detenciones relevantes de la unidad en los 3 meses previos.</p>'
     if previas is None:
         texto = nota_cobertura_mantenciones(evid) or "No hay una fuente de registros de mantención para este cliente."
-        return (f'<section class="tarjeta"><h2>3. Detenciones</h2>{intro}<p>{_e(texto)}</p>'
+        return (f'<section class="tarjeta"><h2>{numero}. Detenciones</h2>{intro}<p>{_e(texto)}</p>'
                 + _cierre("No hay registros de mantención de la unidad para este período.",
                           "Las detenciones no permiten orientar la causa.", pendiente=True) + "</section>")
     no_programadas = sum(1 for p in previas if p.get("tipo") == "Correctiva")
@@ -703,7 +706,7 @@ def _bloque_detenciones(evid, inf) -> str:
                       for t, _, color in TIPO_DETENCION.values())
     return f"""
 <section class="tarjeta">
-  <h2>3. Detenciones</h2>
+  <h2>{numero}. Detenciones</h2>
   {intro}
   <div class="cajas tres">
     <div class="caja"><div class="etq">Detenciones relevantes</div><div class="val">{len(previas)} en los 3 meses previos</div></div>
@@ -806,7 +809,7 @@ def _leyenda_muestras() -> str:
             f'<span><i style="width:3px;border-radius:0;background:{ROJO}"></i>Detención</span></div>')
 
 
-def _bloque_aceite(evid) -> str:
+def _bloque_aceite(evid, numero: int = 2) -> str:
     """Tarjeta Aceite: muestreo por componente, linea de tiempo, ultimas muestras y observaciones del laboratorio.
 
     Sin fuente de aceite para el cliente (o sistema sin componentes de aceite) no se muestra.
@@ -816,7 +819,7 @@ def _bloque_aceite(evid) -> str:
         return ""
     fecha = evid["consulta"]["fecha"]
     if not a["muestras"]:
-        return (f'<section class="tarjeta"><h2>Aceite</h2>'
+        return (f'<section class="tarjeta"><h2>{numero}. Aceite</h2>'
                 f'<p>{_e(_texto_muestreo(a, a["sistema"].capitalize(), []))}</p></section>')
     textos = "".join(f"<p>{_e(_texto_muestreo(a, comp, [m for m in a['muestras'] if m['componente'] == comp]))}</p>"
                      for comp in a["componentes"])
@@ -839,7 +842,7 @@ def _bloque_aceite(evid) -> str:
                      if parrafos else "")
     return f'''
 <section class="tarjeta">
-  <h2>Aceite</h2>
+  <h2>{numero}. Aceite</h2>
   {textos}
   <div class="tarjeta-int">{_linea_muestras(a, fecha)}{_leyenda_muestras()}</div>
   <table class="modos"><thead><tr>{cabecera}</tr></thead><tbody>{filas}</tbody></table>
@@ -863,7 +866,7 @@ def _bloque_resumen(evid, inf) -> str:
     return f"""
 <section class="resumen">
   <h2>1. Resumen</h2>
-  <p class="r-sub">Conclusión que integra lo que muestran el Predictivo y las detenciones de la unidad.</p>
+  <p class="r-sub">Conclusión que integra lo que muestran el monitoreo de riesgo y las detenciones de la unidad.</p>
   <div class="resumen-grid">
     <div><span class="r-etq">Diagnóstico</span><span class="r-val">{_e(r.get("diagnostico", ""))}</span></div>
     <div><span class="r-etq">Causa probable</span><span class="r-val">{_e(r.get("causa_probable", ""))}</span></div>
@@ -873,7 +876,7 @@ def _bloque_resumen(evid, inf) -> str:
     <span class="r-etq">Confianza</span><span class="barras" aria-label="Confianza {_e(conf)}">{barras}</span>
     <strong>{_e(conf.capitalize())}</strong><span class="r-etq">{_e(inf.get("motivo_confianza", ""))}</span>
   </div>
-  <div class="basado"><span class="r-etq">Basado en</span><span class="chip-on">Predictivo: incorporado</span>{chip_det}</div>
+  <div class="basado"><span class="r-etq">Basado en</span><span class="chip-on">Monitoreo de riesgo: incorporado</span>{chip_det}</div>
 </section>"""
 
 
@@ -905,7 +908,7 @@ def _brechas(evid) -> List[str]:
                if b.get("tipo") == "unidad_sin_datos"]
     rangos = [_fecha_corta(b["desde"]) if b["desde"] == b["hasta"] else _fecha_corta(b["desde"]) + " al " + _fecha_corta(b["hasta"])
               for b in brechas[:3]]
-    return ["Faltan datos del Predictivo de la unidad: " + ", ".join(rangos) + "."] if rangos else []
+    return ["Faltan datos del monitoreo de riesgo de la unidad: " + ", ".join(rangos) + "."] if rangos else []
 
 
 # =============================================================================
@@ -921,26 +924,28 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
     numero = numero or numero_informe(unidad, fecha)
     emision = emision or date.today()
     periodo = _fecha_media(ventanas["periodo_desde"]) + " al " + _fecha_media(ventanas["periodo_hasta"])
-    fuentes = ("Predictivo y detenciones" if evid.get("detenciones_previas") is not None else "Predictivo") + \
-              f" de la unidad, del {periodo}."
+    tiene_aceite = bool((evid.get("aceite") or {}).get("disponible"))
+    usadas = (["Aceite"] if tiene_aceite else []) + ["monitoreo de riesgo"] + \
+             (["detenciones"] if evid.get("detenciones_previas") is not None else [])
+    fuentes = (", ".join(usadas[:-1]) + " y " + usadas[-1] if len(usadas) > 1 else usadas[0])
+    fuentes = fuentes[0].upper() + fuentes[1:] + f" de la unidad, del {periodo}."
+    # Numeracion en el orden del informe; sin Aceite, las siguientes suben un numero
+    n_aceite = 2
+    n_monitoreo = 3 if tiene_aceite else 2
+    n_detenciones = n_monitoreo + 1
     diag_p, causa_p, nota_p = _textos_predictivo(evid)
-    pie = [ALCANCE, "El Predictivo no mide fallas eléctricas, estructurales ni de montaje."] + _brechas(evid)
+    pie = [ALCANCE, "El monitoreo de riesgo no mide fallas eléctricas, estructurales ni de montaje."] + _brechas(evid)
 
     return f"""
 <div class="informe_falla">
 <div class="contenedor">
-<div class="barra-sup"><span class="marca">Informe preliminar de fallas</span></div>
-
 <header class="tarjeta cabecera">
-  <div class="cab-unidad"><span class="tenue">Informe preliminar de fallas</span><span class="unidad">{_e(unidad)}</span></div>
-  <div class="cab-datos">
-    <h1>Detención del {_e(_fecha_larga(fecha))}</h1>
-    <div class="cajas cuatro sin-fondo">
-      <div><div class="etq">Detención</div><div class="val">{_e(_fecha_media(fecha))}</div></div>
-      <div><div class="etq">Solicitado por</div><div class="val">{_e(cliente)}</div></div>
-      <div><div class="etq">Fecha de emisión</div><div class="val">{_e(_fecha_media(emision.isoformat()))}</div></div>
-      <div><div class="etq">N.º de informe</div><div class="val">{_e(numero)}</div></div>
-    </div>
+  <h1>Informe preliminar de fallas</h1>
+  <div class="cajas cuatro sin-fondo">
+    <div><div class="etq">Detención</div><div class="val">{_e(_fecha_media(fecha))}</div></div>
+    <div><div class="etq">Equipo</div><div class="val">{_e(unidad)}</div></div>
+    <div><div class="etq">Fecha de emisión</div><div class="val">{_e(_fecha_media(emision.isoformat()))}</div></div>
+    <div><div class="etq">N.º de informe</div><div class="val">{_e(numero)}</div></div>
   </div>
 </header>
 
@@ -951,18 +956,18 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
 
 {_bloque_resumen(evid, inf)}
 
+{_bloque_aceite(evid, n_aceite)}
+
 <section class="tarjeta">
-  <h2>2. Predictivo</h2>
-  <p class="tenue">Lo que el sistema predictivo mostró de la unidad en los 3 meses previos a la detención.</p>
+  <h2>{n_monitoreo}. Monitoreo de riesgo</h2>
+  <p class="tenue">Lo que el monitoreo de riesgo mostró de la unidad en los 3 meses previos a la detención.</p>
   {_bloque_estado_actual(evid)}
   {_bloque_puntajes(evid)}
   {_bloque_ciclo_vida(evid)}
   <div class="sub separada">{_cierre(diag_p, causa_p, nota_p)}</div>
 </section>
 
-{_bloque_aceite(evid)}
-
-{_bloque_detenciones(evid, inf)}
+{_bloque_detenciones(evid, inf, n_detenciones)}
 
 <footer class="pie">{"".join(f"<p>{_e(t)}</p>" for t in pie)}</footer>
 
