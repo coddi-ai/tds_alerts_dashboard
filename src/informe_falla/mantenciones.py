@@ -279,6 +279,14 @@ def antecedentes_mantencion(cliente: str, unidad: str, fecha, sistema: str = c.C
     sistemas = c.SISTEMAS_MANTENCION.get(sistema, {sistema})
     otros_sistemas = propias[~propias["sistema"].isin(sistemas)]
     del_sistema = propias[propias["sistema"].isin(sistemas)]
+    # Subsistemas agrupados en el sistema que no son de el (la cabina en el motor): fuera de la tabla, la linea de
+    # tiempo, los antecedentes y la IA. Un record con otros subsistemas se queda, sin esas acciones.
+    fuera = c.SUBSISTEMAS_FUERA_DEL_SISTEMA.get(sistema, set())
+    es_fuera = del_sistema["action_subsystem_name"].fillna("").str.strip().str.lower().isin(fuera)
+    en_ventana = (del_sistema["dia"] >= desde) & (del_sistema["dia"] < fecha)
+    fuera_del_sistema = (set(del_sistema.loc[es_fuera & en_ventana, "record_id"])
+                         - set(del_sistema.loc[~es_fuera & en_ventana, "record_id"]))
+    del_sistema = del_sistema[~es_fuera]
     records, rellenos = _records(del_sistema, cliente, horas, fecha)
 
     # Sin fugas: solo records cerrados antes de la fecha (un record abierto en la fecha puede ser la detencion).
@@ -329,6 +337,7 @@ def antecedentes_mantencion(cliente: str, unidad: str, fecha, sistema: str = c.C
             "sin_contenido": sin_contenido,
             "otros_sistemas": int(otros_sistemas[(otros_sistemas["dia"] >= desde) & (otros_sistemas["dia"] < fecha)]
                                   ["record_id"].nunique()),
+            "fuera_del_sistema": len(fuera_del_sistema),
             "fuera_del_tope": max(0, len(publicos) - MAX_FILAS_TABLA),
             "abiertos_en_la_fecha": sum(1 for r in records if r["inicio"] < fecha <= r["fin"]),
         },

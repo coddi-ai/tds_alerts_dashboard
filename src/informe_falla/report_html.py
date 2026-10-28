@@ -2,16 +2,16 @@
 Informe preliminar de falla, paso 3: el informe para el cliente como HTML (pdf.py lo pasa a PDF).
 
 Secciones, numeradas en el orden en que aparecen (Aceite solo si el cliente tiene muestras de aceite):
-  1. Resumen: diagnostico, causa probable y acciones. Lo escribe la IA al final, integrando el monitoreo de
-     riesgo y las detenciones.
+  1. Resumen: diagnostico, causa probable y acciones. Lo escribe la IA al final, integrando SOLO el
+     diagnostico y la causa probable de las otras secciones (secciones.redactar_resumen).
   2. Aceite: las muestras de aceite del sistema en los 3 meses previos (aceite.py): cuantas, cuantas fuera de
      lo normal y la ultima; linea de tiempo; las ultimas muestras con el nivel de los ensayos fuera de limite
-     (sin concentraciones) y las observaciones del laboratorio en tres parrafos.
+     (sin concentraciones) y el diagnostico y la causa probable de las recomendaciones del laboratorio.
   3. Monitoreo de riesgo (el Predictivo; en el PDF nunca se llama asi): estado actual semana a semana
      (unit_status_summary), puntajes por modo (risk_scores), estado del ciclo de vida (cumulative_risk_curve) y
      el diagnostico y la causa probable publicados para la unidad la semana previa (unit_failure_analisis).
-  4. Detenciones: las intervenciones previas (mantenciones.py) en cifras, linea de tiempo y listado,
-     con un diagnostico y una causa probable escritos por la IA.
+  4. Detenciones: las intervenciones previas del sistema (mantenciones.py) en cifras, linea de tiempo y
+     listado, con un diagnostico y una causa probable escritos por la IA (secciones.redactar_detenciones).
 Sin Aceite, Monitoreo de riesgo pasa a ser la 2 y Detenciones la 3.
 
 Lo que se puede calcular sale de la evidencia, nunca de la IA. El PDF es para el cliente: no lleva
@@ -717,7 +717,7 @@ def _bloque_detenciones(evid, inf, numero: int = 3) -> str:
     <div class="leyenda">{leyenda}<span><i class="punto" style="background:{ROJO}"></i>Detención analizada</span></div></div>
   <ol class="detenciones">{"".join(filas)}</ol>
   {notas}
-  {_cierre(d.get("diagnostico", ""), d.get("causa_probable", ""))}
+  {_cierre(d.get("diagnostico", ""), d.get("causa_probable", ""), pendiente=bool(d.get("fijo")))}
 </section>"""
 
 
@@ -836,10 +836,13 @@ def _bloque_aceite(evid, numero: int = 2) -> str:
         for m in ultimas)
     cabecera = ("<th>Fecha</th>" + ("<th>Componente</th>" if varios else "")
                 + "<th>Días antes</th><th>Horas motor</th><th>Horas aceite</th><th>Resultado</th><th>Fuera de límite</th>")
+    # Diagnostico y causa probable de la seccion (aceite.observaciones_laboratorio), con el formato del resto.
     obs = a.get("observaciones") or {}
-    parrafos = [obs[p] for p in ("condiciones", "recomendaciones", "seguimiento") if obs.get(p)]
-    observaciones = ("<h3>Observaciones del laboratorio en los 3 meses</h3>" + "".join(f"<p>{_e(p)}</p>" for p in parrafos)
-                     if parrafos else "")
+    observaciones = ""
+    if obs.get("diagnostico"):
+        nota = (f"Resumen de las recomendaciones del laboratorio de {len(a['muestras'])} muestras, del "
+                f"{_fecha_media(a['muestras'][0]['fecha'])} al {_fecha_media(a['muestras'][-1]['fecha'])}.")
+        observaciones = f'<div class="sub separada">{_cierre(obs["diagnostico"], obs.get("causa_probable", ""), nota)}</div>'
     return f'''
 <section class="tarjeta">
   <h2>{numero}. Aceite</h2>
@@ -863,10 +866,13 @@ def _bloque_resumen(evid, inf) -> str:
     detenciones = evid.get("detenciones_previas") is not None
     chip_det = ('<span class="chip-on">Detenciones: incorporado</span>' if detenciones
                 else '<span class="chip-off">Detenciones: sin registros</span>')
+    con_aceite = bool((evid.get("aceite") or {}).get("muestras"))
+    chip_aceite = '<span class="chip-on">Aceite: incorporado</span>' if con_aceite else ""
+    fuentes = "el aceite, el monitoreo de riesgo" if con_aceite else "el monitoreo de riesgo"
     return f"""
 <section class="resumen">
   <h2>1. Resumen</h2>
-  <p class="r-sub">Conclusión que integra lo que muestran el monitoreo de riesgo y las detenciones de la unidad.</p>
+  <p class="r-sub">Conclusión que integra lo que muestran {fuentes} y las detenciones de la unidad.</p>
   <div class="resumen-grid">
     <div><span class="r-etq">Diagnóstico</span><span class="r-val">{_e(r.get("diagnostico", ""))}</span></div>
     <div><span class="r-etq">Causa probable</span><span class="r-val">{_e(r.get("causa_probable", ""))}</span></div>
@@ -876,7 +882,7 @@ def _bloque_resumen(evid, inf) -> str:
     <span class="r-etq">Confianza</span><span class="barras" aria-label="Confianza {_e(conf)}">{barras}</span>
     <strong>{_e(conf.capitalize())}</strong><span class="r-etq">{_e(inf.get("motivo_confianza", ""))}</span>
   </div>
-  <div class="basado"><span class="r-etq">Basado en</span><span class="chip-on">Monitoreo de riesgo: incorporado</span>{chip_det}</div>
+  <div class="basado"><span class="r-etq">Basado en</span>{chip_aceite}<span class="chip-on">Monitoreo de riesgo: incorporado</span>{chip_det}</div>
 </section>"""
 
 
@@ -899,6 +905,11 @@ def problemas(res) -> List[str]:
     controles_aceite = (((res.get("evidencia") or {}).get("aceite") or {}).get("observaciones") or {}).get("controles")
     if controles_aceite:
         p.append("Observaciones del laboratorio: " + "; ".join(controles_aceite) + ".")
+    # Los textos de Detenciones y del Resumen (secciones.py) traen sus propios controles.
+    for seccion, nombre in (("detenciones", "Detenciones"), ("resumen", "Resumen")):
+        controles = ((res.get("informe") or {}).get(seccion) or {}).get("controles")
+        if controles:
+            p.append(f"{nombre}: " + "; ".join(controles) + ".")
     return p
 
 

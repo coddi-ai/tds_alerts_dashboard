@@ -237,6 +237,11 @@ COMPONENTES_CLAVE_POR_MODO = {
 SISTEMAS_MANTENCION = {
     "motor": {"motor", "sistema motor", "sistema de motor", "sistema de motor básico"},
 }
+# Subsistemas que la vista de mantenciones agrupa en el sistema pero no son de el (query_3.action_subsystem_name,
+# en minuscula): la cabina (mangueras de calefaccion, aire acondicionado) no orienta una falla del motor.
+SUBSISTEMAS_FUERA_DEL_SISTEMA = {
+    "motor": {"cabina de operación", "cabina de operacion"},
+}
 
 
 # =============================================================================
@@ -245,6 +250,9 @@ SISTEMAS_MANTENCION = {
 # Limites de largo por mensaje: (maximo de frases, palabras sugeridas). Son sugerencias para calibrar:
 # el control de agent.py avisa recien cuando se pasan las frases o las palabras en mas de TOLERANCIA_LARGO.
 LIMITES_MENSAJE = {"diagnostico": (2, 35), "causa_probable": (2, 30), "acciones": (2, 45)}
+# Diagnostico y causa probable de las secciones Aceite y Detenciones (secciones.py): mas espacio que el Resumen,
+# porque cada una analiza sus antecedentes.
+LIMITES_SECCION = {"diagnostico": (3, 55), "causa_probable": (3, 55)}
 MAX_ACCIONES = 2
 TOLERANCIA_LARGO = 1.25
 

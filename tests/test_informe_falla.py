@@ -20,7 +20,7 @@ import pytest
 
 from config.users import USERS
 from dashboard import informe_falla_files
-from src.informe_falla import agent, catalog, config, evidence, report_html, service
+from src.informe_falla import agent, catalog, config, evidence, report_html, secciones, service
 from src.informe_falla.catalog import MODOS
 
 FECHA = "2026-03-12"          # jueves; la semana de la fecha queda excluida por diseño
@@ -99,6 +99,20 @@ def _informe(fuente_valida: str) -> dict:
 def _llm(system, user, esquema):
     assert esquema is agent.ESQUEMA_INFORME
     return json.dumps(_informe("analisis_por_metrica.coolant_contamination_risk.nivel"))
+
+
+def _llm_secciones(system, user, esquema):
+    """La IA del servicio (secciones.py), un texto por esquema. La causa del Resumen trae una palabra que los
+    lineamientos prohiben ("anomalía"), para que los controles avisen."""
+    if esquema["name"] == "resumen_secciones":
+        return json.dumps({
+            "diagnostico": "Posible contaminación por refrigerante.",
+            "causa_probable": "Se sospecha una anomalía en el sistema de enfriamiento.",
+            "acciones": ["Revise el sistema de refrigeración en esta detención."],
+            "riesgo_si_no_se_hace": "Puede repetirse la detención.",
+            "confianza": esquema["schema"]["properties"]["confianza"]["enum"][-1],
+            "motivo_confianza": "Datos completos."})
+    return json.dumps({"diagnostico": "Texto de la sección.", "causa_probable": "Texto de la causa."})
 
 
 # ---------------------------------------------------------------------------
@@ -264,28 +278,30 @@ def test_genera_guarda_y_lista_el_informe(servicio):
     enviados = []
     def llm(system, user, esquema):
         enviados.append(json.loads(user))
-        return _llm(system, user, esquema)
+        return _llm_secciones(system, user, esquema)
     resultado = service.generar_informe(_solicitud(), llm_fn=llm, sistema_label="Motor")
-    # El sistema elegido va al PDF, no a la IA.
-    assert enviados[0]["contexto_cliente"] == {"titulo": "Pérdida de potencia"}
+    # Sin mantenciones ni aceite, la unica llamada es la del Resumen. El sistema elegido va al PDF, no a la IA.
+    assert len(enviados) == 1 and enviados[0]["contexto_cliente"] == {"titulo": "Pérdida de potencia"}
+    assert enviados[0]["detenciones"]["sin_registros"] and enviados[0]["aceite"]["sin_muestras"]
     assert resultado["status"] == service.STATUS_READY
     assert resultado["unit"] == UNIDAD                     # T_9 del formulario es T_09 en los datos
-    assert resultado["problems"]                          # la fuente inventada queda como aviso
+    assert any("anomalía" in p for p in resultado["problems"])   # el control del Resumen queda como aviso
 
     ruta = service.ruta_pdf("CDA", resultado["report_id"])
     assert ruta.read_bytes() == b"%PDF-sintetico"
     registro = json.loads(ruta.with_suffix(".json").read_text(encoding="utf-8"))
     assert registro["solicitud"]["images"][0] == {"filename": "a.png", "mime": "image/png", "size": len(PNG),
                                                   "caption": "Vista"}
-    assert registro["informe"]["veredicto"] == "SEÑAL CLARA"
-    assert registro["prompt"] == agent.PROMPT_VERSION and registro["modelo"] == "personalizado"
+    assert registro["informe"]["veredicto"] == resultado["rules_verdict"]     # el de las reglas
+    assert registro["informe"]["detenciones"]["diagnostico"] == secciones.SIN_REGISTROS["diagnostico"]
+    assert registro["prompt"] == secciones.PROMPT_VERSION and registro["modelo"] == "personalizado"
     assert [r["report_id"] for r in service.listar_informes("cda")] == [resultado["report_id"]]
     assert service.listar_informes("CAPSTONE") == []
 
 
 def test_el_historial_se_lee_una_vez_por_cliente(servicio):
-    service.generar_informe(_solicitud(), llm_fn=_llm)
-    service.generar_informe(_solicitud(), llm_fn=_llm)
+    service.generar_informe(_solicitud(), llm_fn=_llm_secciones)
+    service.generar_informe(_solicitud(), llm_fn=_llm_secciones)
     assert servicio == ["cda"]
 
 
@@ -300,7 +316,7 @@ def test_ids_ajenos_o_maliciosos_no_resuelven(servicio, report_id):
 ])
 def test_errores_de_la_solicitud(servicio, cambios, motivo):
     with pytest.raises(service.InformeError) as error:
-        service.generar_informe(_solicitud(**cambios), llm_fn=_llm)
+        service.generar_informe(_solicitud(**cambios), llm_fn=_llm_secciones)
     assert error.value.motivo == motivo
 
 
@@ -339,7 +355,7 @@ def test_sin_validador_se_genera_igual(servicio, monkeypatch):
     llamadas = []
     def llm(system, user, esquema):
         llamadas.append(1)
-        return _llm(system, user, esquema)
+        return _llm_secciones(system, user, esquema)
     resultado = service.generar_informe(_solicitud(event_date="2026-05-15"), llm_fn=llm)
     assert resultado["status"] == service.STATUS_READY and llamadas == [1]
     assert resultado["rules_verdict"] == "DATOS INSUFICIENTES"
@@ -410,7 +426,7 @@ PREFIX = "/alerts-dashboard/"
 
 @pytest.fixture
 def web(servicio):
-    report_id = service.generar_informe(_solicitud(), llm_fn=_llm)["report_id"]
+    report_id = service.generar_informe(_solicitud(), llm_fn=_llm_secciones)["report_id"]
     app = dash.Dash(__name__, url_base_pathname=PREFIX, suppress_callback_exceptions=True)
     app.layout = dash.html.Div()
     app.server.secret_key = "flask-secret-key-sintetica-0123456789"

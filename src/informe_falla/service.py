@@ -1,5 +1,5 @@
 """
-Informe preliminar de falla desde el dashboard: valida los datos, corre el agente, arma el PDF y lo guarda.
+Informe preliminar de falla desde el dashboard: valida los datos, la IA redacta las secciones y el Resumen, arma el PDF y lo guarda.
 
 La IA tarda (decenas de segundos), mas que lo razonable para un callback de Dash, asi que
 cada solicitud corre en un hilo y la vista consulta su estado (`iniciar` / `estado`). Los
@@ -31,10 +31,10 @@ from typing import Callable, List, Optional
 
 from src.data.report_health import unit_key
 from src.informe_falla import catalog as c
-from src.informe_falla.agent import PROMPT_VERSION, LlmFn, correr_agente, openai_llm
+from src.informe_falla.agent import LlmFn, openai_llm
 from src.informe_falla.config import get_informe_settings, perfil_cliente
 from src.informe_falla.evidence import armar_evidencia, preparar_risk, preparar_status
-from src.informe_falla import aceite, analisis_unidad, curva, fuentes, mantenciones
+from src.informe_falla import aceite, analisis_unidad, curva, fuentes, mantenciones, secciones
 from src.informe_falla.pdf import html_a_pdf, pdf_disponible
 from src.informe_falla.report_html import documento, numero_informe, problemas
 from src.utils.logger import get_logger
@@ -49,8 +49,8 @@ STATUS_RUNNING, STATUS_READY, STATUS_ERROR = "running", "ready", "error"
 
 # Etapas del informe, en orden, con el avance (%) al empezar cada una (la vista muestra la barra y la etapa,
 # informe_falla.step.<etapa>). Las de IA pesan mas porque tardan mas. "observaciones" se salta sin muestras de aceite.
-ETAPAS = {"datos": 5, "evidencia": 20, "predictivo": 30, "mantenciones": 38, "aceite": 45,
-          "observaciones": 50, "redaccion": 62, "pdf": 92}
+ETAPAS = {"datos": 5, "evidencia": 15, "predictivo": 22, "mantenciones": 28, "aceite": 33,
+          "observaciones": 38, "redaccion_detenciones": 55, "redaccion_resumen": 72, "pdf": 92}
 Avance = Callable[[str], None]
 
 # Motivos de error que la vista traduce (informe_falla.error.<motivo>).
@@ -301,31 +301,43 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
     evid.update(predictivo_de_la_unidad(cliente, unidad, evid["consulta"]["fecha"]))
     # Intervenciones de mantencion previas (sin IA): cobertura, tabla y antecedentes.
     paso("mantenciones")
+    sistema = request.get("system") or c.COMPONENTE
     destacados = [r["modo"] for r in evid["ranking_modos"] if r["nivel"] in ("alto", "medio")]
     evid.update(mantenciones.antecedentes_mantencion(cliente, unidad, evid["consulta"]["fecha"],
-                                                     sistema=request.get("system") or c.COMPONENTE,
-                                                     modos=destacados))
-    # Muestras de aceite del sistema en la misma ventana (sin IA) y el resumen de las recomendaciones del
-    # laboratorio (con la IA si se puede; nunca bloquea el informe).
+                                                     sistema=sistema, modos=destacados))
+    # Muestras de aceite del sistema en la misma ventana (sin IA) y el diagnostico y la causa probable de las
+    # recomendaciones del laboratorio (con la IA si se puede; nunca bloquea el informe).
     try:
         llm = llm_fn or openai_llm()
     except Exception as exc:
         raise InformeError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
     paso("aceite")
     evid["aceite"] = aceite.muestras_aceite(cliente, unidad, evid["consulta"]["fecha"], evid["ventanas"]["periodo_desde"],
-                                            sistema=request.get("system") or c.COMPONENTE)
+                                            sistema=sistema)
     if evid["aceite"].get("muestras"):
         paso("observaciones")
         evid["aceite"]["observaciones"] = aceite.observaciones_laboratorio(evid, cliente, perfil, llm)
     ajustes = get_informe_settings()
     modelo = {"modelo": ajustes.model if llm_fn is None else "personalizado", "temperatura": ajustes.temperature,
-              "semilla": ajustes.seed, "prompt": PROMPT_VERSION}
-    paso("redaccion")
+              "semilla": ajustes.seed, "prompt": secciones.PROMPT_VERSION}
+    # Diagnostico y causa probable de Detenciones, y el Resumen desde las tres secciones (secciones.py).
     try:
+        paso("redaccion_detenciones")
+        detenciones = secciones.redactar_detenciones(evid, perfil, sistema, llm)
+        paso("redaccion_resumen")
         contexto_ia = {k: v for k, v in contexto.items() if k != "sistema"}
-        res = correr_agente(evid, perfil, llm, contexto_ia)
+        rs = secciones.redactar_resumen(evid, perfil, sistema, detenciones, llm, contexto_ia)
     except Exception as exc:
         raise InformeError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
+    informe = {
+        # El veredicto del registro y de la vista es el de las reglas: la IA ya no escribe uno propio.
+        "veredicto": evid["veredicto_reglas"]["veredicto"],
+        "confianza": rs["confianza"], "motivo_confianza": rs["motivo_confianza"],
+        "detenciones": detenciones,
+        "resumen": {**{k: rs[k] for k in ("diagnostico", "causa_probable", "acciones", "riesgo_si_no_se_hace")},
+                    "controles": rs["controles"]},
+    }
+    res = {"evidencia": evid, "informe": informe, "entrada_resumen": rs["entrada"]}
 
     fecha = evid["consulta"]["fecha"]
     report_id = f"IPF_{re.sub(r'[^A-Za-z0-9-]', '-', unidad)}_{fecha}_{datetime.now():%Y%m%d%H%M%S}"

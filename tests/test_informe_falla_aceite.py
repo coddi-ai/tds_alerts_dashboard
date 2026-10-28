@@ -101,35 +101,46 @@ def test_observaciones_con_la_ia(fuente):
     def llm(system, user, esquema):
         recibido.update(json.loads(user))
         assert esquema is a.ESQUEMA_OBSERVACIONES
-        return json.dumps({"condiciones": "Cobre crítico desde el 6 nov.", "recomendaciones": "Cambiar el lubricante.",
-                           "seguimiento": ""})
+        return json.dumps({"diagnostico": "Cobre crítico desde el 6 nov.", "causa_probable": "Se sospecha desgaste."})
 
     obs = a.observaciones_laboratorio(evid, "CAPSTONE", PERFIL, llm)
-    assert obs["origen"] == "ia" and obs["condiciones"] == "Cobre crítico desde el 6 nov." and obs["controles"] == []
-    # La IA recibe los modos destacados con sus ensayos de aceite (un modo sin ensayos queda con la lista vacia).
+    assert obs == {"origen": "ia", "diagnostico": "Cobre crítico desde el 6 nov.",
+                   "causa_probable": "Se sospecha desgaste.", "controles": []}
+    # La IA recibe los modos destacados con sus ensayos de aceite (un modo sin ensayos queda con la lista vacia)
+    # y el diagnostico y la accion del laboratorio por separado.
     modos = {m["modo"]: m["ensayos_aceite"] for m in recibido["modos_destacados"]}
     assert "Cobre" in modos["Desgaste de cojinetes"]
     assert modos["Temperatura dispareja entre lados del motor"] == []
-    assert recibido["muestras"][0]["ensayos_fuera_de_limite"] == {"Cobre": "crítico"}
+    primera = recibido["muestras"][0]
+    assert primera["ensayos_fuera_de_limite"] == {"Cobre": "crítico"}
+    assert (primera["diagnostico_laboratorio"], primera["accion_laboratorio"]) == ("desgaste.", "Cambio inmediato de lubricante.")
+
+
+def test_asentamiento_y_cambio_de_motor(fuente):
+    """Las horas del motor que vuelven a partir marcan un cambio de motor; bajo RODAJE_HORAS_MOTOR, asentamiento."""
+    fuente([{**_muestra("2025-10-01"), "componentHours": 28000.0}, {**_muestra("2025-10-29"), "componentHours": 0.0},
+            {**_muestra("2025-11-29"), "componentHours": a.RODAJE_HORAS_MOTOR + 92.0}])
+    muestras = a.entrada_observaciones(_evid(a.muestras_aceite("CAPSTONE", "CA-30", FECHA, DESDE)), "CAPSTONE", PERFIL)["muestras"]
+    assert [m["horas_motor_reinician_desde_la_anterior"] for m in muestras] == [False, True, False]
+    assert [m["motor_en_asentamiento"] for m in muestras] == [False, True, False]
 
 
 @pytest.mark.parametrize("respuesta", [
-    lambda *_: json.dumps({"condiciones": "Cobre en 8,4 ppm.", "recomendaciones": "", "seguimiento": ""}),   # valores
-    lambda *_: json.dumps({"veredicto": "otro formato"}),                                                   # esquema
-    lambda *_: (_ for _ in ()).throw(RuntimeError("sin red")),                                             # error
+    lambda *_: json.dumps({"diagnostico": "Cobre en 8,4 ppm.", "causa_probable": "Desgaste."}),   # valores
+    lambda *_: json.dumps({"veredicto": "otro formato"}),                                          # esquema
+    lambda *_: (_ for _ in ()).throw(RuntimeError("sin red")),                                    # error
 ])
 def test_observaciones_sin_ia_cuando_la_respuesta_no_sirve(fuente, respuesta):
     obs = a.observaciones_laboratorio(_con_muestras(fuente), "CAPSTONE", PERFIL, respuesta)
     assert obs["origen"] == "sin_ia"
-    assert obs["condiciones"] == "1 de 2 muestras con resultado fuera de lo normal: Desgaste de Componentes (1, desde el 6 nov)."
-    assert obs["recomendaciones"] == "Cambio inmediato de lubricante."
+    assert obs["diagnostico"] == "1 de 2 muestras con resultado fuera de lo normal: Desgaste de Componentes (1, desde el 6 nov)."
 
 
-def test_parrafo_largo_se_acepta_con_aviso(fuente):
-    largo = " ".join(["palabra"] * (a.MAX_PALABRAS_PARRAFO + 5))
+def test_texto_largo_se_acepta_con_aviso(fuente):
+    largo = " ".join(["palabra"] * 80)
     obs = a.observaciones_laboratorio(_con_muestras(fuente), "CAPSTONE", PERFIL,
-                                      lambda *_: json.dumps({"condiciones": largo, "recomendaciones": "", "seguimiento": ""}))
-    assert obs["origen"] == "ia" and obs["controles"] == [f"condiciones: {a.MAX_PALABRAS_PARRAFO + 5} palabras (máximo 60)"]
+                                      lambda *_: json.dumps({"diagnostico": largo, "causa_probable": "Desgaste."}))
+    assert obs["origen"] == "ia" and obs["controles"] == ["diagnostico: 1 frases, 80 palabras"]
     assert "Observaciones del laboratorio" in report_html.problemas({"evidencia": {"aceite": {"observaciones": obs}}})[0]
 
 
@@ -141,14 +152,16 @@ def test_sin_muestras_no_se_llama_a_la_ia(fuente):
 
 def test_tarjeta_del_informe(fuente):
     evid = _con_muestras(fuente)
-    evid["aceite"]["observaciones"] = {"origen": "ia", "condiciones": "Cobre crítico desde el 6 nov.",
-                                       "recomendaciones": "Cambiar el lubricante.", "seguimiento": "", "controles": []}
+    evid["aceite"]["observaciones"] = {"origen": "ia", "diagnostico": "Cobre crítico desde el 6 nov.",
+                                       "causa_probable": "Se sospecha desgaste.", "controles": []}
     html = report_html._bloque_aceite(evid)
-    assert "<h2>Aceite</h2>" in html and "<svg" in html
+    assert "<h2>2. Aceite</h2>" in html and "<svg" in html
     assert ("Motor diesel: 2 muestras de aceite entre el 1 sep 2025 y el 4 dic 2025; 1 con resultado fuera de lo "
             "normal (1 en Alerta). La última se tomó el 29 nov 2025, 6 días antes de la detención, con resultado Normal.") in html
     assert "Cobre (crítico)" in html and "ppm" not in html
-    assert html.count("<p>") == 3            # muestreo + dos parrafos de observaciones (el vacio no va)
+    # El diagnostico y la causa probable van en el mismo recuadro que Monitoreo de riesgo, con su nota.
+    assert report_html._cierre("Cobre crítico desde el 6 nov.", "Se sospecha desgaste.",
+                               "Resumen de las recomendaciones del laboratorio de 2 muestras, del 6 nov 2025 al 29 nov 2025.") in html
 
 
 def test_tarjeta_sin_muestras_y_sin_fuente(fuente):
@@ -221,9 +234,15 @@ def test_data_real_informe_con_la_tarjeta(monkeypatch, tmp_path, unidad, fecha, 
                                           "images": [], "requested_by": "pytest"}, llm_fn=llm, avance=etapas.append)
     assert resultado_["status"] == service.STATUS_READY
     assert etapas == list(service.ETAPAS)             # la barra de progreso de la vista pasa por todas, en orden
-    assert esquemas == ["observaciones_laboratorio", "informe_preliminar_falla"]
+    # Aceite, Detenciones (solo con registros de mantencion: CA-80 no tiene) y el Resumen, en ese orden.
+    con_registros = unidad == "CA-30"
+    assert esquemas == (["aceite_diagnostico_causa"] + (["detenciones_diagnostico_causa"] if con_registros else [])
+                        + ["resumen_secciones"])
     html = documentos[0]
-    assert html.index("<h2>2. Predictivo</h2>") < html.index("<h2>Aceite</h2>") < html.index("<h2>3. Detenciones</h2>")
+    assert (html.index("<h2>1. Resumen</h2>") < html.index("<h2>2. Aceite</h2>")
+            < html.index("<h2>3. Monitoreo de riesgo</h2>") < html.index("<h2>4. Detenciones</h2>"))
+    assert "calefacción" not in html                # la cabina no es del motor (CA-30 tiene un registro)
     assert f"{n} muestras de aceite" in html and f"{fuera} con resultado fuera de lo normal" in html
     assert f"Última: {report_html._fecha_corta(ultima)}" in html
-    assert "Observaciones del laboratorio en los 3 meses" in html and "ppm" not in html
+    assert "Resumen de las recomendaciones del laboratorio" in html and "ppm" not in html
+    assert "Aceite: incorporado" in html

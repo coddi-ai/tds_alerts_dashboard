@@ -190,3 +190,20 @@ def test_rutas_de_mantencion_citables_y_afirmaciones_prohibidas(fuente):
     assert agent._resolver(evid, "detenciones_previas[fecha=2025-01-01]") is None
     informe = {"causa_mas_probable": "Falla confirmada por el registro de mantención del 25 de septiembre."}
     assert agent.afirmaciones_prohibidas(informe) == ["confirmada por el registro"]
+
+
+def test_la_cabina_no_es_del_motor(fuente):
+    """La vista agrupa la cabina en el Sistema de Motor: sus registros salen del informe (y de la IA)."""
+    fuente(_base() + [
+        _accion("r-cabina", "2025-09-21", subsistema="Cabina de Operación", componentes=("Líneas del Calentador",),
+                detalle="Se reparó la manguera de calefacción debido a una filtración de refrigerante."),
+        # Un record con la cabina y otro subsistema del motor se queda, sin las acciones de la cabina.
+        _accion("r-mixto", "2025-09-25", subsistema="Sistema de Lubricación", componentes=("Líneas de Aceite de Motor",),
+                detalle="Filtración en líneas de aceite."),
+        _accion("r-mixto", "2025-09-25", subsistema="Cabina de Operación", componentes=("Aire Acondicionado",),
+                detalle="Revisión del aire acondicionado."),
+    ])
+    r = m.antecedentes_mantencion("CAPSTONE", "CA-30", FECHA)
+    assert [(p["fecha"], p["subsistema"]) for p in r["detenciones_previas"]] == [("2025-09-25", "Sistema de Lubricación")]
+    assert "calefacción" not in str(r) and "Aire Acondicionado" not in str(r)
+    assert r["antecedentes_mantencion"]["omitidos"]["fuera_del_sistema"] == 1

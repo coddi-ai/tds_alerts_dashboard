@@ -32,9 +32,14 @@ from src.informe_falla import service  # noqa: E402
 
 def ia_de_relleno(system, user, esquema):
     """Reemplaza a la IA: sirve para revisar el formato con datos reales, sin llamar a OpenAI."""
-    if esquema and esquema.get("name") == "observaciones_laboratorio":
-        return json.dumps({"condiciones": "Texto de prueba.", "recomendaciones": "Texto de prueba.",
-                           "seguimiento": "Texto de prueba."})
+    nombre = (esquema or {}).get("name")
+    if nombre in ("aceite_diagnostico_causa", "detenciones_diagnostico_causa"):
+        return json.dumps({"diagnostico": "Texto de prueba.", "causa_probable": "Texto de prueba."})
+    if nombre == "resumen_secciones":
+        confianza = esquema["schema"]["properties"]["confianza"]["enum"][-1]
+        return json.dumps({"diagnostico": "Texto de prueba.", "causa_probable": "Texto de prueba.",
+                           "acciones": ["Acción de prueba."], "riesgo_si_no_se_hace": "Texto de prueba.",
+                           "confianza": confianza, "motivo_confianza": "Texto de prueba."})
     texto = {"diagnostico": "Texto de prueba.", "causa_probable": "Texto de prueba."}
     return json.dumps({
         "veredicto": "SEÑAL CLARA", "confianza": "media", "motivo_confianza": "Texto de prueba.",
