@@ -234,13 +234,21 @@ def servicio(fuentes, monkeypatch, tmp_path):
     lecturas = []
     monkeypatch.setenv("INFORME_FALLA_OUTPUT_DIR", str(tmp_path))
     monkeypatch.setattr(service, "_FUENTES", {})
-    monkeypatch.setattr(service, "load_unit_status_history", lambda client, comp: lecturas.append(client) or status)
-    monkeypatch.setattr(service, "load_risk_scores_history", lambda client, comp: risk)
+    monkeypatch.setenv("INFORME_FALLA_ORIGEN", "local")
+
+    def leer_particiones(cliente, tabla, desde=None, hasta=None, tecnica="predictive"):
+        if tabla == "unit_status_summary":
+            lecturas.append(cliente)
+            return status
+        return risk
+    monkeypatch.setattr(service.fuentes, "leer_particiones", leer_particiones)
     monkeypatch.setattr(service, "pdf_disponible", lambda: True)
     monkeypatch.setattr(service, "html_a_pdf", lambda html: b"%PDF-sintetico")
     # Sin fuente de mantenciones: estas pruebas no leen la data real (tests/test_informe_falla_mantenciones.py la cubre).
     monkeypatch.setattr(service.mantenciones, "_cargar", lambda cliente: (pd.DataFrame(), pd.DataFrame(
         columns=["unidad_key", "dia", "intervention_hours"])))
+    # Ni de aceite (tests/test_informe_falla_aceite.py la cubre).
+    monkeypatch.setattr(service.aceite, "_cargar", lambda cliente: pd.DataFrame())
     return lecturas
 
 
@@ -368,7 +376,7 @@ def test_sin_api_key_no_llama_a_la_ia(servicio, monkeypatch):
 
 def test_el_trabajo_en_segundo_plano_termina(monkeypatch):
     monkeypatch.setattr(service, "generar_informe",
-                        lambda request, sistema_label=None: {"status": service.STATUS_READY, "report_id": "INFORME_FALLA_1"})
+                        lambda request, sistema_label=None, avance=None: {"status": service.STATUS_READY, "report_id": "INFORME_FALLA_1"})
     job_id = service.iniciar(_solicitud())
     for _ in range(100):
         job = service.estado(job_id)
@@ -380,7 +388,7 @@ def test_el_trabajo_en_segundo_plano_termina(monkeypatch):
 
 
 def test_un_error_del_trabajo_queda_con_su_motivo(monkeypatch):
-    def falla(request, sistema_label=None):
+    def falla(request, sistema_label=None, avance=None):
         raise service.InformeError(service.ERROR_NO_DATA)
     monkeypatch.setattr(service, "generar_informe", falla)
     job_id = service.iniciar(_solicitud())
@@ -389,7 +397,8 @@ def test_un_error_del_trabajo_queda_con_su_motivo(monkeypatch):
             break
         time.sleep(0.02)
     assert service.estado(job_id) | {"started": 0} == {"status": "error", "reason": "no_data", "details": {},
-                                                        "client": "CDA", "requested_by": "operador", "started": 0}
+                                                        "client": "CDA", "requested_by": "operador", "started": 0,
+                                                        "unit": "T_9", "event_date": FECHA, "etapa": None, "progreso": 0}
 
 
 # ---------------------------------------------------------------------------

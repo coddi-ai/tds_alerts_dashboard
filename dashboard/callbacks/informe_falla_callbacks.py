@@ -4,12 +4,14 @@ Callbacks de Reportes > Informe preliminar de falla (dashboard/pages/reporting_i
 Flujo: al cambiar de cliente se cargan sus unidades (las mismas del Resumen General);
 las imagenes subidas quedan en `informe-images-store` con su descripcion; "Generar" valida
 unidad y fecha, arma la solicitud (src/data/informe_falla_request.py) y la encola en src/informe_falla/service.py.
-La IA tarda, asi que `informe-job-poll` consulta el trabajo hasta que termina; entonces se
-muestra el PDF (servido por dashboard/informe_falla_files.py) y se refresca el historial.
+La IA tarda, asi que `informe-job-poll` consulta el trabajo hasta que termina, mostrando la etapa
+en curso en la tarjeta de progreso fija de la pagina (service.ETAPAS): cada consulta cambia solo la barra,
+el paso, un mensaje que rota y el tiempo, para que el bloque no se vuelva a dibujar ni crezca. Al terminar se muestra el PDF (servido por dashboard/informe_falla_files.py) y se refresca el historial.
 """
 
 from __future__ import annotations
 
+import time
 from datetime import date
 from typing import List, Optional
 
@@ -143,14 +145,31 @@ def _result_card(body, color: str = "primary") -> dbc.Card:
     ], className="shadow-sm mb-4")
 
 
-def build_running(unit: str, event_date: str):
-    return _result_card(html.Div([
-        dbc.Spinner(size="sm", color="primary", spinner_class_name="me-3"),
-        html.Div([
-            html.Div(t("informe_falla.running", unit=unit, date=event_date), className="fw-bold"),
-            html.Small(t("informe_falla.running_hint"), className="text-muted"),
-        ]),
-    ], className="d-flex align-items-center"))
+OCULTO, VISIBLE = {"display": "none"}, {}
+
+
+CONSULTAS_POR_MENSAJE = 2   # el mensaje de la etapa rota cada 2 consultas (~4 s)
+
+
+def progress_values(job: dict, consulta: int = 0) -> tuple:
+    """(valor de la barra, su etiqueta, el paso en curso, un mensaje que rota, tiempo transcurrido).
+
+    El mensaje alterna entre lo que hace la etapa, un dato sobre ella y el aviso general de la espera.
+    """
+    etapas = list(service.ETAPAS)
+    etapa = job.get("etapa")
+    progreso = job.get("progreso") or 0
+    if etapa in etapas:
+        paso = t("informe_falla.step_of", n=etapas.index(etapa) + 1, total=len(etapas),
+                 step=t(f"informe_falla.step.{etapa}"))
+        mensajes = [t(f"informe_falla.step_detail.{etapa}"), t(f"informe_falla.step_more.{etapa}"),
+                    t("informe_falla.running_hint")]
+    else:
+        paso, mensajes = t("informe_falla.step_detail.queued"), [t("informe_falla.running_hint")]
+    mensaje = mensajes[(consulta // CONSULTAS_POR_MENSAJE) % len(mensajes)]
+    segundos = int(time.time() - job["started"]) if job.get("started") else 0
+    return (progreso, f"{progreso}%", paso, mensaje,
+            t("informe_falla.elapsed", time=f"{segundos // 60}:{segundos % 60:02d}"))
 
 
 def _fecha(iso: Optional[str]) -> str:
@@ -358,6 +377,13 @@ def register_informe_falla_callbacks(app: dash.Dash) -> None:
         Output("informe-unit-feedback", "children", allow_duplicate=True),
         Output("informe-job-id", "data"),
         Output("informe-job-poll", "disabled"),
+        Output("informe-progress", "style"),
+        Output("informe-progress-title", "children"),
+        Output("informe-progress-bar", "value"),
+        Output("informe-progress-bar", "label"),
+        Output("informe-progress-step", "children"),
+        Output("informe-progress-detail", "children"),
+        Output("informe-progress-elapsed", "children"),
         Input("informe-generate", "n_clicks"),
         State("client-selector", "value"),
         State("user-info-store", "data"),
@@ -377,15 +403,16 @@ def register_informe_falla_callbacks(app: dash.Dash) -> None:
                             title, description, findings, actions, images, caption_ids, captions):
         if not n_clicks or not user_data:
             raise PreventUpdate
+        sin_progreso = (no_update,) * 7
         if not unit or not event_date:
-            return no_update, t("informe_falla.unit_required"), no_update, no_update
+            return (no_update, t("informe_falla.unit_required"), no_update, no_update, *sin_progreso)
         if date.fromisoformat(event_date[:10]) > date.today():
-            return no_update, t("informe_falla.future_date"), no_update, no_update
+            return (no_update, t("informe_falla.future_date"), no_update, no_update, *sin_progreso)
         client = _active_client(selected_client, user_data)
         # Se repite la autorizacion: la unidad viene del navegador.
         units, notice = load_units(client, user_data.get("clients", []))
         if notice is not None or unit not in units:
-            return notice or _notice(t("reporting.no_access")), None, None, True
+            return (notice or _notice(t("reporting.no_access")), None, None, True, OCULTO, *(no_update,) * 6)
 
         system = system or COMPONENTE
         request = build_informe_request(
@@ -395,28 +422,37 @@ def register_informe_falla_callbacks(app: dash.Dash) -> None:
             user_data.get("username"),
         )
         job_id = service.iniciar(request, sistema_label=system_label(system))
-        return build_running(unit, event_date[:10]), None, job_id, False
+        job = service.estado(job_id) or {}
+        titulo = t("informe_falla.running", unit=unit, date=event_date[:10])
+        return (None, None, job_id, False, VISIBLE, titulo, *progress_values(job))
 
     @app.callback(
         Output("informe-result", "children", allow_duplicate=True),
         Output("informe-job-poll", "disabled", allow_duplicate=True),
         Output("informe-history-version", "data"),
+        Output("informe-progress", "style", allow_duplicate=True),
+        Output("informe-progress-bar", "value", allow_duplicate=True),
+        Output("informe-progress-bar", "label", allow_duplicate=True),
+        Output("informe-progress-step", "children", allow_duplicate=True),
+        Output("informe-progress-detail", "children", allow_duplicate=True),
+        Output("informe-progress-elapsed", "children", allow_duplicate=True),
         Input("informe-job-poll", "n_intervals"),
         State("informe-job-id", "data"),
         State("informe-history-version", "data"),
         State("user-info-store", "data"),
         prevent_initial_call=True,
     )
-    def poll_informe_falla_job(_n, job_id, history_version, user_data):
+    def poll_informe_falla_job(n_intervals, job_id, history_version, user_data):
         job = service.estado(job_id)
         user_clients = {normalize_client_id(c) for c in (user_data or {}).get("clients", [])}
+        fin = (OCULTO, *(no_update,) * 5)
         if job is None or job["client"] not in user_clients:
-            return build_error(service.ERROR_UNEXPECTED), True, no_update
+            return (build_error(service.ERROR_UNEXPECTED), True, no_update, *fin)
         if job["status"] == service.STATUS_RUNNING:
-            raise PreventUpdate
+            return (no_update, no_update, no_update, no_update, *progress_values(job, n_intervals or 0))
         if job["status"] == service.STATUS_ERROR:
-            return build_error(job.get("reason"), job.get("details")), True, no_update
-        return build_ready(job["client"], job), True, (history_version or 0) + 1
+            return (build_error(job.get("reason"), job.get("details")), True, no_update, *fin)
+        return (build_ready(job["client"], job), True, (history_version or 0) + 1, *fin)
 
     @app.callback(
         Output("informe-history", "children"),

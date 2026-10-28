@@ -12,6 +12,8 @@ Flujo (cada paso en su modulo):
                          la semana previa (unit_failure_analisis).
      curva.py          - el estado del ciclo de vida del motor (cumulative_risk_curve).
      mantenciones.py   - las intervenciones de mantencion previas de la unidad.
+     aceite.py         - las muestras de aceite del sistema en los 3 meses previos y el resumen de las
+                         recomendaciones del laboratorio (este resumen, con la IA si se puede).
   2. agent.py          - la IA redacta el diagnostico y la causa probable de las detenciones y el
                          Resumen, con los lineamientos de mensajes; los controles revisan los textos.
   3. report_html.py / pdf.py - el informe para el cliente, como HTML y luego PDF.

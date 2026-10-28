@@ -6,6 +6,9 @@ Tres secciones, como la plantilla aprobada (Claude Design, "Informe preliminar d
   2. Predictivo: estado actual semana a semana (unit_status_summary), puntajes por modo (risk_scores),
      estado del ciclo de vida (cumulative_risk_curve) y el diagnostico y la causa probable que el
      Predictivo publico para la unidad la semana previa (unit_failure_analisis).
+  Aceite (sin numero, entre 2 y 3): las muestras de aceite del sistema en los 3 meses previos (aceite.py):
+     cuantas, cuantas fuera de lo normal y la ultima; linea de tiempo; las ultimas muestras con el nivel de los
+     ensayos fuera de limite (sin concentraciones) y las observaciones del laboratorio en tres parrafos.
   3. Detenciones: las intervenciones previas (mantenciones.py) en cifras, linea de tiempo y listado,
      con un diagnostico y una causa probable escritos por la IA.
 
@@ -716,6 +719,135 @@ def _bloque_detenciones(evid, inf) -> str:
 
 
 # =============================================================================
+# Aceite: muestras del sistema en los 3 meses previos (aceite.py)
+# =============================================================================
+MUESTRAS_EN_TABLA = 3   # las ultimas de cada componente; el texto de muestreo cubre toda la ventana
+
+
+def _y(nombres: list) -> str:
+    return " y ".join([", ".join(nombres[:-1]), nombres[-1]]) if len(nombres) > 1 else "".join(nombres)
+
+
+def _horas_texto(x) -> str:
+    return "—" if x is None else _num(x, 0 if float(x).is_integer() else 1)
+
+
+def _texto_muestreo(a, componente, muestras) -> str:
+    """Cuantas muestras hubo en la ventana, cuantas fuera de lo normal y cuando fue la ultima."""
+    rango = f"entre el {_fecha_media(a['ventana_desde'])} y el {_fecha_media(a['ventana_hasta'])}"
+    if not muestras:
+        return f"{componente}: no hay muestras de aceite {rango}."
+    texto = f"{componente}: {len(muestras)} {'muestra' if len(muestras) == 1 else 'muestras'} de aceite {rango}"
+    fuera = {estado: sum(1 for m in muestras if m["resultado"] == estado) for estado in ("Alerta", "Anormal")}
+    if sum(fuera.values()):
+        detalle = _y([f"{n} en {estado}" for estado, n in fuera.items() if n])
+        texto += f"; {sum(fuera.values())} con resultado fuera de lo normal ({detalle})"
+    else:
+        texto += ", todas con resultado normal"
+    ultima = muestras[-1]
+    return (texto + f". La última se tomó el {_fecha_media(ultima['fecha'])}, {ultima['dias_antes']} días antes de la "
+            f"detención, con resultado {ultima['resultado']}.")
+
+
+def _linea_muestras(a, fecha_det) -> str:
+    """Linea de tiempo de las muestras, con el estilo de _linea_detenciones: un carril por componente, un
+    punto por muestra con el color de su resultado y los cambios de aceite bajo la linea."""
+    desde, fin = _d(a["ventana_desde"]), _d(fecha_det)
+    total = max((fin - desde).days, 1)
+    componentes = a["componentes"]
+    varios = len(componentes) > 1
+    W, X0, X1, Y0, ALTO_CARRIL = 1000, (170 if varios else 20), 960, 62, 64
+    H = Y0 + ALTO_CARRIL * (len(componentes) - 1) + 74
+
+    def x(d):
+        return X0 + (_d(d) - desde).days / total * (X1 - X0)
+
+    s = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Muestras de aceite de {_e(a["sistema"])} entre el '
+         f'{_e(_fecha_larga(desde.isoformat()))} y la detención">']
+    mes = date(desde.year, desde.month, 1)
+    while mes <= fin:
+        if mes >= desde:
+            s.append(f'<line x1="{x(mes):.1f}" x2="{x(mes):.1f}" y1="{Y0 - 34}" y2="{H - 26}" stroke="{LINEA}"/>')
+            s.append(f'<text x="{x(mes):.1f}" y="{H - 8}" text-anchor="middle" font-size="13" fill="{TINTA_2}">'
+                     f'{_MESES[mes.month - 1][:3]}</text>')
+        mes = date(mes.year + mes.month // 12, mes.month % 12 + 1, 1)
+    for i, comp in enumerate(componentes):
+        y = Y0 + i * ALTO_CARRIL
+        propias = [m for m in a["muestras"] if m["componente"] == comp]
+        s.append(f'<line x1="{X0}" x2="{X1}" y1="{y}" y2="{y}" stroke="#C9CFD6" stroke-width="2"/>')
+        if varios:
+            s.append(f'<text x="{X0 - 14}" y="{y + 5}" text-anchor="end" font-size="13" font-weight="600" '
+                     f'fill="{TINTA_2}">{_e(comp)}</text>')
+        for m in propias:
+            if m["cambio_de_aceite"]:
+                xm = x(m["fecha"])
+                s.append(f'<polygon points="{xm:.1f},{y + 11} {xm - 5:.1f},{y + 19} {xm + 5:.1f},{y + 19}" fill="{GRIS}">'
+                         f'<title>Cambio de aceite antes del {_fecha_corta(m["fecha"])}</title></polygon>')
+        for m in propias:
+            s.append(f'<circle cx="{x(m["fecha"]):.1f}" cy="{y}" r="6" fill="{LINEA_CURVA.get(m["resultado"], GRIS)}" '
+                     f'stroke="#FFFFFF" stroke-width="1.5"><title>{_fecha_corta(m["fecha"])}: {_e(m["resultado"])}</title></circle>')
+        if propias:
+            s.append(f'<text x="{x(propias[-1]["fecha"]):.1f}" y="{y + 36}" text-anchor="middle" font-size="12" '
+                     f'font-weight="600" fill="{TINTA_2}">Última: {_fecha_corta(propias[-1]["fecha"])}</text>')
+    xf, y_fin = x(fin), Y0 + ALTO_CARRIL * (len(componentes) - 1)
+    s.append(f'<line x1="{xf:.1f}" x2="{xf:.1f}" y1="{Y0 - 34}" y2="{y_fin + 12}" stroke="{ROJO}" stroke-width="2"/>')
+    s.append(f'<text x="{xf - 6:.1f}" y="{Y0 - 40}" text-anchor="end" font-size="13" font-weight="700" fill="{ROJO}">'
+             f'Detención {_fecha_corta(fin.isoformat())}</text>')
+    s.append("</svg>")
+    return "".join(s)
+
+
+def _leyenda_muestras() -> str:
+    puntos = "".join(f'<span><i style="background:{color};border-radius:50%"></i>{estado}</span>'
+                     for estado, color in LINEA_CURVA.items())
+    return (f'<div class="leyenda">{puntos}'
+            f'<span><i style="width:0;height:0;border-radius:0;background:none;border-left:5px solid transparent;'
+            f'border-right:5px solid transparent;border-bottom:8px solid {GRIS}"></i>Cambio de aceite</span>'
+            f'<span><i style="width:3px;border-radius:0;background:{ROJO}"></i>Detención</span></div>')
+
+
+def _bloque_aceite(evid) -> str:
+    """Tarjeta Aceite: muestreo por componente, linea de tiempo, ultimas muestras y observaciones del laboratorio.
+
+    Sin fuente de aceite para el cliente (o sistema sin componentes de aceite) no se muestra.
+    """
+    a = evid.get("aceite") or {}
+    if not a.get("disponible"):
+        return ""
+    fecha = evid["consulta"]["fecha"]
+    if not a["muestras"]:
+        return (f'<section class="tarjeta"><h2>Aceite</h2>'
+                f'<p>{_e(_texto_muestreo(a, a["sistema"].capitalize(), []))}</p></section>')
+    textos = "".join(f"<p>{_e(_texto_muestreo(a, comp, [m for m in a['muestras'] if m['componente'] == comp]))}</p>"
+                     for comp in a["componentes"])
+    ultimas = []
+    for comp in a["componentes"]:
+        ultimas += [m for m in a["muestras"] if m["componente"] == comp][-MUESTRAS_EN_TABLA:]
+    ultimas.sort(key=lambda m: m["fecha"])
+    varios = len(a["componentes"]) > 1
+    filas = "".join(
+        f"<tr><td>{_e(_fecha_media(m['fecha']))}</td>" + (f"<td>{_e(m['componente'])}</td>" if varios else "")
+        + f"<td>{m['dias_antes']}</td><td>{_e(_horas_texto(m['horas_motor']))}</td>"
+        f"<td>{_e(_horas_texto(m['horas_aceite']))}</td><td>{_e(m['resultado'])}</td>"
+        f"<td>{_e(', '.join(f'{k} ({v})' for k, v in m['fuera_de_limite'].items()) or '—')}</td></tr>"
+        for m in ultimas)
+    cabecera = ("<th>Fecha</th>" + ("<th>Componente</th>" if varios else "")
+                + "<th>Días antes</th><th>Horas motor</th><th>Horas aceite</th><th>Resultado</th><th>Fuera de límite</th>")
+    obs = a.get("observaciones") or {}
+    parrafos = [obs[p] for p in ("condiciones", "recomendaciones", "seguimiento") if obs.get(p)]
+    observaciones = ("<h3>Observaciones del laboratorio en los 3 meses</h3>" + "".join(f"<p>{_e(p)}</p>" for p in parrafos)
+                     if parrafos else "")
+    return f'''
+<section class="tarjeta">
+  <h2>Aceite</h2>
+  {textos}
+  <div class="tarjeta-int">{_linea_muestras(a, fecha)}{_leyenda_muestras()}</div>
+  <table class="modos"><thead><tr>{cabecera}</tr></thead><tbody>{filas}</tbody></table>
+  {observaciones}
+</section>'''
+
+
+# =============================================================================
 # 1. Resumen
 # =============================================================================
 def _bloque_resumen(evid, inf) -> str:
@@ -761,6 +893,9 @@ def problemas(res) -> List[str]:
         p.append("Afirmaciones que los registros de mantención no permiten: " + ", ".join(res["afirmaciones_prohibidas"]) + ".")
     if res.get("largo_excedido"):
         p.append("Mensajes más largos que lo que piden los lineamientos: " + "; ".join(res["largo_excedido"]) + ".")
+    controles_aceite = (((res.get("evidencia") or {}).get("aceite") or {}).get("observaciones") or {}).get("controles")
+    if controles_aceite:
+        p.append("Observaciones del laboratorio: " + "; ".join(controles_aceite) + ".")
     return p
 
 
@@ -824,6 +959,8 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
   {_bloque_ciclo_vida(evid)}
   <div class="sub separada">{_cierre(diag_p, causa_p, nota_p)}</div>
 </section>
+
+{_bloque_aceite(evid)}
 
 {_bloque_detenciones(evid, inf)}
 

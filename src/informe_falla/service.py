@@ -7,8 +7,9 @@ trabajos viven en memoria del proceso: el dashboard corre con un solo worker de 
 (Dockerfile). Con varios workers habria que moverlos a un almacenamiento compartido.
 
 Fuentes: unit_status_summary y risk_scores (src/data/predictive_v2, o S3 con INFORME_FALLA_ORIGEN=s3),
-unit_failure_analisis (analisis_unidad.py), cumulative_risk_curve (curva.py) y las mantenciones
-(mantenciones.py). Origen local o S3: fuentes.py.
+unit_failure_analisis (analisis_unidad.py), cumulative_risk_curve (curva.py), las mantenciones
+(mantenciones.py) y las muestras de aceite (aceite.py, copia local de la capa golden). Origen local o S3
+del Predictivo: fuentes.py.
 La configuracion (modelo, carpeta de salida y de datos, caches, hilos) esta en src/informe_falla/config.py.
 Cada informe queda en la carpeta de salida (por defecto outputs/informe_falla) como
 `{cliente}/{id}.pdf` mas `{cliente}/{id}.json` con el registro completo: la solicitud
@@ -26,15 +27,14 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
-from src.data.predictive_v2 import load_risk_scores_history, load_unit_status_history
 from src.data.report_health import unit_key
 from src.informe_falla import catalog as c
 from src.informe_falla.agent import PROMPT_VERSION, LlmFn, correr_agente, openai_llm
 from src.informe_falla.config import get_informe_settings, perfil_cliente
 from src.informe_falla.evidence import armar_evidencia, preparar_risk, preparar_status
-from src.informe_falla import analisis_unidad, curva, fuentes, mantenciones
+from src.informe_falla import aceite, analisis_unidad, curva, fuentes, mantenciones
 from src.informe_falla.pdf import html_a_pdf, pdf_disponible
 from src.informe_falla.report_html import documento, numero_informe, problemas
 from src.utils.logger import get_logger
@@ -46,6 +46,12 @@ logger = get_logger(__name__)
 SISTEMAS_SOPORTADOS = (c.COMPONENTE,)
 
 STATUS_RUNNING, STATUS_READY, STATUS_ERROR = "running", "ready", "error"
+
+# Etapas del informe, en orden, con el avance (%) al empezar cada una (la vista muestra la barra y la etapa,
+# informe_falla.step.<etapa>). Las de IA pesan mas porque tardan mas. "observaciones" se salta sin muestras de aceite.
+ETAPAS = {"datos": 5, "evidencia": 20, "predictivo": 30, "mantenciones": 38, "aceite": 45,
+          "observaciones": 50, "redaccion": 62, "pdf": 92}
+Avance = Callable[[str], None]
 
 # Motivos de error que la vista traduce (informe_falla.error.<motivo>).
 ERROR_NO_API_KEY = "no_api_key"
@@ -127,8 +133,7 @@ def resolver_unidad(unidad: str, *tablas) -> Optional[str]:
     return None
 
 
-# Historial del Predictivo ya preparado. Se publica una vez por semana: leer las particiones
-# de cada tabla en cada informe es lo mas lento del flujo despues de la IA.
+# Semanas del Predictivo ya preparadas, por cliente, origen y ventana. Se publica una vez por semana.
 _FUENTES: dict = {}
 _FUENTES_LOCK = threading.Lock()
 
@@ -144,26 +149,20 @@ def _cargar_o_error(cliente: str, fecha: Optional[str]):
 def cargar_fuentes(cliente: str, fecha: Optional[str] = None):
     """(status, risk) del motor del cliente, listos para evidence.armar_evidencia.
 
-    Origen local (INFORME_FALLA_ORIGEN=local, por defecto): toda la historia, con los lectores del
-    dashboard, en cache por cliente. Origen S3: solo las semanas que usa el informe de esa fecha
-    (fuentes.semanas_del_informe), en cache por cliente y semana.
+    Con los dos origenes (INFORME_FALLA_ORIGEN local o s3) se leen solo las semanas que usa el informe de
+    esa fecha (fuentes.semanas_del_informe), en cache por cliente, origen y semana. Leer toda la historia
+    da la misma evidencia (comprobado con CA-30, CA-80 y CA-88) y tarda ~40 s en el volumen montado de
+    Docker: recorrer las cientos de carpetas de las tablas es lo lento, no leerlas.
     """
     cliente = cliente.lower()
-    if fuentes.origen() == fuentes.ORIGEN_S3:
-        desde, hasta = fuentes.semanas_del_informe(fecha or datetime.now().date().isoformat())
-        clave = (cliente, fuentes.ORIGEN_S3, desde.isoformat())
-    else:
-        clave = (cliente, fuentes.ORIGEN_LOCAL)
+    desde, hasta = fuentes.semanas_del_informe(fecha or datetime.now().date().isoformat())
+    clave = (cliente, fuentes.origen(), desde.isoformat())
     with _FUENTES_LOCK:
         guardado = _FUENTES.get(clave)
         if guardado and time.time() - guardado[0] < get_informe_settings().data_cache_seconds:
             return guardado[1], guardado[2]
-        if clave[1] == fuentes.ORIGEN_S3:
-            status_crudo = fuentes.leer_particiones(cliente, "unit_status_summary", desde, hasta)
-            risk_crudo = fuentes.leer_particiones(cliente, "risk_scores", desde, hasta)
-        else:
-            status_crudo = load_unit_status_history(cliente, c.COMPONENTE)
-            risk_crudo = load_risk_scores_history(cliente, c.COMPONENTE)
+        status_crudo = fuentes.leer_particiones(cliente, "unit_status_summary", desde, hasta)
+        risk_crudo = fuentes.leer_particiones(cliente, "risk_scores", desde, hasta)
         status, risk = preparar_status(status_crudo), preparar_risk(risk_crudo)
         _FUENTES[clave] = (time.time(), status, risk)
         return status, risk
@@ -265,8 +264,13 @@ def _imagenes(request: dict) -> list:
              "data": f"data:{i['mime']};base64,{i['data_base64']}"} for i in request.get("images", [])]
 
 
-def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label: Optional[str] = None) -> dict:
-    """Corre el informe completo para una solicitud (src/data/informe_falla_request.build_informe_request) y guarda el PDF."""
+def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label: Optional[str] = None,
+                    avance: Optional[Avance] = None) -> dict:
+    """Corre el informe completo para una solicitud (src/data/informe_falla_request.build_informe_request) y guarda el PDF.
+
+    `avance(etapa)` se llama al empezar cada etapa de ETAPAS (el trabajo en segundo plano lo muestra en la vista).
+    """
+    paso = avance or (lambda etapa: None)
     cliente = request["client"]
     if request.get("system") and request["system"] not in SISTEMAS_SOPORTADOS:
         raise InformeError(ERROR_SYSTEM)
@@ -276,6 +280,7 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         raise InformeError(ERROR_NO_PDF)
 
     perfil = perfil_cliente(cliente)
+    paso("datos")
     status, risk = _cargar_o_error(cliente, request["event_date"])
     if status.empty and risk.empty:
         raise InformeError(ERROR_NO_DATA)
@@ -284,6 +289,7 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         raise InformeError(ERROR_UNIT)
 
     contexto = contexto_de(request, sistema_label)
+    paso("evidencia")
     evid = armar_evidencia(unidad, request["event_date"], status, risk, perfil)
     # Sin datos suficientes en la ventana no se llama a la IA: el informe no tendria contenido.
     if get_informe_settings().validar_datos:
@@ -291,24 +297,40 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         if not datos["ok"]:
             raise InformeError(ERROR_INSUFFICIENT, datos=datos)
     # Seccion Predictivo: el diagnostico publicado para la unidad y el estado del ciclo de vida (sin IA).
+    paso("predictivo")
     evid.update(predictivo_de_la_unidad(cliente, unidad, evid["consulta"]["fecha"]))
     # Intervenciones de mantencion previas (sin IA): cobertura, tabla y antecedentes.
+    paso("mantenciones")
     destacados = [r["modo"] for r in evid["ranking_modos"] if r["nivel"] in ("alto", "medio")]
     evid.update(mantenciones.antecedentes_mantencion(cliente, unidad, evid["consulta"]["fecha"],
                                                      sistema=request.get("system") or c.COMPONENTE,
                                                      modos=destacados))
+    # Muestras de aceite del sistema en la misma ventana (sin IA) y el resumen de las recomendaciones del
+    # laboratorio (con la IA si se puede; nunca bloquea el informe).
+    try:
+        llm = llm_fn or openai_llm()
+    except Exception as exc:
+        raise InformeError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
+    paso("aceite")
+    evid["aceite"] = aceite.muestras_aceite(cliente, unidad, evid["consulta"]["fecha"], evid["ventanas"]["periodo_desde"],
+                                            sistema=request.get("system") or c.COMPONENTE)
+    if evid["aceite"].get("muestras"):
+        paso("observaciones")
+        evid["aceite"]["observaciones"] = aceite.observaciones_laboratorio(evid, cliente, perfil, llm)
     ajustes = get_informe_settings()
     modelo = {"modelo": ajustes.model if llm_fn is None else "personalizado", "temperatura": ajustes.temperature,
               "semilla": ajustes.seed, "prompt": PROMPT_VERSION}
+    paso("redaccion")
     try:
         contexto_ia = {k: v for k, v in contexto.items() if k != "sistema"}
-        res = correr_agente(evid, perfil, llm_fn or openai_llm(), contexto_ia)
+        res = correr_agente(evid, perfil, llm, contexto_ia)
     except Exception as exc:
         raise InformeError(ERROR_LLM, f"{type(exc).__name__}: {exc}") from exc
 
     fecha = evid["consulta"]["fecha"]
     report_id = f"IPF_{re.sub(r'[^A-Za-z0-9-]', '-', unidad)}_{fecha}_{datetime.now():%Y%m%d%H%M%S}"
     numero = numero_informe(unidad, fecha)
+    paso("pdf")
     html = documento(res, cliente=perfil["nombre"], numero=numero, version=c.VERSION,
                      contexto=contexto, imagenes=_imagenes(request))
     pdf = html_a_pdf(html)
@@ -343,9 +365,17 @@ def _purgar_viejos() -> None:
         _JOBS.pop(job_id, None)
 
 
+def _marcar_avance(job_id: str) -> Avance:
+    def marcar(etapa: str) -> None:
+        with _LOCK:
+            if job_id in _JOBS:
+                _JOBS[job_id].update(etapa=etapa, progreso=ETAPAS[etapa])
+    return marcar
+
+
 def _correr(job_id: str, request: dict, sistema_label: Optional[str]) -> None:
     try:
-        resultado = generar_informe(request, sistema_label=sistema_label)
+        resultado = generar_informe(request, sistema_label=sistema_label, avance=_marcar_avance(job_id))
     except InformeError as exc:
         logger.warning(f"Informe preliminar {request['client']}/{request['unit']}: {exc.motivo} ({exc})")
         resultado = {"status": STATUS_ERROR, "reason": exc.motivo, "details": exc.datos}
@@ -363,7 +393,8 @@ def iniciar(request: dict, sistema_label: Optional[str] = None) -> str:
     with _LOCK:
         _purgar_viejos()
         _JOBS[job_id] = {"status": STATUS_RUNNING, "client": request["client"],
-                         "requested_by": request.get("requested_by"), "started": time.time()}
+                         "requested_by": request.get("requested_by"), "started": time.time(),
+                         "unit": request["unit"], "event_date": request["event_date"], "etapa": None, "progreso": 0}
     _EXECUTOR.submit(_correr, job_id, request, sistema_label)
     return job_id
 

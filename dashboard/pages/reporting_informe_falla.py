@@ -175,6 +175,29 @@ def _actions_bar() -> html.Div:
     ], className="d-flex justify-content-end gap-2 mb-4")
 
 
+def _progress_card() -> html.Div:
+    """Avance del informe en curso. Esta siempre en el layout (oculta sin informe en curso): la consulta
+    periodica solo cambia la barra, la etapa y el tiempo, sin volver a dibujar el bloque."""
+    return html.Div(dbc.Card([
+        dbc.CardHeader(
+            html.H5([html.I(className="fas fa-clipboard-check me-2"), t("informe_falla.result_title")], className="mb-0"),
+            className="bg-primary text-white",
+        ),
+        dbc.CardBody([
+            html.Div(id="informe-progress-title", className="fw-bold mb-2"),
+            dbc.Progress(id="informe-progress-bar", value=0, label="0%", striped=True, animated=True,
+                         className="mb-2", style={"height": "20px"}),
+            # El spinner es fijo: solo cambian los textos, asi la tarjeta no salta ni crece.
+            html.Div([
+                dbc.Spinner(size="sm", color="primary", spinner_class_name="me-2"),
+                html.Span(id="informe-progress-step", className="fw-bold"),
+                html.Span(id="informe-progress-elapsed", className="text-muted ms-auto ps-3"),
+            ], className="d-flex align-items-center small mb-1"),
+            html.Div(id="informe-progress-detail", className="small text-muted"),
+        ]),
+    ], className="shadow-sm mb-4"), id="informe-progress", style={"display": "none"})
+
+
 def _history_card() -> dbc.Card:
     """Informes informe preliminar ya generados para el cliente activo."""
     return dbc.Card([
@@ -213,6 +236,7 @@ def layout(**kwargs):
             html.Div([_context_card(), _images_card(), _troubleshooting_card()],
                      style={} if get_informe_settings().formulario_completo else {"display": "none"}),
             _actions_bar(),
+            _progress_card(),
             html.Div(id="informe-result"),
             _history_card(),
         ], id="informe-body"),

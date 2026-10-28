@@ -3,12 +3,14 @@ Informe preliminar de fallas: lectura de la capa golden del Predictivo, desde la
 
 El origen se elige con INFORME_FALLA_ORIGEN (config.py):
 - "local" (por defecto): la copia local en data/, la misma que lee el dashboard. El informe muestra
-  exactamente lo que ve el cliente en la plataforma. unit_status_summary y risk_scores se leen con los
-  lectores del dashboard (src/data/predictive_v2.py); este modulo lee el resto.
+  exactamente lo que ve el cliente en la plataforma.
 - "s3": el origen de los datos (predictive_data_contracts.md, "Storage Location"):
       s3://{bucket}/MultiTechnique Alerts/{tecnica}/golden/{cliente}/{componente}/{tabla}/year=YYYY/week=WW/*.parquet
   con el bucket de ERS_S3_BUCKET y las credenciales de AWS del entorno (variables AWS_* o el rol de la
   maquina). Siempre trae lo ultimo, pero puede adelantarse a la copia local del dashboard.
+
+Con los dos origenes, unit_status_summary y risk_scores se leen solo en las semanas del informe
+(particiones_entre): listar la tabla entera es lo lento, no leerla.
 
 Las particiones son ISO year/week (lunes a domingo). Se leen archivo por archivo: una columna toda vacia
 en una semana no debe romper la lectura conjunta, y asi se conservan los metadatos del parquet (la curva
@@ -110,6 +112,53 @@ def particiones(cliente: str, tabla: str, tecnica: str = "predictive") -> List[T
     return salida
 
 
+def _carpetas(fs: pafs.FileSystem, ruta: str) -> List[str]:
+    """Nombres de las subcarpetas directas de `ruta` (vacio si no existe)."""
+    try:
+        infos = fs.get_file_info(pafs.FileSelector(ruta, recursive=False, allow_not_found=True))
+    except OSError:
+        return []
+    return [i.base_name for i in infos if i.type == pafs.FileType.Directory]
+
+
+def particiones_entre(cliente: str, tabla: str, desde: date, hasta: date,
+                      tecnica: str = "predictive") -> List[Tuple[int, int, str]]:
+    """Como `particiones`, pero solo las semanas cuyo lunes cae entre `desde` y `hasta`, listando solo esas
+    carpetas: recorrer toda la tabla (cientos de semanas mas _staging/ y _runs/) es lo que mas tarda,
+    sobre todo en S3 y en el volumen montado de Docker."""
+    fs, raiz = _filesystem()
+    base = _ruta_tabla(raiz, cliente, tabla, tecnica)
+    salida = []
+    for carpeta_year in _carpetas(fs, base):
+        m_year = re.fullmatch(r"year=(\d+)", carpeta_year)
+        if not m_year or not desde.isocalendar()[0] - 1 <= int(m_year.group(1)) <= hasta.isocalendar()[0]:
+            continue
+        year = int(m_year.group(1))
+        for carpeta_week in _carpetas(fs, f"{base}/{carpeta_year}"):
+            m_week = re.fullmatch(r"week=(\d+)", carpeta_week)
+            if not m_week:
+                continue
+            week = int(m_week.group(1))
+            try:
+                lunes = date.fromisocalendar(year, week, 1)
+            except ValueError:
+                continue
+            if not desde <= lunes <= hasta:
+                continue
+            ruta_semana = f"{base}/{carpeta_year}/{carpeta_week}"
+            infos = fs.get_file_info(pafs.FileSelector(ruta_semana, recursive=False, allow_not_found=True))
+            archivos = {i.base_name: i.path for i in infos
+                        if i.type == pafs.FileType.File and i.base_name.endswith(".parquet")}
+            elegido = _archivo_canonico(tabla, sorted(archivos))
+            if elegido is None:
+                if archivos:
+                    logger.warning(f"{tabla} {cliente} {year}-W{week:02d}: varios archivos y ninguno canónico "
+                                   f"({', '.join(sorted(archivos))}); se omite la semana")
+                continue
+            salida.append((year, week, archivos[elegido]))
+    return sorted(salida)
+
+
 def leer_archivo(ruta: str) -> pa.Table:
     """Un archivo parquet, con sus metadatos. Se abre como archivo suelto: con la ruta, pyarrow deduce
     year/week de las carpetas y choca con las columnas year/week que el archivo ya trae."""
@@ -122,7 +171,9 @@ def leer_particiones(cliente: str, tabla: str, desde: Optional[date] = None, has
                      tecnica: str = "predictive") -> pd.DataFrame:
     """Las particiones cuya semana empieza entre `desde` y `hasta` (lunes, inclusive), con year y week."""
     partes = []
-    for year, week, ruta in particiones(cliente, tabla, tecnica):
+    semanas = (particiones_entre(cliente, tabla, desde, hasta, tecnica) if desde and hasta
+               else particiones(cliente, tabla, tecnica))
+    for year, week, ruta in semanas:
         lunes = date.fromisocalendar(year, week, 1)
         if (desde and lunes < desde) or (hasta and lunes > hasta):
             continue

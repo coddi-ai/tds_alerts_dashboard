@@ -209,8 +209,12 @@ Devuelve SOLO JSON con la estructura pedida."""
 # Controles
 # =============================================================================
 def evidencia_para_ia(evid: dict, contexto_cliente: Optional[dict] = None) -> dict:
-    """Lo que recibe la IA: la evidencia sin las series de los graficos, mas el contexto del cliente."""
-    e = json.loads(json.dumps(evid))
+    """Lo que recibe la IA: la evidencia sin las series de los graficos, mas el contexto del cliente.
+
+    Las muestras de aceite no van: tienen su propio resumen (aceite.observaciones_laboratorio) y el prompt
+    del informe no las menciona.
+    """
+    e = json.loads(json.dumps({k: v for k, v in evid.items() if k != "aceite"}))
     if "diario" in e:
         e["diario"] = {k: v for k, v in e["diario"].items() if k != "series"}
     if e.get("ciclo_vida"):
