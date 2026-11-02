@@ -38,6 +38,7 @@ from src.informe_falla import aceite, analisis_unidad, curva, fuentes, mantencio
 from src.informe_falla.pdf import html_a_pdf, pdf_disponible
 from src.informe_falla.report_html import documento, numero_informe, problemas
 from src.utils.logger import get_logger
+from src.utils.openai_key import ENV_KEY, openai_key_configured, resolve_openai_api_key
 
 logger = get_logger(__name__)
 
@@ -274,8 +275,16 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
     cliente = request["client"]
     if request.get("system") and request["system"] not in SISTEMAS_SOPORTADOS:
         raise InformeError(ERROR_SYSTEM)
-    if llm_fn is None and not os.getenv("OPENAI_API_KEY"):
+    if llm_fn is None and not openai_key_configured():
         raise InformeError(ERROR_NO_API_KEY)
+    if llm_fn is None:
+        # openai_llm() builds OpenAI() with no api_key, so it reads OPENAI_API_KEY from
+        # the environment. Export the resolved key (from OPENAI_API_KEY_ARN when set)
+        # so that client picks it up regardless of which variable configured it.
+        try:
+            os.environ[ENV_KEY] = resolve_openai_api_key() or ""
+        except Exception as exc:
+            raise InformeError(ERROR_NO_API_KEY, f"{type(exc).__name__}: {exc}") from exc
     if not pdf_disponible():
         raise InformeError(ERROR_NO_PDF)
 

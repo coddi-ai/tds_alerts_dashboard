@@ -44,6 +44,11 @@ from src.campbell_ai.tool_errors import tool_failure
 from src.campbell_ai.grounding import GroundingReport, audit_response
 from src.campbell_ai.visualization import DashboardVisualizationService
 from src.charts.signals import describe_signals as describe_signal_catalog
+from src.utils.openai_key import (
+    ENV_KEY,
+    openai_key_configured,
+    resolve_openai_api_key,
+)
 
 
 logger = logging.getLogger("campbell_ai.runtime")
@@ -332,6 +337,26 @@ class CampbellAgentRuntime:
         return await asyncio.to_thread(
             self.feedback.record, principal, session_id, message_id, rating, comment
         )
+
+    @staticmethod
+    def _ensure_openai_api_key() -> None:
+        """Verify an OpenAI key is configured and export it for the agents SDK.
+
+        Supports both ``OPENAI_API_KEY`` and ``OPENAI_API_KEY_ARN`` (the latter fetched
+        from Secrets Manager and taking precedence). The SDK reads ``OPENAI_API_KEY``
+        from the environment, so the resolved value is exported there regardless of
+        which variable configured it.
+        """
+        if not openai_key_configured():
+            raise CampbellConfigurationError(
+                "OPENAI_API_KEY no esta configurada en el servicio Campbell AI"
+            )
+        try:
+            os.environ[ENV_KEY] = resolve_openai_api_key() or ""
+        except Exception as exc:
+            raise CampbellConfigurationError(
+                "No se pudo resolver OPENAI_API_KEY_ARN en el servicio Campbell AI"
+            ) from exc
 
     @staticmethod
     def _load_sdk():
@@ -1003,10 +1028,7 @@ class CampbellAgentRuntime:
                 principal, session_id, message, response
             )
             return response, "blocked", message_id, [], GroundingReport()
-        if not os.getenv("OPENAI_API_KEY"):
-            raise CampbellConfigurationError(
-                "OPENAI_API_KEY no esta configurada en el servicio Campbell AI"
-            )
+        self._ensure_openai_api_key()
 
         key = self._session_key(principal, session_id)
         await self.initialize(principal, session_id)
@@ -1231,10 +1253,7 @@ class CampbellAgentRuntime:
                 response, "blocked", message_id, [], GroundingReport()
             )
             return
-        if not os.getenv("OPENAI_API_KEY"):
-            raise CampbellConfigurationError(
-                "OPENAI_API_KEY no esta configurada en el servicio Campbell AI"
-            )
+        self._ensure_openai_api_key()
 
         key = self._session_key(principal, session_id)
         await self.initialize(principal, session_id)

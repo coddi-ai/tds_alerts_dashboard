@@ -19,6 +19,7 @@ import re
 from typing import Sequence
 
 from src.campbell_ai.models import ConversationMessage
+from src.utils.openai_key import ENV_KEY, openai_key_configured, resolve_openai_api_key
 
 
 logger = logging.getLogger("campbell_ai.summary")
@@ -91,11 +92,20 @@ async def generate_conversation_summary(
 ) -> str:
     """Return a short title for the thread, or "" when one cannot be produced."""
     transcript = _transcript(messages)
-    if not transcript or not os.getenv("OPENAI_API_KEY"):
+    if not transcript or not openai_key_configured():
         return ""
     try:
         from agents import Agent, ModelSettings, Runner
     except ImportError:
+        return ""
+
+    # The agents SDK reads OPENAI_API_KEY from the environment; export the resolved key
+    # (from OPENAI_API_KEY_ARN when set) so the call works regardless of which variable
+    # configured it. A missing title is cosmetic, so a resolution failure is swallowed.
+    try:
+        os.environ[ENV_KEY] = resolve_openai_api_key() or ""
+    except Exception:
+        logger.info("Campbell AI no pudo resolver la API key para el resumen")
         return ""
 
     try:
