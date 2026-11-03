@@ -100,8 +100,7 @@ async def generate_conversation_summary(
         return ""
 
     # The agents SDK reads OPENAI_API_KEY from the environment; export the resolved key
-    # (from OPENAI_API_KEY_ARN when set) so the call works regardless of which variable
-    # configured it. A missing title is cosmetic, so a resolution failure is swallowed.
+    # so the call works. A missing title is cosmetic, so a resolution failure is swallowed.
     try:
         os.environ[ENV_KEY] = resolve_openai_api_key() or ""
     except Exception:

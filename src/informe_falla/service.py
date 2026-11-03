@@ -279,8 +279,7 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         raise InformeError(ERROR_NO_API_KEY)
     if llm_fn is None:
         # openai_llm() builds OpenAI() with no api_key, so it reads OPENAI_API_KEY from
-        # the environment. Export the resolved key (from OPENAI_API_KEY_ARN when set)
-        # so that client picks it up regardless of which variable configured it.
+        # the environment. Export the resolved key so that client picks it up.
         try:
             os.environ[ENV_KEY] = resolve_openai_api_key() or ""
         except Exception as exc:

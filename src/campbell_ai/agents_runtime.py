@@ -342,21 +342,14 @@ class CampbellAgentRuntime:
     def _ensure_openai_api_key() -> None:
         """Verify an OpenAI key is configured and export it for the agents SDK.
 
-        Supports both ``OPENAI_API_KEY`` and ``OPENAI_API_KEY_ARN`` (the latter fetched
-        from Secrets Manager and taking precedence). The SDK reads ``OPENAI_API_KEY``
-        from the environment, so the resolved value is exported there regardless of
-        which variable configured it.
+        The SDK reads ``OPENAI_API_KEY`` from the environment, so the resolved value is
+        exported there.
         """
         if not openai_key_configured():
             raise CampbellConfigurationError(
                 "OPENAI_API_KEY no esta configurada en el servicio Campbell AI"
             )
-        try:
-            os.environ[ENV_KEY] = resolve_openai_api_key() or ""
-        except Exception as exc:
-            raise CampbellConfigurationError(
-                "No se pudo resolver OPENAI_API_KEY_ARN en el servicio Campbell AI"
-            ) from exc
+        os.environ[ENV_KEY] = resolve_openai_api_key() or ""
 
     @staticmethod
     def _load_sdk():

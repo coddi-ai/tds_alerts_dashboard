@@ -409,7 +409,7 @@ def make_openai_llm(model: str, reasoning_effort: Optional[str]) -> Callable:
 
     api_key = resolve_openai_api_key()
     if not api_key:
-        raise SystemExit("OPENAI_API_KEY (or OPENAI_API_KEY_ARN) is not set (environment or .env).")
+        raise SystemExit("OPENAI_API_KEY is not set (environment or .env).")
     client = OpenAI(api_key=api_key, max_retries=2, timeout=120)
     extra = {"reasoning_effort": reasoning_effort} if reasoning_effort and model.startswith("gpt-5") else {}
 
