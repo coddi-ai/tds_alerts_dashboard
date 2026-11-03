@@ -43,7 +43,7 @@ def _scope_card() -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-crosshairs me-2"), t("informe_falla.scope_title")], className="mb-0"),
-            className="bg-primary text-white",
+            className="informe-card-header",
         ),
         dbc.CardBody([
             dbc.Row([
@@ -51,7 +51,9 @@ def _scope_card() -> dbc.Card:
                     _label("fa-truck", t("reporting.filter_unit"), required=True),
                     dcc.Dropdown(id="informe-unit", options=[], placeholder=t("informe_falla.unit_placeholder")),
                     html.Div(id="informe-unit-feedback", className="text-danger small mt-1"),
-                ], md=4),
+                ], md=6),
+                # Oculto mientras el informe solo analiza motor: sigue en el layout porque los callbacks
+                # leen y limpian su valor (queda en SISTEMAS_SOPORTADOS[0]).
                 dbc.Col([
                     _label("fa-cogs", t("alerts_general.filter_system")),
                     dcc.Dropdown(
@@ -60,7 +62,7 @@ def _scope_card() -> dbc.Card:
                         value=SISTEMAS_SOPORTADOS[0],
                         clearable=False,
                     ),
-                ], md=4),
+                ], md=4, style={"display": "none"}),
                 dbc.Col([
                     _label("fa-calendar-alt", t("informe_falla.event_date"), required=True),
                     dcc.DatePickerSingle(
@@ -71,7 +73,7 @@ def _scope_card() -> dbc.Card:
                         clearable=True,
                         className="w-100",
                     ),
-                ], md=4),
+                ], md=6),
             ], className="g-3"),
             # Validador de datos (src/informe_falla/service.validar_disponibilidad), al elegir unidad y fecha.
             dcc.Loading(html.Div(id="informe-availability", className="mt-3"), type="dot"),
@@ -93,7 +95,7 @@ def _context_card() -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-pen-to-square me-2"), t("informe_falla.context_title")], className="mb-0"),
-            className="bg-light",
+            className="informe-card-header",
         ),
         dbc.CardBody([
             dbc.Row([
@@ -120,7 +122,7 @@ def _images_card() -> dbc.Card:
                 html.H5([html.I(className="fas fa-images me-2"), t("informe_falla.images_title")], className="mb-0"),
                 html.Span(id="informe-images-count", className="text-muted small"),
             ], className="d-flex justify-content-between align-items-center"),
-            className="bg-light",
+            className="informe-card-header",
         ),
         dbc.CardBody([
             dcc.Upload(
@@ -151,7 +153,7 @@ def _troubleshooting_card() -> dbc.Card:
                          t("nav.service.agents-troubleshooting")], className="mb-0"),
                 dbc.Badge(t("informe_falla.in_development"), color="warning", text_color="dark", className="ms-2"),
             ], className="d-flex align-items-center"),
-            className="bg-light",
+            className="informe-card-header",
         ),
         dbc.CardBody([
             html.P(t("informe_falla.troubleshooting_hint"), className="text-muted small mb-3"),
@@ -181,7 +183,7 @@ def _progress_card() -> html.Div:
     return html.Div(dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-clipboard-check me-2"), t("informe_falla.result_title")], className="mb-0"),
-            className="bg-primary text-white",
+            className="informe-card-header",
         ),
         dbc.CardBody([
             html.Div(id="informe-progress-title", className="fw-bold mb-2"),
@@ -203,7 +205,7 @@ def _history_card() -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-clock-rotate-left me-2"), t("informe_falla.history_title")], className="mb-0"),
-            className="bg-light",
+            className="informe-card-header",
         ),
         dbc.CardBody(dcc.Loading(html.Div(id="informe-history"), type="circle")),
     ], className="shadow-sm mb-4")
@@ -211,13 +213,10 @@ def _history_card() -> dbc.Card:
 
 def layout(**kwargs):
     return html.Div([
-        html.Div([
-            html.H3([
-                html.I(className="fas fa-diagram-project me-2"),
-                t("nav.service.reporting-informe-falla"),
-            ], className="text-primary mb-2"),
-            html.P(t("informe_falla.subtitle"), className="text-muted"),
-        ], className="mb-4"),
+        html.Header([
+            html.H1(t("nav.service.reporting-informe-falla"), className="informe-page-title"),
+            html.P(t("informe_falla.subtitle"), className="informe-page-subtitle"),
+        ], className="informe-page-header"),
 
         # Imagenes cargadas: [{id, filename, mime, size, data, caption}].
         dcc.Store(id="informe-images-store", data=[]),
@@ -240,7 +239,7 @@ def layout(**kwargs):
             html.Div(id="informe-result"),
             _history_card(),
         ], id="informe-body"),
-    ], className="container-fluid p-4")
+    ], className="container-fluid p-4 informe-page")
 
 
 dash.register_page(__name__, path="/reporting/informe-falla", title=page_title("page.title.reporting_informe_falla"), layout=layout)
