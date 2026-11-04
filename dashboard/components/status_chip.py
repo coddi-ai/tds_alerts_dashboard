@@ -6,8 +6,8 @@ Anormal, dash = Sin Datos). Alerta uses the orange tier and Anormal the deep-red
 tier of §1.2; there is no separate "Crítico", it is shown as Anormal.
 
 `solid=True` is the stronger variant for a unit's Estado; the default tinted chip is for
-per-technique and per-component statuses. Colors live in `assets/status_chip.css`; the
-solid hex values in `STATUS_SOLID_COLORS` mirror it for charts that must match a chip.
+per-technique and per-component statuses. Colors live in `assets/status_chip.css`; src/status_scale.py is the
+registry that mirrors them (`STATUS_SOLID_COLORS` is derived from it) for charts that must match a chip.
 """
 
 from __future__ import annotations
@@ -17,29 +17,20 @@ from typing import Optional
 from dash import html
 
 from dashboard.components.labels import status_label
+from src.status_scale import SCALE, get_status
 
-# Raw statuses (several vocabularies) -> the four shown in the General tab.
-_CANONICAL = {
-    "normal": "Normal",
-    "alerta": "Alerta", "atención": "Alerta",
-    "anormal": "Anormal", "crítico": "Anormal", "critico": "Anormal",
-}
-_CSS_KEY = {"Normal": "normal", "Alerta": "alerta", "Anormal": "anormal", "Sin Datos": "nodata"}
+# Names, aliases and colors come from the dashboard's one status scale (src/status_scale.py).
+_CSS_KEY = {status.name: status.css for status in SCALE}
 
 # Solid tier colors, same values as the CSS tokens (guide §1.2: Alerta = orange tier,
 # Anormal = deep red).
-STATUS_SOLID_COLORS = {
-    "Normal": "#15803d",
-    "Alerta": "#c2410c",
-    "Anormal": "#b91c1c",
-    "Sin Datos": "#4b5563",
-}
+STATUS_SOLID_COLORS = {status.name: status.solid for status in SCALE}
 
 
 def canonical_status(status) -> str:
     """The status as one of Normal / Alerta / Anormal / Sin Datos. Anything without a
     reading or not recognised (InsufficientData, Sin Fuente, None...) is Sin Datos."""
-    return _CANONICAL.get(str(status or "").strip().casefold(), "Sin Datos")
+    return get_status(status).name
 
 
 def status_chip(status, *, solid: bool = False, on_dark: bool = False, label: Optional[str] = None, **attrs) -> html.Span:
