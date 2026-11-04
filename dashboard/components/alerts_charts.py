@@ -244,9 +244,9 @@ def select_plottable_signals(feature_names: List[str]) -> tuple[List[str], List[
 # cards render at the same height regardless of fleet size.
 ALERTS_CHART_HEIGHT = 400
 
-# Pareto chart (Distribución por unidad) styling: bars are not segmented by
-# system, so a single accent color is used for the count bars and a
-# contrasting color for the cumulative-percentage line.
+# Pareto chart (Distribución por unidad) styling: bars are colored per system
+# (SISTEMA_COLORS) and PARETO_BAR_COLOR is the generic accent the treemap falls back
+# to; the cumulative-percentage line gets a contrasting color.
 PARETO_BAR_COLOR = '#355c7d'
 PARETO_LINE_COLOR = '#d08c60'
 # The "Otras (n)" bar stands for several units, so it is drawn neutral instead of
@@ -273,8 +273,10 @@ def create_alerts_per_unit_chart(
     """
     Create a Pareto chart of alerts per unit: units on the X-axis sorted by
     descending alert count (bars, primary Y-axis) with a cumulative-percentage
-    line (secondary Y-axis, fixed 0-100%). Units are not segmented/colored by
-    system and no legend is shown - the axes and hover text carry that.
+    line (secondary Y-axis, fixed 0-100%). Each bar is stacked by system, colored
+    with the shared system palette (so its height is still the unit's alert count);
+    the count above it is the unit's total and the system legend only shows when
+    the data has more than one system.
 
     Progressive disclosure: the busiest units get their own bar until their running
     total reaches ``target_pct`` of all alerts (never more than ``max_bars`` bars);
@@ -297,7 +299,7 @@ def create_alerts_per_unit_chart(
     cumulative %) is always available on hover.
 
     Args:
-        alerts_df: DataFrame with column ['UnitId']
+        alerts_df: DataFrame with columns ['UnitId', 'sistema']
         target_pct: Share of all alerts the individual bars should reach.
         max_bars: Most individual bars, whether or not ``target_pct`` was reached.
         selected_units: Units currently filtered on. They always get their own bar and
@@ -343,13 +345,13 @@ def create_alerts_per_unit_chart(
         # grows, so labels keep fitting the fixed card width without
         # overlapping - unit-level detail is still always available on hover.
         if unit_count <= 12:
-            tick_font_size, value_font_size, value_angle = 11, 11, 0
+            tick_font_size, value_font_size = 11, 11
         elif unit_count <= 25:
-            tick_font_size, value_font_size, value_angle = 10, 9, 0
+            tick_font_size, value_font_size = 10, 9
         elif unit_count <= 45:
-            tick_font_size, value_font_size, value_angle = 8, 8, -90
+            tick_font_size, value_font_size = 8, 8
         else:
-            tick_font_size, value_font_size, value_angle = 7, 7, -90
+            tick_font_size, value_font_size = 7, 7
 
         # Above this many units, on-bar count labels start to overlap - drop
         # them and lean on hover instead of forcing every label into view.
@@ -370,43 +372,81 @@ def create_alerts_per_unit_chart(
         # of compressing toward the bottom as total alert count grows.
         axis_max = (max_count * 1.15) if max_count else 1
 
-        if selected_units:
-            # Selected bars keep the full color and an outline; the rest fade back.
-            faded = light_tint(PARETO_BAR_COLOR, 0.6)
-            bar_colors = [
-                PARETO_BAR_COLOR if unit in selected_units else (PARETO_OTHERS_COLOR if pd.isna(unit) else faded)
-                for unit in counts['Unit']
-            ]
-            bar_outline_widths = [2.5 if unit in selected_units else (1.5 if pd.isna(unit) else 0) for unit in counts['Unit']]
-        elif has_others:
-            bar_colors = [PARETO_BAR_COLOR] * (unit_count - 1) + [PARETO_OTHERS_COLOR]
-            bar_outline_widths = [0] * (unit_count - 1) + [1.5]
-        else:
-            bar_colors = PARETO_BAR_COLOR
-        # The aggregate is hatched and outlined so it cannot pass for one more unit
-        # (Plotly bars cannot take a dashed border).
-        others_pattern = dict(
-            shape=['/' if pd.isna(unit) else '' for unit in counts['Unit']],
-            fgcolor=PARETO_OTHERS_COLOR, bgcolor='white', size=7, solidity=0.4,
-        ) if has_others else None
+        # Each unit's bar is stacked by system, in the palette the weekly chart and the
+        # treemap use, so a unit's total height is still its alert count. The "Otras (n)"
+        # aggregate spans several units and stays one neutral, hatched bar.
+        unit_labels = counts['UnitId'].tolist()
+        drawn_units = unit_labels[:-1] if has_others else unit_labels
+        by_system = alerts_df[alerts_df['UnitId'].isin(drawn_units)]
+        system_labels = (
+            by_system['sistema'] if 'sistema' in by_system.columns
+            else pd.Series(None, index=by_system.index, dtype=object)
+        ).map(translate_system_label)
+        per_system = (
+            by_system.assign(_system_display=system_labels)
+            .groupby(['UnitId', '_system_display']).size().unstack(fill_value=0)
+            .reindex(drawn_units, fill_value=0)
+        )
+        systems = sorted(per_system.columns)
+        system_colors = _treemap_root_colors(systems)
+        drawn_customdata = unit_customdata[:len(drawn_units)]
+        selected = set(selected_units)
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
+        for system in systems:
+            base_color = system_colors[system]
+            if selected:
+                # Selected bars keep the full color and an outline; the rest fade back.
+                faded = light_tint(base_color, 0.6)
+                marker_color = [base_color if unit in selected else faded for unit in drawn_units]
+                marker_line = dict(width=[2.5 if unit in selected else 0 for unit in drawn_units], color=PARETO_SELECTED_OUTLINE)
+            else:
+                marker_color, marker_line = base_color, None
+            fig.add_trace(
+                go.Bar(
+                    x=drawn_units,
+                    y=per_system[system].astype(int),
+                    name=system,
+                    legendgroup=system,
+                    marker_color=marker_color,
+                    marker_line=marker_line,
+                    customdata=drawn_customdata,
+                    cliponaxis=False,
+                    hovertemplate=t("alerts_charts.unit_system_hover"),
+                ),
+                secondary_y=False,
+            )
+        if has_others:
+            # Hatched and outlined so it cannot pass for one more unit (Plotly bars
+            # cannot take a dashed border).
+            fig.add_trace(
+                go.Bar(
+                    x=[unit_labels[-1]],
+                    y=[int(counts['Count'].iloc[-1])],
+                    name=unit_labels[-1],
+                    showlegend=False,
+                    marker_color=PARETO_OTHERS_COLOR,
+                    marker_line=dict(width=1.5, color=PARETO_SELECTED_OUTLINE),
+                    marker_pattern=dict(shape='/', fgcolor=PARETO_OTHERS_COLOR, bgcolor='white', size=7, solidity=0.4),
+                    customdata=[[None]],
+                    cliponaxis=False,
+                    hovertemplate=t("alerts_charts.alertas_extra_extra"),
+                ),
+                secondary_y=False,
+            )
+        # Stacked segments cannot carry an outside label, so each bar's total is a
+        # text-only trace sitting on top of it.
         fig.add_trace(
-            go.Bar(
-                x=counts['UnitId'],
+            go.Scatter(
+                x=unit_labels,
                 y=counts['Count'],
-                name=t("erp.source.alertas"),
-                marker_color=bar_colors,
-                marker_line=dict(width=bar_outline_widths, color=PARETO_SELECTED_OUTLINE) if (selected_units or has_others) else None,
-                marker_pattern=others_pattern,
-                customdata=unit_customdata,
+                mode='text',
                 text=bar_text,
-                textposition='auto',
-                textangle=value_angle,
-                insidetextfont=dict(size=value_font_size, color='white'),
-                outsidetextfont=dict(size=value_font_size, color='#2c3e50'),
+                textposition='top center',
+                textfont=dict(size=value_font_size, color='#2c3e50'),
+                showlegend=False,
+                hoverinfo='skip',
                 cliponaxis=False,
-                hovertemplate=t("alerts_charts.alertas_extra_extra"),
             ),
             secondary_y=False,
         )
@@ -431,6 +471,9 @@ def create_alerts_per_unit_chart(
         xaxis_kwargs = dict(
             title_text=t("alerts_charts.identificador_de_unidad"),
             type='category',
+            # Bars are separate traces now, so pin the Pareto order (busiest first, "Otras" last).
+            categoryorder='array',
+            categoryarray=unit_labels,
             tickangle=-45,
             tickfont=dict(size=tick_font_size),
         )
@@ -452,9 +495,16 @@ def create_alerts_per_unit_chart(
             ticksuffix='%',
             secondary_y=True,
         )
+        # As in the weekly chart, the system legend only appears once there is more
+        # than one system to tell apart.
         fig.update_layout(
             template='plotly_white',
-            showlegend=False,
+            barmode='stack',
+            showlegend=len(systems) >= 2,
+            legend=dict(
+                title=t("alerts_general.filter_system"),
+                orientation='h', x=1, y=1.0, xanchor='right', yanchor='bottom', font=dict(size=10),
+            ),
             height=ALERTS_CHART_HEIGHT,
             margin=dict(l=55, r=55, t=55, b=80),
             hovermode='x unified',
@@ -1830,8 +1880,9 @@ def create_gps_route_map_golden(
     mapbox_token: str
 ) -> go.Figure:
     """
-    Create GPS route map using pre-processed golden layer data.
-    
+    Create the GPS map of the alert's location (a single marker, no route) using
+    pre-processed golden layer data.
+
     Args:
         alert_data: DataFrame with GPS data from golden layer
         unit_id: Unit identifier
@@ -1871,54 +1922,14 @@ def create_gps_route_map_golden(
                 x=0.5, y=0.5, showarrow=False
             )
         
-        # Normalize time for color gradient
-        time_min = gps_data['TimeStart'].min()
-        time_max = gps_data['TimeStart'].max()
-        
-        if time_max > time_min:
-            gps_data['TimeNorm'] = (gps_data['TimeStart'] - time_min) / (time_max - time_min)
-        else:
-            gps_data['TimeNorm'] = 0.5
-        
-        # Create map
-        fig = go.Figure()
-        
-        # Add route line with subtle gray color for better contrast against satellite background
-        fig.add_trace(go.Scattermapbox(
-            lat=gps_data['GPSLat'],
-            lon=gps_data['GPSLon'],
-            mode='lines',
-            line=dict(width=2, color='rgba(100, 100, 100, 0.5)'),
-            showlegend=False,
-            hoverinfo='skip'
-        ))
-        
-        # Find alert point (closest to alert_time)
+        # Only the alert's own location is drawn (no route): the GPS fix closest to alert_time.
+        # The window/closest-point math stays in UTC-naive; local time is applied only to the
+        # hover text below.
         alert_idx = (gps_data['TimeStart'] - alert_time).abs().argmin()
         alert_point = gps_data.iloc[alert_idx]
-        
-        # Add all non-alert points with single blue color (use boolean masking to avoid index issues)
-        alert_point_index = gps_data.index[alert_idx]
-        non_alert_gps = gps_data[gps_data.index != alert_point_index]
-        if not non_alert_gps.empty:
-            fig.add_trace(go.Scattermapbox(
-                lat=non_alert_gps['GPSLat'],
-                lon=non_alert_gps['GPSLon'],
-                mode='markers',
-                marker=dict(
-                    size=10,
-                    color="#ea6648",  # Light red color for non-alert points
-                ),
-                showlegend=False,
-                # W34-06: local wall-clock time in the hover text. The map
-                # has no time axis to keep visually aligned (unlike the
-                # sensor-trends chart), so converting only at the display
-                # site here is enough — the windowing/closest-point math
-                # above stays in UTC-naive, unchanged.
-                text=to_local_naive(non_alert_gps['TimeStart']).dt.strftime('%H:%M:%S'),
-                hovertemplate=t("alerts_charts.hora_extra_extra")
-            ))
-        
+
+        fig = go.Figure()
+
         # Add white border circle first (bottom layer) for alert point
         fig.add_trace(go.Scattermapbox(
             lat=[alert_point['GPSLat']],
@@ -1956,22 +1967,22 @@ def create_gps_route_map_golden(
                 accesstoken=mapbox_token,
                 style="satellite-streets",
                 center=dict(
-                    lat=gps_data['GPSLat'].mean(),
-                    lon=gps_data['GPSLon'].mean()
+                    lat=float(alert_point['GPSLat']),
+                    lon=float(alert_point['GPSLon'])
                 ),
-                zoom=14
+                zoom=15
             ),
             title=None,
             height=600,
             margin=dict(l=0, r=0, t=10, b=0),
             showlegend=False
         )
-        
-        logger.info(f"Created GPS route map (golden layer) with {len(gps_data)} points")
+
+        logger.info("Created GPS alert-location map (golden layer)")
         return fig
-    
+
     except Exception as e:
-        logger.error(f"Error creating GPS route map (golden layer): {e}")
+        logger.error(f"Error creating GPS alert-location map (golden layer): {e}")
         return go.Figure().add_annotation(
             text=t("component_hours_callbacks.error", str_e=str(e)),
             xref="paper", yref="paper",

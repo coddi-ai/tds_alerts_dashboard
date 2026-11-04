@@ -165,11 +165,12 @@ def test_capstone_system_labels_are_translated_in_alert_charts():
     system_chart = create_system_signal_treemap(alerts)
 
     assert translate_alert_system("motor") == "Motor"
-    # Pareto chart: units on X, a single (non-system) bar color, and a
+    # Pareto chart: units on X, bars painted with the (translated) system's color, and a
     # cumulative-percentage line that reaches 100% at the last point.
-    assert list(unit_chart.data[0].x) == ["CA-42"]
-    assert unit_chart.data[0].marker.color == PARETO_BAR_COLOR
-    assert unit_chart.data[1].y[-1] == 100
+    bars = unit_chart.data[0]
+    assert bars.name == "Motor" and list(bars.x) == ["CA-42"]
+    assert bars.marker.color == PARETO_BAR_COLOR  # Motor's palette color
+    assert unit_chart.data[-1].y[-1] == 100
     assert {trace.name for trace in week_chart.data} == {"Motor"}
     # System/subsystem/signal treemap: translated Sistema is the sole level-1 node,
     # colored via the shared system palette. This alert has neither a subsistema nor

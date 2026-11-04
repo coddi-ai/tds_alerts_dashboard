@@ -267,7 +267,26 @@ def test_featured_chart_is_annotated_with_peak_and_limit():
     panels, _ = _evidence(3, out_of_range=(0,))
     fig = grid.build_signal_figure(panels[0], panels[0].values["TimeStart"].iloc[-1], featured=True)
     notes = " ".join(a.text or "" for a in fig.layout.annotations)
-    assert "Pico" in notes and "Límite Superior" in notes
+    assert "Peak" in notes and "Pico" not in notes and "Límite Superior" in notes
+
+
+def test_gps_map_shows_only_the_alert_location_not_the_route():
+    from datetime import datetime, timedelta
+
+    from dashboard.components.alerts_charts import create_gps_route_map_golden
+
+    alert_time = datetime(2026, 7, 10, 12, 0, 0)
+    points = pd.DataFrame({
+        "TimeStart": [alert_time - timedelta(minutes=m) for m in (60, 30, 5, 0)],
+        "GPSLat": [-23.50, -23.51, -23.52, -23.53],
+        "GPSLon": [-70.40, -70.41, -70.42, -70.43],
+    })
+    fig = create_gps_route_map_golden(points, "CA-1", alert_time, "token")
+    # Only the alert marker (white halo + red dot), each a single point, and no route line.
+    assert len(fig.data) == 2
+    assert all(len(trace.lat) == 1 and trace.mode == "markers" for trace in fig.data)
+    assert all(list(trace.lat) == [-23.53] and list(trace.lon) == [-70.43] for trace in fig.data)
+    assert fig.layout.mapbox.center.lat == -23.53 and fig.layout.mapbox.center.lon == -70.43
 
 
 def test_grid_never_goes_below_a_legible_card_width_and_caps_at_three_columns():

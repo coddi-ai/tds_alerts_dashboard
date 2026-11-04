@@ -33,7 +33,7 @@ BUCKET_NAME=...          # S3 bucket holding processed data (used for auto-sync)
 ACCESS_KEY=...
 SECRET_KEY=...
 OPENAI_API_KEY=...       # optional, for AI-generated recommendations/insights
-MAPBOX_TOKEN=...         # optional, for GPS route maps in Alerts detail
+MAPBOX_TOKEN=...         # optional, for the GPS location map in Alerts detail
 ```
 
 ### 3. Get Data
@@ -86,7 +86,7 @@ Navigation is organized into sections/subsections in the left sidebar (`dashboar
   - *Vista General*: date-filtered distribution charts (by unit, month, trigger, sistema) and an
     interactive alerts table
   - *Vista Detallada*: per-alert inspection with AI diagnosis, telemetry evidence (sensor trends,
-    GPS route, KPIs), oil evidence (radar chart), and maintenance evidence
+    GPS alert location, KPIs), oil evidence (radar chart), and maintenance evidence
 - **Telemetría** — sensor-based health monitoring
   - *Vista de Flota*: fleet matrix of unit/system status
   - *Detalle de Unidad*: unit → system → signal drill-down with AI commentary
