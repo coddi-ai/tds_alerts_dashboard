@@ -122,7 +122,44 @@ def preparar_risk(df: pd.DataFrame) -> pd.DataFrame:
     for m in MODOS:
         if m not in ancho.columns:
             ancho[m] = np.nan
+    # Nivel frente a la flota (risk_level), una columna "nivel__<modo>". Las particiones anteriores al bootstrap no
+    # traen la columna (fuentes.leer_particiones lee una por una y las une): esos dias quedan sin nivel.
+    if "risk_level" in df.columns:
+        niveles = df.dropna(subset=["risk_level"])
+        if not niveles.empty:
+            niveles = (niveles.assign(risk_level=niveles["risk_level"].map(nivel_flota))
+                              .pivot_table(index=["Unit", "Fecha"], columns="failure_mode", values="risk_level",
+                                           aggfunc="last")
+                              .rename(columns=lambda m: f"nivel__{m}").reset_index().rename_axis(columns=None))
+            ancho = ancho.merge(niveles, on=["Unit", "Fecha"], how="left")
+    for m in MODOS:
+        if f"nivel__{m}" not in ancho.columns:
+            ancho[f"nivel__{m}"] = None
     return ancho
+
+
+def nivel_flota(valor) -> Optional[str]:
+    """risk_level normalizado ("Critico" con o sin tilde); None si viene vacio o con otro texto."""
+    if valor is None or (isinstance(valor, float) and np.isnan(valor)):
+        return None
+    return c.NIVEL_FLOTA_ALIAS.get(str(valor).strip().lower())
+
+
+def niveles_flota(vd: pd.DataFrame, unidad: str) -> dict:
+    """{modo: {"nivel", "fecha"}}: el nivel frente a la flota del ultimo dia con nivel antes de la detencion, y
+    {modo: {fecha: nivel}} de todo el periodo (para colorear los puntos del grafico)."""
+    propia = vd[vd["Unit"] == unidad].sort_values("Fecha")
+    ultimo, por_dia = {}, {}
+    for m in MODOS:
+        col = f"nivel__{m}"
+        if col not in propia.columns:
+            continue
+        serie = propia[["Fecha", col]].dropna()
+        if serie.empty:
+            continue
+        por_dia[m] = {d.date().isoformat(): n for d, n in zip(serie["Fecha"], serie[col])}
+        ultimo[m] = {"nivel": serie[col].iloc[-1], "fecha": serie["Fecha"].iloc[-1].date().isoformat()}
+    return {"ultimo": ultimo, "por_dia": por_dia}
 
 
 # =============================================================================
@@ -532,10 +569,13 @@ def armar_evidencia(unidad, fecha, status, risk, perfil: Optional[dict] = None):
 
     hay_diario = bool((vd["Unit"] == unidad).any())
     analisis_d, series = {}, {}
+    niveles = niveles_flota(vd, unidad) if hay_diario else {"ultimo": {}, "por_dia": {}}
     if hay_diario:
         for m in MODOS:
             analisis_d[m], tabla = analizar_modo_diario(vd, unidad, m, f)
             series[m] = _serie_grafico(tabla, unidad, m, f)
+            for p in series[m]:                          # el nivel frente a la flota de cada dia, si lo hay
+                p["nivel"] = niveles["por_dia"].get(m, {}).get(str(p["fecha"])[:10])
 
     # Nivel final de cada modo: el mayor entre el semanal y el diario
     for m in MODOS:
@@ -567,6 +607,8 @@ def armar_evidencia(unidad, fecha, status, risk, perfil: Optional[dict] = None):
                                            f"{(pd.Timestamp(f) - pd.Timedelta(days=1)).date()} (incluye los días de "
                                            "la semana de la detención anteriores a la fecha)")
     evid["diario"] = {"auditoria": aud_d, "analisis_por_modo": analisis_d, "series": series}
+    # Nivel de cada modo frente a la flota el ultimo dia antes de la detencion (tabla de modos y Resumen)
+    evid["nivel_flota"] = niveles["ultimo"]
     return evid
 
 

@@ -334,7 +334,7 @@ def generar_informe(request: dict, llm_fn: Optional[LlmFn] = None, sistema_label
         "veredicto": evid["veredicto_reglas"]["veredicto"],
         "confianza": rs["confianza"], "motivo_confianza": rs["motivo_confianza"],
         "detenciones": detenciones,
-        "resumen": {**{k: rs[k] for k in ("diagnostico", "causa_probable", "acciones", "riesgo_si_no_se_hace")},
+        "resumen": {**{k: rs[k] for k in ("diagnostico", "causa_probable", "causas", "acciones", "riesgo_si_no_se_hace")},
                     "controles": rs["controles"]},
     }
     res = {"evidencia": evid, "informe": informe, "entrada_resumen": rs["entrada"]}

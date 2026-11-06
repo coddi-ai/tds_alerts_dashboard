@@ -37,7 +37,6 @@
 .informe_falla .dos-col { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .informe_falla .grafico-tabla { grid-template-columns:3fr 2fr; align-items:start; }
 .informe_falla .graficos > * + * { margin-top:10px; }
-.informe_falla .puntajes { break-inside:avoid; }   /* titulo, graficos y tabla en la misma pagina */
 .informe_falla .cajas { display:grid; gap:12px; }
 .informe_falla .cajas.cuatro { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .informe_falla .cajas.tres { grid-template-columns:repeat(3,minmax(0,1fr)); }
@@ -51,8 +50,8 @@
 /* Encabezado */
 .informe_falla .cabecera > * + * { margin-top:16px; }
 .informe_falla .cabecera .cajas { border-top:1px solid var(--linea-2); padding-top:14px; }
-.informe_falla .contexto { margin-top:4px; } .informe_falla .contexto > * + * { margin-top:10px; }
-.informe_falla .contexto .texto { white-space:pre-wrap; }
+.informe_falla .fuentes-linea { font-size:12.5px; color:var(--tinta-2); padding:0 4px; }
+.informe_falla .contenedor > .fuentes-linea { margin-top:8px; }
 
 /* 1. Resumen */
 .informe_falla .resumen { background:var(--oscuro); color:#fff; border-radius:8px; padding:26px 28px; break-inside:avoid; }
@@ -82,6 +81,11 @@
 .informe_falla .pill-neutra { color:var(--gris-txt); background:var(--gris); }
 .informe_falla .pill-normal { color:var(--verde-txt); background:var(--verde); }
 .informe_falla .pill-rojo { color:#fff; background:var(--rojo); }
+/* Nivel frente a la flota (risk_level), de Saludable a Critico */
+.informe_falla .pill-nivel-0 { color:#3F4A55; background:#E3E7EB; }
+.informe_falla .pill-nivel-1 { color:#6B4A00; background:#F6E2A6; }
+.informe_falla .pill-nivel-2 { color:#fff; background:#E8873A; }
+.informe_falla .pill-nivel-3 { color:#fff; background:var(--rojo); }
 .informe_falla .pill-borde { color:var(--gris-txt); background:#fff; border:1px solid #9AA3AD; padding:1px 8px; }
 
 /* 2. Predictivo */
@@ -91,7 +95,7 @@
 .informe_falla .semana-etq { display:block; font-size:11px; color:var(--tinta-2); text-align:center; white-space:nowrap; }
 .informe_falla .leyenda { display:flex; flex-wrap:wrap; gap:6px 18px; font-size:13px; color:var(--tinta-2); }
 .informe_falla .leyenda span { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
-.informe_falla .leyenda i { display:inline-block; width:12px; height:12px; border-radius:3px; }
+.informe_falla .leyenda i { display:inline-block; flex:none; width:12px; height:12px; border-radius:3px; }   /* flex:none: sin ovalos */
 .informe_falla .leyenda i.vacia { background:#fff; border:1px dashed #9AA3AD; box-sizing:border-box; }
 .informe_falla .leyenda i.punto { border-radius:999px; }
 .informe_falla .leyenda i.linea-azul { width:20px; height:4px; border-radius:2px; background:var(--azul); }
@@ -118,7 +122,7 @@
 .informe_falla .det-titulo { display:flex; flex-wrap:wrap; align-items:center; gap:4px 0; }
 
 /* Pie y anexo de fotos */
-.informe_falla .pie { font-size:14px; color:var(--tinta-2); padding:0 4px; break-before:avoid; }
+.informe_falla .pie { font-size:11.5px; line-height:1.45; color:var(--tinta-2); padding:8px 4px 0; border-top:1px solid var(--linea); break-before:avoid; }
 .informe_falla .pie p + p { margin-top:4px; }
 .informe_falla .grid-fotos { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .informe_falla .foto { border:1px solid var(--linea); border-radius:6px; padding:10px; break-inside:avoid; margin:0; }
@@ -135,3 +139,24 @@
 @page { size:1060px 1499px; margin:44px 40px 56px;
   @bottom-right { content:"Página " counter(page) " de " counter(pages); font-family:"Barlow",sans-serif;
                   font-size:12px; color:#59636E; } }
+/* Monitoreo de riesgo, por preguntas: titulo, frase de respuesta y la evidencia debajo */
+.informe_falla .respuesta { font-size:17px; font-weight:500; margin-top:6px; }
+.informe_falla .respuesta + * { margin-top:12px; }
+.informe_falla .sub-cuerpo { margin-top:10px; }
+.informe_falla .junto { break-inside:avoid; }      /* titulo, frase y tabla juntos; los graficos pueden pasar de pagina */
+.informe_falla .junto table { margin-top:10px; }
+.informe_falla .graf-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px; }
+.informe_falla .graf-grid:empty { display:none; }
+.informe_falla .graf-grid .tarjeta-int { margin-top:0; break-inside:avoid; }
+.informe_falla .fuente-seccion { border-top:1px solid var(--linea-2); padding-top:10px; margin-top:18px; }
+
+/* Resumen: dos hipotesis de causa, cada una con su respaldo */
+.informe_falla .hipotesis > div + div { margin-top:12px; padding-top:12px; border-top:1px solid #3A4654; }
+.informe_falla .hipotesis .h-num { display:block; font-size:12px; font-weight:700; color:#8DB4E8; text-transform:uppercase;
+  letter-spacing:.4px; margin-bottom:3px; }
+.informe_falla .hipotesis .h-resp { display:block; font-size:12.5px; color:#C2CAD3; margin-top:4px; }
+
+/* Detenciones: antecedentes en tabla y titulo del detalle */
+.informe_falla .antecedentes { margin-top:16px; break-inside:avoid; } .informe_falla .antecedentes table { margin-top:8px; }
+.informe_falla .antecedentes td:first-child { color:var(--tinta-2); width:42%; }
+.informe_falla .lista-tit { margin-top:18px; }

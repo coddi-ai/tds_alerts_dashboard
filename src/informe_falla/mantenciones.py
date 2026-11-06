@@ -249,6 +249,19 @@ def cobertura(cliente: str, unidad: str, fecha, semanas: int = SEMANAS_VENTANA) 
     return _cobertura(acciones, presente, fecha - pd.Timedelta(weeks=semanas), fecha - pd.Timedelta(days=1), cliente)
 
 
+def _detencion_actual(propias: pd.DataFrame, fecha: pd.Timestamp) -> Optional[dict]:
+    """Cuantos dias estuvo detenida la unidad segun los registros: las OT con algun registro entre el dia antes y
+    dos dias despues de la fecha, hasta su ultimo dia. Solo se muestra junto a la marca de la detencion; nunca va a
+    la IA ni cuenta como evidencia (es posterior a la detencion). None si no hay registros cerca de la fecha."""
+    if propias.empty or "record_id" not in propias.columns:
+        return None
+    cerca = propias[(propias["dia"] >= fecha - pd.Timedelta(days=1)) & (propias["dia"] <= fecha + pd.Timedelta(days=2))]
+    if cerca.empty:
+        return None
+    hasta = max(propias.loc[propias["record_id"].isin(cerca["record_id"].unique()), "dia"].max(), fecha)
+    return {"hasta": hasta.date().isoformat(), "dias": int((hasta - fecha).days) + 1}
+
+
 def _orden_tabla(r: dict) -> tuple:
     return (r["tipo"] != TIPO_CORRECTIVA, -r["inicio"].value)
 
@@ -344,4 +357,4 @@ def antecedentes_mantencion(cliente: str, unidad: str, fecha, sistema: str = c.C
         "ventana_extendida_dias": dias_extendido,
     }
     return {"cobertura_mantenciones": cobertura, "detenciones_previas": publicos[:MAX_FILAS_TABLA],
-            "antecedentes_mantencion": antecedentes}
+            "antecedentes_mantencion": antecedentes, "detencion_actual": _detencion_actual(propias, fecha)}
