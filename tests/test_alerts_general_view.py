@@ -13,8 +13,8 @@ from dashboard.callbacks import alerts_callbacks as callbacks
 from dashboard.components.alerts_charts import (
     FEATURE_NAMES_ES,
     NO_SIGNAL_KEY,
-    PARETO_BAR_COLOR,
     PARETO_OTHERS_COLOR,
+    _system_colors,
     create_alerts_per_unit_chart,
     create_system_signal_treemap,
 )
@@ -381,29 +381,58 @@ def _units(counts):
     return pd.DataFrame(rows)
 
 
+def _pareto_axis(fig):
+    """The unit chart's bars in Pareto order (busiest first, "Otras" last). The bars are one
+    trace per system plus one for "Otras", so the order is pinned on the axis."""
+    return list(fig.layout.xaxis.categoryarray)
+
+
+def _pareto_totals(fig):
+    """Alert count per bar: the stacked system segments added up."""
+    totals = {}
+    for trace in fig.data:
+        if trace.type == "bar":
+            for unit, count in zip(trace.x, trace.y):
+                totals[unit] = totals.get(unit, 0) + int(count)
+    return totals
+
+
+def _pareto_line(fig):
+    return fig.data[-1]
+
+
+def _system_bars(fig):
+    """The per-system bar traces by system name (the hatched "Otras" bar has no system)."""
+    return {trace.name: trace for trace in fig.data if trace.type == "bar" and not trace.name.startswith("Otras")}
+
+
 def test_bars_run_until_the_cumulative_share_then_one_others_bar_folds_the_rest():
     counts = {f"U{i:02d}": 30 - i for i in range(20)}
     fig = create_alerts_per_unit_chart(_units(counts))
-    bars = fig.data[0]
     # 80% of 410 alerts is reached by the busiest fourteen units (329 alerts).
-    assert len(bars.x) == 15
-    assert list(bars.x[:14]) == [f"U{i:02d}" for i in range(14)]
-    assert bars.x[14] == "Otras (6)"
-    assert bars.y[14] == sum(counts[f"U{i:02d}"] for i in range(14, 20))
-    assert bars.marker.color[14] == PARETO_OTHERS_COLOR and bars.marker.color[0] == PARETO_BAR_COLOR
-    # The aggregate is hatched and outlined; unit bars are solid.
-    assert list(bars.marker.pattern.shape) == [""] * 14 + ["/"]
-    assert bars.marker.line.width[14] == 1.5 and bars.marker.line.width[0] == 0
+    assert len(_pareto_axis(fig)) == 15
+    assert _pareto_axis(fig)[:14] == [f"U{i:02d}" for i in range(14)]
+    assert _pareto_axis(fig)[14] == "Otras (6)"
+    totals = _pareto_totals(fig)
+    assert totals["Otras (6)"] == sum(counts[f"U{i:02d}"] for i in range(14, 20))
+    assert [totals[f"U{i:02d}"] for i in range(14)] == [counts[f"U{i:02d}"] for i in range(14)]
+    # Unit bars are solid and take their system's color; the aggregate is neutral, hatched and outlined.
+    (motor,) = _system_bars(fig).values()
+    assert motor.marker.color == "#355c7d" and motor.marker.line.width is None
+    others = next(trace for trace in fig.data if trace.type == "bar" and trace.x[0] == "Otras (6)")
+    assert others.marker.color == PARETO_OTHERS_COLOR
+    assert others.marker.pattern.shape == "/" and others.marker.line.width == 1.5
     # Unit bars carry their id for click-to-filter; "Otras" carries none.
-    assert [list(c) for c in bars.customdata[:14]] == [[f"U{i:02d}"] for i in range(14)]
-    assert list(bars.customdata[14]) == [None]
+    assert [list(c) for c in motor.customdata] == [[f"U{i:02d}"] for i in range(14)]
+    assert list(others.customdata[0]) == [None]
     assert "14 de 20 unidades concentran el 80% de las alertas." in [a.text for a in fig.layout.annotations]
 
 
 def test_cumulative_line_spans_every_bar_including_others():
     fig = create_alerts_per_unit_chart(_units({f"U{i:02d}": 30 - i for i in range(20)}))
-    cumulative = list(fig.data[1].y)
-    assert list(fig.data[1].x) == list(fig.data[0].x)
+    line = _pareto_line(fig)
+    cumulative = list(line.y)
+    assert list(line.x) == _pareto_axis(fig)
     assert len(cumulative) == 15
     assert cumulative == sorted(cumulative)
     assert cumulative[-1] == 100
@@ -412,22 +441,55 @@ def test_cumulative_line_spans_every_bar_including_others():
 @pytest.mark.parametrize("counts", [{"U00": 7}, {"U00": 79, "U01": 21}, {"U00": 5, "U01": 5}])
 def test_units_that_are_all_needed_to_reach_the_share_render_without_aggregation(counts):
     fig = create_alerts_per_unit_chart(_units(counts))
-    assert list(fig.data[0].x) == list(counts)
-    assert not any(str(x).startswith("Otras") for x in fig.data[0].x)
-    assert fig.data[0].marker.color == PARETO_BAR_COLOR
+    assert _pareto_axis(fig) == list(counts)
+    assert not any(str(x).startswith("Otras") for x in _pareto_axis(fig))
+    (motor,) = _system_bars(fig).values()
+    assert motor.marker.color == "#355c7d"
+    assert _pareto_totals(fig) == counts
 
 
 def test_a_flat_fleet_stops_at_the_bar_cap_and_reports_the_share_actually_reached():
     fig = create_alerts_per_unit_chart(_units({f"U{i:02d}": 5 for i in range(40)}))
-    assert len(fig.data[0].x) == 16 and fig.data[0].x[-1] == "Otras (25)"
+    assert len(_pareto_axis(fig)) == 16 and _pareto_axis(fig)[-1] == "Otras (25)"
     # 15 of 40 equal units hold 37.5%: the sentence must not claim 80% (nor round up to 38%).
     assert "15 de 40 unidades representan el 37% de las alertas." in [a.text for a in fig.layout.annotations]
-    assert fig.data[1].y[-1] == 100
+    assert _pareto_line(fig).y[-1] == 100
 
 
 def test_target_and_cap_are_configurable():
     fig = create_alerts_per_unit_chart(_units({f"U{i:02d}": 10 - i for i in range(8)}), target_pct=50, max_bars=3)
-    assert list(fig.data[0].x) == ["U00", "U01", "U02", "Otras (5)"]
+    assert _pareto_axis(fig) == ["U00", "U01", "U02", "Otras (5)"]
+
+
+def test_unit_bars_are_stacked_per_system_in_the_shared_palette():
+    rows = (
+        [{"UnitId": "U1", "sistema": "motor"}] * 5 + [{"UnitId": "U1", "sistema": "frenos"}] * 3
+        + [{"UnitId": "U2", "sistema": "frenos"}] * 4
+    )
+    fig = create_alerts_per_unit_chart(pd.DataFrame(rows))
+    bars = _system_bars(fig)
+    assert set(bars) == {"Motor", "Frenos"}
+    assert bars["Motor"].marker.color == "#355c7d" and bars["Frenos"].marker.color == "#d08c60"
+    # Each bar's segments add up to the unit's alert count, so the Pareto and its cumulative line are unchanged.
+    assert dict(zip(bars["Motor"].x, bars["Motor"].y)) == {"U1": 5, "U2": 0}
+    assert dict(zip(bars["Frenos"].x, bars["Frenos"].y)) == {"U1": 3, "U2": 4}
+    assert _pareto_totals(fig) == {"U1": 8, "U2": 4}
+    assert _pareto_axis(fig) == ["U1", "U2"] and list(_pareto_line(fig).y) == [pytest.approx(200 / 3), 100]
+    assert fig.layout.barmode == "stack" and fig.layout.showlegend is True
+
+
+def test_a_single_system_fleet_shows_no_system_legend():
+    assert create_alerts_per_unit_chart(_units({"U00": 3, "U01": 2})).layout.showlegend is False
+
+
+def test_selected_unit_keeps_each_system_color_and_the_others_fade():
+    rows = [{"UnitId": u, "sistema": s} for u in ("U1", "U2") for s in ("motor", "frenos")]
+    fig = create_alerts_per_unit_chart(pd.DataFrame(rows), selected_units=["U1"])
+    for system, color in (("Motor", "#355c7d"), ("Frenos", "#d08c60")):
+        bar = _system_bars(fig)[system]
+        assert dict(zip(bar.x, bar.marker.color))["U1"] == color
+        assert dict(zip(bar.x, bar.marker.color))["U2"] != color
+        assert dict(zip(bar.x, bar.marker.line.width)) == {"U1": 2.5, "U2": 0}
 
 
 def test_unit_click_resolves_to_the_unit_but_others_does_not():
@@ -573,7 +635,7 @@ def test_unit_roster_is_every_unit_not_the_ones_the_pareto_draws():
     counts = {f"CA-{i}": 30 - i for i in range(1, 21)}
     frame = _units(counts)
     chart = create_alerts_per_unit_chart(frame)
-    assert len(chart.data[0].x) == 15  # fourteen units reach 80%, then "Otras"
+    assert len(_pareto_axis(chart)) == 15  # fourteen units reach 80%, then "Otras"
     catalog = alert_filter_catalog(frame)
     assert catalog["units"] == [f"CA-{i}" for i in range(1, 21)]  # natural order, none folded away
 
@@ -675,22 +737,25 @@ def test_treemap_marks_a_selected_trigger_without_dropping_the_others(monkeypatc
 
 def test_unit_chart_keeps_every_unit_and_marks_the_selected_ones(monkeypatch, alerts):
     unit_chart, *_ = _general(monkeypatch, alerts, {"unit": ["CA-2"]})
-    bars = unit_chart.data[0]
     # The selected unit always keeps its own bar, whatever the cutoff folds away.
-    assert "CA-2" in set(bars.x)
-    colors = dict(zip(bars.x, bars.marker.color))
-    assert colors["CA-2"] == PARETO_BAR_COLOR
-    assert all(color != PARETO_BAR_COLOR for unit, color in colors.items() if unit != "CA-2")
+    assert "CA-2" in _pareto_axis(unit_chart)
+    for bars in _system_bars(unit_chart).values():
+        colors = dict(zip(bars.x, bars.marker.color))
+        full = _system_colors()[bars.name]
+        if "CA-2" in colors:
+            assert colors["CA-2"] == full
+        assert all(color != full for unit, color in colors.items() if unit != "CA-2")
     # Other filters still narrow the counts.
     narrowed, *_ = _general(monkeypatch, alerts, {"unit": ["CA-2"], "system": "Frenos"})
-    assert list(narrowed.data[0].x) == ["CA-2"]
+    assert _pareto_axis(narrowed) == ["CA-2"]
 
 
 def test_a_selected_unit_beyond_the_cutoff_is_drawn_on_its_own_bar():
     fig = create_alerts_per_unit_chart(_units({f"U{i:02d}": 30 - i for i in range(20)}), selected_units=["U19"])
-    assert "U19" in list(fig.data[0].x)
-    assert fig.data[0].x[-1].startswith("Otras")
-    assert list(fig.data[0].customdata[list(fig.data[0].x).index("U19")]) == ["U19"]
+    assert "U19" in _pareto_axis(fig)
+    assert _pareto_axis(fig)[-1].startswith("Otras")
+    (motor,) = _system_bars(fig).values()
+    assert list(motor.customdata[list(motor.x).index("U19")]) == ["U19"]
 
 
 def test_weekly_chart_keeps_every_week_and_marks_the_selected_one(monkeypatch, alerts):

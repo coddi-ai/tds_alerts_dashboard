@@ -13,7 +13,7 @@ from src.data.catalog import dashboard_data_root
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.1.31"
+APP_VERSION = "2.1.32"
 
 # Ranking fields a Short View axis can be configured with (`fleet_scatter_axes`);
 # the chart maps each name to its column (predictive_charts.SCATTER_AXIS_FIELDS).

@@ -1,17 +1,89 @@
-/* Reportes > Informe preliminar de falla (dashboard/pages/reporting_informe_falla.py) */
+/* Reportes > Informe preliminar de falla (dashboard/pages/reporting_informe_falla.py).
+   Same look as the ERP pages (erp_avisos.css): white cards with a slate border and no coloured
+   header band; blue is kept for the page title and the primary action. Everything is scoped to
+   .informe-page because Dash loads every asset on every page. */
+
+.informe-page {
+    --informe-border: #e2e8f0;
+    --informe-text: #0f172a;
+    --informe-muted: #475569;
+    color: var(--informe-text);
+}
+
+/* ---- Page header ---- */
+.informe-page-header {
+    margin-bottom: 20px;
+}
+
+.informe-page-title {
+    margin: 0 0 4px;
+    color: #0a58ca;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.informe-page-subtitle {
+    margin: 0;
+    color: var(--informe-muted);
+}
+
+/* ---- Cards ---- */
+.informe-page .card {
+    border: 1px solid var(--informe-border);
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05) !important;
+}
+
+.informe-page .card-header.informe-card-header {
+    padding: 14px 20px 0;
+    border-bottom: 0;
+    background: transparent;
+    color: var(--informe-text);
+}
+
+.informe-card-header h5 {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.informe-card-header h5 > .fas {
+    color: var(--informe-muted);
+}
+
+.informe-card-header--danger h5,
+.informe-card-header--danger h5 > .fas {
+    color: #b91c1c;
+}
+
+.informe-page .card-body {
+    padding: 14px 20px 18px;
+}
+
+.informe-page label {
+    color: #1e293b;
+    font-size: 0.9rem;
+    font-weight: 600 !important;
+}
+
+.informe-page label > .fas {
+    color: var(--informe-muted);
+}
+
+/* ---- Images ---- */
 .informe-upload {
     display: block;
     padding: 24px 16px;
     border: 2px dashed var(--border-strong, #adb5bd);
-    border-radius: 6px;
+    border-radius: 10px;
     text-align: center;
     cursor: pointer;
     transition: background-color 0.15s, border-color 0.15s;
 }
 
 .informe-upload:hover {
-    border-color: #0d6efd;
-    background-color: rgba(52, 152, 219, 0.06);
+    border-color: #1d4ed8;
+    background-color: rgba(29, 78, 216, 0.05);
 }
 
 .informe-thumb {
@@ -19,8 +91,8 @@
     width: 100%;
     height: 140px;
     object-fit: cover;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+    border-top-left-radius: 11px;
+    border-top-right-radius: 11px;
     background-color: #f8f9fa;
 }
 
@@ -36,13 +108,17 @@
 .informe-in-development {
     margin: 12px;
     border: 1px dashed var(--border-strong, #adb5bd);
-    border-radius: 6px;
+    border-radius: 10px;
     opacity: 0.75;
 }
 
+/* ---- PDF preview ---- */
 .informe-preview {
+    display: block;
     width: 100%;
-    height: 80vh;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
+    height: 85vh;
+    min-height: 640px;
+    border: 1px solid var(--informe-border);
+    border-radius: 8px;
+    background: #f8fafc;
 }

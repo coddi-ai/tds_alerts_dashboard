@@ -405,7 +405,9 @@ def make_openai_llm(model: str, reasoning_effort: Optional[str]) -> Callable:
     """Build the real OpenAI call (imported lazily so demo planning works without a key)."""
     from openai import OpenAI
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    from src.utils.openai_key import resolve_openai_api_key
+
+    api_key = resolve_openai_api_key()
     if not api_key:
         raise SystemExit("OPENAI_API_KEY is not set (environment or .env).")
     client = OpenAI(api_key=api_key, max_retries=2, timeout=120)

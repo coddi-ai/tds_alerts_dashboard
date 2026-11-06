@@ -22,6 +22,10 @@ services:
       # Progressive answers over SSE. Must match the value the API sees, or the browser
       # opens a stream the service will refuse.
       - CAMPBELL_AI_STREAMING=${CAMPBELL_AI_STREAMING:-true}
+      # El informe preliminar de falla llama a OpenAI desde este contenedor, no desde
+      # campbell-api. Se declara explicito igual que alla para que llegue aunque el
+      # despliegue no traiga la clave en .env.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # MAPBOX_TOKEN will be read from .env file
       # Or set explicitly: MAPBOX_TOKEN=${MAPBOX_TOKEN}
     volumes:

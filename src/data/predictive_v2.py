@@ -303,6 +303,23 @@ def load_unit_state_history(client: str, component: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def load_curve_state_history(client: str, component: str) -> pd.DataFrame:
+    """`Unit`, `Fecha`, `estado` of every row of `cumulative_risk_curve` - the curve's
+    state of each unit day by day, across all its cycles, `estado` as delivered.
+
+    The latest partition already carries each unit's full history (see
+    `read_cumulative_risk_curve`), so one read answers "what was the curve state up
+    to date D". Reportabilidad combines it with `load_unit_state_history`. Ordered by
+    date, then cycle, so the newest cycle wins a date two cycles share. Empty
+    DataFrame if the client/component has no curve."""
+    columns = ["Unit", "Fecha", "estado"]
+    curve = read_cumulative_risk_curve(client, component)
+    if curve is None or curve.empty or not set(columns).issubset(curve.columns):
+        return pd.DataFrame(columns=columns)
+    order = ["Fecha", "ciclo"] if "ciclo" in curve.columns else ["Fecha"]
+    return curve.sort_values(order, kind="stable")[columns].reset_index(drop=True)
+
+
 def read_all_partitions(base: Path) -> pd.DataFrame:
     """Every week partition under `base`, concatenated, with its `year`/`week`.
 

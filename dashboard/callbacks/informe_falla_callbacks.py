@@ -139,7 +139,7 @@ def _result_card(body, color: str = "primary") -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader(
             html.H5([html.I(className="fas fa-clipboard-check me-2"), t("informe_falla.result_title")], className="mb-0"),
-            className=f"bg-{color} text-white",
+            className=f"informe-card-header informe-card-header--{color}",
         ),
         dbc.CardBody(body),
     ], className="shadow-sm mb-4")
