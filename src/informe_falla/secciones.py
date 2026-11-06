@@ -4,9 +4,11 @@ Informe preliminar de falla: la IA redacta el diagnostico y la causa probable de
 Tres llamadas, cada una sobre lo que se muestra en su seccion:
   - Aceite (aceite.observaciones_laboratorio): las muestras de laboratorio de los 3 meses previos.
   - Detenciones (redactar_detenciones): las intervenciones de mantencion del sistema (mantenciones.py).
-  - Resumen (redactar_resumen): SOLO el diagnostico y la causa probable de Aceite, Monitoreo de riesgo (el
-    analisis publicado, analisis_unidad) y Detenciones, tal como los lee el cliente. No recibe otros datos, asi
-    que no puede contradecir a las secciones ni agregar hechos que no esten en ellas.
+  - Resumen (redactar_resumen): SOLO lo que el cliente lee en Aceite, Monitoreo de riesgo (el analisis publicado,
+    analisis_unidad, y las frases de respuesta de la seccion: desde cuando estaba fuera de lo normal, los modos
+    frente a la flota y el estado general del motor) y Detenciones. No recibe otros datos, asi que no puede
+    contradecir a las secciones ni agregar hechos que no esten en ellas. La causa probable sale como 1 o 2
+    hipotesis, cada una con su respaldo; las acciones son solo para esta mantencion.
 
 Todas siguen los lineamientos de mensajes del prompt del informe (agent.prompt_informe: Principios y Lenguaje) y
 pasan por los mismos controles (vocabulario prohibido, terminos internos, afirmaciones que los registros no
@@ -22,13 +24,13 @@ from typing import List, Optional
 from src.informe_falla import catalog as c
 from src.informe_falla.agent import (_AFIRMACIONES_PROHIBIDAS, _LENGUAJE_PROHIBIDO, _LISTA_TEXTO, _TERMINOS_INTERNOS,
                                      _TEXTO, LlmFn, _enum, _frases, _obj, _palabras, prompt_informe, validar_esquema)
-from src.informe_falla.report_html import _textos_predictivo
+from src.informe_falla.report_html import _textos_predictivo, frases_monitoreo
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # Cambia cada vez que cambian los prompts o los esquemas de este modulo o de aceite.py; queda en el registro.
-PROMPT_VERSION = "secciones-1"
+PROMPT_VERSION = "secciones-2"
 
 _VALOR = re.compile(r"\d+(?:[.,]\d+)?\s*(?:ppm|%|cSt)\b", re.IGNORECASE)
 
@@ -164,9 +166,14 @@ def confianzas_permitidas(evid: dict) -> List[str]:
     return c.CONFIANZAS[:c.CONFIANZAS.index(techo) + 1] if techo in c.CONFIANZAS else list(c.CONFIANZAS)
 
 
+# Causa probable del Resumen: una, o dos hipotesis cuando las secciones apuntan a causas distintas, cada una con las
+# secciones que la respaldan ("el aceite y la detención del 30 sep").
+_CAUSAS = {"type": "array", "items": _obj({"causa": _TEXTO, "respaldo": _TEXTO})}
+
+
 def esquema_resumen(evid: dict) -> dict:
     return {"name": "resumen_secciones", "strict": True, "schema": _obj({
-        "diagnostico": _TEXTO, "causa_probable": _TEXTO, "acciones": _LISTA_TEXTO, "riesgo_si_no_se_hace": _TEXTO,
+        "diagnostico": _TEXTO, "causas": _CAUSAS, "acciones": _LISTA_TEXTO, "riesgo_si_no_se_hace": _TEXTO,
         "confianza": _enum(confianzas_permitidas(evid)), "motivo_confianza": _TEXTO,
     })}
 
@@ -182,7 +189,10 @@ def entrada_resumen(evid: dict, perfil: dict, sistema: str, detenciones: dict,
         "unidad": evid["consulta"]["unidad"], "sistema": sistema, "equipo": perfil["equipo"],
         "fecha_detencion": evid["consulta"]["fecha"],
         "aceite": aceite,
-        "monitoreo_de_riesgo": {"diagnostico": diag_m, "causa_probable": causa_m, "nota": nota_m},
+        # El analisis publicado mas las frases de respuesta de la seccion (desde cuando estaba fuera de lo normal,
+        # los modos frente a la flota y el estado general del motor), tal como las lee el cliente.
+        "monitoreo_de_riesgo": {"diagnostico": diag_m, "causa_probable": causa_m, "nota": nota_m,
+                                **{k: v for k, v in frases_monitoreo(evid).items() if v}},
         "detenciones": {"diagnostico": detenciones["diagnostico"], "causa_probable": detenciones["causa_probable"],
                         "sin_registros": bool(detenciones.get("fijo"))},
         # Las verificaciones del catalogo para los modos destacados: de ahi salen las acciones concretas.
@@ -209,13 +219,21 @@ Detenciones (las intervenciones de mantención). Las recibes tal como las lee el
 que permiten los datos, sus advertencias y las verificaciones sugeridas para los modos destacados. A veces llega un
 relato del cliente (contexto_cliente) que nadie verificó.
 
+Monitoreo de riesgo trae además las frases que el cliente lee en esa sección: desde_cuando (desde cuándo la unidad
+estaba fuera de lo normal), modos_frente_a_la_flota (los modos más altos frente a la flota, ya en palabras del
+cliente) y, si aplica, estado_general_del_motor. Úsalas con las mismas palabras; no las conviertas en cifras.
+
 Escribe el Resumen del informe, integrando SOLO esas tres secciones:
 - diagnostico (máximo {d[0]} frases, unas {d[1]} palabras): qué pasa probablemente en el equipo.
-- causa_probable (máximo {k[0]} frases, unas {k[1]} palabras): la causa principal. Si dos o más secciones apuntan a
-  lo mismo, dilo; si se contradicen, dilo y no elijas sin fundamento.
-- acciones (1 o {c.MAX_ACCIONES} acciones; unas {a[1]} palabras en total contando riesgo_si_no_se_hace): qué hacer,
-  dónde y cuándo. Tómalas de verificaciones_sugeridas de los modos que coinciden con lo que dicen las secciones; si
-  ninguna sección muestra algo, el procedimiento habitual (tomar una muestra de aceite antes de drenar).
+- causas: la causa probable, como una lista de 1 o {c.MAX_HIPOTESIS} hipótesis. Cada una con causa (máximo {k[0]} frases,
+  unas {k[1]} palabras) y respaldo (qué secciones la sostienen, en pocas palabras: "el aceite y la detención del 30
+  sep"). Una sola hipótesis si las secciones apuntan a lo mismo o si solo una aporta. Dos hipótesis solo si las
+  secciones apuntan a causas distintas y los datos no permiten elegir: no fuerces una sola ni inventes una segunda.
+- acciones (1 o {c.MAX_ACCIONES} acciones; unas {a[1]} palabras en total contando riesgo_si_no_se_hace): qué revisar o
+  medir durante esta mantención, y dónde. Tómalas de verificaciones_sugeridas de los modos que coinciden con lo que
+  dicen las secciones; primero lo del modo más alto frente a la flota. Con dos hipótesis, las acciones deben permitir
+  distinguirlas. Si ninguna sección muestra algo, el procedimiento habitual (tomar una muestra de aceite antes de
+  drenar).
 - riesgo_si_no_se_hace: qué pasa si no se hace, en una frase corta.
 - confianza (como máximo el techo de confianza) y motivo_confianza: una frase en palabras del cliente (por ejemplo,
   "el aceite y el monitoreo de riesgo apuntan a lo mismo").
@@ -225,8 +243,10 @@ Reglas:
   aporta: no la uses para subir ni bajar la confianza.
 - contexto_cliente no está verificado: úsalo para orientar la redacción, sin subir la confianza.
 - Todo es probable, nunca confirmado; la inspección de la unidad confirma la causa. Nunca lo llames "RCA".
-- La unidad YA está detenida: la urgencia es "en esta detención" o "antes de volver a operar", nunca "en la próxima
-  detención".
+- La unidad YA está detenida: las acciones son solo tareas para hacer durante esta mantención. No agregues cuándo
+  (nada de "antes de volver a operar", "en la próxima detención" ni plazos) ni lo que viene después de la mantención.
+- No uses los niveles del laboratorio ("marginal", "crítico") ni los nombres de los niveles de la flota: dilo en
+  palabras simples ("bajó, aunque seguía sobre lo normal").
 - Acciones en imperativo formal (usted): "tome", "revise", "mida".
 - Al sistema que destaca los modos llámalo "el monitoreo de riesgo".
 {lineamientos(perfil)}
@@ -234,15 +254,22 @@ Devuelve SOLO JSON con la estructura pedida."""
 
 
 def controles_resumen(r: dict) -> List[str]:
-    problemas = [p for p in controles_diagnostico_causa(r, c.LIMITES_MENSAJE) if not p.startswith(("palabra", "término",
-                                                                                                    "afirmación", "valor"))]
+    causas = [x["causa"] for x in r["causas"]] or [""]
+    problemas = []
+    for i, causa in enumerate(causas):
+        problemas += [p.replace("causa_probable", f"causa {i + 1}") for p in
+                      controles_diagnostico_causa({"diagnostico": r["diagnostico"] if i == 0 else "",
+                                                   "causa_probable": causa}, c.LIMITES_MENSAJE)
+                      if not p.startswith(("palabra", "término", "afirmación", "valor"))]
+    if not r["causas"] or len(r["causas"]) > c.MAX_HIPOTESIS:
+        problemas.append(f"causas: {len(r['causas'])} (deben ser 1 o {c.MAX_HIPOTESIS})")
     total = sum(_palabras(x) for x in r["acciones"]) + _palabras(r["riesgo_si_no_se_hace"])
     if not r["acciones"] or len(r["acciones"]) > c.MAX_ACCIONES:
         problemas.append(f"acciones: {len(r['acciones'])} (deben ser 1 o {c.MAX_ACCIONES})")
     if total > c.LIMITES_MENSAJE["acciones"][1] * c.TOLERANCIA_LARGO:
         problemas.append(f"acciones: {total} palabras")
-    return problemas + _vocabulario([r["diagnostico"], r["causa_probable"], r["riesgo_si_no_se_hace"],
-                                     r["motivo_confianza"], *r["acciones"]])
+    return problemas + _vocabulario([r["diagnostico"], *causas, *[x["respaldo"] for x in r["causas"]],
+                                     r["riesgo_si_no_se_hace"], r["motivo_confianza"], *r["acciones"]])
 
 
 def redactar_resumen(evid: dict, perfil: dict, sistema: str, detenciones: dict, llm_fn: LlmFn,
@@ -250,6 +277,10 @@ def redactar_resumen(evid: dict, perfil: dict, sistema: str, detenciones: dict, 
     """El Resumen (diagnostico, causa probable, acciones, riesgo, confianza y su motivo) desde las tres secciones."""
     entrada = entrada_resumen(evid, perfil, sistema, detenciones, contexto_cliente)
     r = pedir(llm_fn, prompt_resumen(perfil), entrada, esquema_resumen(evid))
-    r = {**r, "diagnostico": r["diagnostico"].strip(), "causa_probable": r["causa_probable"].strip(),
+    causas = [{"causa": x["causa"].strip(), "respaldo": x["respaldo"].strip()} for x in r["causas"] if x["causa"].strip()]
+    r = {**r, "diagnostico": r["diagnostico"].strip(), "causas": causas[:c.MAX_HIPOTESIS] if causas else r["causas"],
          "acciones": [x.strip() for x in r["acciones"][:c.MAX_ACCIONES]]}
+    # causa_probable en un solo texto, para el registro y la vista (el PDF muestra las hipotesis por separado)
+    r["causa_probable"] = (r["causas"][0]["causa"] if len(r["causas"]) == 1 else
+                           " ".join(f"Hipótesis {i}: {x['causa']}" for i, x in enumerate(r["causas"], 1)))
     return {**r, "controles": controles_resumen(r), "entrada": entrada}

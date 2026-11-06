@@ -1,22 +1,35 @@
 """
 Informe preliminar de falla, paso 3: el informe para el cliente como HTML (pdf.py lo pasa a PDF).
 
-Secciones, numeradas en el orden en que aparecen (Aceite solo si el cliente tiene muestras de aceite):
-  1. Resumen: diagnostico, causa probable y acciones. Lo escribe la IA al final, integrando SOLO el
-     diagnostico y la causa probable de las otras secciones (secciones.redactar_resumen).
+Cabecera (titulo y datos de la detencion) y una linea chica con las fuentes. Despues, las secciones, numeradas en
+el orden en que aparecen (Aceite solo si el cliente tiene muestras de aceite):
+  1. Resumen: diagnostico, causa probable (una, o dos hipotesis con su respaldo si las secciones apuntan a causas
+     distintas) y acciones para esta mantencion. Lo escribe la IA al final, integrando SOLO lo que el cliente lee
+     en las otras secciones (secciones.redactar_resumen).
   2. Aceite: las muestras de aceite del sistema en los 3 meses previos (aceite.py): cuantas, cuantas fuera de
      lo normal y la ultima; linea de tiempo; las ultimas muestras con el nivel de los ensayos fuera de limite
      (sin concentraciones) y el diagnostico y la causa probable de las recomendaciones del laboratorio.
-  3. Monitoreo de riesgo (el Predictivo; en el PDF nunca se llama asi): estado actual semana a semana
-     (unit_status_summary), puntajes por modo (risk_scores), estado del ciclo de vida (cumulative_risk_curve) y
-     el diagnostico y la causa probable publicados para la unidad la semana previa (unit_failure_analisis).
-  4. Detenciones: las intervenciones previas del sistema (mantenciones.py) en cifras, linea de tiempo y
-     listado, con un diagnostico y una causa probable escritos por la IA (secciones.redactar_detenciones).
-Sin Aceite, Monitoreo de riesgo pasa a ser la 2 y Detenciones la 3.
+  3. Monitoreo de riesgo (el Predictivo; en el PDF nunca se llama asi), ordenado por las preguntas del cliente.
+     Cada bloque abre con una frase de respuesta escrita por el codigo (frases_monitoreo), salvo donde la tabla ya
+     responde:
+       3.1 Que concluyo: el analisis publicado para la unidad la semana previa (unit_failure_analisis).
+       3.2 Desde cuando la unidad estaba fuera de lo normal: el estado semanal (unit_status_summary).
+       3.3 Que modos de falla estaban mas altos: cada modo con su nivel frente a la flota (risk_scores.risk_level
+           del ultimo dia antes de la detencion, traducido) y los graficos de los modos sobre lo habitual de la
+           unidad o entre el 10 % mas alto de la flota, con los puntos del color de su nivel.
+       3.4 Estado general del motor para sus horas de uso (cumulative_risk_curve): solo si el motor se evalua;
+           Normal, solo la frase; Alerta o Anormal, la frase y el grafico.
+  4. Detenciones: las intervenciones previas del sistema (mantenciones.py) en cifras, linea de tiempo, una tabla
+     de antecedentes y el listado de la mas reciente a la mas antigua, con un diagnostico y una causa probable
+     escritos por la IA (secciones.redactar_detenciones). La marca de la detencion lleva los dias detenida si los
+     registros lo dicen (solo se muestra; nunca es evidencia).
+Sin Aceite, Monitoreo de riesgo pasa a ser la 2 y Detenciones la 3. El pie (alcance y brechas) va al final, en
+letra chica.
 
 Lo que se puede calcular sale de la evidencia, nunca de la IA. El PDF es para el cliente: no lleva
 avisos internos de los controles ni el veredicto de las reglas (quedan en el registro JSON y en la
-vista del dashboard). Lo que el usuario escribio en el formulario y sus fotos van tal cual, escapados.
+vista del dashboard). Lo que el usuario escribio en el formulario no se muestra (lo usa la IA); sus fotos van
+tal cual, escapadas.
 
 Los estilos viven en assets/report.css (fuentes locales en assets/fonts/). Los SVG llevan sus colores
 como atributos: el renderizador SVG de WeasyPrint no aplica las clases de la hoja de estilos.
@@ -47,6 +60,8 @@ ALCANCE = ("Informe preliminar elaborado con los datos del monitoreo de riesgo d
 AZUL, ROJO, GRIS, TINTA_2, LINEA = "#1F5FAD", "#B3362C", "#9AA3AD", "#59636E", "#DCE0E6"
 COLOR_ESTADO = {"normal": "#DCEBE2", "alerta": "#F2C66D", "anormal": "#C9473C"}
 ZONAS_CURVA = {"normal": "#E4F0E8", "alerta": "#FBF0CC", "anormal": "#F7DCD9"}
+# Nivel frente a la flota: puntos de los graficos y etiquetas de la tabla (Saludable no lleva punto)
+COLOR_NIVEL = {"Saludable": "#E3E7EB", "Monitoreo": "#F3D27A", "Prioridad alta": "#E8873A", "Critico": "#B3362C"}
 TIPO_DETENCION = {"Correctiva": ("No programada", "ambar", "#E0A82E"),
                   "Programada": ("Programada", "neutra", GRIS),
                   "Sin clasificar": ("Sin clasificar", "borde", "#FFFFFF")}
@@ -55,11 +70,6 @@ TIPO_DETENCION = {"Correctiva": ("No programada", "ambar", "#E0A82E"),
 def numero_informe(unidad: str, fecha: str) -> str:
     """N.º de informe que ve el cliente: IPF-<unidad>-<AAAAMMDD de la detencion>."""
     return "IPF-" + unidad + "-" + fecha.replace("-", "")
-
-
-# Campos del formulario que se muestran, en orden: (clave en contexto, titulo).
-CAMPOS_CONTEXTO = [("sistema", "Sistema indicado"), ("titulo", "Título"), ("descripcion", "Descripción del evento"),
-                   ("hallazgos", "Hallazgos de inspección"), ("acciones", "Acciones realizadas")]
 
 
 def _e(texto):
@@ -143,14 +153,14 @@ def _grafico(evid, modo):
     serie = (diario.get("series") or {}).get(modo)
     fecha_det = _d(evid["consulta"]["fecha"])
     if serie:
-        puntos = [(_d(p["fecha"]), p["valor"], p["anomalo"], p["zona"] == "reciente") for p in serie]
+        puntos = [(_d(p["fecha"]), p["valor"], p["anomalo"], p["zona"] == "reciente", p.get("nivel")) for p in serie]
         base = _diario_modo(evid, modo).get("base_diaria") or {}
         habitual = next((v for k, v in base.items() if k.startswith("p") and k[1:].isdigit()), None)
         etiqueta, paso = "Nivel alto habitual de la unidad", 1
     else:
         anomalas = set(evid["analisis_por_metrica"].get(modo, {}).get("semanas_anomalas") or [])
         lunes0 = _lunes_de(evid)
-        puntos = [(lunes0 + timedelta(weeks=f["rel"]), f[modo], f["rel"] in anomalas, f["zona"] == "reciente")
+        puntos = [(lunes0 + timedelta(weeks=f["rel"]), f[modo], f["rel"] in anomalas, f["zona"] == "reciente", None)
                   for f in evid.get("trayectoria", []) if f.get(modo) is not None and f.get("valida", True)]
         habitual = (evid["analisis_por_metrica"].get(modo, {}).get("vs_unidad") or {}).get("base_max")
         etiqueta, paso = "Máximo habitual de la unidad", 7
@@ -167,7 +177,10 @@ def _grafico(evid, modo):
         return H - aba - v / vmax * (H - arr - aba)
 
     s = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="Score de {_e(NOMBRE_MODO[modo])} en los 3 meses previos">']
-    recientes = [p[0] for p in puntos if p[3]]
+    con_niveles = any(p[4] for p in puntos)     # con nivel frente a la flota: sin zona ni linea de lo habitual
+    if con_niveles:
+        habitual = None
+    recientes = [p[0] for p in puntos if p[3]] if not con_niveles else []
     if recientes:
         x0 = x(recientes[0]) - (3 if paso == 1 else 10)
         s.append(f'<rect class="g-zona" x="{x0:.1f}" y="{arr}" width="{x(fecha_det) - x0:.1f}" height="{H - arr - aba}"/>')
@@ -179,7 +192,7 @@ def _grafico(evid, modo):
         s.append(f'<line class="g-ref" x1="{izq}" x2="{W - der}" y1="{y(habitual):.1f}" y2="{y(habitual):.1f}"/>')
         s.append(f'<text class="g-eje" x="{izq + 4}" y="{y(habitual) - 6:.1f}">{etiqueta}: {_num(habitual)}</text>')
     tramos, tramo, previo = [], [], None
-    for d, v, _, _ in puntos:                 # la linea se corta donde faltan datos
+    for d, v, *_ in puntos:                   # la linea se corta donde faltan datos
         if previo is not None and (d - previo).days > paso and tramo:
             tramos.append(tramo)
             tramo = []
@@ -189,7 +202,12 @@ def _grafico(evid, modo):
         tramos.append(tramo)
     for t in tramos:
         s.append('<polyline class="g-serie" points="' + " ".join(t) + '"/>')
-    anomalos = [(d, v) for d, v, a, _ in puntos if a]
+    if con_niveles:
+        for d, v, _, _, nivel in puntos:
+            if nivel in c.NIVELES_FLOTA[1:]:
+                s.append(f'<circle cx="{x(d):.1f}" cy="{y(v):.1f}" r="3.3" fill="{COLOR_NIVEL[nivel]}" stroke="#FFFFFF" '
+                         f'stroke-width="0.6"><title>{_fecha_corta(d.isoformat())}: {_e(c.NIVEL_FLOTA_CORTO[nivel])}</title></circle>')
+    anomalos = [(d, v) for d, v, a, *_ in puntos if a] if not con_niveles else []
     for d, v in anomalos:
         s.append(f'<circle class="g-anomalo" cx="{x(d):.1f}" cy="{y(v):.1f}" r="{3.5 if paso == 1 else 4.5}">'
                  f'<title>{_fecha_corta(d.isoformat())}: {_num(v)}</title></circle>')
@@ -219,7 +237,7 @@ _SVG_ATRIBUTOS = {
 
 
 # =============================================================================
-# Bloques reutilizados: mantenciones, contexto del cliente y fotos
+# Bloques reutilizados: mantenciones y fotos
 # =============================================================================
 def nota_cobertura_mantenciones(evid) -> str:
     """Frase determinista cuando la cobertura de mantenciones no es completa (vacia si lo es o no hay fuente).
@@ -242,35 +260,35 @@ def nota_cobertura_mantenciones(evid) -> str:
     return ""
 
 def _resumen_antecedentes(evid) -> list:
-    """Lineas cortas bajo la tabla: ultimo PM, rellenos, recurrencia y lo que se omitio."""
+    """[(antecedente, detalle)] para la tabla de antecedentes: ultimo PM, rellenos, recurrencia y lo omitido."""
     a = evid.get("antecedentes_mantencion") or {}
     if not a:
         return []
-    lineas = []
+    filas = []
     if a.get("ultimo_pm"):
-        lineas.append(f"Último mantenimiento programado: {_fecha_media(a['ultimo_pm']['fecha'])} "
-                      f"({a['ultimo_pm']['dias_antes']} días antes).")
+        filas.append(("Último mantenimiento programado", f"{_fecha_media(a['ultimo_pm']['fecha'])}, "
+                      f"{a['ultimo_pm']['dias_antes']} días antes de la detención"))
     rellenos = [f"{v['n']} de {k}" for k, v in (a.get("rellenos") or {}).items() if v["n"] and k != "otro"]
     if rellenos:
-        lineas.append("Rellenos en el período: " + ", ".join(rellenos) + ".")
-    for r in a.get("recurrencia") or []:
-        lineas.append(f"{r['subsistema']}: {r['correctivas']} correctivas en los últimos "
-                      f"{a.get('ventana_extendida_dias', 180)} días.")
+        filas.append(("Rellenos en el período", _y(rellenos)))
+    recurrencia = [f"{r['subsistema']}: {r['correctivas']}" for r in a.get("recurrencia") or []]
+    if recurrencia:
+        filas.append((f"No programadas en los últimos {a.get('ventana_extendida_dias', 180)} días", " · ".join(recurrencia)))
     extra = (a.get("omitidos") or {}).get("fuera_del_tope")
     if extra:
-        lineas.append(f"Y {extra} registros más en el período.")
-    return lineas
+        filas.append(("Otros registros del período", f"{extra} más, fuera del detalle" if extra > 1 else "1 más, fuera del detalle"))
+    return filas
+
+def _dias_detenida(evid) -> str:
+    """" · 3 días" junto a la marca de la detencion, si los registros de mantencion lo dicen ("" si no)."""
+    d = evid.get("detencion_actual") or {}
+    if not d.get("dias"):
+        return ""
+    return f" · {d['dias']} día" + ("" if d["dias"] == 1 else "s")
+
 
 def _lista(items):
     return "".join("<li>" + _e(t) + "</li>" for t in items)
-
-def _contexto_cliente(unidad, fecha, contexto):
-    """Lo que el usuario entrego en el formulario: unidad, fecha y los textos que haya escrito."""
-    bloques = [f'<div>Unidad {_e(unidad)} y fecha de la detención: {_e(_fecha_media(fecha))}.</div>']
-    for clave, titulo in CAMPOS_CONTEXTO:
-        if (contexto or {}).get(clave):
-            bloques.append(f'<div><div class="etq">{_e(titulo)}</div><div class="texto">{_e(contexto[clave])}</div></div>')
-    return '<div class="contexto">' + "".join(bloques) + "</div>"
 
 def _fotos(imagenes, numero_seccion):
     """Anexo con las fotos del formulario. Solo data URIs de imagen (validadas al subirlas)."""
@@ -290,7 +308,7 @@ def _fotos(imagenes, numero_seccion):
 
 
 # =============================================================================
-# 3.1 Monitoreo de riesgo: estado actual, semana a semana (unit_status_summary)
+# 3.2 Monitoreo de riesgo: desde cuando la unidad estaba fuera de lo normal (unit_status_summary)
 # =============================================================================
 def _semanas(evid) -> list:
     """[(lunes, estado o None)] de las semanas del periodo; None = semana sin datos validos."""
@@ -308,98 +326,156 @@ def _semanas(evid) -> list:
     return salida
 
 
-def _bloque_estado_actual(evid) -> str:
+def _tramo_fuera(semanas) -> tuple:
+    """(lunes en que empieza el tramo final continuo fuera de normal, lunes de su primera semana Anormal)."""
+    desde = anormal = None
+    for lunes, estado in reversed(semanas):
+        if estado in ("alerta", "anormal"):
+            desde = lunes
+            anormal = lunes if estado == "anormal" else anormal
+        elif estado:
+            break
+    return desde, anormal
+
+
+def _frase_desde(evid, semanas) -> str:
+    """La respuesta de 3.2, escrita por el codigo a partir del estado semanal (la lee el cliente y el Resumen)."""
+    con_dato = [e for _, e in semanas if e]
+    if not con_dato:
+        return "No hay datos del estado de la unidad en el período."
+    desde, anormal = _tramo_fuera(semanas)
+    if desde:
+        dias = (_d(evid["consulta"]["fecha"]) - desde).days
+        frase = f"La unidad estuvo fuera de lo normal desde la semana del {_fecha_corta(desde.isoformat())}, {dias} días antes de la detención"
+        if anormal:
+            frase += f", y llegó a Anormal la semana del {_fecha_corta(anormal.isoformat())}"
+        return frase + "."
+    fuera = sum(1 for e in con_dato if e != "normal")
+    if fuera:
+        return (f"La unidad estaba normal en la última semana con datos; estuvo fuera de lo normal {fuera} de las "
+                f"{len(con_dato)} semanas del período.")
+    return "La unidad estuvo normal en todo el período."
+
+
+def frases_monitoreo(evid) -> dict:
+    """Las frases de respuesta de la seccion Monitoreo de riesgo, tal como las lee el cliente. El Resumen las
+    recibe (secciones.entrada_resumen) para integrar la seccion sin recibir datos que el cliente no ve."""
+    cv = evid.get("ciclo_vida") or {}
+    return {"desde_cuando": _frase_desde(evid, _semanas(evid)),
+            "estado_general_del_motor": _frase_ciclo_vida(cv) if _muestra_ciclo_vida(cv) else None,
+            "modos_frente_a_la_flota": [f"{NOMBRE_MODO[m]}: {c.NIVEL_FLOTA_TEXTO[n]}" for m, n in _niveles_tabla(evid)
+                                        if n and n != "Saludable"]}
+
+
+def _bloque_desde(evid, n) -> str:
     semanas = _semanas(evid)
     celdas = []
     for lunes, estado in semanas:
         caja = (f'<span class="semana" style="background:{COLOR_ESTADO[estado]}"></span>' if estado
                 else '<span class="semana semana-vacia"></span>')
         celdas.append(f'<div>{caja}<span class="semana-etq">{_e(_fecha_corta(lunes.isoformat()))}</span></div>')
-    con_dato = [e for _, e in semanas if e]
-    fuera = [e for e in con_dato if e != "normal"]
-    ultimo = con_dato[-1] if con_dato else None
-    desde = None
-    for lunes, estado in reversed(semanas):          # tramo final continuo fuera de normal
-        if estado in ("alerta", "anormal"):
-            desde = lunes
-        elif estado:
-            break
-    dash = evid.get("dashboard_ultima_semana") or {}
-    peor = NOMBRE_MODO.get(dash.get("peor_modo"), "—") if dash else "—"
-    estilo = {"normal": "normal", "alerta": "ambar", "anormal": "rojo"}
-    estado_txt = _pill(ultimo.capitalize(), estilo[ultimo]) if ultimo else "Sin datos"
     return f"""
-  <div class="sub">
-    <div class="sub-cabeza"><h3>Estado actual de la unidad</h3><span class="fuente">Fuente: estado semanal del monitoreo de riesgo</span></div>
-    <p class="nota">Cada cuadro es una semana; la fecha indica el lunes en que empieza.</p>
+  <div class="sub separada">
+    <h3>{n}.2 Desde cuándo la unidad estaba fuera de lo normal</h3>
+    <p class="respuesta">{_e(_frase_desde(evid, semanas))}</p>
     <div class="semanas" style="grid-template-columns:repeat({max(len(semanas), 1)},minmax(0,1fr))">{"".join(celdas)}</div>
     <div class="leyenda"><span><i style="background:{COLOR_ESTADO["normal"]}"></i>Normal</span>
       <span><i style="background:{COLOR_ESTADO["alerta"]}"></i>Alerta</span>
       <span><i style="background:{COLOR_ESTADO["anormal"]}"></i>Anormal</span>
       <span><i class="vacia"></i>Sin datos</span></div>
-    <div class="cajas cuatro">
-      <div class="caja"><div class="etq">Estado al último dato</div><div class="val">{estado_txt}</div></div>
-      <div class="caja"><div class="etq">Fuera de lo normal desde</div><div class="val">{_e(_fecha_media(desde.isoformat())) if desde else "—"}</div></div>
-      <div class="caja"><div class="etq">Modo más alto en la última semana</div><div class="val">{_e(peor)}</div></div>
-      <div class="caja"><div class="etq">Semanas en alerta o anormal</div><div class="val">{len(fuera)} de {len(con_dato)}</div></div>
-    </div>
   </div>"""
 
 
 # =============================================================================
-# 3.2 Monitoreo de riesgo: puntajes de riesgo por modo (risk_scores)
+# 3.3 Monitoreo de riesgo: que modos de falla estaban mas altos (risk_scores, risk_level)
 # =============================================================================
+def _orden_nivel(nivel) -> int:
+    return c.NIVELES_FLOTA.index(nivel) if nivel in c.NIVELES_FLOTA else -1
+
+
+def _niveles_tabla(evid) -> list:
+    """[(modo, nivel frente a la flota o None)] de los modos que el cliente publica, del mas alto al mas bajo;
+    a igual nivel, en el orden del ranking frente a la unidad."""
+    nf = evid.get("nivel_flota") or {}
+    ranking = [r["modo"] for r in evid.get("ranking_modos", [])]
+    modos = [m for m in ranking if m in NOMBRE_MODO and (m in nf or next(
+        (r for r in evid["ranking_modos"] if r["modo"] == m), {}).get("nivel") != "sin_datos")]
+    modos += [m for m in nf if m in NOMBRE_MODO and m not in modos]
+    return sorted(((m, (nf.get(m) or {}).get("nivel")) for m in modos),
+                  key=lambda x: (-_orden_nivel(x[1]), ranking.index(x[0]) if x[0] in ranking else len(ranking)))
+
+
 def _tabla_modos(evid) -> str:
+    """Modo y su nivel frente a la flota (risk_level del ultimo dia antes de la detencion), traducido."""
+    nf = evid.get("nivel_flota") or {}
+    if not nf:                                   # datos anteriores al bootstrap o sin calibracion
+        return _tabla_modos_habitual(evid)
     filas = []
-    graficados = [m for m in _modos_graficados(evid) if m in _destacados(evid)]
-    orden = sorted(evid.get("ranking_modos", []),       # primero los modos graficados, en el mismo orden
-                   key=lambda r: graficados.index(r["modo"]) if r["modo"] in graficados else len(graficados))
-    for r in orden:
+    for m, nivel in _niveles_tabla(evid):
+        celda = (f'<span class="pill pill-nivel-{_orden_nivel(nivel)}">{_e(c.NIVEL_FLOTA_CORTO[nivel])}</span>' if nivel
+                 else '<span class="tenue">Sin dato</span>')
+        clase = ' class="fuerte"' if nivel in c.NIVELES_FLOTA_GRAFICAR else ""
+        filas.append(f'<tr><td{clase}>{_e(NOMBRE_MODO[m])}</td><td>{celda}</td></tr>')
+    fecha = max(v["fecha"] for v in nf.values())
+    return ('<table class="modos"><thead><tr><th scope="col">Modo de falla</th><th scope="col">Frente a la flota</th>'
+            '</tr></thead><tbody>' + "".join(filas) + "</tbody></table>"
+            f'<p class="nota">Nivel del {_e(_fecha_corta(fecha))} frente a la historia de la flota.</p>')
+
+
+def _tabla_modos_habitual(evid) -> str:
+    """Tabla anterior, frente a lo habitual de la unidad: solo cuando risk_scores no trae el nivel frente a la flota."""
+    filas = []
+    for r in evid.get("ranking_modos", []):
         if r["nivel"] == "sin_datos" or r["modo"] not in NOMBRE_MODO:     # el cliente no publica ese modo
             continue
         if r["nivel"] in ("alto", "medio"):
-            estado, inicio = _pill("Sobre lo habitual", "fuerte"), _inicio(evid, r["modo"])
-            desde = _fecha_corta(inicio) if inicio else "—"
+            estado = _pill("Sobre lo habitual", "fuerte")
         elif r["nivel"] == "bajo":
-            estado, desde = _pill("Leve alza", "ambar"), "—"
+            estado = _pill("Leve alza", "ambar")
         else:
-            estado, desde = '<span class="tenue">Sin cambios</span>', "—"
+            estado = '<span class="tenue">Sin cambios</span>'
         clase = ' class="fuerte"' if r["nivel"] in ("alto", "medio") else ""
-        filas.append(f'<tr><td{clase}>{_e(NOMBRE_MODO[r["modo"]])}</td><td>{estado}</td><td class="tenue">{_e(desde)}</td></tr>')
-    return ('<table class="modos"><thead><tr><th scope="col">Modo de falla</th><th scope="col">Último mes</th>'
-            '<th scope="col">Desde</th></tr></thead><tbody>' + "".join(filas) + "</tbody></table>")
+        filas.append(f'<tr><td{clase}>{_e(NOMBRE_MODO[r["modo"]])}</td><td>{estado}</td></tr>')
+    return ('<table class="modos"><thead><tr><th scope="col">Modo de falla</th><th scope="col">Último mes</th></tr>'
+            '</thead><tbody>' + "".join(filas) + "</tbody></table>")
 
 
 def _modos_graficados(evid) -> list:
-    """Un grafico por cada modo "Sobre lo habitual" (alto o medio), el principal primero. Si no hay
-    ninguno, el modo con alza leve (si existe), para que la seccion muestre algo de contexto."""
-    destacados = _destacados(evid)
+    """Un grafico por cada modo sobre lo habitual de la unidad (alto o medio) o entre el 10 % mas alto de la flota
+    (Prioridad alta o Critico), del nivel mas alto al mas bajo. Sin ninguno, el modo con alza leve (si existe)."""
+    nf = evid.get("nivel_flota") or {}
     principal = _modo_principal(evid)
-    if not destacados:
+    modos = list(dict.fromkeys(_destacados(evid) + [m for m, v in nf.items()
+                                                    if v["nivel"] in c.NIVELES_FLOTA_GRAFICAR and m in NOMBRE_MODO]))
+    if not modos:
         return [principal] if principal else []
-    return sorted(destacados, key=lambda m: m != principal)
+    return sorted(modos, key=lambda m: (-_orden_nivel((nf.get(m) or {}).get("nivel")), m != principal))
 
 
-def _bloque_puntajes(evid) -> str:
+def _bloque_puntajes(evid, n) -> str:
     modos = _modos_graficados(evid)
-    hay_diario = bool((evid.get("diario") or {}).get("analisis_por_modo"))
-    if modos:
-        unidad_t = "días" if hay_diario else "semanas"
-        graficos = "".join(f'<div class="tarjeta-int"><div class="fuerte">{_e(NOMBRE_MODO[m])}</div>{_grafico(evid, m)}</div>'
-                           for m in modos)
-        graficos += f'<p class="nota">Puntos azules: {unidad_t} sobre lo habitual de la unidad.</p>'
+    graficos = "".join(f'<div class="tarjeta-int"><div class="fuerte">{_e(NOMBRE_MODO[m])}</div>{_grafico(evid, m)}</div>'
+                       for m in modos)
+    con_niveles = any(p.get("nivel") for m in modos for p in ((evid.get("diario") or {}).get("series") or {}).get(m) or [])
+    if not modos:
+        leyenda = ""
+    elif con_niveles:
+        leyenda = ('<div class="leyenda">' + "".join(
+            f'<span><i class="punto" style="background:{COLOR_NIVEL[k]}"></i>{_e(c.NIVEL_FLOTA_CORTO[k])}</span>'
+            for k in c.NIVELES_FLOTA[1:]) + "</div>")
     else:
-        graficos = ('<div class="tarjeta-int"><p>Ningún modo de falla se salió de lo habitual de la unidad en el '
-                    'período analizado.</p></div>')
+        hay_diario = bool((evid.get("diario") or {}).get("analisis_por_modo"))
+        leyenda = f'<p class="nota">Puntos azules: {"días" if hay_diario else "semanas"} sobre lo habitual de la unidad.</p>'
     return f"""
-  <div class="sub separada puntajes">
-    <div class="sub-cabeza"><h3>Puntajes de riesgo por modo de falla</h3><span class="fuente">Fuente: puntajes de riesgo del monitoreo de riesgo</span></div>
-    <div class="dos-col grafico-tabla"><div class="graficos">{graficos}</div><div>{_tabla_modos(evid)}</div></div>
+  <div class="sub separada">
+    <div class="junto"><h3>{n}.3 Qué modos de falla estaban más altos</h3>{_tabla_modos(evid)}</div>
+    <div class="graf-grid">{graficos}</div>
+    {leyenda}
   </div>"""
 
 
 # =============================================================================
-# 3.3 Monitoreo de riesgo: estado del ciclo de vida (cumulative_risk_curve)
+# 3.4 Monitoreo de riesgo: estado general del motor para sus horas de uso (cumulative_risk_curve)
 # =============================================================================
 def _compacto(v: float) -> str:
     if v >= 1_000_000:
@@ -567,49 +643,61 @@ def _grafico_curva(cv: dict, unidad: str) -> str:
     return "".join(s)
 
 
-def _bloque_ciclo_vida(evid) -> str:
+def _muestra_ciclo_vida(cv) -> bool:
+    """La 3.4 solo aparece si el motor se evalua (curva disponible y sobre las horas minimas)."""
+    return bool(cv.get("disponible") and cv.get("evaluable") and cv.get("estado_final"))
+
+
+def _frase_ciclo_vida(cv) -> str:
+    estado = {"Normal": "dentro de lo habitual", "Alerta": "por sobre lo habitual",
+              "Anormal": "muy por sobre lo habitual"}.get(cv["estado_final"], "dentro de lo habitual")
+    frase = f"Para sus horas de uso, el motor estaba {estado} de la flota"
+    if cv["estado_final"] != "Normal" and cv.get("fuera_de_normal_desde"):
+        frase += f" desde el {_fecha_corta(cv['fuera_de_normal_desde'])}"
+    if cv.get("horas_motor") is not None:
+        frase += f", con {_num(cv['horas_motor'], 0)} horas"
+    return frase + "."
+
+
+def _bloque_ciclo_vida(evid, n) -> str:
+    """Solo si le suma al cliente: sin el motor evaluado no aparece; Normal, solo la frase; Alerta o Anormal, la
+    frase y el grafico."""
     cv = evid.get("ciclo_vida") or {}
+    if not _muestra_ciclo_vida(cv):
+        return ""
     unidad = evid["consulta"]["unidad"]
-    cabeza = ('<div class="sub-cabeza"><h3>Estado del ciclo de vida del motor</h3>'
-              '<span class="fuente">Fuente: curva acumulada del monitoreo de riesgo</span></div>')
-    if not cv.get("disponible"):
-        texto = ("La unidad no tiene curva acumulada antes de la detención." if cv.get("motivo") == "unidad_sin_curva"
-                 else "La curva acumulada del monitoreo de riesgo no está disponible para este informe.")
-        return f'<div class="sub separada">{cabeza}<p class="tenue">{_e(texto)}</p></div>'
-    if not cv.get("evaluable"):
-        zona = _pill("No evaluable", "borde")
-        nota_zona = f'<div class="nota">El motor tiene menos de {_num(c.HORAS_MIN_CURVA, 0)} horas: la curva aún no se evalúa.</div>'
-    else:
-        estilo = {"Normal": "normal", "Alerta": "ambar", "Anormal": "rojo"}.get(cv["estado_final"], "neutra")
-        zona, nota_zona = _pill(cv["estado_final"], estilo), ""
-    desde = _fecha_media(cv["fuera_de_normal_desde"]) if cv.get("fuera_de_normal_desde") else "—"
-    horas = _num(cv["horas_motor"], 0) + " h" if cv.get("horas_motor") is not None else "—"
-    r = cv.get("flota_resumen") or {}
-    aviso = ('<p class="nota">La curva disponible se calculó después de la detención; las zonas pueden incluir '
-             'datos posteriores.</p>' if cv.get("particion_posterior") else "")
+    grafico = ""
+    if cv["estado_final"] != "Normal":
+        aviso = ('<p class="nota">La curva disponible se calculó después de la detención; las zonas pueden incluir '
+                 'datos posteriores.</p>' if cv.get("particion_posterior") else "")
+        grafico = (f'<div class="tarjeta-int">{_grafico_curva(cv, unidad)}<p class="nota">La línea de color es '
+                   f'{_e(unidad)}; el fondo es la referencia de la flota.</p></div>{aviso}')
     return f"""
   <div class="sub separada">
-    {cabeza}
-    <p class="tenue">Riesgo acumulado de cada motor de la flota según sus horas de uso. La unidad {_e(unidad)} va
-      destacada. Se evalúa desde las {_num(c.HORAS_MIN_CURVA, 0)} horas del motor.</p>
-    <div class="tarjeta-int">{_grafico_curva(cv, unidad)}
-      <p class="nota">En gris, el resto de la flota. La línea de {_e(unidad)} lleva el color de su estado: verde
-        Normal, amarillo Alerta, rojo Anormal. El fondo es la referencia de la flota (verde dentro de lo habitual,
-        amarillo sobre lo habitual, rojo muy sobre lo habitual) y puede no coincidir con el estado, que compara el
-        último tramo del motor contra la flota. Donde hay muchas unidades juntas se omiten algunas etiquetas.</p>
-    </div>
-    {aviso}
-    <div class="cajas cuatro">
-      <div class="caja"><div class="etq">Zona al final del período</div><div class="val">{zona}</div>{nota_zona}</div>
-      <div class="caja"><div class="etq">Fuera de lo normal desde</div><div class="val">{_e(desde)}</div></div>
-      <div class="caja"><div class="etq">Horas del motor</div><div class="val">{_e(horas)}</div></div>
-      <div class="caja"><div class="etq">Unidades de la flota en alerta o anormal</div><div class="val">{r.get("alerta_o_anormal", 0)} de {r.get("total", 0)}</div></div>
-    </div>
+    <div class="junto"><h3>{n}.4 Estado general del motor para sus horas de uso</h3>
+    <p class="respuesta">{_e(_frase_ciclo_vida(cv))}</p>
+    {grafico}</div>
   </div>"""
 
 
+def _bloque_monitoreo(evid, n) -> str:
+    """Seccion Monitoreo de riesgo, ordenada por las preguntas del cliente: que concluyo, desde cuando la unidad
+    estaba fuera de lo normal, que modos estaban mas altos y (si aporta) el estado general del motor."""
+    diag, causa, nota = _textos_predictivo(evid)
+    return f"""
+<section class="tarjeta">
+  <h2>{n}. Monitoreo de riesgo</h2>
+  <p class="tenue">Qué mostró el monitoreo de riesgo de la unidad en los 3 meses previos a la detención.</p>
+  <div class="sub"><h3>{n}.1 Qué concluyó el monitoreo de riesgo</h3><div class="sub-cuerpo">{_cierre(diag, causa, nota)}</div></div>
+  {_bloque_desde(evid, n)}
+  {_bloque_puntajes(evid, n)}
+  {_bloque_ciclo_vida(evid, n)}
+  <p class="nota fuente-seccion">Fuente: monitoreo de riesgo de CODDI Asset Health.</p>
+</section>"""
+
+
 # =============================================================================
-# 3.4 Monitoreo de riesgo: diagnostico y causa probable (unit_failure_analisis)
+# 3.1 Monitoreo de riesgo: que concluyo (unit_failure_analisis)
 # =============================================================================
 def _textos_predictivo(evid) -> tuple:
     """(diagnostico, causa probable, nota de fecha) del analisis publicado; textos fijos si no lo hay."""
@@ -664,9 +752,9 @@ def _linea_detenciones(evid, previas) -> str:
         s.append(f'<circle cx="{xp:.1f}" cy="{YL}" r="8" fill="{color}" stroke="{borde}" stroke-width="2"/>')
         s.append(f'<text x="{xp:.1f}" y="{YL - 16 if arriba else YL + 44}" text-anchor="middle" font-size="12" '
                  f'font-weight="600" fill="{TINTA_2}">{_e(_fecha_corta(p["fecha"]))}</text>')
-    s.append(f'<circle cx="{x(fecha):.1f}" cy="{YL}" r="10" fill="{ROJO}" stroke="#FFFFFF" stroke-width="2"/>')
-    s.append(f'<text x="{x(fecha):.1f}" y="{YL - 18}" text-anchor="end" font-size="13" font-weight="700" fill="{ROJO}">'
-             f'{_e(_fecha_corta(fecha.isoformat()))}</text>')
+    s.append(f'<circle cx="{x(fecha):.1f}" cy="{YL}" r="14" fill="{ROJO}" stroke="#FFFFFF" stroke-width="3"/>')
+    s.append(f'<text x="{x(fecha):.1f}" y="{YL + 45}" text-anchor="end" font-size="16" font-weight="700" fill="{ROJO}">'
+             f'Detención {_e(_fecha_corta(fecha.isoformat()))}{_e(_dias_detenida(evid))}</text>')
     s.append("</svg>")
     return "".join(s)
 
@@ -687,8 +775,10 @@ def _bloque_detenciones(evid, inf, numero: int = 3) -> str:
                           "Las detenciones no permiten orientar la causa.", pendiente=True) + "</section>")
     no_programadas = sum(1 for p in previas if p.get("tipo") == "Correctiva")
     horas = [p["horas_dia"] for p in previas if p.get("horas_dia") is not None]
-    filas = []
-    for p in sorted(previas, key=lambda q: q["fecha"]):
+    actual = evid.get("detencion_actual") or {}
+    filas = [_fila_detencion(_fecha_corta(evid["consulta"]["fecha"]), "Detención actual", _pill("Detención analizada", "rojo"),
+                             "Motivo por confirmar en la inspección.", _dias_detenida(evid)[3:] or "—")]
+    for p in sorted(previas, key=lambda q: q["fecha"], reverse=True):
         texto, estilo, _ = TIPO_DETENCION.get(p.get("tipo"), TIPO_DETENCION["Sin clasificar"])
         pill = _pill(texto, estilo) + (_pill("Días previos", "ambar") if p.get("cerca_de_la_detencion") else "")
         detalle = p.get("descripcion") or "Sin detalle"
@@ -696,9 +786,11 @@ def _bloque_detenciones(evid, inf, numero: int = 3) -> str:
             detalle += " Componentes: " + p["componentes"] + "."
         filas.append(_fila_detencion(_fecha_corta(p["fecha"]), p.get("subsistema") or "Intervención", pill, detalle,
                                      _num(p["horas_dia"]) + " h" if p.get("horas_dia") is not None else "—"))
-    filas.append(_fila_detencion(_fecha_corta(evid["consulta"]["fecha"]), "Detención actual", _pill("Detención analizada", "rojo"),
-                                 "Motivo por confirmar en la inspección.", "—"))
-    notas = "".join(f'<p class="nota">{_e(x)}</p>' for x in _resumen_antecedentes(evid))
+    antecedentes = _resumen_antecedentes(evid)
+    tabla_ant = ('<div class="sub antecedentes"><h3>Antecedentes de mantención</h3><table class="modos"><tbody>'
+                 + "".join(f"<tr><td>{_e(k)}</td><td>{_e(v)}</td></tr>" for k, v in antecedentes)
+                 + "</tbody></table></div>") if antecedentes else ""
+    notas = ""
     if cob.get("estado") == "parcial":
         notas += f'<p class="nota">{_e(nota_cobertura_mantenciones(evid))}</p>'
     d = inf.get("detenciones") or {}
@@ -715,6 +807,8 @@ def _bloque_detenciones(evid, inf, numero: int = 3) -> str:
   </div>
   <div class="tarjeta-int">{_linea_detenciones(evid, previas)}
     <div class="leyenda">{leyenda}<span><i class="punto" style="background:{ROJO}"></i>Detención analizada</span></div></div>
+  {tabla_ant}
+  <h3 class="lista-tit">Detalle, de la más reciente a la más antigua</h3>
   <ol class="detenciones">{"".join(filas)}</ol>
   {notas}
   {_cierre(d.get("diagnostico", ""), d.get("causa_probable", ""), pendiente=bool(d.get("fijo")))}
@@ -752,7 +846,7 @@ def _texto_muestreo(a, componente, muestras) -> str:
             f"detención, con resultado {ultima['resultado']}.")
 
 
-def _linea_muestras(a, fecha_det) -> str:
+def _linea_muestras(a, fecha_det, evid=None) -> str:
     """Linea de tiempo de las muestras, con el estilo de _linea_detenciones: un carril por componente, un
     punto por muestra con el color de su resultado y los cambios de aceite bajo la linea."""
     desde, fin = _d(a["ventana_desde"]), _d(fecha_det)
@@ -793,9 +887,10 @@ def _linea_muestras(a, fecha_det) -> str:
             s.append(f'<text x="{x(propias[-1]["fecha"]):.1f}" y="{y + 36}" text-anchor="middle" font-size="12" '
                      f'font-weight="600" fill="{TINTA_2}">Última: {_fecha_corta(propias[-1]["fecha"])}</text>')
     xf, y_fin = x(fin), Y0 + ALTO_CARRIL * (len(componentes) - 1)
-    s.append(f'<line x1="{xf:.1f}" x2="{xf:.1f}" y1="{Y0 - 34}" y2="{y_fin + 12}" stroke="{ROJO}" stroke-width="2"/>')
-    s.append(f'<text x="{xf - 6:.1f}" y="{Y0 - 40}" text-anchor="end" font-size="13" font-weight="700" fill="{ROJO}">'
-             f'Detención {_fecha_corta(fin.isoformat())}</text>')
+    s.append(f'<line x1="{xf:.1f}" x2="{xf:.1f}" y1="{Y0 - 34}" y2="{y_fin + 12}" stroke="{ROJO}" stroke-width="5" '
+             f'stroke-linecap="round"/>')
+    s.append(f'<text x="{xf - 8:.1f}" y="{Y0 - 40}" text-anchor="end" font-size="16" font-weight="700" fill="{ROJO}">'
+             f'Detención {_fecha_corta(fin.isoformat())}{_e(_dias_detenida(evid or {}))}</text>')
     s.append("</svg>")
     return "".join(s)
 
@@ -847,7 +942,7 @@ def _bloque_aceite(evid, numero: int = 2) -> str:
 <section class="tarjeta">
   <h2>{numero}. Aceite</h2>
   {textos}
-  <div class="tarjeta-int">{_linea_muestras(a, fecha)}{_leyenda_muestras()}</div>
+  <div class="tarjeta-int">{_linea_muestras(a, fecha, evid)}{_leyenda_muestras()}</div>
   <table class="modos"><thead><tr>{cabecera}</tr></thead><tbody>{filas}</tbody></table>
   {observaciones}
 </section>'''
@@ -868,14 +963,21 @@ def _bloque_resumen(evid, inf) -> str:
                 else '<span class="chip-off">Detenciones: sin registros</span>')
     con_aceite = bool((evid.get("aceite") or {}).get("muestras"))
     chip_aceite = '<span class="chip-on">Aceite: incorporado</span>' if con_aceite else ""
-    fuentes = "el aceite, el monitoreo de riesgo" if con_aceite else "el monitoreo de riesgo"
+    # Una causa, o dos hipotesis (cada una con su respaldo) cuando las secciones apuntan a causas distintas
+    causas = [x for x in (r.get("causas") or []) if x.get("causa")][:c.MAX_HIPOTESIS]
+    if len(causas) > 1:
+        causa_html = '<div class="hipotesis">' + "".join(
+            f'<div><span class="h-num">Hipótesis {i}</span><span class="r-val">{_e(x["causa"])}</span>'
+            + (f'<span class="h-resp">Respaldo: {_e(x["respaldo"])}</span>' if x.get("respaldo") else "") + "</div>"
+            for i, x in enumerate(causas, 1)) + "</div>"
+    else:
+        causa_html = f'<span class="r-val">{_e(causas[0]["causa"] if causas else r.get("causa_probable", ""))}</span>'
     return f"""
 <section class="resumen">
   <h2>1. Resumen</h2>
-  <p class="r-sub">Conclusión que integra lo que muestran {fuentes} y las detenciones de la unidad.</p>
   <div class="resumen-grid">
     <div><span class="r-etq">Diagnóstico</span><span class="r-val">{_e(r.get("diagnostico", ""))}</span></div>
-    <div><span class="r-etq">Causa probable</span><span class="r-val">{_e(r.get("causa_probable", ""))}</span></div>
+    <div><span class="r-etq">Causa probable</span>{causa_html}</div>
     <div><span class="r-etq">Acciones</span><ol class="r-acciones">{acciones}</ol>{riesgo}</div>
   </div>
   <div class="confianza">
@@ -936,15 +1038,13 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
     emision = emision or date.today()
     periodo = _fecha_media(ventanas["periodo_desde"]) + " al " + _fecha_media(ventanas["periodo_hasta"])
     tiene_aceite = bool((evid.get("aceite") or {}).get("disponible"))
-    usadas = (["Aceite"] if tiene_aceite else []) + ["monitoreo de riesgo"] + \
+    usadas = (["aceite"] if tiene_aceite else []) + ["monitoreo de riesgo"] + \
              (["detenciones"] if evid.get("detenciones_previas") is not None else [])
-    fuentes = (", ".join(usadas[:-1]) + " y " + usadas[-1] if len(usadas) > 1 else usadas[0])
-    fuentes = fuentes[0].upper() + fuentes[1:] + f" de la unidad, del {periodo}."
+    fuentes = _y(usadas) + f" de la unidad, del {periodo}."
     # Numeracion en el orden del informe; sin Aceite, las siguientes suben un numero
     n_aceite = 2
     n_monitoreo = 3 if tiene_aceite else 2
     n_detenciones = n_monitoreo + 1
-    diag_p, causa_p, nota_p = _textos_predictivo(evid)
     pie = [ALCANCE, "El monitoreo de riesgo no mide fallas eléctricas, estructurales ni de montaje."] + _brechas(evid)
 
     return f"""
@@ -960,23 +1060,13 @@ def generar(res, cliente: str = "[Cliente]", numero: Optional[str] = None, versi
   </div>
 </header>
 
-<div class="dos-col">
-  <div class="tarjeta chica"><div class="etq fuerte">Información entregada por el cliente</div>{_contexto_cliente(unidad, fecha, contexto)}</div>
-  <div class="tarjeta chica"><div class="etq fuerte">Fuentes consultadas</div><div>{_e(fuentes)}</div></div>
-</div>
+<p class="fuentes-linea">Fuentes: {_e(fuentes)}</p>
 
 {_bloque_resumen(evid, inf)}
 
 {_bloque_aceite(evid, n_aceite)}
 
-<section class="tarjeta">
-  <h2>{n_monitoreo}. Monitoreo de riesgo</h2>
-  <p class="tenue">Lo que el monitoreo de riesgo mostró de la unidad en los 3 meses previos a la detención.</p>
-  {_bloque_estado_actual(evid)}
-  {_bloque_puntajes(evid)}
-  {_bloque_ciclo_vida(evid)}
-  <div class="sub separada">{_cierre(diag_p, causa_p, nota_p)}</div>
-</section>
+{_bloque_monitoreo(evid, n_monitoreo)}
 
 {_bloque_detenciones(evid, inf, n_detenciones)}
 

@@ -86,8 +86,8 @@ COMPONENTES_POR_MODO = {
 MODOS = ["abrasive_wear_risk", "combustion_risk", "thermal_imbalance_risk", "turbocharger_risk",
          "oil_degradation_risk", "coolant_contamination_risk", "lubrication_failure_risk",
          "bearing_wear_risk", "blowby_risk", "accumulated_wear_risk"]
-# early_oil_change_risk (Capstone, contrato v2.8) no se analiza ni se muestra en el informe: es un aviso de
-# cambio de aceite, no un modo de falla. Un modo de esta lista que el cliente no publica queda "sin_datos"
+# early_oil_change_risk ya salio del modelo; solo aparece en particiones antiguas de risk_scores, y por eso sigue
+# excluido: no se analiza ni se muestra en el informe. Un modo de esta lista que el cliente no publica queda "sin_datos"
 # y el informe no lo muestra (CDA no tiene accumulated_wear_risk).
 MODOS_EXCLUIDOS = ["early_oil_change_risk"]
 
@@ -254,6 +254,21 @@ LIMITES_MENSAJE = {"diagnostico": (2, 35), "causa_probable": (2, 30), "acciones"
 # porque cada una analiza sus antecedentes.
 LIMITES_SECCION = {"diagnostico": (3, 55), "causa_probable": (3, 55)}
 MAX_ACCIONES = 2
+MAX_HIPOTESIS = 2   # causas probables del Resumen: dos solo cuando las secciones apuntan a causas distintas
+
+# Nivel de cada modo frente a la flota (risk_scores.risk_level): el valor del dia contra la historia del mismo modo
+# en toda la flota (Saludable <= P75 o valor < 1; Monitoreo > P75; Prioridad alta > P90; Critico > P98). Es el mismo
+# nivel que usa el analisis de la plataforma (criticidad). Al cliente nunca se le muestra el nombre: se traduce.
+NIVELES_FLOTA = ["Saludable", "Monitoreo", "Prioridad alta", "Critico"]          # de menor a mayor
+NIVEL_FLOTA_ALIAS = {"crítico": "Critico", "critico": "Critico", "prioridad alta": "Prioridad alta",
+                     "monitoreo": "Monitoreo", "saludable": "Saludable"}
+NIVEL_FLOTA_CORTO = {"Saludable": "Normal", "Monitoreo": "Algo sobre lo normal", "Prioridad alta": "10 % más alto",
+                     "Critico": "Entre los más altos"}                          # etiqueta de la tabla de modos
+NIVEL_FLOTA_TEXTO = {"Saludable": "dentro de lo normal de la flota",
+                     "Monitoreo": "algo por sobre lo normal de la flota",
+                     "Prioridad alta": "entre el 10 % de casos más altos de la flota",
+                     "Critico": "entre los casos más altos que ha registrado la flota"}   # para los textos
+NIVELES_FLOTA_GRAFICAR = ("Prioridad alta", "Critico")    # se grafican aunque sean lo habitual de la unidad
 TOLERANCIA_LARGO = 1.25
 
 # Analisis del Predictivo por unidad (unit_failure_analisis): se publica una vez por semana.

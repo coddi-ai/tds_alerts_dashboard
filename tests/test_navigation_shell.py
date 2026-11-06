@@ -49,7 +49,7 @@ def _classes(component) -> str:
 
 @pytest.fixture
 def full_nav(monkeypatch):
-    """Every service enabled, so the menu holds all 14 links; links resolve without a Dash app."""
+    """Every service enabled, so the menu holds all 15 links; links resolve without a Dash app."""
     monkeypatch.setattr(layout, "is_service_enabled", lambda client, service: True)
     monkeypatch.setattr(layout, "_campbell_ai_enabled", lambda: True)
     monkeypatch.setattr(layout, "troubleshooting_agent_configured", lambda: True)
@@ -231,8 +231,8 @@ def test_every_section_and_link_has_its_own_icon(full_nav):
 
     assert list(sections) == ["overview", "monitoring", "predictive", "agents", "integration", "reporting", "admin"]
     assert len(set(sections.values())) == len(sections) == 7
-    assert len(links) == 14 and set(links) == set(NAV_PATHS)
-    assert len(set(links.values())) == 14
+    assert len(links) == 15 and set(links) == set(NAV_PATHS)
+    assert len(set(links.values())) == 15
     # A link never reuses a section's icon either, so the rail and the flyout read apart.
     assert not set(sections.values()) & set(links.values())
     assert all(icon for icon in [*sections.values(), *links.values()])

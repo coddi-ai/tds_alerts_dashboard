@@ -107,6 +107,7 @@ NAV_ICONS = {
     "integration-validacion-avisos": "fas fa-check-double",
     "integration-seguimiento-avisos": "fas fa-route",
     "reporting-main": "fas fa-chart-pie",
+    "reporting-informe-falla": "fas fa-diagram-project",   # el mismo del titulo de la pagina
     "admin-main": "fas fa-sliders-h",
     "admin-user-registry": "fas fa-users",
 }

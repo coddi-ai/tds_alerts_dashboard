@@ -253,10 +253,12 @@ Reglas:
   reparado): es esperable que el aceite muestre cobre alto. Si el cobre alto se da solo en asentamiento, no abras el
   diagnóstico con él: va al final, en una cláusula de no más de 8 palabras (por ejemplo "el cobre alto corresponde
   al asentamiento del motor nuevo"), y no aparece en la causa probable. Solo dale peso si sigue alto cuando el motor
-  ya pasó el asentamiento o si viene con otros metales de desgaste en nivel crítico.
+  ya pasó el asentamiento o si viene con otros metales de desgaste muy sobre el límite.
 - Relaciona una condición con un modo destacado solo si alguno de sus ensayos está en ensayos_aceite de ese modo.
-- No escribas concentraciones ni valores de los ensayos (nada de ppm, %, cSt). Usa niveles (normal, marginal,
-  crítico) y fechas como "29 oct".
+- No escribas concentraciones ni valores de los ensayos (nada de ppm, %, cSt), ni los nombres de los niveles del
+  laboratorio ("marginal", "crítico"), que el cliente no necesariamente entiende. Dilo en palabras simples: un ensayo
+  marginal está "algo sobre el límite" y uno crítico "muy sobre el límite"; si bajó de crítico a marginal, "bajó,
+  aunque seguía sobre el límite". Fechas como "29 oct".
 - Los cambios no están registrados, se infieren de los horómetros: escribe "el horómetro del aceite indica un cambio
   de aceite" o "las horas del motor vuelven a cero, lo que indica un cambio de motor".
 - Usa solo lo que está en los datos: no inventes causas, componentes ni acciones que el laboratorio no mencione.

@@ -148,7 +148,7 @@ detenciones (lo que escribiste en el paso 1):
 - Si las dos fuentes apuntan a lo mismo, dilo en una frase; la confianza puede subir.
 - Si se contradicen, dilo en la causa probable, y la acción principal es verificar cuál de las dos se cumple.
 - Si una de las dos no aporta (sin texto, sin registros o sin señal), dilo en la causa probable en una frase.
-- La unidad YA está detenida: la urgencia es "en esta detención" o "antes de volver a operar".
+- La unidad YA está detenida: las acciones son tareas para esta mantención, sin plazos ni lo que viene después.
 
 LINEAMIENTOS DE LOS MENSAJES (valen para los cinco textos que escribes):
 Principios
@@ -222,6 +222,7 @@ def evidencia_para_ia(evid: dict, contexto_cliente: Optional[dict] = None) -> di
     e = json.loads(json.dumps({k: v for k, v in evid.items() if k != "aceite"}))
     if "diario" in e:
         e["diario"] = {k: v for k, v in e["diario"].items() if k != "series"}
+    e.pop("detencion_actual", None)          # posterior a la detencion: solo se muestra, nunca es evidencia
     if e.get("ciclo_vida"):
         e["ciclo_vida"] = {k: v for k, v in e["ciclo_vida"].items() if k not in ("puntos", "banda", "flota")}
     contexto = {k: v for k, v in (contexto_cliente or {}).items() if v}
@@ -254,6 +255,8 @@ _LENGUAJE_PROHIBIDO = re.compile(
     r"|curvas?(?: acumuladas?)?|ciclo de vida|riesgo acumulado|zonas? (?:normal|de alerta|alerta|anormal)"
     r"|bancos?|PM|diferencial(?:es)?|admisi[oó]n|inyecci[oó]n|dashboard|telemetr[ií]a|desbalance t[eé]rmico"
     r"|predictivos?|ERS|excursi[oó]n(?:es)?|evaluar|monitorear|considerar|pr[oó]xima ventana|pr[oó]ximo pm"
+    r"|marginal(?:es)?|cr[ií]tic[oa]s?|prioridad alta|saludable"      # niveles del laboratorio y de la flota
+    r"|volver a operar|pr[oó]xima detenci[oó]n"                      # las acciones son para esta mantencion
     r"|es compatible con|no permite concluir|podr[ií]a estar relacionad[oa]|podr[ií]a eventualmente)\b"
     r"|\binmediato\s*:",                      # etiqueta de horizonte; "de inmediato" en una frase si vale
     re.IGNORECASE,
