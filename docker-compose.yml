@@ -1,20 +1,14 @@
+# Local development only. Ports, commands, healthchecks and Campbell AI defaults
+# live in Dockerfile.app / Dockerfile.api (the same images ECS builds); this file
+# only adds what is environment-specific: secrets, volumes and published ports.
 services:
   dashboard:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.app
     container_name: oil-analysis-dashboard
     env_file:
-      - .env  # Load environment variables from .env file
-    environment:
-      # Override specific variables if needed. Everything else Campbell-AI-specific
-      # (feature flags, timeouts, model names, the internal token) defaults from the
-      # Dockerfile; add a line here to override one of those without editing it.
-      - DASHBOARD_HOST=0.0.0.0
-      - DASHBOARD_PORT=8050
-      - CAMPBELL_AI_API_URL=http://campbell-api:8000
-      # MAPBOX_TOKEN will be read from .env file
-      # Or set explicitly: MAPBOX_TOKEN=${MAPBOX_TOKEN}
+      - .env  # Secrets such as MAPBOX_TOKEN
     volumes:
       # Read the freshly downloaded data from the same path used by the app.
       - ./data:/app/data:ro
@@ -33,19 +27,14 @@ services:
   campbell-api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.api
     container_name: campbell-ai-api
-    command: ["uvicorn", "src.campbell_ai.api:app", "--host", "0.0.0.0", "--port", "8000"]
     env_file:
       - .env
     environment:
-      # Campbell-AI-specific operational settings (feature flags, timeouts, model
-      # names, the internal token) default from the Dockerfile; only the real
-      # secrets need to flow through from .env here.
+      # Real secrets only; declared explicitly so a deployment without them fails
+      # visibly instead of silently degrading to the local mirror.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # Durable conversation and feedback backup. Declared explicitly so a deployment
-      # without these values fails visibly here instead of silently degrading to the
-      # local mirror inside the container.
       - BUCKET_NAME=${BUCKET_NAME:-}
       - ACCESS_KEY=${ACCESS_KEY:-}
       - SECRET_KEY=${SECRET_KEY:-}
@@ -55,12 +44,4 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config:ro
       - ./src:/app/src:ro
-    expose:
-      - "8000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/campbell-ai/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
     restart: unless-stopped
