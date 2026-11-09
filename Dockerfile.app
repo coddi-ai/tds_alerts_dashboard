@@ -1,0 +1,70 @@
+# ECS Fargate service: dashboard (Dash UI). Sibling image: Dockerfile.api
+FROM public.ecr.aws/docker/library/python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y gcc curl && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . ./
+
+# Data (/app/data, /data) is excluded by .dockerignore: mount it at runtime (EFS/S3 sync).
+RUN mkdir -p logs
+
+ENV PYTHONUNBUFFERED=1
+
+ENV DASHBOARD_HOST=0.0.0.0
+ENV DASHBOARD_PORT=8050
+# Where the dashboard reaches the internal API. With ECS Service Connect / Cloud Map,
+# name the API service "campbell-api" (port 8000) and this works unchanged;
+# otherwise override CAMPBELL_AI_API_URL in the task definition.
+ENV CAMPBELL_AI_API_URL=http://campbell-api:8000
+
+# Campbell AI — operational defaults, not secrets. Real credentials (OPENAI_API_KEY,
+# BUCKET_NAME / ACCESS_KEY / SECRET_KEY) must be injected at runtime by the ECS task
+# definition (Secrets Manager / SSM) and are never baked in here. Everything below
+# is versioned with the code: the developer owns these values and changing one
+# means rebuilding the image. Keep this block identical in Dockerfile.app and
+# Dockerfile.api so both services stay in sync.
+ENV CAMPBELL_AI_ENABLED=true
+ENV CAMPBELL_AI_API_TIMEOUT_SECONDS=90
+# Shared secret between the dashboard and the internal API. Identical default in both
+# images keeps them in sync; override per-deployment from the task definition if needed.
+ENV CAMPBELL_AI_INTERNAL_TOKEN=campbell-internal-service-token
+ENV CAMPBELL_AI_SESSION_TTL_SECONDS=1800
+ENV CAMPBELL_AI_MAX_HISTORY_MESSAGES=20
+ENV CAMPBELL_AI_MAX_MESSAGE_CHARS=4000
+ENV CAMPBELL_AI_MAX_TURNS_DATA_ANALYST=10
+ENV CAMPBELL_AI_MAX_TURNS_HEAD=10
+# `memory` is process-local and only valid for a single worker/task; with more than
+# one task use `redis` (and set CAMPBELL_AI_REDIS_URL).
+ENV CAMPBELL_AI_SESSION_BACKEND=memory
+# Progressive answers over SSE. Must have the same value in both images.
+ENV CAMPBELL_AI_STREAMING=false
+ENV CAMPBELL_AI_PERSISTENCE=true
+ENV CAMPBELL_AI_S3_PREFIX=campbellAI
+ENV CAMPBELL_AI_HISTORY_LIMIT=50
+ENV CAMPBELL_AI_SUMMARY=true
+ENV CAMPBELL_AI_MODEL_SUMMARY=gpt-4.1-mini
+ENV CAMPBELL_AI_MAX_CONCURRENT_REQUESTS=10
+ENV CAMPBELL_AI_MAX_CONCURRENT_PER_USER=2
+ENV CAMPBELL_AI_MAX_REQUESTS_PER_MINUTE=200
+ENV CAMPBELL_AI_QUEUE_TIMEOUT_SECONDS=20
+ENV CAMPBELL_AI_RETRY_ATTEMPTS=3
+ENV CAMPBELL_AI_RETRY_INITIAL_DELAY=1
+ENV CAMPBELL_AI_RETRY_MAX_DELAY=30
+ENV CAMPBELL_AI_MODEL_GATEKEEPER=gpt-4.1-mini
+ENV CAMPBELL_AI_MODEL_HEAD=gpt-4.1-mini
+ENV CAMPBELL_AI_MODEL_PLANNER=gpt-4.1-mini
+ENV CAMPBELL_AI_MODEL_DATA_ANALYST=gpt-4.1
+ENV CAMPBELL_AI_MODEL_TECHNICAL_EXPERT=gpt-4.1-mini
+ENV CAMPBELL_AI_MODEL_DASHBOARD_GUIDE=gpt-4.1-mini
+
+EXPOSE 8050
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS -o /dev/null http://localhost:8050/ || exit 1
+
+CMD ["python", "dashboard/app.py"]
