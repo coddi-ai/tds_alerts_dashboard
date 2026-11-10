@@ -35,6 +35,11 @@ openai>=1.99.0
 # imports nothing. Kept declared so a horizontally scaled deployment installs it.
 redis>=5.0.0
 
+# Mailing service (src/mailing): HTTP call to the email Lambda; tzdata backs zoneinfo
+# ("America/Santiago") on systems without an OS timezone database (Windows, slim images).
+requests>=2.31.0
+tzdata>=2024.1
+
 # Utilities
 tqdm>=4.66.0
 

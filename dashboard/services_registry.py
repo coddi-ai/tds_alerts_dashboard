@@ -6,7 +6,7 @@ label, icon, and parent nav section - used by both the sidebar builder
 (dashboard/layout.py) and the centralized route guard
 (dashboard/callbacks/access_control_callbacks.py), so the two never drift.
 
-Admin routes (admin-main, admin-user-registry) are role-gated, not
+Admin routes (admin-main, admin-user-registry, admin-mailing) are role-gated, not
 client-service-gated, and are kept separate from KNOWN_SERVICE_IDS.
 """
 
@@ -18,7 +18,7 @@ import dash
 
 from config.client_services import KNOWN_SERVICE_IDS, is_service_dummy, is_service_enabled
 
-# Nav sections in display order. Each service id here must be one of
+# Nav sections in display order (Reportes before Conexión ERP, per 04_sidebar_menu_reorder). Each service id here must be one of
 # config.client_services.KNOWN_SERVICE_IDS. 'predictive' is a section on its
 # own, built dynamically per client from the per-component
 # `predictive-<component>` service ids (dashboard/layout.py::build_navigation_items),
@@ -43,16 +43,16 @@ SERVICE_SECTIONS = [
         "services": ["agents-campbell-ai", "agents-troubleshooting"],
     },
     {
-        "section": "integration",
-        "label": "Conexión ERP",
-        "icon": "fas fa-plug",
-        "services": ["integration-validacion-avisos", "integration-seguimiento-avisos"],
-    },
-    {
         "section": "reporting",
         "label": "Reportes",
         "icon": "fas fa-file-alt",
         "services": ["reporting-main", "reporting-informe-falla"],
+    },
+    {
+        "section": "integration",
+        "label": "Conexión ERP",
+        "icon": "fas fa-plug",
+        "services": ["integration-validacion-avisos", "integration-seguimiento-avisos"],
     },
 ]
 
@@ -89,6 +89,7 @@ NAV_PATHS = {
     "reporting-informe-falla": "/reporting/informe-falla",
     "admin-main": "/admin",
     "admin-user-registry": "/admin/registro-usuarios",
+    "admin-mailing": "/admin/mailing",
 }
 
 # One Font Awesome icon per sidebar link. Every entry is unique, and none repeats a
@@ -110,6 +111,7 @@ NAV_ICONS = {
     "reporting-informe-falla": "fas fa-diagram-project",   # el mismo del titulo de la pagina
     "admin-main": "fas fa-sliders-h",
     "admin-user-registry": "fas fa-users",
+    "admin-mailing": "fas fa-envelope",
 }
 
 # Route guard resolution: stripped pathname ('dash.strip_relative_path' form,

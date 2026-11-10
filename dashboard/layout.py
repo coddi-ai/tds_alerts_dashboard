@@ -521,6 +521,7 @@ def build_navigation_items(selected_client: str, user_data: dict) -> list:
                     'label': service_label('admin-user-registry'),
                     'icon': nav_icon('admin-user-registry'),
                 },
+                {'id': 'admin-mailing', 'label': service_label('admin-mailing'), 'icon': nav_icon('admin-mailing')},
             ]
         })
 

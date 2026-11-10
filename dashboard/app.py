@@ -78,6 +78,7 @@ from dashboard.callbacks.predictive_pages_callbacks import register_predictive_p
 
 # Import admin callbacks (login events chart)
 from dashboard.callbacks.admin_callbacks import register_admin_callbacks
+from dashboard.callbacks.mailing_callbacks import register_mailing_callbacks
 
 # Import the centralized route guard (role + client-service route protection)
 from dashboard.callbacks.access_control_callbacks import register_access_control_callbacks
@@ -169,6 +170,7 @@ import dashboard.pages.reporting_main
 import dashboard.pages.reporting_informe_falla
 import dashboard.pages.admin_main
 import dashboard.pages.admin_user_registry
+import dashboard.pages.admin_mailing
 import dashboard.pages.no_services
 
 # Set app layout
@@ -241,6 +243,7 @@ register_campbell_ai_callbacks(app)
 # CAMPBELL_AI_STREAMING is enabled.
 register_campbell_ai_stream(app)
 register_admin_callbacks(app)
+register_mailing_callbacks(app)
 register_access_control_callbacks(app)
 register_sidebar_callbacks(app)
 register_troubleshooting_callbacks(app)
@@ -252,6 +255,13 @@ register_informe_falla_callbacks(app)
 register_report_files(app)
 # Flask route {PATH_PREFIX}informe-falla/file: re-checks access and serves a generated informe preliminar PDF.
 register_informe_falla_files(app)
+
+# Automatic alert-summary emails (Emin daily, Capstone weekly, 08:00 America/Santiago).
+# On by default (MAILING_SCHEDULER_ENABLED=false turns it off); several workers are safe
+# (persisted marker). Not started when the module is imported by the test suite.
+if "pytest" not in sys.modules:
+    from src.mailing import start_mailing_scheduler
+    start_mailing_scheduler()
 
 
 @app.server.after_request

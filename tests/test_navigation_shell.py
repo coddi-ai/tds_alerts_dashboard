@@ -49,7 +49,7 @@ def _classes(component) -> str:
 
 @pytest.fixture
 def full_nav(monkeypatch):
-    """Every service enabled, so the menu holds all 15 links; links resolve without a Dash app."""
+    """Every service enabled, so the menu holds all 16 links; links resolve without a Dash app."""
     monkeypatch.setattr(layout, "is_service_enabled", lambda client, service: True)
     monkeypatch.setattr(layout, "_campbell_ai_enabled", lambda: True)
     monkeypatch.setattr(layout, "troubleshooting_agent_configured", lambda: True)
@@ -223,16 +223,38 @@ def test_logout_button_is_neutral_not_a_danger_action():
     assert not re.search(r"(?i)\bred\b|danger|#(dc|e7|c0|b9)[0-9a-f]{4}|#d9534f", account_css)
 
 
+# ── Sidebar: section order (04_sidebar_menu_reorder) ─────────────────────────
+
+def test_reportes_comes_before_conexion_erp_and_admin_stays_last(full_nav):
+    assert [s["section"] for s in full_nav] == [
+        "overview", "monitoring", "predictive", "agents", "reporting", "integration", "admin",
+    ]
+    labels = [s["label"] for s in full_nav]
+    assert labels[-3:] == ["Reportes", "Conexión ERP", "Administración"]
+
+
+def test_reorder_changes_only_the_position_of_each_section(full_nav):
+    by_section = {s["section"]: s for s in full_nav}
+    assert by_section["reporting"]["icon"] == "fas fa-file-alt" and by_section["integration"]["icon"] == "fas fa-plug"
+    assert [sub["id"] for sub in by_section["reporting"]["subsections"]] == ["reporting-main", "reporting-informe-falla"]
+    assert [sub["id"] for sub in by_section["integration"]["subsections"]] == [
+        "integration-validacion-avisos", "integration-seguimiento-avisos",
+    ]
+    menu = build_menu_items(full_nav)
+    # the rendered menu (what the expanded sidebar draws) follows the same order
+    assert [getattr(item, "data-section") for item in menu] == [s["section"] for s in full_nav]
+
+
 # ── Sidebar: icons ───────────────────────────────────────────────────────────
 
 def test_every_section_and_link_has_its_own_icon(full_nav):
     sections = {s["section"]: s["icon"] for s in full_nav}
     links = {sub["id"]: sub["icon"] for s in full_nav for sub in s["subsections"]}
 
-    assert list(sections) == ["overview", "monitoring", "predictive", "agents", "integration", "reporting", "admin"]
+    assert list(sections) == ["overview", "monitoring", "predictive", "agents", "reporting", "integration", "admin"]
     assert len(set(sections.values())) == len(sections) == 7
-    assert len(links) == 15 and set(links) == set(NAV_PATHS)
-    assert len(set(links.values())) == 15
+    assert len(links) == 16 and set(links) == set(NAV_PATHS)
+    assert len(set(links.values())) == 16
     # A link never reuses a section's icon either, so the rail and the flyout read apart.
     assert not set(sections.values()) & set(links.values())
     assert all(icon for icon in [*sections.values(), *links.values()])

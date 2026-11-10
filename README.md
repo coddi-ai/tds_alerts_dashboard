@@ -104,6 +104,28 @@ El dashboard estará disponible en: **http://localhost:8050**
 
 **Credenciales por defecto:** `admin` / `admin123` (cambiar en producción)
 
+### Mailing (resúmenes de alertas por correo)
+
+Servicio `src/mailing/` (ver `documentation/mailling/01_mailing_service_backend.md`). Corre dentro
+del mismo proceso del dashboard; no requiere infraestructura nueva ni un job externo.
+
+| Variable (`.env`) | Para qué | Default |
+|---|---|---|
+| `LAMBDA_URL` | URL de la Lambda que envía los correos. **Secreto**: no se loguea ni se muestra | — (obligatoria) |
+| `DEPLOY_STATUS` | Entorno. `POC` = producción; cualquier otro valor (o ausente) = no producción, y entonces solo `tds@coddi.ai` recibe correos | — |
+| `LAMBDA_ACCESS_KEY` / `LAMBDA_SECRET_ACCESS_KEY` | Credenciales AWS con que se firma (SigV4) la llamada a la Lambda; necesitan `lambda:InvokeFunctionUrl` y `lambda:InvokeFunction`. No se usan las de S3 | — |
+| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático (Emin diario, Capstone miércoles, 08:00 `America/Santiago`) | `true` |
+| `MAILING_STATE_DIR` | Marcadores que garantizan un solo envío por (cliente, día); debe sobrevivir reinicios | `logs/mailing` (volumen montado) |
+| `MAILING_RETRY_DELAYS` | Esperas (s) entre reintentos de un envío programado; la cantidad = nº de reintentos | `30,120,300` |
+| `MAILING_MANUAL_COOLDOWN_SECONDS` | Ventana anti doble clic tras un envío manual exitoso | `5` |
+| `MAILING_SCHEDULER_GRACE_MINUTES` | Cuánto después de las 08:00 aún se considera "a tiempo" (no hay envío de recuperación) | `15` |
+
+Despliegue: (1) `LAMBDA_URL`, `LAMBDA_ACCESS_KEY`, `LAMBDA_SECRET_ACCESS_KEY` y `DEPLOY_STATUS=POC` en el `.env` del
+servidor; (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requirements.txt`);
+(3) `docker-compose up -d`. Destinatarios y horarios se editan en `src/mailing/config.py`.
+Con varios workers no hay duplicados: el primero que crea el marcador envía y los demás lo omiten.
+Un envío manual no altera el envío automático.
+
 ---
 
 ## 📊 Datos
