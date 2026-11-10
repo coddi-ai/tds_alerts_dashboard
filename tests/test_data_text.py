@@ -171,7 +171,7 @@ def test_oil_machine_detail_table_and_recommendation_card(monkeypatch):
         assert [r["ai_text"] for r in table.data] == ["Cambio de aceite."]
 
 
-def test_predictive_evidence_panels_use_the_english_columns():
+def test_predictive_evidence_panel_uses_the_english_columns():
     from dashboard.tabs import tab_predictive_evidence as ev
 
     unit = pd.Series({
@@ -179,20 +179,14 @@ def test_predictive_evidence_panels_use_the_english_columns():
         "diagnostico_eng": "Diag en", "causa_probable_eng": "Cause en", "acciones_eng": '["Inspect"]',
         "analisis_fuente": "llm",
     })
-    mode = pd.Series({
-        "diagnostico": "Modo es", "probable_cause": "Causa modo es", "recommended_actions": '["Medir"]',
-        "diagnostico_eng": "Mode en", "probable_cause_eng": "Mode cause en",
-        "recommended_actions_eng": '["Measure"]', "analysis_status": "ok",
-    })
     with _in("en"):
-        assert ev._unit_narrative_panel(unit)["diagnostico"] == "Diag en"
-        assert ev._unit_narrative_panel(unit)["acciones"] == '["Inspect"]'
-        panel = ev._mode_narrative_panel(mode, "alerta")
+        panel = ev._unit_narrative_panel(unit)
         assert (panel["diagnostico"], panel["causa_probable"], panel["acciones"]) == (
-            "Mode en", "Mode cause en", '["Measure"]')
+            "Diag en", "Cause en", '["Inspect"]')
     with _in("es"):
-        assert ev._unit_narrative_panel(unit)["diagnostico"] == "Diag es"
-        assert ev._mode_narrative_panel(mode, "alerta")["acciones"] == '["Medir"]'
+        panel = ev._unit_narrative_panel(unit)
+        assert (panel["diagnostico"], panel["causa_probable"], panel["acciones"]) == (
+            "Diag es", "Causa es", '["Revisar"]')
 
 
 # ── Telemetry ───────────────────────────────────────────────────────────────────

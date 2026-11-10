@@ -1,6 +1,6 @@
 """
 Predictive Overview Tab - Fleet status, KPIs, priority cards, failure mode table.
-Supports multi-component model: auto-discovers component CSVs (motor, transmision, etc.)
+Supports multi-component model: auto-discovers the partitioned components (motor, transmision, etc.)
 """
 
 from src.i18n import t
@@ -22,16 +22,19 @@ from dashboard.components.predictive_charts import (
     SCATTER_AXIS_FIELDS,
     create_empty_selection_figure,
     create_fleet_scatter,
-    classify_criticidad,
     create_long_view_chart,
-    get_mode_thresholds,
     scatter_axis_columns,
 )
-from dashboard.components.predictive_state import STATE_COLORS, combine_states, normalize_state
+from dashboard.components.predictive_state import (
+    RISK_LEVEL_STYLE,
+    STATE_COLORS,
+    combine_states,
+    normalize_risk_level,
+    normalize_state,
+)
 from dashboard.components import predictive_long_selection as long_sel
 from config.settings import get_settings
-from src.data.loaders import get_latest_analisis_inteligente, get_model_run_date
-from src.data.fast_io import read_csv as fast_read_csv
+from src.data.loaders import get_model_run_date
 from dashboard.components.labels import NO_DATA_BG, NO_DATA_TEXT, status_label
 
 logger = get_logger(__name__)
@@ -57,21 +60,15 @@ def _discover_components(client: str) -> dict:
     """Auto-discover available components for a client (Change 1: single
     shared discovery function, backed by predictive_v2.discover_predictive_layout).
 
-    Returns {component: Path} where Path is the new-layout `risk_scores`
-    partition directory when it exists (preferred - richer data), else the
-    legacy CSV file. `_load_component_data` below branches on which kind of
-    path it received. This keeps every existing call site working unchanged
-    (`components.get(component)` / `if not filepath` / `_load_component_data
-    (filepath, component, client)`).
+    Returns {component: Path} where Path is the component's `risk_scores`
+    partition directory. A component without `risk_scores` is not available.
     """
     layout = predictive_v2.discover_predictive_layout(client)
-    components = {}
-    for component, availability in layout.items():
-        if availability.risk_scores:
-            components[component] = predictive_v2.risk_scores_base_path(client, component)
-        elif availability.legacy_csv is not None:
-            components[component] = availability.legacy_csv
-    return components
+    return {
+        component: predictive_v2.risk_scores_base_path(client, component)
+        for component, availability in layout.items()
+        if availability.risk_scores
+    }
 
 
 @lru_cache(maxsize=16)
@@ -84,8 +81,8 @@ def _load_component_data_cached(
 ):
     """Load and precompute predictive data for a single component.
 
-    Cached per (filepath, component, client): this CSV can be 20+MB and the
-    rolling-window computation below isn't cheap, so re-parsing it on every
+    Cached per (filepath, component, client): the rolling-window computation
+    below isn't cheap, so re-reading and re-computing it on every
     callback firing (filter change, tab switch) is wasted work. Cache clears
     on process restart, matching the data-refresh boundary already used for
     the other client-keyed loaders in src/data/loaders.py. The only current
@@ -93,36 +90,20 @@ def _load_component_data_cached(
     mutation) — any future caller that needs to mutate df/df_latest must copy
     first, since these objects are shared across calls.
     """
-    filepath = Path(filepath)
-    is_legacy_csv = filepath.suffix == ".csv"
-
-    if is_legacy_csv:
-        if not filepath.exists():
-            logger.warning(f"Predictive data not found: {filepath}")
-            return None, None, {}
-
-        df = fast_read_csv(filepath)
-        df["Fecha"] = pd.to_datetime(df["Fecha"])
-        df = df.copy()  # defragment after column assignment
-
-        # Get component-specific failure modes
-        failure_modes = get_failure_modes_dict(component, client)
-        fm_keys = list(failure_modes.keys())
-    else:
-        # New Data Contract v2.0 layout (Change 1/2): `filepath` is the
-        # risk_scores partition directory. Pivot the long-format table into
-        # the same wide shape the legacy CSV produced (one column per mode
-        # + "ranking") so the rolling-window computation below - already
-        # written generically off fm_keys/score_cols, not hardcoded column
-        # names - keeps working unchanged. fm_keys comes from whatever modes
-        # are actually present in this component's data, not from config
-        # (Change 3: no hardcoded mode count).
-        df_long = predictive_v2.load_risk_scores(client, component)
-        if df_long.empty:
-            logger.warning(f"No risk_scores data found for {client}/{component}")
-            return None, None, {}
-        df = predictive_v2.risk_scores_to_wide(df_long)
-        fm_keys = [c for c in df.columns if c not in ("Unit", "Fecha", "ranking")]
+    # Data Contract v2.0 layout: `filepath` is the risk_scores partition directory.
+    # Pivot the long-format table into one column per mode + "ranking" so the
+    # rolling-window computation below - written generically off fm_keys/score_cols,
+    # not hardcoded column names - works on it. fm_keys comes from whatever modes
+    # are actually present in this component's data, not from config (Change 3:
+    # no hardcoded mode count). Only `risk_value` is pivoted here: the per-mode
+    # status (`risk_level`) is read separately (predictive_v2.load_risk_levels),
+    # never derived from these numbers.
+    df_long = predictive_v2.load_risk_scores(client, component)
+    if df_long.empty:
+        logger.warning(f"No risk_scores data found for {client}/{component}")
+        return None, None, {}
+    df = predictive_v2.risk_scores_to_wide(df_long)
+    fm_keys = [c for c in df.columns if c not in ("Unit", "Fecha", "ranking")]
 
     score_cols = [c for c in fm_keys if c in df.columns] + ["ranking"]
 
@@ -200,23 +181,22 @@ def _load_component_data_cached(
         df_prev = df[df["Fecha"] == prev_date]
         prev_ranking = dict(zip(df_prev["Unit"], df_prev["ranking"]))
 
-    if not is_legacy_csv:
-        # Change 5: the overall ranking's 30d average is precomputed
-        # upstream - overwrite the client-side rolling value with
-        # unit_status_summary.media_30d wherever that table exists for this
-        # client/component, carrying dias_media_30d alongside for coverage.
-        # Per-mode 30/60/90d columns (driver bars, sort dropdown) stay
-        # client-side rolling - there's no upstream per-mode equivalent and
-        # 60d/90d are explicitly out of scope.
-        df_status = predictive_v2.load_unit_status_summary(client, component)
-        if not df_status.empty and "media_30d" in df_status.columns:
-            media_map = dict(zip(df_status["Unit"], df_status["media_30d"]))
-            df_latest["avg_ranking_30d"] = (
-                df_latest["Unit"].map(media_map).combine_first(df_latest["avg_ranking_30d"])
-            )
-            if "dias_media_30d" in df_status.columns:
-                dias_map = dict(zip(df_status["Unit"], df_status["dias_media_30d"]))
-                df_latest["dias_media_30d"] = df_latest["Unit"].map(dias_map)
+    # Change 5: the overall ranking's 30d average is precomputed
+    # upstream - overwrite the client-side rolling value with
+    # unit_status_summary.media_30d wherever that table exists for this
+    # client/component, carrying dias_media_30d alongside for coverage.
+    # Per-mode 30/60/90d columns (driver bars, sort dropdown) stay
+    # client-side rolling - there's no upstream per-mode equivalent and
+    # 60d/90d are explicitly out of scope.
+    df_status = predictive_v2.load_unit_status_summary(client, component)
+    if not df_status.empty and "media_30d" in df_status.columns:
+        media_map = dict(zip(df_status["Unit"], df_status["media_30d"]))
+        df_latest["avg_ranking_30d"] = (
+            df_latest["Unit"].map(media_map).combine_first(df_latest["avg_ranking_30d"])
+        )
+        if "dias_media_30d" in df_status.columns:
+            dias_map = dict(zip(df_status["Unit"], df_status["dias_media_30d"]))
+            df_latest["dias_media_30d"] = df_latest["Unit"].map(dias_map)
 
     return df, df_latest, prev_ranking
 
@@ -224,15 +204,9 @@ def _load_component_data_cached(
 def _load_component_data(filepath: Path, component: str, client: str = "cda"):
     """Load a predictive component with invalidation on file generation."""
     filepath = Path(filepath)
-    if filepath.suffix == ".csv":
-        if not filepath.exists():
-            return None, None, {}
-        stat = filepath.stat()
-        mtime_ns, size = stat.st_mtime_ns, stat.st_size
-    else:
-        if not filepath.is_dir():
-            return None, None, {}
-        mtime_ns, size = predictive_v2.risk_scores_generation(client, component)
+    if not filepath.is_dir():
+        return None, None, {}
+    mtime_ns, size = predictive_v2.risk_scores_generation(client, component)
     result = _load_component_data_cached(
         str(filepath), component, client, mtime_ns, size
     )
@@ -328,8 +302,8 @@ _SCATTER_STATUS_COLORS = STATE_COLORS
 
 
 def _normalize_unit_id(uid) -> str:
-    """T_09 -> T_9. Component CSVs zero-pad unit ids; analisis_inteligente.parquet
-    doesn't, so lookups against it must normalize both sides first."""
+    """T_09 -> T_9. Sources don't always agree on zero-padding unit ids, so
+    lookups across them must normalize both sides first."""
     m = re.match(r"^([A-Za-z]+_)0*(\d+)$", str(uid))
     return f"{m.group(1)}{m.group(2)}" if m else str(uid)
 
@@ -363,17 +337,14 @@ def _classify_status_from_scores(row: pd.Series) -> str:
 def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataFrame:
     """Attach `estado` as `status` (REQ-PR-04).
 
-    Change 4: prefers `unit_status_summary.estado` (Data Contract v2.1 -
-    curve-derived, see module-level COMPUTE_STATUS comment) when that table
-    exists for this client/component; falls back to
-    analisis_inteligente.parquet's `estado` for components not yet migrated
-    (e.g. cda/transmision). Units with no row in either show "Sin Datos"
-    (Confirmed §3.1, documentation/general/general_specs/00_implementation_guide.md) -
+    Change 4: `unit_status_summary.estado` (Data Contract v2.1 - curve-derived,
+    see module-level COMPUTE_STATUS comment). Units with no row there show "Sin
+    Datos" (Confirmed §3.1, documentation/general/general_specs/00_implementation_guide.md) -
     an absent/no-record unit must never be silently reported as a healthy
     "Normal".
 
     When COMPUTE_STATUS is True (safety-net override, see module-level
-    comment), the estado sources above are bypassed entirely and status is
+    comment), the estado source above is bypassed entirely and status is
     instead classified from the 30d scores already present in `latest` via
     _classify_status_from_scores.
     """
@@ -399,8 +370,6 @@ def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataF
     if client:
         status_df = predictive_v2.load_unit_status_summary(client, component)
         estado_map = _estado_map(status_df)
-    if not estado_map and client:
-        estado_map = _estado_map(get_latest_analisis_inteligente(client, component))
 
     latest["status"] = latest["Unit"].apply(
         lambda u: estado_map.get(_normalize_unit_id(u), "Sin Datos")
@@ -464,23 +433,24 @@ def _score_cell_style(value) -> dict:
     return {"background": "#eaf3de", "text": "#3b6d11"}
 
 
-# Cell tones of the four criticidad bands (Saludable, Monitoreo, Prioridad alta,
-# Crítico), the light-background counterparts of the Calendario de estado's colours.
-_BAND_CELL_STYLES = (
-    {"background": "#eaf3de", "text": "#3b6d11"},
-    {"background": "#fdf3c4", "text": "#7a5f00"},
-    {"background": "#fde4cf", "text": "#9a4a0a"},
-    {"background": "#fcebeb", "text": "#a32d2d"},
-)
+def _risk_level_cell_style(level) -> dict:
+    """Cell style of a failure-mode cell: the tone of its `risk_level` (see
+    predictive_state.RISK_LEVEL_STYLE). No level -> the neutral no-data style, never
+    the Saludable green: a missing level must not read as healthy."""
+    normalized = normalize_risk_level(level)
+    if normalized is None:
+        return {"background": NO_DATA_BG, "text": NO_DATA_TEXT}
+    style = RISK_LEVEL_STYLE[normalized]
+    return {"background": style["cell_bg"], "text": style["cell_text"]}
 
 
-def _mode_cell_style(value, edges=None) -> dict:
-    """Cell style of a failure-mode score. With the mode's calibrated `edges`
-    (P75/P90/P98, see predictive_charts.get_mode_thresholds) the cell takes its
-    criticidad band; without them it keeps the fixed 40/70 style."""
-    if edges is None or value is None or pd.isna(value):
-        return _score_cell_style(value)
-    return _BAND_CELL_STYLES[classify_criticidad(value, edges)]
+def load_latest_risk_levels(client: str, component: str):
+    """Each unit's latest `risk_level` per failure mode (DataFrame indexed by Unit, one
+    column per mode) from `risk_scores`, or None when the client has no data. This is
+    the only thing that colours a per-mode cell."""
+    if not client:
+        return None
+    return predictive_v2.latest_risk_levels(predictive_v2.load_risk_levels(client, component))
 
 
 # ── Components ────────────────────────────────────────────────────────────────
@@ -506,18 +476,19 @@ FAILURE_TABLE_DEFAULT_WINDOW = "ranking_acum_90d"
 FAILURE_TABLE_HIDDEN_MODES = frozenset({"early_oil_change_risk"})
 
 
-def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client=None):
+def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, risk_levels=None):
     """Bottom ranking table: one ranking column driven by `window`, plus one
     column per failure mode. `sort_by` is either `window` itself or a failure
     mode key - clicking a failure-mode header sorts by that column (REQ-PR-10)
     while the ranking column stays a single value driven by the window
     dropdown (REQ-PR-09, option ii).
 
-    A failure-mode cell is coloured by the mode's calibrated criticidad edges
-    for `client` when it has them (same ones as the Calendario de estado),
-    applied to the value shown for the chosen window.
+    A failure-mode cell shows the value of the chosen window and is coloured by the
+    mode's `risk_level` (`risk_levels`: Unit-indexed frame from `load_latest_risk_levels`)
+    on the unit's latest day - the same level as the Calendario de estado's last cell.
+    `risk_levels` is only a lookup: no colour is computed from the number shown. Without
+    it every cell is the neutral no-data style.
     """
-    thresholds = get_mode_thresholds(client)
     shown = {k: lbl for k, lbl in failure_modes.items() if k not in FAILURE_TABLE_HIDDEN_MODES}
     fm_keys = list(shown.keys())
     fm_labels = list(shown.values())
@@ -600,7 +571,12 @@ def _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client=
             # is NaN — a missing failure-mode score must not render "0" in
             # the same green a genuinely healthy 0 score gets.
             val = float(r[col_name]) if col_name in r.index and pd.notna(r[col_name]) else None
-            fm_style = _mode_cell_style(val, thresholds.get(key))
+            level = (
+                risk_levels.at[r["Unit"], key]
+                if risk_levels is not None and r["Unit"] in risk_levels.index and key in risk_levels.columns
+                else None
+            )
+            fm_style = _risk_level_cell_style(level)
             is_sort = key == sort_by
             cells.append(html.Td(
                 f"{val:.0f}" if val is not None else "—",
@@ -930,7 +906,6 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
     Render overview content for a specific component.
 
     Status (Anormal / Alerta / Normal) comes from `estado` - unit_status_summary
-    when it exists for this client/component, else analisis_inteligente.parquet
     (REQ-PR-04/05, Change 4). Three layers: KPI hero, the fleet-wide
     ranking-today vs ranking-30d scatter, and the failure-mode table.
 
@@ -1035,7 +1010,8 @@ def _render_component_overview(df_latest, prev_ranking, component: str,
                    className="text-muted mb-3", style={"fontSize": "0.85rem"}),
         ]),
         html.Div(
-            _failure_table(sorted_df, FAILURE_TABLE_DEFAULT_WINDOW, FAILURE_TABLE_DEFAULT_WINDOW, False, failure_modes, client),
+            _failure_table(sorted_df, FAILURE_TABLE_DEFAULT_WINDOW, FAILURE_TABLE_DEFAULT_WINDOW, False, failure_modes,
+                           load_latest_risk_levels(client, component)),
             id="predictive-fm-table-container",
         ),
         dcc.Store(

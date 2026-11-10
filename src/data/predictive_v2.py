@@ -39,7 +39,6 @@ class ComponentAvailability:
     signal_daily_status: bool = False
     mode_failure_analisis: bool = False
     unit_failure_analisis: bool = False
-    legacy_csv: Optional[Path] = None
 
 
 # ── Path resolution ────────────────────────────────────────────────────────
@@ -93,7 +92,6 @@ def _discover_predictive_layout_cached(client: str, root_mtime_ns: int) -> dict:
     for entry in sorted(root.iterdir()):
         if entry.is_dir():
             component = entry.name
-            candidate_csv = root / f"{component}.csv"
             layout[component] = ComponentAvailability(
                 risk_scores=_has_partitions(entry / "risk_scores"),
                 unit_status_summary=_has_partitions(entry / "unit_status_summary"),
@@ -103,23 +101,15 @@ def _discover_predictive_layout_cached(client: str, root_mtime_ns: int) -> dict:
                 ),
                 mode_failure_analisis=_has_partitions(entry / "mode_failure_analisis"),
                 unit_failure_analisis=_has_partitions(entry / "unit_failure_analisis"),
-                legacy_csv=candidate_csv if candidate_csv.is_file() else None,
             )
-        elif entry.suffix == ".csv":
-            component = entry.stem
-            # Only fills components not already populated by the dir branch
-            # above - sorted() puts "motor" before "motor.csv", so a
-            # component with both a directory and a legacy CSV is already
-            # correctly recorded by the time this branch runs for it.
-            layout.setdefault(component, ComponentAvailability(legacy_csv=entry))
     return layout
 
 
 def discover_predictive_layout(client: str) -> dict:
     """Per-component table availability for `client`.
 
-    This is the single shared discovery function (Change 1) - callers no
-    longer scan `data/predictive/golden/{client}/*.csv` themselves. Cached
+    This is the single shared discovery function (Change 1) - callers don't
+    scan `data/predictive/golden/{client}/` themselves. Cached
     until the client's predictive root directory changes (new component
     materialized/removed).
     """
@@ -230,59 +220,34 @@ def load_unit_status_summary(client: str, component: str) -> pd.DataFrame:
     return read_latest_partition(unit_status_summary_base_path(client, component))
 
 
-def load_mode_failure_analisis(client: str, component: str) -> pd.DataFrame:
-    """`mode_failure_analisis` (Data Contract v2.3, formerly `failure_mode_diagnosis`):
-    one row per unit x flagged mode, published upstream alongside
-    `unit_failure_analisis`. Same run-snapshot pattern as `unit_status_summary`
-    - only the latest partition matters, and a unit with no flagged mode that
-    week simply has no rows."""
-    return read_latest_partition(mode_failure_analisis_base_path(client, component))
+def latest_risk_scores_run(client: str, component: str) -> Optional[tuple]:
+    """(year, week) of the newest `risk_scores` partition: the run the Predictivo pages
+    are drawn from. None when the component has no `risk_scores`."""
+    partitions = _list_week_partitions(risk_scores_base_path(client, component))
+    if not partitions:
+        return None
+    year, week, _ = partitions[-1]
+    return year, week
 
 
-def get_unit_mode_failure_analisis(client: str, component: str, unit: str) -> pd.DataFrame:
-    """`mode_failure_analisis` rows for `unit`, ordered by `modos_ordenados`
-    severity (highest first), same join pattern as the data contract's §3.
-    Empty DataFrame if the table doesn't exist for this client/component or
-    the unit has no flagged mode this week - callers should fall back to
-    `unit_failure_analisis` routing in that case.
+def load_unit_failure_analisis(client: str, component: str, run: Optional[tuple] = None) -> pd.DataFrame:
+    """`unit_failure_analisis` (Data Contract v2.3): one AI-written diagnosis per unit
+    for its worst mode, wide format, published every run. Source of the Análisis
+    Inteligente panel (`diagnostico`, `causa_probable`, `acciones`).
+
+    With `run=(year, week)` it reads exactly that partition and nothing else - an
+    empty DataFrame when it is not there - so the narrative can never come from a
+    different run than the scores beside it. Without `run` it reads the latest
+    partition. Empty DataFrame when the table doesn't exist for this client/component.
     """
-    df_diag = load_mode_failure_analisis(client, component)
-    if df_diag.empty or "Unit" not in df_diag.columns:
-        return pd.DataFrame()
-    rows = df_diag[df_diag["Unit"] == unit].copy()
-    if rows.empty or "failure_mode" not in rows.columns:
-        return rows
-
-    df_status = load_unit_status_summary(client, component)
-    scores = {}
-    if not df_status.empty and "modos_ordenados" in df_status.columns:
-        match = df_status[df_status["Unit"] == unit]
-        if not match.empty:
-            raw = match.iloc[0].get("modos_ordenados")
-            if raw:
-                try:
-                    scores = json.loads(raw)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    logger.warning(
-                        "No se pudo parsear modos_ordenados para %s/%s/%s", client, component, unit
-                    )
-    if scores:
-        rows["_score"] = rows["failure_mode"].map(scores)
-        rows = rows.sort_values("_score", ascending=False, na_position="last")
-    return rows
-
-
-def load_unit_failure_analisis(client: str, component: str) -> pd.DataFrame:
-    """`unit_failure_analisis` (Data Contract v2.3, formerly the frozen
-    `analisis_inteligente.parquet`): one AI-written diagnosis per unit for its
-    worst mode, wide format, regenerated and published every run alongside
-    `mode_failure_analisis`. Same run-snapshot pattern as `unit_status_summary`
-    - only the latest partition matters. Empty DataFrame if this client/
-    component isn't on the new layout yet - callers should fall back to the
-    legacy flat `analisis_inteligente.parquet` (`src.data.loaders.load_analisis_inteligente`)
-    in that case.
-    """
-    return read_latest_partition(unit_failure_analisis_base_path(client, component))
+    base = unit_failure_analisis_base_path(client, component)
+    if run is None:
+        return read_latest_partition(base)
+    year, week = run
+    for p_year, p_week, path in _list_week_partitions(base):
+        if (p_year, p_week) == (year, week):
+            return _read_partition(path)
+    return pd.DataFrame()
 
 
 def load_unit_state_history(client: str, component: str) -> pd.DataFrame:
@@ -379,6 +344,46 @@ def risk_scores_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
     wide = wide.reset_index()
     wide["Fecha"] = pd.to_datetime(wide["Fecha"])
     return wide
+
+
+def risk_levels_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
+    """Pivot long-format `risk_scores` into one `risk_level` column per mode (plus
+    `ranking`), indexed by (Unit, Fecha) - the delivered level strings, untouched.
+
+    This is the status of a failure mode on a day. It is read, never derived: no
+    consumer computes a level from `risk_value`, a ranking or a threshold. A unit/day/
+    mode with no row is NaN (no data), never a level. Empty frame (Unit, Fecha only)
+    when `risk_level` is not in the data.
+    """
+    if df_long is None or df_long.empty or "risk_level" not in df_long.columns:
+        return pd.DataFrame(columns=["Unit", "Fecha"])
+    rows = df_long.drop_duplicates(subset=["Unit", "Fecha", "failure_mode"], keep="last")
+    wide = rows.pivot(index=["Unit", "Fecha"], columns="failure_mode", values="risk_level")
+    wide.columns = [str(c) for c in wide.columns]
+    wide = wide.reset_index()
+    wide["Fecha"] = pd.to_datetime(wide["Fecha"])
+    return wide
+
+
+@lru_cache(maxsize=16)
+def _risk_levels_cached(client: str, component: str, mtime_ns: int, size: int) -> pd.DataFrame:
+    return risk_levels_to_wide(load_risk_scores(client, component))
+
+
+def load_risk_levels(client: str, component: str) -> pd.DataFrame:
+    """Wide `risk_level` frame of the same `risk_scores` window the Predictivo pages
+    read (see `risk_scores_to_wide`), cached on the partitions' generation."""
+    mtime_ns, size = risk_scores_generation(client, component)
+    return _risk_levels_cached((client or "").lower(), component, mtime_ns, size).copy()
+
+
+def latest_risk_levels(levels_wide: pd.DataFrame) -> pd.DataFrame:
+    """Per unit, each mode's `risk_level` on the latest day that unit has a row for
+    that mode. Indexed by Unit, one column per mode; a mode a unit never has is NaN."""
+    if levels_wide is None or levels_wide.empty or "Unit" not in levels_wide.columns:
+        return pd.DataFrame()
+    ordered = levels_wide.sort_values(["Unit", "Fecha"], kind="stable")
+    return ordered.drop(columns=["Fecha"]).groupby("Unit").last()
 
 
 def get_failure_mode_keys(client: str, component: str) -> list:

@@ -1,11 +1,8 @@
 """
 Componentes de gráficos para la página de evidencia.
 """
-import json
 import logging
 import math
-from functools import lru_cache
-from pathlib import Path
 from typing import NamedTuple
 
 from src.i18n import t as _t
@@ -21,11 +18,16 @@ from dashboard.components.oil_charts import (
     limit_line_color,
 )
 from dashboard.components.predictive_state import (
+    RISK_LEVEL_NO_DATA_COLOR,
+    RISK_LEVEL_STYLE,
+    RISK_LEVELS,
     STATE_COLORS,
     STATE_SEVERITY,
     STATE_ZONE_FILL,
     STATE_ZONE_TEXT,
+    normalize_risk_level,
     normalize_state,
+    risk_level_label,
     state_marker_size,
 )
 
@@ -738,135 +740,68 @@ def create_comparative_bars(unit_row, df_latest, failure_modes):
     return fig
 
 
-# Four-band criticidad classification, the same one `mode_failure_analisis`
-# uses for every client (lower bound inclusive): Saludable <35, Monitoreo
-# 35-55, Prioridad alta 55-75, Crítico >=75. Index == band code in the heatmap.
-CRITICIDAD_BANDS = [
-    ("Saludable", "#1d9e75"),
-    ("Monitoreo", "#f2d04b"),
-    ("Prioridad alta", "#ef7f27"),
-    ("Crítico", "#e24b4a"),
-]
-_CRITICIDAD_EDGES = (35.0, 55.0, 75.0)
-_BAND_LABEL_KEYS = (
-    "predictive_charts.band_healthy",
-    "predictive_charts.band_monitoring",
-    "predictive_charts.band_high_priority",
-    "predictive_charts.band_critical",
-)
-
-
-def _band_label(index: int) -> str:
-    """Display label of band `index` of CRITICIDAD_BANDS (which holds the Spanish source text)."""
-    return _t(_BAND_LABEL_KEYS[index])
-
-
-_NO_DATA_CODE = len(CRITICIDAD_BANDS)
-_NO_DATA_COLOR = "#e5e7eb"
+_NO_DATA_CODE = len(RISK_LEVELS)  # heatmap code of a mode/day with no level
 
 _WEAR_PALETTE = ["#2563EB", "#E24B4A", "#1D9E75", "#7C3AED", "#EF9F27", "#0891B2"]
 
 
-_THRESHOLDS_DIR = Path(__file__).resolve().parents[2] / "config" / "umbrales_criticidad"
-_MEAN_WINDOW_DAYS = 7
-
-
-@lru_cache(maxsize=8)
-def _load_mode_thresholds(client_key: str) -> dict:
-    """{mode: (p75, p90, p98)} from config/umbrales_criticidad/<client>.json
-    (the `umbrales_criticidad` dictionary written by the calibration script),
-    or {} when the client has no file or it can't be parsed. Edges are the
-    lower bounds of Monitoreo / Prioridad alta / Crítico."""
-    if not client_key:
-        return {}
-    path = _THRESHOLDS_DIR / f"{client_key}.json"
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        logger.warning("No se pudo leer %s", path)
-        return {}
-    modes = (data.get("umbrales_criticidad", data) or {}).get("modos") or {}
-    edges = {}
-    for mode, v in modes.items():
-        try:
-            e = (float(v["p75"]), float(v["p90"]), float(v["p98"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if e[0] <= e[1] <= e[2]:
-            edges[mode] = e
-    return edges
-
-
-def get_mode_thresholds(client) -> dict:
-    """Calibrated criticidad edges per failure mode for `client` ({} if none)."""
-    return _load_mode_thresholds((client or "").lower())
-
-
-def classify_criticidad(value, edges=_CRITICIDAD_EDGES):
-    """Band index (0..3) of a risk score, or None when there is no score -
-    a missing day is "no data", never implicitly Saludable. `edges` are the
-    lower bounds of bands 1..3 (the fixed 35/55/75 unless a mode is calibrated)."""
-    if value is None or pd.isna(value):
-        return None
-    return sum(float(value) >= edge for edge in edges)
-
-
-def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90, client=None):
+def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90, risk_levels=None):
     """Calendar heatmap: one row per failure mode, one column per day over the
-    `days` days ending at `end_date`, coloured by the criticidad band of that
-    day's value. `df_unit` is the unit's wide risk frame (Fecha + one column
-    per mode); a mode/day with no value renders as "Sin datos".
+    `days` days ending at `end_date`, coloured by the `risk_level` that
+    `risk_scores` delivers for that unit x day x mode.
 
-    A mode with calibrated thresholds for `client` (config/umbrales_criticidad)
-    is classified on its trailing 7-day mean - the series the P75/P90/P98 edges
-    were computed on - against its own edges. Any other mode keeps the daily
-    `risk_value` against the fixed 35/55/75 bands. A day without a reading stays
-    "Sin datos" in both cases, so the mean never paints a day the unit skipped.
+    `risk_levels` is the unit's wide `risk_level` frame (Fecha + one column per mode,
+    see predictive_v2.risk_levels_to_wide). A cell's colour is only ever that value:
+    nothing is derived from `risk_value`, so no threshold lives here. A mode/day with
+    no row (or an unrecognised level) renders as "Sin datos", never as Saludable.
+
+    `df_unit` (the unit's wide risk-value frame, Fecha + one column per mode) only
+    supplies the number shown in the tooltip and the row order (highest mean over the
+    window on top, ties by catalogue order); it never decides a colour.
     Dotted vertical lines mark each Monday (week start).
     """
-    if df_unit is None or df_unit.empty or end_date is None:
+    if risk_levels is None or risk_levels.empty or end_date is None:
         return None
-    modes = [k for k in failure_modes if k in df_unit.columns]
+    modes = [k for k in failure_modes if k in risk_levels.columns]
     if not modes:
         return None
 
     end = pd.Timestamp(end_date).normalize()
     dates = pd.date_range(end=end, periods=days, freq="D")
-    unit_days = (
-        df_unit.assign(Fecha=pd.to_datetime(df_unit["Fecha"]).dt.normalize())
-        .drop_duplicates(subset="Fecha", keep="last")
-        .set_index("Fecha")
+
+    def _by_day(frame):
+        return (
+            frame.assign(Fecha=pd.to_datetime(frame["Fecha"]).dt.normalize())
+            .drop_duplicates(subset="Fecha", keep="last")
+            .set_index("Fecha")
+        )
+
+    levels = _by_day(risk_levels).reindex(dates)[modes]
+    has_values = df_unit is not None and not df_unit.empty
+    values = (
+        _by_day(df_unit).reindex(dates).reindex(columns=modes)
+        if has_values else pd.DataFrame(index=dates, columns=modes, dtype=float)
     )
-    daily = unit_days.reindex(dates)[modes]
-    # The mean needs the days before the window too; calendar days, so a gap
-    # lowers the divisor instead of stretching the mean over older readings.
-    lead = pd.date_range(end=end, periods=days + _MEAN_WINDOW_DAYS - 1, freq="D")
-    mean_7d = unit_days.reindex(lead)[modes].rolling(_MEAN_WINDOW_DAYS, min_periods=1).mean().reindex(dates)
-    thresholds = get_mode_thresholds(client)
     # Worst mode on top: order by mean over the window, ties by catalogue order.
-    order = sorted(modes, key=lambda m: (-(daily[m].mean() if daily[m].notna().any() else -1.0), modes.index(m)))
+    order = sorted(modes, key=lambda m: (-(values[m].mean() if values[m].notna().any() else -1.0), modes.index(m)))
 
     z, hover = [], []
     for m in order:
-        edges = thresholds.get(m)
-        series = mean_7d[m].where(daily[m].notna()) if edges else daily[m]
         row_z, row_h = [], []
-        for d, v in zip(dates, series):
-            band = classify_criticidad(v, edges or _CRITICIDAD_EDGES)
-            row_z.append(_NO_DATA_CODE if band is None else band)
-            if band is None:
+        for d, raw_level, value in zip(dates, levels[m], values[m]):
+            level = normalize_risk_level(raw_level)
+            if level is None:
+                row_z.append(_NO_DATA_CODE)
                 row_h.append(_t("predictive_charts.sin_datos", d=d))
-            elif edges:
-                row_h.append(_t("predictive_charts.hover_mean_7d", d=d, v=float(v), band=_band_label(band)))
-            else:
-                row_h.append(f"{d:%d %b %Y}: {float(v):.1f} · {_band_label(band)}")
+                continue
+            row_z.append(RISK_LEVELS.index(level))
+            label = risk_level_label(level)
+            row_h.append(f"{d:%d %b %Y}: {float(value):.1f} · {label}" if pd.notna(value) else f"{d:%d %b %Y}: {label}")
         z.append(row_z)
         hover.append(row_h)
 
-    # Discrete colorscale: code k occupies [k/n, (k+1)/n] with n = bands + no data.
-    palette = [c for _, c in CRITICIDAD_BANDS] + [_NO_DATA_COLOR]
+    # Discrete colorscale: code k occupies [k/n, (k+1)/n] with n = levels + no data.
+    palette = [RISK_LEVEL_STYLE[level]["color"] for level in RISK_LEVELS] + [RISK_LEVEL_NO_DATA_COLOR]
     n = len(palette)
     colorscale = []
     for i, c in enumerate(palette):
@@ -888,8 +823,11 @@ def create_mode_status_calendar(df_unit, failure_modes, end_date, days=90, clien
             line=dict(color="rgba(0,0,0,0.45)", width=1, dash="dot"), layer="above",
         )
 
-    # Legend: heatmaps have none, so one empty marker trace per band.
-    for label, color in [*[(_band_label(i), c) for i, (_, c) in enumerate(CRITICIDAD_BANDS)], (_t("oil_machine_detail.sin_datos"), _NO_DATA_COLOR)]:
+    # Legend: heatmaps have none, so one empty marker trace per level.
+    for label, color in [
+        *[(risk_level_label(level), RISK_LEVEL_STYLE[level]["color"]) for level in RISK_LEVELS],
+        (_t("oil_machine_detail.sin_datos"), RISK_LEVEL_NO_DATA_COLOR),
+    ]:
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="markers", name=label, hoverinfo="skip",
             marker=dict(symbol="square", size=10, color=color),

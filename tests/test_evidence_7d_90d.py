@@ -125,13 +125,30 @@ def test_trend_tile_states_the_direction_in_words():
         assert word in texts and arrow in texts and any("pts" in s for s in texts)
 
 
-def test_dominant_mode_tile_stays_out_of_the_risk_palette():
-    tile = ev._dominant_mode_card("Modo Uno", 12.3)
+def test_dominant_mode_tile_has_no_gauge_and_its_badge_is_the_risk_level():
+    from dashboard.components.predictive_state import RISK_LEVEL_STYLE
+
+    tile = ev._dominant_mode_card("Modo Uno", 12.3, "Prioridad alta")
     rendered = str(tile)
-    assert "ev-tile--mode" in rendered
-    for _, _, fill, chip_bg, chip_text in ev.RISK_SCALE_BANDS:
-        assert not {fill, chip_bg, chip_text} & set(re.findall(r"#[0-9a-fA-F]{6}", rendered))
-    assert "ev-gauge" not in rendered and "ev-chip" not in rendered
+    assert "ev-tile--mode" in rendered and "ev-gauge" not in rendered
+    assert "Prioridad alta" in _texts(tile)
+    style = RISK_LEVEL_STYLE["Prioridad alta"]
+    assert style["cell_bg"] in rendered and style["cell_text"] in rendered
+
+
+def test_dominant_mode_badge_never_follows_the_score():
+    from dashboard.components.predictive_state import RISK_LEVEL_STYLE
+
+    # A score of 99 delivered as Saludable is a Saludable badge; 0 delivered as Critico is Critico.
+    high = str(ev._dominant_mode_card("M", 99.0, "Saludable"))
+    low = str(ev._dominant_mode_card("M", 0.0, "Critico"))
+    assert RISK_LEVEL_STYLE["Saludable"]["cell_bg"] in high and RISK_LEVEL_STYLE["Critico"]["cell_bg"] not in high
+    assert RISK_LEVEL_STYLE["Critico"]["cell_bg"] in low and RISK_LEVEL_STYLE["Saludable"]["cell_bg"] not in low
+
+
+def test_dominant_mode_without_a_level_gets_the_neutral_no_data_badge():
+    tile = ev._dominant_mode_card("Modo Uno", 12.3)
+    assert "Sin datos" in _texts(tile)
 
 
 def test_ultima_evidencia_is_subtitle_metadata_not_a_tile(monkeypatch):
@@ -156,3 +173,15 @@ def test_each_banner_tier_has_its_own_fill_and_normal_has_no_alarm_color():
     assert len(set(fills.values())) == 4
     assert "e24b4a" in fills["critico"] and "b45309" in fills["anormal"]
     assert not {"e24b4a", "b45309", "ef9f27"} & set(re.findall(r"[0-9a-f]{6}", fills["normal"], re.I))
+
+
+def test_calendar_without_risk_level_says_so_instead_of_rebuilding_a_status(monkeypatch):
+    """A run whose risk_scores predate `risk_level` has numbers but no status: the card
+    explains that, and no calendar is drawn from the numbers."""
+    monkeypatch.setattr(ev, "_unit_risk_levels", lambda client, component, unit: pd.DataFrame())
+    rendered = _render_resumen(monkeypatch)
+    texts = [s for n in _walk(rendered) for s in _texts(n)]
+    assert any("risk_level" in s for s in texts)
+    heatmaps = [n for n in _walk(rendered) if type(n).__name__ == "Graph"
+                and any(type(trace).__name__ == "Heatmap" for trace in n.figure.data)]
+    assert heatmaps == []

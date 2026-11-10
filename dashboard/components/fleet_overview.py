@@ -449,7 +449,6 @@ def _component_predictive_status_maps(client: str, component: str) -> tuple[dict
     never diverge from what fed into the merged Predictivo row for the same
     unit/component (Functional Rules: "never recalculated independently")."""
     from src.data import predictive_v2
-    from src.data.loaders import get_latest_analisis_inteligente
 
     df_status = predictive_v2.load_unit_status_summary(client, component)
     estado_map: dict[str, str] = {}
@@ -464,18 +463,6 @@ def _component_predictive_status_maps(client: str, component: str) -> tuple[dict
                 _normalize_unit_id(u): r
                 for u, r in zip(df_status["Unit"], df_status["ranking"])
             }
-    if not estado_map:
-        df_legacy = get_latest_analisis_inteligente(client, component)
-        if not df_legacy.empty and "estado" in df_legacy.columns:
-            estado_map = {
-                _normalize_unit_id(u): str(e).strip().title()
-                for u, e in zip(df_legacy["Unit"], df_legacy["estado"])
-            }
-            if "ranking" in df_legacy.columns:
-                ranking_map = {
-                    _normalize_unit_id(u): r
-                    for u, r in zip(df_legacy["Unit"], df_legacy["ranking"])
-                }
     return estado_map, ranking_map
 
 

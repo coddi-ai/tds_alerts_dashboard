@@ -21,6 +21,7 @@ from dashboard.tabs.tab_predictive_overview import (
     attach_general_status,
     attach_status,
     load_active_curve,
+    load_latest_risk_levels,
     load_status_frame,
     load_unit_component_hours,
     render_long_view,
@@ -364,7 +365,9 @@ def register_callbacks(app):
         else:
             sorted_df = latest.sort_values(["avg_ranking_30d", "Unit"], ascending=[False, True])
 
-        return _failure_table(sorted_df, window, sort_by, ascending, failure_modes, client), state
+        return _failure_table(
+            sorted_df, window, sort_by, ascending, failure_modes, load_latest_risk_levels(client, component),
+        ), state
 
     # ══════════════════════════════════════════════════════════════════════════
     # EVIDENCE: Unit banner
@@ -527,7 +530,8 @@ def register_callbacks(app):
 
         row = row.iloc[0]
         fm_keys = list(failure_modes.keys())
-        fm_scores = {k: float(row[f"{k}_30d"]) if f"{k}_30d" in row.index and pd.notna(row[f"{k}_30d"]) else 0.0 for k in fm_keys}
+        # Same dominant mode as the Resumen card: the highest cutoff-day value.
+        fm_scores = {k: float(row[k]) if k in row.index and pd.notna(row[k]) else 0.0 for k in fm_keys}
         return max(fm_scores, key=fm_scores.get) if fm_scores else (fm_keys[0] if fm_keys else None)
 
     # ══════════════════════════════════════════════════════════════════════════

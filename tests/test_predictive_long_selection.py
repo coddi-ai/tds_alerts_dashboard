@@ -501,17 +501,18 @@ def test_short_view_tooltip_has_today_7d_30d_and_the_component_meter():
     assert {u: h for t in fig.data for u, h in zip(t.text, t.hovertext)}["T_00"] == "1,234 hrs"
 
 
-def test_seven_day_mean_uses_real_calendar_days_up_to_each_units_last_reading(tmp_path):
+def test_seven_day_mean_uses_real_calendar_days_up_to_each_units_last_reading(monkeypatch):
     """No 7-day figure is published upstream, so the loader computes it: the mean of the daily
     ranking over the 7 calendar days ending at the unit's own last reading; a day with no
     row is skipped, never counted as zero."""
     days = pd.date_range("2026-09-01", periods=20)
     rows = [{"Unit": "A", "Fecha": d, "ranking": float(i)} for i, d in enumerate(days) if d.day not in (15, 16)]
     rows += [{"Unit": "B", "Fecha": d, "ranking": 100.0} for d in days[:10]]  # stopped reporting on 10 Sep
-    csv = tmp_path / "motor.csv"
-    pd.DataFrame(rows).to_csv(csv, index=False)
-    stat = csv.stat()
-    _, latest, _ = ov._load_component_data_cached(str(csv), "motor", "testclient", stat.st_mtime_ns, stat.st_size)
+    long = pd.DataFrame(rows).rename(columns={"ranking": "risk_value"})
+    long["failure_mode"], long["risk_level"] = "ranking", "Saludable"
+    monkeypatch.setattr(ov.predictive_v2, "load_risk_scores", lambda client, component: long)
+    monkeypatch.setattr(ov.predictive_v2, "load_unit_status_summary", lambda client, component: pd.DataFrame())
+    _, latest, _ = ov._load_component_data_cached("unused", "motor", "testclient-7d", 0, 0)
     mean7 = dict(zip(latest["Unit"], latest["avg_ranking_7d"]))
     # A: last reading 20 Sep; the window is 14-20 Sep and 15/16 have no rows -> days 14, 17, 18, 19, 20
     expected = np.mean([i for i, d in enumerate(days) if d.day in (14, 17, 18, 19, 20)])

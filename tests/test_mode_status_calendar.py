@@ -1,110 +1,176 @@
-"""Calendario de estado: bands come from the client's calibrated thresholds."""
+"""Per-failure-mode status: the Calendario de estado, the Riesgo por modo de falla table and the
+risk_level readers all take the status from `risk_scores.risk_level` - never from `risk_value`."""
 import pandas as pd
+import pytest
 
 from dashboard.components import predictive_charts as pc
-from dashboard.components.predictive_charts import (
-    classify_criticidad,
-    create_mode_status_calendar,
-    get_mode_thresholds,
-)
+from dashboard.components import predictive_state as ps
+from dashboard.components.predictive_charts import create_mode_status_calendar
+from src.data import predictive_v2
 
 END = pd.Timestamp("2026-01-31")
-MODES = {"bearing_wear_risk": "Bearing", "unknown_mode_risk": "Unknown"}
+MODES = {"bearing_wear_risk": "Bearing", "other_risk": "Other"}
+CODE = {level: i for i, level in enumerate(ps.RISK_LEVELS)}
 
 
-def _frame(bearing, unknown, start="2026-01-01"):
+def _values(bearing, other, start="2026-01-01"):
     dates = pd.date_range(start, periods=len(bearing), freq="D")
-    return pd.DataFrame({"Fecha": dates, "bearing_wear_risk": bearing, "unknown_mode_risk": unknown})
+    return pd.DataFrame({"Fecha": dates, "bearing_wear_risk": bearing, "other_risk": other})
+
+
+def _levels(bearing, other, start="2026-01-01"):
+    dates = pd.date_range(start, periods=len(bearing), freq="D")
+    return pd.DataFrame({"Fecha": dates, "bearing_wear_risk": bearing, "other_risk": other})
 
 
 def _codes(fig):
-    """{row label: [band code per day]} of the heatmap."""
+    """{row label: [code per day]} of the heatmap."""
     heat = fig.data[0]
     return {y: list(z) for y, z in zip(heat.y, heat.z)}
 
 
-def test_capstone_thresholds_are_loaded_per_mode():
-    edges = get_mode_thresholds("Capstone")
-    assert edges["bearing_wear_risk"] == (5.8292, 16.3931, 42.9137)
-    assert len(edges) == 10
+# ── risk_level vocabulary ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("raw, level", [
+    ("Saludable", "Saludable"), ("monitoreo", "Monitoreo"), ("Prioridad alta", "Prioridad alta"),
+    ("Critico", "Critico"), ("Crítico", "Critico"), (" CRÍTICO ", "Critico"),
+    ("Alerta", None), ("", None), (None, None), (float("nan"), None), (pd.NA, None),
+])
+def test_normalize_risk_level_accepts_the_contract_spelling_and_nothing_else(raw, level):
+    assert ps.normalize_risk_level(raw) == level
 
 
-def test_client_without_file_has_no_thresholds():
-    assert get_mode_thresholds("cda") == {}
-    assert get_mode_thresholds(None) == {}
+def test_every_level_has_one_color_and_one_label_key():
+    assert set(ps.RISK_LEVEL_STYLE) == set(ps.RISK_LEVELS)
+    colors = [ps.RISK_LEVEL_STYLE[level]["color"] for level in ps.RISK_LEVELS]
+    assert len(set(colors)) == len(colors) and ps.RISK_LEVEL_NO_DATA_COLOR not in colors
+    assert [ps.risk_level_label(level) for level in ps.RISK_LEVELS] == [
+        "Saludable", "Monitoreo", "Prioridad alta", "Crítico"]
+    assert ps.risk_level_label(None) == "Sin datos"
 
 
-def test_classify_uses_given_edges_and_keeps_missing_as_none():
-    assert classify_criticidad(20.0) == 0  # fixed 35/55/75
-    assert classify_criticidad(20.0, (5.8292, 16.3931, 42.9137)) == 2
-    assert classify_criticidad(float("nan"), (1, 2, 3)) is None
+# ── Calendario de estado ──────────────────────────────────────────────────────
+
+def test_cell_color_is_the_delivered_risk_level_whatever_the_value():
+    # A value of 90 delivered as Saludable and a value of 0 delivered as Critico: the level wins.
+    levels = _levels(["Saludable"] * 31, ["Critico"] * 31)
+    values = _values([90.0] * 31, [0.0] * 31)
+    codes = _codes(create_mode_status_calendar(values, MODES, END, days=31, risk_levels=levels))
+    assert set(codes["Bearing"]) == {CODE["Saludable"]}
+    assert set(codes["Other"]) == {CODE["Critico"]}
 
 
-def test_calibrated_mode_uses_its_edges_on_the_7_day_mean():
-    # 31 days at 20: far under the fixed 35, but above bearing's P90 (16.39).
-    df = _frame([20.0] * 31, [20.0] * 31)
-    fig = create_mode_status_calendar(df, MODES, END, days=31, client="capstone")
-    codes = _codes(fig)
-    assert set(codes["Bearing"]) == {2}  # Prioridad alta
-    assert set(codes["Unknown"]) == {0}  # no calibration -> fixed bands, Saludable
+def test_each_day_takes_its_own_level():
+    seq = list(ps.RISK_LEVELS) + ["Saludable"] * 27
+    codes = _codes(create_mode_status_calendar(
+        _values([10.0] * 31, [10.0] * 31), MODES, END, days=31, risk_levels=_levels(seq, seq)))
+    assert codes["Bearing"][:4] == [0, 1, 2, 3]
 
 
-def test_mean_smooths_a_single_spike():
-    values = [0.0] * 31
-    values[-1] = 50.0  # daily 50 >= P98 (42.9), but the 7-day mean is ~7.1
-    fig = create_mode_status_calendar(_frame(values, values), MODES, END, days=31, client="capstone")
-    assert _codes(fig)["Bearing"][-1] == 1  # Monitoreo, not Crítico
-    assert _codes(fig)["Unknown"][-1] == 1  # daily 50 against the fixed 35/55/75
+def test_the_same_value_can_carry_different_levels_on_different_days():
+    # risk_level is not a function of risk_value: the same 12.3 is Monitoreo one day, Prioridad alta the next.
+    levels = _levels(["Monitoreo", "Prioridad alta"] * 15 + ["Monitoreo"], ["Saludable"] * 31)
+    codes = _codes(create_mode_status_calendar(
+        _values([12.3] * 31, [0.0] * 31), MODES, END, days=31, risk_levels=levels))["Bearing"]
+    assert codes[:2] == [CODE["Monitoreo"], CODE["Prioridad alta"]]
 
 
-def test_day_without_reading_stays_no_data_under_the_mean():
-    df = _frame([20.0] * 31, [20.0] * 31).drop(index=15)
-    fig = create_mode_status_calendar(df, MODES, END, days=31, client="capstone")
-    assert _codes(fig)["Bearing"][15] == pc._NO_DATA_CODE
-    assert _codes(fig)["Bearing"][16] == 2
+def test_day_without_a_row_is_no_data_not_saludable():
+    levels = _levels(["Monitoreo"] * 31, ["Monitoreo"] * 31).drop(index=15)
+    codes = _codes(create_mode_status_calendar(
+        _values([20.0] * 31, [20.0] * 31), MODES, END, days=31, risk_levels=levels))["Bearing"]
+    assert codes[15] == pc._NO_DATA_CODE and codes[16] == CODE["Monitoreo"]
 
 
-def test_without_client_every_mode_keeps_the_fixed_bands():
-    df = _frame([60.0] * 31, [60.0] * 31)
-    fig = create_mode_status_calendar(df, MODES, END, days=31)
-    assert set(_codes(fig)["Bearing"]) == {2}  # 55 <= 60 < 75
+def test_unrecognised_or_null_level_is_no_data():
+    levels = _levels(["Alerta", None, "Crítico"] + ["Saludable"] * 28, ["Saludable"] * 31)
+    codes = _codes(create_mode_status_calendar(
+        _values([5.0] * 31, [5.0] * 31), MODES, END, days=31, risk_levels=levels))["Bearing"]
+    assert codes[:3] == [pc._NO_DATA_CODE, pc._NO_DATA_CODE, CODE["Critico"]]  # accent variant still maps
+
+
+def test_without_risk_levels_there_is_no_calendar_and_values_never_stand_in():
+    values = _values([99.0] * 31, [99.0] * 31)
+    assert create_mode_status_calendar(values, MODES, END, days=31) is None
+    assert create_mode_status_calendar(values, MODES, END, days=31, risk_levels=pd.DataFrame()) is None
+    assert create_mode_status_calendar(values, MODES, END, days=31, risk_levels=_levels([None] * 31, [None] * 31)).data[0].z is not None
+
+
+def test_palette_and_legend_come_from_the_shared_level_table():
+    fig = create_mode_status_calendar(
+        _values([1.0] * 31, [1.0] * 31), MODES, END, days=31,
+        risk_levels=_levels(["Saludable"] * 31, ["Saludable"] * 31))
+    colorscale_colors = {c for _, c in fig.data[0].colorscale}
+    assert colorscale_colors == {ps.RISK_LEVEL_STYLE[l]["color"] for l in ps.RISK_LEVELS} | {ps.RISK_LEVEL_NO_DATA_COLOR}
+    assert [t.name for t in fig.data[1:]] == ["Saludable", "Monitoreo", "Prioridad alta", "Crítico", "Sin datos"]
+
+
+def test_no_threshold_machinery_is_left_in_the_chart_module():
+    for name in ("classify_criticidad", "get_mode_thresholds", "_load_mode_thresholds", "CRITICIDAD_BANDS"):
+        assert not hasattr(pc, name)
 
 
 # ── Riesgo por Modo de Falla table (Predictivo > Resumen) ─────────────────────
 
-def _fm_cell_backgrounds(client, value, mode="bearing_wear_risk"):
+def _fm_cell_backgrounds(level, value=20.0, mode="bearing_wear_risk", with_levels=True):
     from dashboard.tabs import tab_predictive_overview as ov
 
     latest = pd.DataFrame({
         "Unit": ["U1"], "status": "Normal", "ranking": 1.0, "avg_ranking_30d": 1.0,
         f"{mode}_30d": value,
     })
-    table = ov._failure_table(latest, "avg_ranking_30d", "avg_ranking_30d", False, {mode: "Modo"}, client)
+    levels = pd.DataFrame({mode: [level]}, index=pd.Index(["U1"], name="Unit")) if with_levels else None
+    table = ov._failure_table(latest, "avg_ranking_30d", "avg_ranking_30d", False, {mode: "Modo"}, levels)
     row = table.children[0].children[1].children[0]
     return row.children[-1].style["background"]
 
 
-def test_failure_table_cell_takes_the_mode_band_for_a_calibrated_client():
-    from dashboard.tabs import tab_predictive_overview as ov
-
-    bands = ov._BAND_CELL_STYLES
-    # bearing edges: 5.8292 / 16.3931 / 42.9137
-    assert _fm_cell_backgrounds("capstone", 3.0) == bands[0]["background"]
-    assert _fm_cell_backgrounds("capstone", 10.0) == bands[1]["background"]
-    assert _fm_cell_backgrounds("capstone", 20.0) == bands[2]["background"]
-    assert _fm_cell_backgrounds("capstone", 45.0) == bands[3]["background"]
+@pytest.mark.parametrize("level", ps.RISK_LEVELS)
+def test_failure_table_cell_takes_the_tone_of_the_risk_level(level):
+    assert _fm_cell_backgrounds(level) == ps.RISK_LEVEL_STYLE[level]["cell_bg"]
 
 
-def test_failure_table_cell_keeps_the_fixed_style_without_thresholds():
-    from dashboard.tabs import tab_predictive_overview as ov
-
-    # 20 is Saludable under 40/70; the same value is Prioridad alta for capstone.
-    assert _fm_cell_backgrounds("cda", 20.0) == ov._score_cell_style(20.0)["background"]
-    assert _fm_cell_backgrounds(None, 20.0) == ov._score_cell_style(20.0)["background"]
-    assert _fm_cell_backgrounds("capstone", 20.0, mode="unknown_mode_risk") == ov._score_cell_style(20.0)["background"]
+def test_failure_table_cell_tone_ignores_the_number_it_shows():
+    assert _fm_cell_backgrounds("Saludable", value=95.0) == ps.RISK_LEVEL_STYLE["Saludable"]["cell_bg"]
+    assert _fm_cell_backgrounds("Critico", value=0.0) == ps.RISK_LEVEL_STYLE["Critico"]["cell_bg"]
 
 
-def test_failure_table_missing_value_stays_neutral_for_a_calibrated_client():
-    from dashboard.tabs import tab_predictive_overview as ov
+def test_failure_table_without_a_level_is_neutral_never_green():
+    from dashboard.components.labels import NO_DATA_BG
 
-    assert _fm_cell_backgrounds("capstone", float("nan")) == ov._score_cell_style(None)["background"]
+    assert _fm_cell_backgrounds(None) == NO_DATA_BG
+    assert _fm_cell_backgrounds("Saludable", with_levels=False) == NO_DATA_BG
+    assert _fm_cell_backgrounds("Saludable", mode="bearing_wear_risk") != NO_DATA_BG
+
+
+# ── risk_level readers ────────────────────────────────────────────────────────
+
+def _long():
+    rows = []
+    for unit in ("A", "B"):
+        for day, (lvl_m1, lvl_rank) in enumerate([("Saludable", "Monitoreo"), ("Prioridad alta", "Prioridad alta")], start=1):
+            d = pd.Timestamp(f"2026-01-0{day}")
+            rows.append({"Unit": unit, "Fecha": d, "failure_mode": "m1", "risk_value": 1.0, "risk_level": lvl_m1})
+            rows.append({"Unit": unit, "Fecha": d, "failure_mode": "ranking", "risk_value": 2.0, "risk_level": lvl_rank})
+    rows.append({"Unit": "A", "Fecha": pd.Timestamp("2026-01-03"), "failure_mode": "m2", "risk_value": 3.0, "risk_level": "Critico"})
+    return pd.DataFrame(rows)
+
+
+def test_risk_levels_to_wide_keeps_the_delivered_strings_and_leaves_gaps_empty():
+    wide = predictive_v2.risk_levels_to_wide(_long())
+    a = wide[wide.Unit == "A"].set_index("Fecha")
+    assert a.loc["2026-01-01", "m1"] == "Saludable" and a.loc["2026-01-02", "m1"] == "Prioridad alta"
+    assert pd.isna(a.loc["2026-01-01", "m2"]) and a.loc["2026-01-03", "m2"] == "Critico"
+    assert "ranking" in wide.columns
+
+
+def test_risk_levels_to_wide_without_the_column_is_empty():
+    assert predictive_v2.risk_levels_to_wide(_long().drop(columns="risk_level")).empty
+    assert predictive_v2.risk_levels_to_wide(pd.DataFrame()).empty
+
+
+def test_latest_risk_levels_is_the_last_day_each_unit_has_for_each_mode():
+    latest = predictive_v2.latest_risk_levels(predictive_v2.risk_levels_to_wide(_long()))
+    assert latest.loc["A", "m1"] == "Prioridad alta"   # 02 Jan (A has no m1 row on the 03rd)
+    assert latest.loc["A", "m2"] == "Critico"
+    assert pd.isna(latest.loc["B", "m2"])

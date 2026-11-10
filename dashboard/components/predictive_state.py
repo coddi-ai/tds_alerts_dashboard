@@ -7,9 +7,65 @@ view's `unit_status_summary.estado` (lowercase) and the long view's
 its own `estado`; only the KPI aggregate uses `combine_states`.
 """
 
+import unicodedata
 from typing import Optional
 
 import pandas as pd
+
+from src.i18n import t
+
+# ── Per-failure-mode status: `risk_scores.risk_level` ────────────────────────
+#
+# The status of a failure mode (unit x day x mode) is the `risk_level` that
+# `risk_scores` delivers - never anything computed from `risk_value`, a ranking
+# or a threshold in consumer code. The values are the data contract's spelling
+# (note `Critico` has no accent). This table is the one place a level gets its
+# color and label, so every Predictivo surface that draws a mode status agrees.
+#
+# Palette: the previous Calendario de estado colors. The technical lead's
+# canonical palette is not in the repo yet; swap the values here when it lands.
+RISK_LEVELS = ("Saludable", "Monitoreo", "Prioridad alta", "Critico")  # low -> high
+RISK_LEVEL_STYLE = {
+    # color: solid (calendar cell, legend); cell_bg / cell_text: light table-cell tone
+    "Saludable":      {"color": "#1d9e75", "cell_bg": "#eaf3de", "cell_text": "#3b6d11",
+                       "label_key": "predictive_charts.band_healthy"},
+    "Monitoreo":      {"color": "#f2d04b", "cell_bg": "#fdf3c4", "cell_text": "#7a5f00",
+                       "label_key": "predictive_charts.band_monitoring"},
+    "Prioridad alta": {"color": "#ef7f27", "cell_bg": "#fde4cf", "cell_text": "#9a4a0a",
+                       "label_key": "predictive_charts.band_high_priority"},
+    "Critico":        {"color": "#e24b4a", "cell_bg": "#fcebeb", "cell_text": "#a32d2d",
+                       "label_key": "predictive_charts.band_critical"},
+}
+# A mode/day with no `risk_scores` row: "no data", never implicitly Saludable.
+RISK_LEVEL_NO_DATA_COLOR = "#e5e7eb"
+
+
+def _fold(text: str) -> str:
+    """Case- and accent-insensitive key: `Crítico` / `Critico` / `CRITICO` -> `critico`."""
+    decomposed = unicodedata.normalize("NFKD", str(text).strip())
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+
+
+_RISK_LEVEL_BY_FOLDED = {_fold(level): level for level in RISK_LEVELS}
+
+
+def normalize_risk_level(value) -> Optional[str]:
+    """The contract spelling of a `risk_level` value, or None when it is missing or
+    not one of the four known levels (an unknown value is never guessed)."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    return _RISK_LEVEL_BY_FOLDED.get(_fold(value))
+
+
+def risk_level_label(value) -> str:
+    """Display text of a `risk_level` (translated); "Sin datos" when it has none."""
+    level = normalize_risk_level(value)
+    if level is None:
+        return t("oil_machine_detail.sin_datos")
+    return t(RISK_LEVEL_STYLE[level]["label_key"])
+
+
+# ── Unit state (`estado`) ─────────────────────────────────────────────────────
 
 # Severity order, low -> high: Normal < Alerta < Anormal.
 STATE_ORDER = ("Normal", "Alerta", "Anormal")
