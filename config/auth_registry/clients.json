@@ -1,0 +1,8 @@
+[
+  { "client_id": "capstone",  "display_name": "Capstone",  "active": true },
+  { "client_id": "emin",      "display_name": "Emin",      "active": true },
+  { "client_id": "lomas",     "display_name": "Lomas",     "active": true },
+  { "client_id": "cda",       "display_name": "CDA",       "active": true },
+  { "client_id": "enex",      "display_name": "Enex",      "active": true },
+  { "client_id": "centinela", "display_name": "Centinela", "active": true }
+]
