@@ -67,13 +67,13 @@ PRODUCTION_SCHEDULES: Dict[str, dict] = {
     "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
 }
 
-# >>> TEMPORARY DEPLOYED TEST (Tuesday 2026-11-10): both clients fire at 21:00 Chile time, and the
+# >>> TEMPORARY DEPLOYED TEST (Tuesday 2026-11-10): both clients fire at 21:30 Chile time, and the
 # >>> scheduled email goes ONLY to tds@coddi.ai even in production (see SCHEDULED_RECIPIENTS_OVERRIDE).
 # >>> AFTER THE TEST, replace the three blocks marked TEMPORARY with:
 # >>>     MAILING_SCHEDULES = PRODUCTION_SCHEDULES   and   SCHEDULED_RECIPIENTS_OVERRIDE = None
 MAILING_SCHEDULES: Dict[str, dict] = {
-    "emin": {"frequency": "daily", "time": "21:00"},
-    "capstone": {"frequency": "weekly", "weekday": "tuesday", "time": "21:00"},
+    "emin": {"frequency": "daily", "time": "21:30"},
+    "capstone": {"frequency": "weekly", "weekday": "tuesday", "time": "21:30"},
 }
 
 # TEMPORARY: when not None, EVERY scheduled send goes only to these addresses, whatever the
