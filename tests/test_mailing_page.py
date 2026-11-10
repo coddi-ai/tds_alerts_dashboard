@@ -18,6 +18,7 @@ from src.mailing.errors import MailingError
 ADMIN = next(n for n, u in USERS.items() if u.get("role") == "admin")
 CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
 TECH = "tds@coddi.ai"
+TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
 EMIN_CLIENT = [r["email"] for r in config.MAILING_RECIPIENTS["emin"]]
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 
@@ -226,7 +227,7 @@ def test_technical_is_checked_and_disabled_everywhere(flask_app, production):
     for env in ("production", "development"):
         state, _ = render(flask_app)
         options, value = checklist_state(state["s_tech"])
-        assert value == [TECH] and options[0]["disabled"] is True
+        assert value == TECHS and all(o["disabled"] is True for o in options)
         if env == "production":
             continue
 
@@ -238,7 +239,7 @@ def test_outside_production_client_and_management_are_unchecked_disabled_with_re
         options, value = checklist_state(state[key])
         assert value == [] and options and all(o["disabled"] for o in options)
         assert all("Solo disponible en producción" in text(o["label"]) for o in options)
-    assert checklist_state(state["s_tech"])[1] == [TECH]
+    assert checklist_state(state["s_tech"])[1] == TECHS
 
 
 def test_contact_without_automatic_sending_is_unchecked_but_selectable(flask_app, production, monkeypatch):
@@ -345,17 +346,19 @@ def send(app, selected_client, selected_tech=(TECH,), selected_mgmt=(), client="
 
 def test_send_to_the_selection_reports_success(flask_app, builder, sent, production):
     result = send(flask_app, EMIN_CLIENT[:1], selected_mgmt=GERENCIA)
-    assert result["kind"] == "success" and result["message"] == "Resumen enviado a 4 destinatarios."
-    assert sent["calls"][0]["emails"] == [EMIN_CLIENT[0], TECH, *GERENCIA]
+    expected = [EMIN_CLIENT[0], *TECHS, *GERENCIA]
+    assert result["kind"] == "success" and result["message"] == f"Resumen enviado a {len(expected)} destinatarios."
+    assert sorted(sent["calls"][0]["emails"]) == sorted(expected)
 
 
-def test_singular_success_message(flask_app, builder, sent):
+def test_singular_success_message(flask_app, builder, sent, monkeypatch):
+    monkeypatch.setattr(config, "CODDI_RECIPIENTS", {"technical": [{"name": "T", "email": TECH, "send_email": True}], "management": []})
     assert send(flask_app, [])["message"] == "Resumen enviado a 1 destinatario."
 
 
 def test_a_test_send_is_just_the_technical_contact(flask_app, builder, sent, production):
     send(flask_app, [], selected_mgmt=[])
-    assert sent["calls"][0]["emails"] == [TECH]
+    assert sent["calls"][0]["emails"] == TECHS
 
 
 def test_lambda_failure_shows_the_generic_failure_without_internals(flask_app, builder, sent):

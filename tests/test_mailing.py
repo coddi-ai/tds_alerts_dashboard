@@ -34,6 +34,7 @@ from src.mailing.scheduler import MailingScheduler
 SANTIAGO = ZoneInfo("America/Santiago")
 SECRET_URL = "https://abc123secret.lambda-url.us-east-2.on.aws/"
 TECH = "tds@coddi.ai"
+TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 EMIN_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["emin"] if r["send_email"]]
 
@@ -129,8 +130,8 @@ def at(day: date, hour=8, minute=0) -> datetime:
 
 
 def test_non_production_only_technical_can_receive(sent):
-    assert recipients.allowed_emails("emin") == [TECH]
-    assert recipients.scheduled_emails("emin") == [TECH]
+    assert recipients.allowed_emails("emin") == TECHS
+    assert recipients.scheduled_emails("emin") == TECHS
     everyone = recipients.list_recipients("emin")
     for r in everyone:
         if r.group != config.GROUP_TECHNICAL:
@@ -138,7 +139,7 @@ def test_non_production_only_technical_can_receive(sent):
 
 
 def test_production_scheduled_goes_to_client_flagged_technical_and_management(production):
-    assert recipients.scheduled_emails("emin") == EMIN_SEND + [TECH] + GERENCIA
+    assert recipients.scheduled_emails("emin") == EMIN_SEND + TECHS + GERENCIA
 
 
 def test_production_scheduled_skips_client_contacts_without_send_email(production, monkeypatch):
@@ -147,7 +148,7 @@ def test_production_scheduled_skips_client_contacts_without_send_email(productio
         {"name": "B", "email": "b@x.cl", "send_email": False},
     ]}
     monkeypatch.setattr(config, "MAILING_RECIPIENTS", registry)
-    assert recipients.scheduled_emails("emin") == ["a@x.cl", TECH] + GERENCIA
+    assert recipients.scheduled_emails("emin") == ["a@x.cl", *TECHS] + GERENCIA
     # B sigue siendo seleccionable a mano, pero no viene marcado.
     by_email = {r.email: r for r in recipients.list_recipients("emin")}
     assert not by_email["b@x.cl"].selected_by_default and not by_email["b@x.cl"].disabled
@@ -157,7 +158,7 @@ def test_production_scheduled_skips_client_contacts_without_send_email(productio
 def test_technical_is_locked_and_preselected_everywhere(production):
     tech = next(r for r in recipients.list_recipients("capstone") if r.email == TECH)
     assert tech.locked and tech.selected_by_default
-    assert recipients.technical_emails("capstone") == [TECH]
+    assert recipients.technical_emails("capstone") == TECHS
 
 
 def test_unknown_client_still_has_technical_and_management(production):
@@ -336,17 +337,17 @@ def test_temporary_override_restricts_every_scheduled_send_to_tds_even_in_produc
 
 def test_the_override_does_not_change_what_a_manual_send_may_target(production, monkeypatch):
     monkeypatch.setattr(config, "SCHEDULED_RECIPIENTS_OVERRIDE", ["tds@coddi.ai"])
-    assert set(recipients.allowed_emails("emin")) == {*EMIN_SEND, TECH, *GERENCIA}
+    assert set(recipients.allowed_emails("emin")) == {*EMIN_SEND, *TECHS, *GERENCIA}
 
 
 def test_scheduled_send_in_production_reaches_every_expected_recipient(builder, sent, production):
     run_scheduled("emin", date(2026, 11, 10))
-    assert sent["calls"][0]["emails"] == EMIN_SEND + [TECH] + GERENCIA
+    assert sent["calls"][0]["emails"] == EMIN_SEND + TECHS + GERENCIA
 
 
 def test_scheduled_send_outside_production_reaches_only_technical(builder, sent):
     run_scheduled("capstone", date(2026, 11, 11))
-    assert sent["calls"][0]["emails"] == [TECH]
+    assert sent["calls"][0]["emails"] == TECHS
 
 
 def test_scheduled_and_manual_share_builder_and_delivery(builder, sent, flask_app):
@@ -363,14 +364,14 @@ def test_manual_send_always_adds_technical(builder, sent, flask_app, production)
     admin = as_user(flask_app, ADMIN)
     result = send_manual("emin", [EMIN_SEND[0]], admin)
     assert result["ok"] and result["status"] == "sent"
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], TECH]
-    assert [r["status"] for r in result["recipients"]] == ["sent", "sent"]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
+    assert [r["status"] for r in result["recipients"]] == ["sent"] * (1 + len(TECHS))
 
 
 def test_manual_mock_test_is_just_technical_selected(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [TECH], admin)
-    assert sent["calls"][0]["emails"] == [TECH]
+    assert sent["calls"][0]["emails"] == TECHS
 
 
 def test_manual_send_rejects_emails_outside_the_allowed_set(builder, sent, flask_app, production):
@@ -395,13 +396,13 @@ def test_manual_send_outside_production_rejects_client_and_management(builder, s
         with pytest.raises(MailingValidationError):
             send_manual("emin", [email], admin)
     send_manual("emin", [], admin)
-    assert sent["calls"][0]["emails"] == [TECH]
+    assert sent["calls"][0]["emails"] == TECHS
 
 
 def test_manual_send_matches_emails_case_insensitively_without_duplicates(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [EMIN_SEND[0].upper(), EMIN_SEND[0], TECH.upper()], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], TECH]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
 
 
 def test_manual_failure_is_returned_not_retried(builder, sent, flask_app):
@@ -523,7 +524,7 @@ def test_context_outside_production_disables_client_and_management(flask_app):
     ctx = get_mailing_context("emin", admin)
     assert ctx["environment"] == "development" and not ctx["is_production"]
     for r in ctx["recipients"]:
-        if r["email"] != TECH:
+        if r["email"] not in TECHS:
             assert r["disabled"] and not r["selected_by_default"] and r["disabled_reason"]
 
 

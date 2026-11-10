@@ -42,6 +42,7 @@ MAILING_RECIPIENTS: Dict[str, List[dict]] = {
 CODDI_RECIPIENTS: Dict[str, List[dict]] = {
     "technical": [
         {"name": "Equipo Técnico", "email": "tds@coddi.ai", "send_email": True},
+        {"name": "Warren", "email": "warren@coddi.ai", "send_email": True},
     ],
     "management": [
         {"name": "Eduardo", "email": "eduardo@coddi.ai", "send_email": True},
