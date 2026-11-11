@@ -192,8 +192,8 @@ def send_manual(
 ) -> dict:
     """Send the summary now to the validated selection. Admin-only, no automatic retry.
 
-    The UI is never the source of truth: any email outside the allowed set for this client
-    and environment rejects the whole send, and Coddi Técnico is added when missing.
+    The UI is never the source of truth: any email outside the registry of this client
+    rejects the whole send, and Coddi Técnico is added when missing.
     Raises MailingError subclasses for expected refusals (permission, not configured,
     invalid recipients, busy); a delivery failure is returned in the result.
     """
@@ -208,7 +208,7 @@ def send_manual(
             key, requested_by, rejected,
         )
         raise MailingValidationError(
-            "La selección incluye destinatarios no permitidos para este cliente o entorno.",
+            "La selección incluye destinatarios no permitidos para este cliente.",
             rejected=rejected,
         )
 
@@ -310,9 +310,10 @@ def _log_attempt(
     result = "sent" if outcome.ok else "failed"
     per_recipient: List[str] = [f"{email}={result}" for email in emails]
     logger.info(
-        "mailing send | client=%s trigger=%s requested_by=%s attempt=%d subject=%r "
-        "recipients=%s results=[%s]%s",
-        client, trigger, requested_by or "-", attempt, subject, list(emails),
+        "mailing send | client=%s trigger=%s requested_by=%s environment=%s host=%s attempt=%d "
+        "subject=%r recipients=%s results=[%s]%s",
+        client, trigger, requested_by or "-", config.environment_name(), config.get_hostname(),
+        attempt, subject, list(emails),
         ", ".join(per_recipient),
         "" if outcome.ok else f" reason={outcome.reason!r}",
     )

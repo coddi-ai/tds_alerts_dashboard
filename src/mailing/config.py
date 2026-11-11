@@ -12,6 +12,7 @@ Client keys match the identifiers of the per-client configuration (``config/clie
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -62,26 +63,13 @@ GROUP_ORDER = (GROUP_CLIENT, GROUP_TECHNICAL, GROUP_MANAGEMENT)
 
 MAILING_TIMEZONE = "America/Santiago"
 
-# The real schedules (Emin daily, Capstone weekly on Wednesday, both at 08:00 Chile time).
-PRODUCTION_SCHEDULES: Dict[str, dict] = {
+# The schedules live in code ON PURPOSE: they cannot be overridden from `.env`, the UI or a local
+# file. A temporary test schedule must never be committed (manual send is the way to test; a test
+# in tests/test_mailing.py guards these exact values).
+MAILING_SCHEDULES: Dict[str, dict] = {
     "emin": {"frequency": "daily", "time": "08:00"},
     "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
 }
-
-# >>> TEMPORARY DEPLOYED TEST (Tuesday 2026-11-10): both clients fire at 22:10 Chile time, and the
-# >>> scheduled email goes ONLY to tds@coddi.ai and warren@coddi.ai even in production (see SCHEDULED_RECIPIENTS_OVERRIDE).
-# >>> AFTER THE TEST, replace the three blocks marked TEMPORARY with:
-# >>>     MAILING_SCHEDULES = PRODUCTION_SCHEDULES   and   SCHEDULED_RECIPIENTS_OVERRIDE = None
-MAILING_SCHEDULES: Dict[str, dict] = {
-    "emin": {"frequency": "daily", "time": "22:10"},
-    "capstone": {"frequency": "weekly", "weekday": "tuesday", "time": "22:10"},
-}
-
-# TEMPORARY: when not None, EVERY scheduled send goes only to these addresses, whatever the
-# environment (production would otherwise add the client contacts and management). It does not
-# affect the manual send, which has its own validation.
-SCHEDULED_RECIPIENTS_OVERRIDE: Optional[List[str]] = ["tds@coddi.ai", "warren@coddi.ai"]
-# <<< END TEMPORARY DEPLOYED TEST
 
 WEEKDAYS = (
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -94,9 +82,10 @@ WEEKDAYS = (
 # Public base URL of the dashboard (prefix included). The email button points at its Alertas page.
 DASHBOARD_URL = "https://poc.tds.coddi.ai/alerts-dashboard"
 
-# The app's existing environment flag is DEPLOY_STATUS ("POC" = production, "test" =
-# development; see src/utils/auth_event_logger.py and user_registry_charts.py). Anything
-# else, or unset, is NON-production, so a missing variable can never email a client.
+# The app's existing environment flag is DEPLOY_STATUS ("POC" = production, anything else or
+# unset = non-production). It only changes the default selection of the manual screen, the
+# confirmation in the front and the `environment` field of the logs. It never changes who
+# receives a scheduled email or who an admin may select.
 PRODUCTION_DEPLOY_STATUSES = frozenset({"poc", "production"})
 
 DEFAULT_RETRY_DELAYS: Tuple[float, ...] = (30.0, 120.0, 300.0)  # 3 retries, growing waits
@@ -158,12 +147,21 @@ def environment_name() -> str:
 
 
 def scheduler_enabled() -> bool:
-    """On by default; `MAILING_SCHEDULER_ENABLED=false` switches it off.
+    """On by default in EVERY environment (a local machine included);
+    `MAILING_SCHEDULER_ENABLED=false` switches it off on that machine.
 
-    Safe to leave on in development: outside production a scheduled send only reaches
-    `tds@coddi.ai` (see recipients.scheduled_emails).
+    A machine with the scheduler on sends the real scheduled emails to the client contacts
+    whenever it is running at the scheduled time, wherever it is.
     """
     return env_flag("MAILING_SCHEDULER_ENABLED", True)
+
+
+def get_hostname() -> str:
+    """Machine name, logged with every send attempt so the origin of an email can be traced."""
+    try:
+        return socket.gethostname() or "unknown"
+    except OSError:
+        return "unknown"
 
 
 def get_state_dir() -> Path:

@@ -54,12 +54,6 @@ def _option(recipient: dict) -> dict:
         tags.append(_tag(t("mailing.tag.no_auto"), "muted"))
     if group == mailing_config.GROUP_TECHNICAL:
         tags.append(_tag(t("mailing.tag.always"), "technical"))
-    if group == mailing_config.GROUP_MANAGEMENT:
-        tags.append(_tag(t("mailing.tag.production_only"), "production"))
-    reason = []
-    if recipient["disabled"] and recipient.get("disabled_reason"):
-        # Outside production: say why the row is disabled (the backend owns the reason).
-        reason = [html.Span(recipient["disabled_reason"], className="mailing-reason")]
     label = html.Span(
         [
             html.Span(
@@ -67,14 +61,14 @@ def _option(recipient: dict) -> dict:
                  html.Span(recipient["email"], className="mailing-email")],
                 className="mailing-identity",
             ),
-            html.Span([*tags, *reason], className="mailing-tags"),
+            html.Span(tags, className="mailing-tags"),
         ],
         className="mailing-row",
     )
     return {
         "label": label,
         "value": recipient["email"],
-        # Técnico is locked (cannot be removed); the environment disables the rest.
+        # Only Técnico is locked (cannot be removed); the environment disables nothing.
         "disabled": bool(recipient["disabled"] or recipient["locked"]),
     }
 

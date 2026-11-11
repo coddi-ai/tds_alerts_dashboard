@@ -20,7 +20,6 @@ BASE = datetime(2026, 7, 10, 12, 0, tzinfo=SANTIAGO)
 @pytest.fixture(autouse=True)
 def production_schedules(monkeypatch):
     """The email text (cada miércoles, 08:00...) comes from the REAL schedules, not a temporary test one."""
-    monkeypatch.setattr(config, "MAILING_SCHEDULES", config.PRODUCTION_SCHEDULES)
 
 
 def rec(unit, minutes=0, system="Motor", source="Telemetría", multi=False, diagnosis="Diagnóstico", component="Turbo"):

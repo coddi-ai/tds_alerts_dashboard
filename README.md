@@ -112,9 +112,9 @@ del mismo proceso del dashboard; no requiere infraestructura nueva ni un job ext
 | Variable (`.env`) | Para qué | Default |
 |---|---|---|
 | `LAMBDA_URL` | URL de la Lambda que envía los correos. **Secreto**: no se loguea ni se muestra | — (obligatoria) |
-| `DEPLOY_STATUS` | Entorno. `POC` = producción; cualquier otro valor (o ausente) = no producción, y entonces solo `tds@coddi.ai` recibe correos | — |
+| `DEPLOY_STATUS` | Entorno. `POC` = producción; cualquier otro valor (o ausente) = no producción. Solo cambia la selección por defecto de la pantalla Mailing (en no producción solo viene marcado Coddi Técnico), el aviso de confirmación y el campo `environment` de los logs. **No** cambia quién puede ser seleccionado ni quién recibe el envío automático | — |
 | `LAMBDA_ACCESS_KEY` / `LAMBDA_SECRET_ACCESS_KEY` | Credenciales AWS con que se firma (SigV4) la llamada a la Lambda; necesitan `lambda:InvokeFunctionUrl` y `lambda:InvokeFunction`. No se usan las de S3 | — |
-| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático (Emin diario, Capstone miércoles, 08:00 `America/Santiago`) | `true` |
+| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático **en esa máquina** (Emin diario, Capstone miércoles, 08:00 `America/Santiago`). Los horarios están en el código (`MAILING_SCHEDULES`) y no se pueden cambiar por `.env` | `true` en **todos** los entornos |
 | `MAILING_STATE_DIR` | Marcadores que garantizan un solo envío por (cliente, día); debe sobrevivir reinicios | `logs/mailing` (volumen montado) |
 | `MAILING_RETRY_DELAYS` | Esperas (s) entre reintentos de un envío programado; la cantidad = nº de reintentos | `30,120,300` |
 | `MAILING_MANUAL_COOLDOWN_SECONDS` | Ventana anti doble clic tras un envío manual exitoso | `5` |
@@ -125,6 +125,9 @@ servidor; (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requi
 (3) `docker-compose up -d`. Destinatarios y horarios se editan en `src/mailing/config.py`.
 Con varios workers no hay duplicados: el primero que crea el marcador envía y los demás lo omiten.
 Un envío manual no altera el envío automático.
+
+**Envío automático desde cualquier máquina.** El scheduler está encendido por defecto en todos los entornos, también en un computador local, y evalúa el horario en hora de Chile sin importar la zona horaria del sistema operativo. Una máquina con el scheduler encendido que esté corriendo a las 08:00 envía los correos reales a los contactos del cliente (los marcados con `send_email`), más Coddi Técnico y Gerencia. Una máquina local necesita `LAMBDA_URL` y las credenciales `LAMBDA_*` en su `.env`; si faltan, el envío se reintenta, se registra un error y la aplicación sigue funcionando. Para que una máquina **no** envíe, defina `MAILING_SCHEDULER_ENABLED=false` en su `.env`.
+El marcador de "ya enviado" es por máquina: si el servidor y otra máquina corren a las 08:00, el cliente recibe **dos** correos. Apague el scheduler en toda máquina que no deba enviar. Cada intento queda en el log con `environment` y `host`.
 
 ---
 

@@ -37,6 +37,8 @@ TECH = "tds@coddi.ai"
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 EMIN_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["emin"] if r["send_email"]]
+EMIN_ALL = [r["email"] for r in config.MAILING_RECIPIENTS["emin"]]
+CAPSTONE_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["capstone"] if r["send_email"]]
 
 ADMIN = next(n for n, u in USERS.items() if u.get("role") == "admin")
 CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
@@ -49,8 +51,6 @@ CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
 def hermetic(monkeypatch, tmp_path):
     """Sin .env real: ni la URL de la Lambda, ni el entorno, ni el estado salen de la maquina."""
     monkeypatch.setattr(config, "_DOTENV_LOADED", True)
-    monkeypatch.setattr(config, "MAILING_SCHEDULES", config.PRODUCTION_SCHEDULES)  # not the temp local test one
-    monkeypatch.setattr(config, "SCHEDULED_RECIPIENTS_OVERRIDE", None)  # not the temporary deployed-test one
     monkeypatch.setenv("LAMBDA_URL", SECRET_URL)
     monkeypatch.setenv("LAMBDA_ACCESS_KEY", "AKIAFAKEFAKEFAKEFAKE")
     monkeypatch.setenv("LAMBDA_SECRET_ACCESS_KEY", "fake-secret-key-for-signing-tests")
@@ -129,13 +129,33 @@ def at(day: date, hour=8, minute=0) -> datetime:
 # --------------------------------------------------------------------------- recipients
 
 
-def test_non_production_only_technical_can_receive(sent):
-    assert recipients.allowed_emails("emin") == TECHS
-    assert recipients.scheduled_emails("emin") == TECHS
-    everyone = recipients.list_recipients("emin")
-    for r in everyone:
-        if r.group != config.GROUP_TECHNICAL:
-            assert r.disabled and not r.selected_by_default and r.disabled_reason
+def test_non_production_allows_the_whole_registry_of_the_client(sent):
+    assert not config.is_production()
+    assert recipients.allowed_emails("emin") == EMIN_ALL + TECHS + GERENCIA
+    for r in recipients.list_recipients("emin"):
+        assert r.locked == (r.group == config.GROUP_TECHNICAL)
+        assert r.disabled == r.locked  # nothing is disabled because of the environment
+
+
+def test_non_production_only_technical_is_selected_by_default():
+    selected = [r.email for r in recipients.list_recipients("emin") if r.selected_by_default]
+    assert selected == TECHS
+
+
+def test_production_defaults_are_client_send_email_technical_and_management(production):
+    selected = [r.email for r in recipients.list_recipients("emin") if r.selected_by_default]
+    assert selected == EMIN_SEND + TECHS + GERENCIA
+    assert [r.email for r in recipients.list_recipients("emin") if r.locked] == TECHS
+
+
+def test_scheduled_recipients_are_identical_in_production_and_non_production(monkeypatch):
+    monkeypatch.setenv("DEPLOY_STATUS", "test")
+    outside = {c: recipients.scheduled_emails(c) for c in ("emin", "capstone")}
+    monkeypatch.setenv("DEPLOY_STATUS", "POC")
+    inside = {c: recipients.scheduled_emails(c) for c in ("emin", "capstone")}
+    assert outside == inside
+    assert inside["emin"] == EMIN_SEND + TECHS + GERENCIA
+    assert inside["capstone"] == CAPSTONE_SEND + TECHS + GERENCIA
 
 
 def test_production_scheduled_goes_to_client_flagged_technical_and_management(production):
@@ -252,6 +272,38 @@ def test_schedule_stays_at_0800_chile_across_the_daylight_saving_change():
     assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 11, 0, tzinfo=utc)) == after
 
 
+def test_mailing_schedules_hold_exactly_the_intended_values():
+    """Guards against a temporary test schedule being committed (01.1)."""
+    assert config.MAILING_TIMEZONE == "America/Santiago"
+    assert config.MAILING_SCHEDULES == {
+        "emin": {"frequency": "daily", "time": "08:00"},
+        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
+    }
+
+
+@pytest.mark.parametrize("zone", ["Asia/Tokyo", "America/New_York", "Europe/Madrid", "UTC", "Pacific/Auckland"])
+def test_schedule_is_evaluated_in_chile_time_whatever_the_machine_zone(zone):
+    """`now` expressed in any machine zone fires at 08:00 Chile, never at 08:00 of that zone."""
+    schedule = config.MAILING_SCHEDULES["emin"]
+    machine = ZoneInfo(zone)
+    day = date(2026, 11, 10)
+    chile_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=SANTIAGO)
+    assert periods.due_scheduled_date(schedule, chile_0800.astimezone(machine)) == day
+    local_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=machine)
+    if local_0800.astimezone(SANTIAGO).strftime("%H:%M") != "08:00":
+        assert periods.due_scheduled_date(schedule, local_0800) is None
+
+
+def test_chile_0800_is_fixed_in_chile_time_across_a_daylight_saving_change_seen_from_another_zone():
+    schedule = config.MAILING_SCHEDULES["emin"]
+    tokyo = ZoneInfo("Asia/Tokyo")  # no daylight saving: its offset to Chile moves when Chile changes
+    for day in (date(2026, 9, 4), date(2026, 9, 7)):  # before and after Chile's spring forward (Sep 6)
+        moment = periods.scheduled_moment(schedule, day)
+        assert (moment.hour, moment.minute) == (8, 0)
+        assert periods.due_scheduled_date(schedule, moment.astimezone(tokyo)) == day
+        assert periods.due_scheduled_date(schedule, (moment - timedelta(minutes=1)).astimezone(tokyo)) is None
+
+
 def test_scheduler_tick_runs_each_due_client_once_per_day():
     started = []
     scheduler = MailingScheduler(runner=lambda c, d: started.append((c, d)) or "sent")
@@ -328,26 +380,14 @@ def test_scheduled_failure_gives_up_after_three_retries_and_logs_an_error(builde
     assert state.read("emin", date(2026, 11, 10))["status"] == "failed"
 
 
-def test_temporary_override_restricts_every_scheduled_send_to_tds_even_in_production(builder, sent, production, monkeypatch):
-    monkeypatch.setattr(config, "SCHEDULED_RECIPIENTS_OVERRIDE", ["tds@coddi.ai"])
-    assert recipients.scheduled_emails("emin") == [TECH] and recipients.scheduled_emails("capstone") == [TECH]
-    run_scheduled("emin", date(2026, 11, 10))
-    assert sent["calls"][0]["emails"] == [TECH]  # no client, no management
-
-
-def test_the_override_does_not_change_what_a_manual_send_may_target(production, monkeypatch):
-    monkeypatch.setattr(config, "SCHEDULED_RECIPIENTS_OVERRIDE", ["tds@coddi.ai"])
-    assert set(recipients.allowed_emails("emin")) == {*EMIN_SEND, *TECHS, *GERENCIA}
-
-
 def test_scheduled_send_in_production_reaches_every_expected_recipient(builder, sent, production):
     run_scheduled("emin", date(2026, 11, 10))
     assert sent["calls"][0]["emails"] == EMIN_SEND + TECHS + GERENCIA
 
 
-def test_scheduled_send_outside_production_reaches_only_technical(builder, sent):
+def test_scheduled_send_outside_production_reaches_the_same_recipients(builder, sent):
     run_scheduled("capstone", date(2026, 11, 11))
-    assert sent["calls"][0]["emails"] == TECHS
+    assert sent["calls"][0]["emails"] == CAPSTONE_SEND + TECHS + GERENCIA
 
 
 def test_scheduled_and_manual_share_builder_and_delivery(builder, sent, flask_app):
@@ -390,13 +430,27 @@ def test_manual_send_rejects_another_clients_contact(builder, sent, flask_app, p
     assert sent["calls"] == []
 
 
-def test_manual_send_outside_production_rejects_client_and_management(builder, sent, flask_app):
+def test_manual_send_outside_production_accepts_the_whole_registry(builder, sent, flask_app):
     admin = as_user(flask_app, ADMIN)
-    for email in (EMIN_SEND[0], GERENCIA[0]):
-        with pytest.raises(MailingValidationError):
-            send_manual("emin", [email], admin)
+    assert not config.is_production()
+    send_manual("emin", [EMIN_SEND[0], GERENCIA[0], TECH], admin)
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], GERENCIA[0], *TECHS]
+
+
+def test_manual_send_outside_production_still_rejects_emails_outside_the_registry(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    with pytest.raises(MailingValidationError) as info:
+        send_manual("emin", [EMIN_SEND[0], "intruso@evil.com"], admin)
+    assert info.value.rejected == ["intruso@evil.com"]
+    assert sent["calls"] == []
+
+
+def test_manual_send_outside_production_always_adds_technical(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("emin", [GERENCIA[0]], admin)
+    assert sent["calls"][0]["emails"] == [GERENCIA[0], *TECHS]
     send_manual("emin", [], admin)
-    assert sent["calls"][0]["emails"] == TECHS
+    assert sent["calls"][1]["emails"] == TECHS
 
 
 def test_manual_send_matches_emails_case_insensitively_without_duplicates(builder, sent, flask_app, production):
@@ -514,18 +568,32 @@ def test_context_for_capstone_in_production(flask_app, production):
     assert groups == sorted(groups, key=config.GROUP_ORDER.index)
     for r in ctx["recipients"]:
         assert {"name", "email", "group", "selected_by_default", "locked", "disabled", "disabled_reason"} <= set(r)
-        assert not r["disabled"]
+        assert r["disabled"] == r["locked"]
     tech = next(r for r in ctx["recipients"] if r["email"] == TECH)
     assert tech["locked"] and tech["selected_by_default"]
 
 
-def test_context_outside_production_disables_client_and_management(flask_app):
+def test_context_outside_production_selects_only_technical_and_disables_nothing_else(flask_app):
     admin = as_user(flask_app, ADMIN)
     ctx = get_mailing_context("emin", admin)
     assert ctx["environment"] == "development" and not ctx["is_production"]
+    assert [r["email"] for r in ctx["recipients"]] == EMIN_ALL + TECHS + GERENCIA
     for r in ctx["recipients"]:
-        if r["email"] not in TECHS:
-            assert r["disabled"] and not r["selected_by_default"] and r["disabled_reason"]
+        is_tech = r["email"] in TECHS
+        assert r["selected_by_default"] == is_tech
+        assert r["locked"] == is_tech
+        assert r["disabled"] == is_tech  # only locked rows
+        if not is_tech:
+            assert not r["disabled_reason"]
+
+
+def test_context_in_production_keeps_the_ticket_01_defaults(flask_app, production):
+    admin = as_user(flask_app, ADMIN)
+    ctx = get_mailing_context("emin", admin)
+    assert ctx["environment"] == "production" and ctx["is_production"]
+    defaults = [r["email"] for r in ctx["recipients"] if r["selected_by_default"]]
+    assert defaults == EMIN_SEND + TECHS + GERENCIA
+    assert [r["email"] for r in ctx["recipients"] if r["locked"]] == TECHS
 
 
 def test_context_for_emin_is_daily(flask_app):
@@ -705,6 +773,15 @@ def test_network_errors_never_expose_the_lambda_url(monkeypatch, caplog, exc):
     assert "abc123secret" not in caplog.text
 
 
+def test_scheduled_run_without_lambda_url_logs_an_error_and_does_not_raise(builder, monkeypatch, caplog):
+    monkeypatch.delenv("LAMBDA_URL")
+    with caplog.at_level(logging.ERROR):
+        outcome = run_scheduled("emin", date(2026, 11, 10), sleep=lambda s: None)
+    assert outcome == "failed"
+    assert any("FAILED" in r.getMessage() for r in caplog.records)
+    assert state.read("emin", date(2026, 11, 10))["status"] == "failed"
+
+
 def test_missing_lambda_url_is_a_failure_not_a_crash(monkeypatch):
     monkeypatch.delenv("LAMBDA_URL")
     result = delivery.send_email("s", "h", ["a@x.cl"])
@@ -738,3 +815,6 @@ def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkey
         assert field in manual
     for field in ("client=capstone", "trigger=scheduled", "requested_by=-"):
         assert field in scheduled
+    host = config.get_hostname()
+    for line in (manual, scheduled):
+        assert "environment=production" in line and f"host={host}" in line

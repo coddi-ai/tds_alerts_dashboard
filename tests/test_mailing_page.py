@@ -29,8 +29,6 @@ GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 @pytest.fixture(autouse=True)
 def hermetic(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "_DOTENV_LOADED", True)
-    monkeypatch.setattr(config, "MAILING_SCHEDULES", config.PRODUCTION_SCHEDULES)
-    monkeypatch.setattr(config, "SCHEDULED_RECIPIENTS_OVERRIDE", None)  # not the temporary deployed-test one
     monkeypatch.setenv("LAMBDA_URL", "https://abc.lambda-url.us-east-2.on.aws/")
     monkeypatch.setenv("LAMBDA_ACCESS_KEY", "AKIAFAKEFAKEFAKEFAKE")
     monkeypatch.setenv("LAMBDA_SECRET_ACCESS_KEY", "fake")
@@ -232,14 +230,16 @@ def test_technical_is_checked_and_disabled_everywhere(flask_app, production):
             continue
 
 
-def test_outside_production_client_and_management_are_unchecked_disabled_with_reason(flask_app):
+def test_outside_production_every_contact_is_selectable_and_only_technical_is_checked(flask_app):
     state, _ = render(flask_app)
     assert "Entorno: Desarrollo" in " ".join(c.children for c in state["chips"])
-    for key in ("s_client", "s_mgmt"):
+    for key, emails in (("s_client", EMIN_CLIENT), ("s_mgmt", GERENCIA)):
         options, value = checklist_state(state[key])
-        assert value == [] and options and all(o["disabled"] for o in options)
-        assert all("Solo disponible en producción" in text(o["label"]) for o in options)
-    assert checklist_state(state["s_tech"])[1] == TECHS
+        assert value == [] and [o["value"] for o in options] == emails
+        assert not any(o["disabled"] for o in options)  # the environment disables nothing
+        assert not any("Solo disponible en producción" in text(o["label"]) for o in options)
+    options, value = checklist_state(state["s_tech"])
+    assert value == TECHS and all(o["disabled"] for o in options)
 
 
 def test_contact_without_automatic_sending_is_unchecked_but_selectable(flask_app, production, monkeypatch):
@@ -258,7 +258,7 @@ def test_row_tags_carry_text(flask_app, production):
     state, _ = render(flask_app)
     assert "Siempre incluido" in text(checklist_state(state["s_tech"])[0][0]["label"])
     for option in checklist_state(state["s_mgmt"])[0]:
-        assert "Solo producción" in text(option["label"])
+        assert "Solo producción" not in text(option["label"])  # Gerencia is selectable everywhere now
     first = checklist_state(state["s_client"])[0][0]["label"]
     assert "Diego Contreras" in text(first) and "dcontrerasr@emin.cl" in text(first)
 
@@ -368,8 +368,14 @@ def test_lambda_failure_shows_the_generic_failure_without_internals(flask_app, b
     assert "lambda" not in str(result).lower() and "http" not in str(result).lower()
 
 
+def test_outside_production_a_client_contact_can_be_sent_to(flask_app, builder, sent):
+    result = send(flask_app, EMIN_CLIENT[:1])
+    assert result["kind"] == "success"
+    assert sent["calls"][0]["emails"] == [EMIN_CLIENT[0], *TECHS]
+
+
 def test_backend_rejection_is_shown_as_a_failure(flask_app, builder, sent):
-    result = send(flask_app, EMIN_CLIENT[:1])  # non-production: client contacts are not allowed
+    result = send(flask_app, ["intruso@evil.com"])  # not in the registry, in any environment
     assert result["kind"] == "error" and result["message"] == "No se pudo enviar el resumen. Intente nuevamente."
     assert "no permitidos" in result["detail"]
     assert sent["calls"] == []
