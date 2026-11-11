@@ -10,7 +10,8 @@ manual send in EVERY environment (01.1). The environment only changes the defaul
 | Coddi · Técnico    | locked, always in  | always                                | always (all)       |
 | Coddi · Gerencia   | yes                | production: `send_email`; else none   | `send_email`       |
 
-Scheduled recipients are identical in every environment.
+Scheduled recipients are identical in every environment. A client listed in
+`config.SCHEDULED_TECHNICAL_ONLY_CLIENTS` (Emin, while it is in test) gets only Técnico.
 """
 
 from dataclasses import asdict, dataclass
@@ -94,10 +95,15 @@ def allowed_emails(client: str, production: Optional[bool] = None) -> List[str]:
 
 def scheduled_emails(client: str) -> List[str]:
     """Emails of a scheduled send, identical in every environment: all Técnico plus the
-    client and Gerencia contacts flagged `send_email`."""
+    client and Gerencia contacts flagged `send_email`.
+
+    A client in `config.SCHEDULED_TECHNICAL_ONLY_CLIENTS` (Emin, while it is in test) gets only
+    the Técnico contacts.
+    """
+    technical_only = config.normalize_client(client) in config.SCHEDULED_TECHNICAL_ONLY_CLIENTS
     emails: List[str] = []
     for r in list_recipients(client):
-        if r.group == config.GROUP_TECHNICAL or r.send_email:
+        if r.group == config.GROUP_TECHNICAL or (r.send_email and not technical_only):
             emails.append(r.email)
     return dedupe(emails)
 

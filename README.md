@@ -127,6 +127,8 @@ servidor; (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requi
 Con varios workers no hay duplicados: el primero que crea el marcador envía y los demás lo omiten.
 Un envío manual no altera el envío automático.
 
+**Emin en prueba.** Mientras `SCHEDULED_TECHNICAL_ONLY_CLIENTS` (en `src/mailing/config.py`) contenga `emin`, el envío automático de Emin llega solo a Coddi Técnico (`tds@` y `warren@coddi.ai`); Capstone envía a su audiencia real. Para poner Emin en producción real basta dejarlo vacío (`frozenset()`). No afecta el envío manual.
+
 **Datos frescos.** Antes de armar cada correo automático se ejecuta la misma sincronización con S3 que la app corre al arrancar (`src.data.s3_downloader.main`), una vez por fecha y por proceso. Si falla (sin `BUCKET_NAME`, sin red, volumen de datos de solo lectura) se registra una advertencia y el correo se arma con los datos que hay en disco. El envío manual no sincroniza.
 
 **Envío automático desde cualquier máquina.** El scheduler está encendido por defecto en todos los entornos, también en un computador local, y evalúa el horario en hora de Chile sin importar la zona horaria del sistema operativo. Una máquina con el scheduler encendido que esté corriendo a las 08:00 envía los correos reales a los contactos del cliente (los marcados con `send_email`), más Coddi Técnico y Gerencia. Una máquina local necesita `LAMBDA_URL` y las credenciales `LAMBDA_*` en su `.env`; si faltan, el envío se reintenta, se registra un error y la aplicación sigue funcionando. Para que una máquina **no** envíe, defina `MAILING_SCHEDULER_ENABLED=false` en su `.env`.

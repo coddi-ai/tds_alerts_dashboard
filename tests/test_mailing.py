@@ -34,6 +34,7 @@ from src.mailing.scheduler import MailingScheduler
 SANTIAGO = ZoneInfo("America/Santiago")
 SECRET_URL = "https://abc123secret.lambda-url.us-east-2.on.aws/"
 TECH = "tds@coddi.ai"
+SHIPPED_TECHNICAL_ONLY = config.SCHEDULED_TECHNICAL_ONLY_CLIENTS  # what the code ships, before any fixture
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 EMIN_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["emin"] if r["send_email"]]
@@ -59,6 +60,7 @@ def hermetic(monkeypatch, tmp_path):
     monkeypatch.setenv("MAILING_RETRY_DELAYS", "1,2,3")
     monkeypatch.setenv("MAILING_MANUAL_COOLDOWN_SECONDS", "0")
     monkeypatch.delenv("MAILING_SCHEDULER_ENABLED", raising=False)
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", frozenset())  # general rule; see the shipped-value tests
     monkeypatch.setenv("SYNC_DATA", "false")  # never touch S3 from a test (the sync has its own tests)
     __import__("src.mailing.data_sync", fromlist=["x"])._DONE.clear()
     service_module = __import__("src.mailing.service", fromlist=["x"])
@@ -397,6 +399,40 @@ def test_scheduled_and_manual_share_builder_and_delivery(builder, sent, flask_ap
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [], admin)
     assert len(builder.calls) == 2 and len(sent["calls"]) == 2
+
+
+# --------------------------------------------------------------------------- Emin in test: technical staff only
+
+
+def test_the_shipped_setting_holds_emin_back_and_nobody_else():
+    assert SHIPPED_TECHNICAL_ONLY == frozenset({"emin"})
+
+
+def test_emin_scheduled_goes_only_to_the_technical_staff_and_capstone_keeps_the_real_audience(monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    for env in ("test", "POC"):  # the same in every environment
+        monkeypatch.setenv("DEPLOY_STATUS", env)
+        assert recipients.scheduled_emails("emin") == TECHS == ["tds@coddi.ai", "warren@coddi.ai"]
+        assert recipients.scheduled_emails("EMIN") == TECHS  # the client name is normalised
+        assert recipients.scheduled_emails("capstone") == CAPSTONE_SEND + TECHS + GERENCIA
+
+
+def test_the_scheduled_emin_email_really_reaches_no_client_and_no_gerencia(builder, sent, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    run_scheduled("emin", date(2026, 11, 11))
+    run_scheduled("capstone", date(2026, 11, 11))
+    emin, capstone = sent["calls"][0]["emails"], sent["calls"][1]["emails"]
+    assert emin == TECHS
+    assert not set(emin) & set(EMIN_ALL) and not set(emin) & set(GERENCIA)
+    assert capstone == CAPSTONE_SEND + TECHS + GERENCIA
+
+
+def test_the_emin_test_setting_does_not_limit_a_manual_send(builder, sent, flask_app, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    admin = as_user(flask_app, ADMIN)
+    assert set(recipients.allowed_emails("emin")) == {*EMIN_ALL, *TECHS, *GERENCIA}
+    send_manual("emin", [EMIN_ALL[0], GERENCIA[0]], admin)
+    assert sent["calls"][0]["emails"] == [EMIN_ALL[0], GERENCIA[0], *TECHS]
 
 
 # --------------------------------------------------------------------------- data sync before a scheduled send

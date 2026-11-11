@@ -71,6 +71,12 @@ MAILING_SCHEDULES: Dict[str, dict] = {
     "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
 }
 
+# >>> TEMPORARY, EMIN IN TEST: the SCHEDULED email of these clients goes ONLY to the Coddi technical
+# >>> contacts (CODDI_RECIPIENTS["technical"]); no client contact and no Gerencia. Capstone keeps the
+# >>> real audience. To put Emin live, make this `frozenset()`. It never affects the manual send,
+# >>> where the admin picks the recipients (any registry contact, every environment).
+SCHEDULED_TECHNICAL_ONLY_CLIENTS = frozenset({"emin"})
+
 # Refresh `data/` from S3 (the app's own startup sync) right before a scheduled email is built, so a
 # process that has been up for days does not send a summary from stale files. Failure never blocks
 # the email. The app-wide `SYNC_DATA=false` switch also turns it off. See data_sync.py.
