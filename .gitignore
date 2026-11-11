@@ -127,3 +127,6 @@ outputs/*
 *.pyc
 # Informes preliminares de falla generados (src/informe_falla/service.py)
 outputs/
+# Local-only docs (kept out of the repo)
+documentation/manual_de_usuario/*
+documentation/conference/*
