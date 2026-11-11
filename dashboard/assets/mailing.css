@@ -1,7 +1,7 @@
-/* Admin → Mailing (documentation/mailling/03_admin_mailing_screen.md).
+/* Admin → Mailing (documentation/mailling/03_admin_mailing_screen.md + 03.1).
    Tinted chips instead of left-border accents; every tag carries text, color is never the only signal. */
 
-.mailing-page { max-width: 960px; padding-bottom: 32px; }
+.mailing-page { max-width: 1240px; padding-bottom: 32px; }
 
 /* Header: title block on the left, read-only chips on the right; wraps on narrow widths. */
 .mailing-header {
@@ -15,51 +15,100 @@
     border-radius: 999px; font-size: 0.85rem; font-weight: 600; white-space: nowrap;
 }
 .mailing-chip--client { background: #dbeafe; color: #1e40af; }
-.mailing-chip--env { background: #f1f5f9; color: #334155; }
+.mailing-chip--env-production { background: #e2e8f0; color: #1e293b; }
+.mailing-chip--env-development { background: #fef3c7; color: #92400e; }
 
 .mailing-unavailable:not(:empty) {
     padding: 16px; border-radius: 8px; background: #f1f5f9; color: #334155; margin-bottom: 16px;
 }
 
+/* Two columns: recipients on the left, sticky summary on the right (at most 420 px).
+   They stack below 992 px, recipients first. */
+.mailing-grid {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+    gap: 16px; align-items: start;
+}
+@media (max-width: 991px) {
+    .mailing-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Cards */
 .mailing-card {
-    background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px;
+    background: #fff; border-radius: 8px; padding: 20px;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+.mailing-card--summary { position: sticky; top: 16px; }
+@media (max-width: 991px) {
+    .mailing-card--summary { position: static; }
 }
 .mailing-card-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin: 0 0 4px; }
 .mailing-card-subtitle { color: #475569; margin: 0 0 16px; }
-.mailing-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px 24px; }
+.mailing-details { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 16px; }
 .mailing-detail { min-width: 0; }
 .mailing-detail-label { font-size: 0.8rem; font-weight: 600; color: #475569; }
 .mailing-detail-value { color: #0f172a; font-weight: 600; overflow-wrap: anywhere; }
 
+/* Summary: sentence, Cliente / Técnico / Gerencia breakdown, buttons, note */
+.mailing-send-summary { color: #0f172a; font-weight: 700; margin-bottom: 8px; }
+.mailing-breakdown { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.mailing-sum-box {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: 8px 10px; border-radius: 8px; min-width: 0;
+}
+.mailing-sum-label { font-size: 0.8rem; font-weight: 700; }
+.mailing-sum-count { font-size: 1.25rem; font-weight: 800; line-height: 1.1; }
+.mailing-sum-box--client { background: #f1f5f9; color: #0f172a; }
+.mailing-sum-box--technical { background: #ccfbf1; color: #115e59; }
+.mailing-sum-box--management { background: #ede9fe; color: #5b21b6; }
+.mailing-note { margin: 12px 0 0; font-size: 0.85rem; color: #475569; }
+
 /* Recipients */
 .mailing-recipients-header {
     display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
-    gap: 8px; margin-bottom: 12px;
+    gap: 8px; margin-bottom: 4px;
 }
 .mailing-counter { color: #475569; font-size: 0.9rem; font-weight: 600; }
+.mailing-help { margin: 0 0 12px; font-size: 0.9rem; color: #475569; }
 .mailing-group { margin-bottom: 12px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
 .mailing-group:last-child { margin-bottom: 0; }
 .mailing-group-header {
-    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
     padding: 8px 12px; background: #f1f5f9; color: #0f172a; font-weight: 700; font-size: 0.9rem;
 }
 .mailing-group-count { color: #475569; font-weight: 600; }
+.mailing-group-btn {
+    margin-left: auto; min-height: 36px; padding: 4px 14px; border-radius: 6px; cursor: pointer;
+    background: #fff; color: #1d4ed8; border: 1px solid #1d4ed8; font-weight: 700; font-size: 0.85rem;
+}
+.mailing-group-btn:hover { background: #eff6ff; }
+.mailing-group-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
 
 .mailing-checklist { display: block; }
-.mailing-option {
+/* Dash 4 renders each option as <label><span wrapper><input></span><span text class=labelClassName>:
+   the LABEL is the whole row, so the whole row toggles the checkbox, and it carries the sizing. */
+.mailing-checklist .dash-options-list-option {
     display: flex; align-items: center; gap: 12px; width: 100%;
-    min-height: 44px; margin: 0; padding: 6px 12px; cursor: pointer;
-    border-top: 1px solid #e2e8f0;
+    min-height: 48px; margin: 0; padding: 6px 12px; cursor: pointer;
+    border-top: 1px solid #e2e8f0; background: transparent;
 }
-.mailing-group-header + .mailing-checklist .mailing-option:first-child { border-top: 0; }
-.mailing-option:hover { background: #f8fafc; }
-.mailing-option:focus-within { outline: 2px solid #1d4ed8; outline-offset: -2px; }
-.mailing-checkbox { width: 20px; height: 20px; flex: 0 0 20px; margin: 0 !important; align-self: center; accent-color: #1d4ed8; cursor: pointer; }
-.mailing-checkbox:disabled, .mailing-checkbox:disabled ~ .mailing-row { cursor: not-allowed; }
+.mailing-checklist .dash-options-list-option:first-child { border-top: 0; }
+.mailing-checklist .dash-options-list-option:hover { background: #f8fafc; }
+.mailing-checklist .dash-options-list-option:focus-within { outline: 2px solid #1d4ed8; outline-offset: -2px; }
+.mailing-checklist .dash-options-list-option-wrapper { display: flex; align-items: center; flex: 0 0 18px; margin: 0; padding: 0; }
+.mailing-option { flex: 1 1 auto; min-width: 0; margin: 0; padding: 0; }
+.mailing-checkbox { width: 18px; height: 18px; flex: 0 0 18px; margin: 0 !important; align-self: center; accent-color: #1d4ed8; cursor: pointer; }
+/* A locked row (Coddi Técnico) reads as disabled, not only as checked. */
+.mailing-checklist .dash-options-list-option:has(.mailing-checkbox:disabled) { background: #f8fafc; cursor: not-allowed; }
+.mailing-checkbox:disabled { cursor: not-allowed; }
+.mailing-checkbox:disabled ~ .mailing-row { cursor: not-allowed; }
+.dash-options-list-option:has(.mailing-checkbox:disabled) .mailing-name,
+.dash-options-list-option:has(.mailing-checkbox:disabled) .mailing-email { opacity: 0.75; }
+
+.mailing-row { cursor: not-allowed; }
 .mailing-checkbox:disabled ~ .mailing-row .mailing-name,
 .mailing-checkbox:disabled ~ .mailing-row .mailing-email { opacity: 0.75; }
+/* A locked row (Coddi Técnico) reads as disabled, not only as checked. */
+.mailing-option:has(.mailing-checkbox:disabled) { background: #f8fafc; cursor: not-allowed; }
 
 .mailing-row {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
@@ -73,26 +122,16 @@
     display: inline-block; padding: 2px 10px; border-radius: 999px;
     font-size: 0.75rem; font-weight: 700; white-space: nowrap;
 }
-.mailing-tag--client { background: #dbeafe; color: #1e40af; }
 .mailing-tag--technical { background: #ccfbf1; color: #115e59; }
-.mailing-tag--production { background: #fef3c7; color: #92400e; }
 .mailing-tag--muted { background: #f1f5f9; color: #334155; }
-.mailing-reason { font-size: 0.8rem; color: #475569; }
-
-.mailing-help { margin: 12px 0 0; font-size: 0.85rem; color: #475569; }
 
 /* While a send is running every checkbox is inert (pointer and keyboard focus). */
 .mailing-busy { pointer-events: none; opacity: 0.7; }
 
-/* Action bar */
-.mailing-actions {
-    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-    gap: 12px; margin-bottom: 12px;
-}
-.mailing-send-summary { color: #0f172a; font-weight: 600; flex: 1 1 240px; }
-.mailing-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Buttons: full width in the summary card */
+.mailing-buttons { display: flex; flex-direction: column; gap: 8px; }
 .mailing-btn {
-    min-height: 44px; min-width: 44px; padding: 8px 20px; border-radius: 6px;
+    min-height: 44px; min-width: 44px; padding: 8px 20px; border-radius: 6px; width: 100%;
     font-weight: 700; font-size: 0.95rem; cursor: pointer; border: 1px solid transparent;
 }
 .mailing-btn--primary { background: #1d4ed8; color: #fff; }
@@ -103,6 +142,7 @@
 .mailing-btn:disabled { opacity: 0.65; cursor: not-allowed; }
 
 /* Send feedback (the container is a polite live region) */
+.mailing-feedback { margin-top: 12px; }
 .mailing-feedback-box { padding: 12px 16px; border-radius: 8px; font-weight: 600; }
 .mailing-feedback-box--success { background: #dcfce7; color: #14532d; }
 .mailing-feedback-box--warning { background: #fef3c7; color: #78350f; }
@@ -114,7 +154,21 @@
 .mailing-preview-subject { font-weight: 700; color: #0f172a; margin-bottom: 8px; overflow-wrap: anywhere; }
 .mailing-preview-frame { width: 100%; height: 70vh; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; }
 
+/* Confirmation dialog (non-production with Cliente contacts selected) */
+.mailing-confirm-notice {
+    padding: 12px 16px; border-radius: 8px; background: #fef3c7; color: #92400e; font-weight: 600; margin-bottom: 16px;
+}
+.mailing-confirm-counts { list-style: none; margin: 0; padding: 0; }
+.mailing-confirm-row {
+    display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #e2e8f0;
+}
+.mailing-confirm-row:first-child { border-top: 0; }
+.mailing-confirm-name { font-weight: 700; color: #0f172a; }
+.mailing-confirm-count { color: #475569; font-weight: 600; white-space: nowrap; }
+.mailing-confirm-footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.mailing-confirm-footer .mailing-btn { width: auto; }
+
 @media (max-width: 575px) {
     .mailing-card { padding: 14px; }
-    .mailing-buttons, .mailing-btn { width: 100%; }
+    .mailing-confirm-footer .mailing-btn { width: 100%; }
 }

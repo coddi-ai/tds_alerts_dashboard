@@ -513,9 +513,8 @@ def connect_s3() -> tuple:
     access, secret = os.getenv("ACCESS_KEY"), os.getenv("SECRET_KEY")
     if access and secret:
         return boto3.client("s3", aws_access_key_id=access, aws_secret_access_key=secret, region_name="us-east-1"), bucket
-    if os.getenv("STAGE_NAME"):
-        return boto3.client("s3", region_name="us-east-1"), bucket
-    raise SystemExit("ACCESS_KEY/SECRET_KEY are not set (environment or .env).")
+    # Keys are optional: on AWS the task role supplies credentials via the default chain.
+    return boto3.client("s3", region_name="us-east-1"), bucket
 
 
 def s3_key(prefix: str, rel_path: str) -> str:

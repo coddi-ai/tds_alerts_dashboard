@@ -1,16 +1,18 @@
 """
-Recipient resolution: who may receive an email, per client and environment.
+Recipient resolution: who may receive an email, per client.
 
-Matrix (see 01_mailing_service_backend.md):
+The registry (config.MAILING_RECIPIENTS + config.CODDI_RECIPIENTS) is the allowed set of a
+manual send in EVERY environment (01.1). The environment only changes the default selection.
 
-| Group              | Production                          | Non-production         |
-|--------------------|-------------------------------------|------------------------|
-| Cliente            | selectable; scheduled: send_email   | never sent, not shown  |
-| Coddi · Técnico    | always included, cannot be removed  | same                   |
-| Coddi · Gerencia   | scheduled; selectable in manual     | never sent, not shown  |
+| Group              | Manual: selectable | Default selection                     | Scheduled          |
+|--------------------|--------------------|---------------------------------------|--------------------|
+| Cliente            | yes                | production: `send_email`; else none   | `send_email`       |
+| Coddi · Técnico    | locked, always in  | always                                | always (all)       |
+| Coddi · Gerencia   | yes                | production: `send_email`; else none   | `send_email`       |
+
+Scheduled recipients are identical in every environment. A client listed in
+`config.SCHEDULED_TECHNICAL_ONLY_CLIENTS` (Emin, while it is in test) gets only Técnico.
 """
-
-from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Iterable, List, Optional
@@ -23,7 +25,6 @@ GROUP_LABELS = {
     config.GROUP_MANAGEMENT: "Coddi · Gerencia",
 }
 
-NON_PRODUCTION_REASON = "Solo disponible en producción"
 LOCKED_REASON = "Siempre incluido"
 
 
@@ -53,31 +54,26 @@ def _from_registry(entries: Iterable[dict], group: str, production: bool) -> Lis
     for entry in entries:
         send = bool(entry.get("send_email", False))
         if group == config.GROUP_TECHNICAL:
-            # Always included, in every environment, whatever `send_email` says.
+            # Always included, in every environment, whatever `send_email` says. The only
+            # locked rows, and so the only ones the screen disables.
             result.append(Recipient(
                 name=entry["name"], email=entry["email"], group=group, send_email=True,
-                selected_by_default=True, locked=True, disabled=False,
+                selected_by_default=True, locked=True, disabled=True,
                 disabled_reason=LOCKED_REASON,
             ))
-        elif production:
-            result.append(Recipient(
-                name=entry["name"], email=entry["email"], group=group, send_email=send,
-                selected_by_default=send,
-            ))
         else:
+            # Selectable in every environment; production pre-selects the `send_email` ones.
             result.append(Recipient(
                 name=entry["name"], email=entry["email"], group=group, send_email=send,
-                selected_by_default=False, disabled=True,
-                disabled_reason=NON_PRODUCTION_REASON,
+                selected_by_default=production and send,
             ))
     return result
 
 
 def list_recipients(client: str, production: Optional[bool] = None) -> List[Recipient]:
-    """All contacts for the client, grouped Cliente / Técnico / Gerencia, with their state.
+    """Every registry contact for the client, grouped Cliente / Técnico / Gerencia.
 
-    In non-production the Cliente and Gerencia contacts are listed but disabled and
-    unselected (the admin screen shows them greyed out); they are not in `allowed_emails`.
+    `production` only changes `selected_by_default`; nothing is disabled by the environment.
     """
     production = config.is_production() if production is None else production
     client = config.normalize_client(client)
@@ -93,19 +89,21 @@ def technical_emails(client: str = "", production: Optional[bool] = None) -> Lis
 
 
 def allowed_emails(client: str, production: Optional[bool] = None) -> List[str]:
-    """Emails a manual send may target: everything not disabled, Técnico included."""
-    return [r.email for r in list_recipients(client, production) if not r.disabled]
+    """Emails a manual send may target: the whole registry of the client, in any environment."""
+    return [r.email for r in list_recipients(client, production)]
 
 
-def scheduled_emails(client: str, production: Optional[bool] = None) -> List[str]:
-    """Emails of a scheduled send: Técnico always; in production also contacts flagged
-    `send_email` (client and management)."""
-    if config.SCHEDULED_RECIPIENTS_OVERRIDE is not None:  # temporary test restriction (see config.py)
-        return dedupe(config.SCHEDULED_RECIPIENTS_OVERRIDE)
-    production = config.is_production() if production is None else production
+def scheduled_emails(client: str) -> List[str]:
+    """Emails of a scheduled send, identical in every environment: all Técnico plus the
+    client and Gerencia contacts flagged `send_email`.
+
+    A client in `config.SCHEDULED_TECHNICAL_ONLY_CLIENTS` (Emin, while it is in test) gets only
+    the Técnico contacts.
+    """
+    technical_only = config.normalize_client(client) in config.SCHEDULED_TECHNICAL_ONLY_CLIENTS
     emails: List[str] = []
-    for r in list_recipients(client, production):
-        if r.group == config.GROUP_TECHNICAL or (production and r.send_email):
+    for r in list_recipients(client):
+        if r.group == config.GROUP_TECHNICAL or (r.send_email and not technical_only):
             emails.append(r.email)
     return dedupe(emails)
 
@@ -123,14 +121,14 @@ def dedupe(emails: Iterable[str]) -> List[str]:
 
 
 def resolve_manual_selection(client: str, selected: Iterable[str], production: Optional[bool] = None):
-    """Validate a manual selection against the server-side allowed set.
+    """Validate a manual selection against the registry of the client (server-side).
 
     Returns `(final_emails, rejected)`. `final_emails` always contains Coddi Técnico (added
     when missing). `rejected` lists every submitted email outside the allowed set; the
     caller must refuse the whole send when it is not empty.
     """
     allowed = list_recipients(client, production)
-    canonical = {normalize_email(r.email): r.email for r in allowed if not r.disabled}
+    canonical = {normalize_email(r.email): r.email for r in allowed}
     rejected: List[str] = []
     picked: List[str] = []
     for raw in selected or []:
