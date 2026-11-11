@@ -68,19 +68,19 @@ PRODUCTION_SCHEDULES: Dict[str, dict] = {
     "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
 }
 
-# >>> TEMPORARY DEPLOYED TEST (Tuesday 2026-11-10): both clients fire at 21:15 Chile time, and the
-# >>> scheduled email goes ONLY to tds@coddi.ai even in production (see SCHEDULED_RECIPIENTS_OVERRIDE).
+# >>> TEMPORARY DEPLOYED TEST (Tuesday 2026-11-10): both clients fire at 22:10 Chile time, and the
+# >>> scheduled email goes ONLY to tds@coddi.ai and warren@coddi.ai even in production (see SCHEDULED_RECIPIENTS_OVERRIDE).
 # >>> AFTER THE TEST, replace the three blocks marked TEMPORARY with:
 # >>>     MAILING_SCHEDULES = PRODUCTION_SCHEDULES   and   SCHEDULED_RECIPIENTS_OVERRIDE = None
 MAILING_SCHEDULES: Dict[str, dict] = {
-    "emin": {"frequency": "daily", "time": "21:15"},
-    "capstone": {"frequency": "weekly", "weekday": "tuesday", "time": "21:15"},
+    "emin": {"frequency": "daily", "time": "22:10"},
+    "capstone": {"frequency": "weekly", "weekday": "tuesday", "time": "22:10"},
 }
 
 # TEMPORARY: when not None, EVERY scheduled send goes only to these addresses, whatever the
 # environment (production would otherwise add the client contacts and management). It does not
 # affect the manual send, which has its own validation.
-SCHEDULED_RECIPIENTS_OVERRIDE: Optional[List[str]] = ["tds@coddi.ai"]
+SCHEDULED_RECIPIENTS_OVERRIDE: Optional[List[str]] = ["tds@coddi.ai", "warren@coddi.ai"]
 # <<< END TEMPORARY DEPLOYED TEST
 
 WEEKDAYS = (
