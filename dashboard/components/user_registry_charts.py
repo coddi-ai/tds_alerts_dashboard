@@ -33,7 +33,7 @@ def _int_dtick(maximum: int) -> int:
 
 
 def _is_weekly(buckets: list[Bucket]) -> bool:
-    return bool(buckets) and buckets[0].tooltip.startswith("Sem.")
+    return bool(buckets) and buckets[0].weekly
 
 
 def _label_step(count: int, weekly: bool) -> int:
@@ -63,6 +63,9 @@ def _style(fig: go.Figure, buckets: list[Bucket], maximum: int) -> None:
         rangemode="tozero", tickformat="d", dtick=_int_dtick(maximum),
         title=None, gridcolor="#e2e8f0",
     )
+    # Every label plus the desktop interval: dashboard/assets/user_registry_axis.js thins them to the width.
+    fig.update_layout(meta={"urTicks": {
+        "vals": [b.tooltip for b in buckets], "text": [b.label for b in buckets], "step": step}})
     fig.update_layout(
         template="plotly_white", height=340, separators=",.", bargap=0.25,
         margin={"l": 40, "r": 10, "t": 10, "b": 40}, font={"color": "#0f172a"},

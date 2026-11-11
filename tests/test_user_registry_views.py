@@ -133,3 +133,64 @@ def test_page_is_admin_only_on_the_server(monkeypatch):
     from dashboard.pages import admin_user_registry
     out = admin_user_registry.layout()          # no request/session: nobody is signed in
     assert "permisos" in repr(out)
+
+
+# --- TR-A / TR-5: as-built amendments and narrow-screen labels ----------------------------------
+
+def _overview_for(events_specs, include_internal=False):
+    from datetime import date
+    from src.auth_events import metrics as m
+    from src.auth_events.data_access import _frame
+    from src.auth_events.registry import parse_registry
+    registry = parse_registry(
+        b'[{"client_id":"cda","display_name":"CDA","active":true},{"client_id":"old","display_name":"Old","active":false}]',
+        b'[{"username":"cda_user","user_type":"client","client_id":"cda"}]')
+    events = [build_event(*spec[:4], moment=spec[4], event_id=f"x{i}") for i, spec in enumerate(events_specs)]
+    frame = _frame(events, "America/Santiago")
+    return m.build_overview(frame, registry, m.resolve_period("30", frame["date"].max()), include_internal)
+
+
+def test_inactive_client_events_are_excluded_and_footnoted_only_when_present():
+    from dashboard.components import user_registry_views as v
+    now = datetime.now(timezone.utc)
+    with_orphan = _overview_for([("cda_user", "client", "cda", "production", now),
+                                 ("old_user", "client", "old", "production", now),
+                                 ("ghost_user", "client", "nowhere", "production", now)])
+    assert with_orphan.logins == 1 and with_orphan.orphan_client_logins == 2
+    filters = {"now": now.astimezone(), "nav": {"period": "30", "env": "all", "internal": False}}
+    assert "2 inicios de sesión de clientes inactivos" in repr(v.overview_content(with_orphan, filters))
+    clean = _overview_for([("cda_user", "client", "cda", "production", now)])
+    assert clean.orphan_client_logins == 0
+    assert "inactivos" not in repr(v.overview_content(clean, filters))
+
+
+def test_english_ui_keeps_es_cl_numbers_and_has_no_spanish_words():
+    from datetime import date
+    from dashboard.components import user_registry_views as v
+    from src.auth_events import metrics as m
+    from src.i18n import forced_language
+    ov = m.Overview(period=m.Period(date(2026, 10, 12), date(2026, 11, 10)), include_internal=False,
+                    logins=1450, previous_logins=1282, logins_change=m.change_vs_previous(1450, 1282),
+                    registered_clients=5, registered_users=8, buckets=m.build_buckets(m.Period(date(2026, 10, 12), date(2026, 11, 10))),
+                    chart_counts=[1] * 30)
+    now = datetime(2026, 11, 10, 15, 0, tzinfo=timezone.utc)
+    with forced_language("en"):
+        text = repr(v.overview_content(ov, {"now": now, "nav": {}}))
+        assert "1.450" in text and "▲ +13,1%" in text and "Client Logins" in text
+        assert "Inicios de Sesión" not in text and "user_registry." not in text
+        assert m.relative_access(None, now) == "No logins"
+        assert m.change_vs_previous(3, 0).text == "New"
+        assert m.relative_access(datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc), now) == "3 h ago"
+    assert m.relative_access(datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc), now) == "Hace 3 h"
+
+
+def test_charts_ship_every_label_and_the_desktop_interval_for_thinning():
+    from datetime import date
+    from dashboard.components.user_registry_charts import create_daily_chart
+    from src.auth_events import metrics as m
+    daily = m.build_buckets(m.Period(date(2026, 10, 12), date(2026, 11, 10)))
+    meta = create_daily_chart(daily, [1] * 30).layout.meta["urTicks"]
+    assert meta["step"] == 5 and len(meta["vals"]) == len(meta["text"]) == 30 and meta["text"][-1] == "10 Nov"
+    weekly = m.build_buckets(m.Period(date(2026, 1, 1), date(2026, 6, 30)))
+    assert create_daily_chart(weekly, [1] * len(weekly)).layout.meta["urTicks"]["step"] >= 1
+    assert (ROOT / "dashboard" / "assets" / "user_registry_axis.js").exists()

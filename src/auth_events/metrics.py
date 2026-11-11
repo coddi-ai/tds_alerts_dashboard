@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 
 from src.auth_events.registry import Registry
+from src.i18n import t
 
 INTERNAL_ID = "internal"
 PERIOD_CHOICES = ("7", "30", "90", "custom")
@@ -126,7 +127,7 @@ class Change:
 
 def change_vs_previous(current: int, previous: int) -> Change:
     if previous == 0:
-        return Change("new", "Nuevo") if current > 0 else Change("none", "–")
+        return Change("new", t("user_registry.change.new")) if current > 0 else Change("none", "–")
     pct = (current - previous) / previous * 100
     rounded = round(abs(pct), 1)
     if pct == 0:
@@ -138,17 +139,17 @@ def change_vs_previous(current: int, previous: int) -> Change:
 def relative_access(last: datetime | None, now: datetime) -> str:
     """Time since the last login, in the display timezone (`now` and `last` are tz-aware)."""
     if last is None:
-        return "Sin accesos"
+        return t("user_registry.relative.never")
     delta = now - last
     minutes = int(delta.total_seconds() // 60)
     if minutes < 60:
-        return f"Hace {max(minutes, 0)} min"
+        return t("user_registry.relative.minutes", n=max(minutes, 0))
     if delta < timedelta(hours=24):
-        return f"Hace {minutes // 60} h"
+        return t("user_registry.relative.hours", n=minutes // 60)
     days_apart = (now.date() - last.date()).days
     if days_apart == 1:
-        return f"Ayer, {last:%H:%M}"
-    return f"Hace {days_apart} días"
+        return t("user_registry.relative.yesterday", time=f"{last:%H:%M}")
+    return t("user_registry.relative.days", n=days_apart)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -195,6 +196,7 @@ class Bucket:
     end: date           # inclusive
     label: str
     tooltip: str
+    weekly: bool = False
 
 
 def build_buckets(period: Period) -> list[Bucket]:
@@ -208,7 +210,8 @@ def build_buckets(period: Period) -> list[Bucket]:
         week_end = min(week_start + timedelta(days=6), period.end)
         first = max(week_start, period.start)
         buckets.append(Bucket(first, week_end, fmt_day_month(first),
-                              f"Sem. {fmt_day_month(first)} – {fmt_day_month(week_end)}"))
+                              t("user_registry.chart.week_tooltip", start=fmt_day_month(first), end=fmt_day_month(week_end)),
+                              weekly=True))
         cursor = week_end + timedelta(days=1)
     return buckets
 
