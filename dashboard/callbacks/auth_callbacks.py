@@ -15,7 +15,7 @@ from dashboard.auth import (
     resolve_authenticated_username,
     should_process_login,
 )
-from src.utils.auth_event_logger import log_authentication_event
+from src.auth_events.writer import record_login
 import logging
 
 logger = logging.getLogger(__name__)
@@ -59,8 +59,7 @@ def register_auth_callbacks(app):
         
         if user:
             logger.info(f"Login successful for user: {username}")
-            user_clients = user.get('clients') or []
-            log_authentication_event(username, client_id=user_clients[0] if user_clients else None)
+            record_login(username)  # one login event; fire-and-forget, never raises (TR-1)
             flask_session["dashboard_user"] = username
             return add_identity_proof(user), "", False
         else:
