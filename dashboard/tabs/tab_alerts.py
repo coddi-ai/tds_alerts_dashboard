@@ -34,10 +34,11 @@ def create_layout() -> html.Div:
                     t("tab_alerts.identifique_unidades_afectadas_causa_evide"),
                     className="text-muted"
                 )
-            ])
+            ], xs=12, sm=True),
+            # "Fuentes de Datos" button + popover, filled by update_alerts_source_status.
+            dbc.Col(html.Div(id="alerts-source-status"), xs=12, sm="auto", className="ds-header-slot"),
         ], className="mb-4"),
-        html.Div(id="alerts-source-status"),
-        
+
         # Internal Tabs. pred-tab: each tab is only as wide as its label and its
         # indicator sits under that label alone (same as Predictivo Resumen / Evidencia).
         dcc.Tabs(

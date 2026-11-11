@@ -3,10 +3,14 @@
 Keys are service ids (`dashboard/services_registry.py`); a trailing ``*`` matches a family
 (`predictive-*` covers every predictive component). Values are source ids from the catalog
 (`src/data/catalog.py::build_client_availability`). A tab with no entry shows no
-"Fuentes de datos" indicator at all.
+"Fuentes de Datos" popover at all.
 
 Adding a source to a tab is one line here plus its label in the i18n catalogs
 (`source_status.source_<id>`); the shared component is not touched.
+
+The lists below are the result of the audit in
+documentation/general/data_sources_documentation_dashboard.md: each entry is a source the
+tab's code actually reads, and each missing one is a discrepancy to be fixed there first.
 
 Tabs still pending confirmation of their backend dependencies are deliberately absent:
 monitoring-mantenciones, agents-campbell-ai, agents-troubleshooting,
@@ -21,11 +25,36 @@ from fnmatch import fnmatchcase
 from typing import Optional
 
 SERVICE_DATA_SOURCES: dict[str, tuple[str, ...]] = {
-    "monitoring-alerts": ("alerts_consolidated", "telemetry_alert_detail", "oil_classified"),
-    "monitoring-telemetry": ("telemetry_unit_health", "telemetry_system_health", "telemetry_manifest"),
-    "monitoring-oil": ("oil_classified", "oil_machine_status", "oil_limits_four"),
-    "predictive-*": ("predictive_components", "predictive_ai"),
+    "monitoring-alerts": (
+        "alerts_consolidated", "telemetry_alert_detail", "oil_classified", "oil_limits_four", "maintenance_weekly",
+    ),
+    "monitoring-telemetry": (
+        "telemetry_unit_health", "telemetry_system_health", "telemetry_manifest", "telemetry_ai_comments",
+        "telemetry_deviation", "telemetry_trends", "telemetry_events", "telemetry_limits", "telemetry_silver_weekly",
+    ),
+    "monitoring-oil": ("oil_classified", "oil_machine_status", "oil_limits_four", "oil_component_hours"),
+    # Predictivo reads the v2 long-format tables, not the legacy `<component>.csv` /
+    # `analisis_inteligente.parquet`. The `predictive_*` ids below are those tables (resolved from
+    # their partitions in dashboard/components/source_status.py), not catalog probes.
+    "predictive-*": (
+        "predictive_risk_scores", "predictive_unit_status", "predictive_curve", "predictive_unit_analysis",
+        "predictive_signal_status", "oil_classified", "oil_limits_four", "predictive_oil_meter",
+    ),
 }
+
+# Sources a tab lists only for some clients (the tab never reads them for the others).
+# `oil_component_hours`: the Horas Componente column of the oil machine detail
+# (`Settings.component_hours_allowed_clients`).
+CLIENT_GATED_SOURCES = {"oil_component_hours"}
+
+
+def source_applies_to_client(source: str, client: Optional[str]) -> bool:
+    """Whether the tab reads `source` for `client` (always true for ungated sources)."""
+    if source not in CLIENT_GATED_SOURCES or not client:
+        return True
+    from config.settings import get_settings
+
+    return str(client).upper() in {c.upper() for c in get_settings().component_hours_allowed_clients}
 
 
 
@@ -40,17 +69,17 @@ class DateField:
 
 
 # Source id -> the date field of its data. Shared by every tab that lists the source.
-# A source without an entry (e.g. a predictive client with only partitioned parquet, whose
-# files carry no date column) shows no freshness.
+# A source without an entry shows no freshness ("—" in the popover): see NO_DATE_SOURCES. The
+# `predictive_*` tables are partitioned by week and are dated from their newest partition's
+# `Fecha` (`PREDICTIVE_DATE_FIELD`), not from this mapping.
 SOURCE_DATE_FIELDS: dict[str, DateField] = {
     "alerts_consolidated": DateField("Timestamp"),
     "telemetry_alert_detail": DateField("Alert_TimeStart"),
     "oil_classified": DateField("sampleDate"),
     "oil_machine_status": DateField("latest_sample_date"),
     "oil_limits_four": DateField("calculation_date"),
+    "oil_component_hours": DateField("sampleDate"),
     "data_freshness": DateField("Ultima Fecha de Actualizacion"),
-    "predictive_ai": DateField("Fecha"),
-    "predictive_components": DateField("Fecha", glob="*.csv"),
     "telemetry_unit_health": DateField("evaluation_timestamp", glob="**/*.parquet"),
     "telemetry_system_health": DateField("evaluation_timestamp", glob="**/*.parquet"),
     "telemetry_manifest": DateField("execution_timestamp"),
@@ -58,13 +87,22 @@ SOURCE_DATE_FIELDS: dict[str, DateField] = {
 }
 
 
-# Resumen > General lists techniques rather than files; each takes its last-modified time
-# from the catalog source that backs it.
+# Listed sources with no single date column to read; their "Última actualización" is "—".
+NO_DATE_SOURCES = frozenset({
+    "maintenance_weekly", "telemetry_ai_comments", "telemetry_deviation", "telemetry_trends",
+    "telemetry_events", "telemetry_limits", "telemetry_silver_weekly",
+})
+
+# The date column of every partitioned `predictive_*` table (read from the newest partition).
+PREDICTIVE_DATE_FIELD = DateField("Fecha", glob="*.parquet")
+
+# Resumen > General lists techniques rather than files; each takes its freshness from the data
+# of the catalog source that backs it. Predictivo is not here: its date is the model run date
+# of the v2 `unit_status_summary` (dashboard/components/source_status.py::predictive_run_days).
 TECHNIQUE_SOURCE: dict[str, str] = {
     "alerts": "alerts_consolidated",
     "telemetry": "telemetry_unit_health",
     "oil": "oil_classified",
-    "predictive": "predictive_components",
     "maintenance": "maintenance_contract",
 }
 

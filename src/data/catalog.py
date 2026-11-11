@@ -144,6 +144,52 @@ def _probe_partitioned(
     )
 
 
+def _dir_has_files(path: Path) -> bool:
+    return path.is_dir() and any(item.is_file() for item in path.rglob("*"))
+
+
+def _with_data_first(candidates: Iterable[Path]) -> tuple[Path, ...]:
+    """The candidate folders that hold data come first, so a loader's fallback location
+    (an empty primary folder, a populated legacy one) is the one probed."""
+    candidates = tuple(candidates)
+    return tuple(sorted(candidates, key=lambda path: not _dir_has_files(path)))
+
+
+def _probe_ai_comments(client: str, telemetry_root: Path) -> SourceProbe:
+    """Telemetría's AI comments: one folder per level (`ai_<level>_comments`) with a legacy
+    `ai_comments` fallback. Fleet view needs unit and system; signal comments are detail only."""
+    levels = {level: telemetry_root / f"ai_{level}_comments" for level in ("unit", "system", "signal")}
+    legacy = telemetry_root / "ai_comments"
+    present = [level for level, path in levels.items() if _dir_has_files(path)]
+    candidates = tuple(str(path) for path in (*levels.values(), legacy))
+    base = dict(client=client.upper(), technique="telemetry", source="telemetry_ai_comments", candidates=candidates)
+    if _dir_has_files(legacy) or {"unit", "system"} <= set(present):
+        return SourceProbe(**base, status="available", path=str(telemetry_root))
+    if present:
+        return SourceProbe(
+            **base, status="partial", path=str(telemetry_root),
+            note=f"Comentarios de IA solo para: {', '.join(present)}.",
+        )
+    return SourceProbe(**base, status="missing", path=None)
+
+
+def _probe_maintenance_weekly(client: str, root: Path) -> SourceProbe:
+    """Weekly maintenance snapshots `<WW-YYYY>.csv` next to the Parquet contract folder."""
+    files = (
+        sorted(path for path in root.glob("*.csv") if path.stem != "Resumen_Semanal_Completo" and path.stem[:2].isdigit())
+        if root.is_dir() else []
+    )
+    base = dict(client=client.upper(), technique="mantentions", source="maintenance_weekly", candidates=(str(root),))
+    if not files:
+        return SourceProbe(**base, status="missing", path=None, note="No hay snapshots semanales de mantención.")
+    return SourceProbe(
+        **base, status="available", path=str(root),
+        size_bytes=sum(path.stat().st_size for path in files),
+        modified_utc=datetime.fromtimestamp(max(path.stat().st_mtime for path in files), tz=timezone.utc).isoformat(),
+        note=f"{len(files)} snapshots semanales.",
+    )
+
+
 def _build_client_availability_uncached(
     client: str,
     root: str | os.PathLike[str] | Path | None = None,
@@ -185,6 +231,26 @@ def _build_client_availability_uncached(
     result["telemetry_manifest"] = _probe_file(
         client, "telemetry", "telemetry_manifest",
         (telemetry_root / "latest.json",),
+    )
+
+    # Sources Telemetría > Detalle de Unidad (and the AI comments of Vista de Flota) read
+    # through `load_telemetry_*` in src/data/loaders.py; the folder candidates mirror those
+    # loaders (data_sources_documentation_dashboard.md, section 4).
+    telemetry_silver = root_path / "telemetry" / "silver" / client_lower
+    for source, candidates, note in (
+        ("telemetry_deviation", (telemetry_root / "deviation_summary", telemetry_root / "technique_results" / "deviation"), ""),
+        ("telemetry_trends", (telemetry_root / "trend_results", telemetry_root / "technique_results" / "trend"), ""),
+        ("telemetry_events", (telemetry_root / "event_results", telemetry_root / "technique_results" / "events"), ""),
+        ("telemetry_limits", (telemetry_silver / "limits", telemetry_silver / "baselines"), "Límites; si faltan, se usan los baselines."),
+        ("telemetry_silver_weekly", (telemetry_silver / "Telemetry_Wide_With_States",), ""),
+    ):
+        result[source] = _probe_partitioned(
+            client, "telemetry", source, _with_data_first(candidates), note=note,
+        )
+    result["telemetry_ai_comments"] = _probe_ai_comments(client, telemetry_root)
+
+    result["maintenance_weekly"] = _probe_maintenance_weekly(
+        client, root_path / "mantentions" / "golden" / client_lower,
     )
 
     predictive_root = root_path / "predictive" / "golden" / client_lower

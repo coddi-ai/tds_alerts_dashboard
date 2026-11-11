@@ -21,10 +21,12 @@ def create_layout(client: str = 'cda') -> html.Div:
                     t("tab_telemetry.monitoreo_de_salud_de_flota_basado"),
                     className="text-muted"
                 )
-            ]),
+            ], xs=12, sm=True),
+            # Evaluation reference + "Fuentes de Datos" button/popover (update_telemetry_source_status).
             dbc.Col([
-                html.Div(id='telemetry-reference-date', className="text-end")
-            ], width="auto", className="d-flex align-items-center")
+                html.Div(id='telemetry-reference-date', className="text-end"),
+                html.Div(id='telemetry-source-status'),
+            ], xs=12, sm="auto", className="ds-header-slot align-items-center flex-wrap gap-3")
         ], className="mb-4"),
 
         # Availability notice is populated from the selected client's data.

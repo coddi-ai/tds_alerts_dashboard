@@ -219,7 +219,7 @@ def _combined_layout_ids() -> set[str]:
         "client-selector", "alerts-navigation-state", "alerts-internal-tabs",
         "alerts-tab-content", "telemetry-health-tabs", "telemetry-health-tab-content",
         "telemetry-navigation-state", "telemetry-reference-date",
-        "telemetry-availability-notice", "telemetry-fleet-model-filter",
+        "telemetry-availability-notice", "telemetry-source-status", "telemetry-fleet-model-filter",
         "telemetry-fleet-status-filter",
     })
     return found

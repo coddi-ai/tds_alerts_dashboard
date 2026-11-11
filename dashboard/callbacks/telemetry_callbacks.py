@@ -45,16 +45,22 @@ def update_telemetry_availability(client):
     if not client:
         return html.Div()
     snapshot = load_telemetry_snapshot(client)
-    source_status = render_service_data_sources(client, "monitoring-telemetry")
     if snapshot.unit_health.empty and snapshot.system_health.empty:
         return html.Div([
-            source_status,
             dbc.Alert([
                 html.I(className="fas fa-info-circle me-2"),
                 t("telemetry_callbacks.no_hay_datos_de_telemetria_disponibles", str_client_upper=str(client).upper())
             ], color="info"),
         ])
-    return source_status
+    return html.Div()
+
+
+@callback(Output('telemetry-source-status', 'children'), Input('client-selector', 'value'))
+def update_telemetry_source_status(client):
+    """The "Fuentes de Datos" button and popover of the page header."""
+    if not client:
+        return None
+    return render_service_data_sources(client, "monitoring-telemetry")
 
 
 @callback(

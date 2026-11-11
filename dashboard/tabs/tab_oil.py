@@ -38,9 +38,10 @@ def create_layout() -> html.Div:
                     t("tab_oil.analisis_de_aceite_vision_de_flota"),
                     className="text-muted"
                 )
-            ])
+            ], xs=12, sm=True),
+            # "Fuentes de Datos" button + popover, filled by update_oil_source_status.
+            dbc.Col(html.Div(id="oil-source-status"), xs=12, sm="auto", className="ds-header-slot"),
         ], className="mb-4"),
-        html.Div(id="oil-source-status"),
 
         # Internal Tabs
         dcc.Tabs(

@@ -103,3 +103,22 @@ def days_since(data_date: Optional[date], today: Optional[date] = None) -> Optio
     if data_date is None:
         return None
     return ((today or today_local()) - data_date).days
+
+
+def newest_week_partition(base: Optional[Path]) -> Optional[Path]:
+    """The newest `year=YYYY/week=WW` folder under `base` that holds a Parquet file, or ``None``.
+
+    Order is numeric (year, then week), so `week=9` is older than `week=10`. A partitioned
+    predictive table carries its newest data in this folder, so a source's freshness only needs
+    to read it and never the whole history."""
+    if base is None or not Path(base).is_dir():
+        return None
+    found = []
+    for week_dir in Path(base).glob("year=*/week=*"):
+        try:
+            key = (int(week_dir.parent.name.split("=", 1)[1]), int(week_dir.name.split("=", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+        if week_dir.is_dir() and any(week_dir.glob("*.parquet")):
+            found.append((key, week_dir))
+    return max(found)[1] if found else None

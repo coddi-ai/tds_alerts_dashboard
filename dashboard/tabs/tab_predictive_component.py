@@ -106,12 +106,15 @@ def layout(client: str, component: str):
         # Page header
         html.Div([
             html.Div([
-                html.I(className=f"{icon} me-2"),
-                t("tab_predictive_component.predictivo", component_title=component.title())
-            ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
-        ], style={"marginBottom": "16px"}),
-        render_service_data_sources(client, f"predictive-{component}"),
+                html.Div([
+                    html.I(className=f"{icon} me-2"),
+                    t("tab_predictive_component.predictivo", component_title=component.title())
+                ], className="page-title", style={"display": "flex", "alignItems": "center"}),
+                html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
+            ]),
+            # "Fuentes de Datos" button + popover, to the right of the title block.
+            html.Div(render_service_data_sources(client, f"predictive-{component}"), className="ds-header-slot"),
+        ], className="d-flex flex-wrap align-items-start justify-content-between gap-3", style={"marginBottom": "16px"}),
 
         # Internal tabs: Resumen / Evidencia
         dcc.Tabs(

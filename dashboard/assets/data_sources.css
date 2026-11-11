@@ -1,61 +1,219 @@
-/* Fuentes de datos: shared indicator (dashboard/components/data_sources.py).
-   Status colors are the severity tokens from predictive_styles.css (:root):
-   available = green, partial/stale = amber, unavailable = red. */
+/* Fuentes de Datos: shared popover (dashboard/components/data_sources.py).
+   Colors are the severity tokens from predictive_styles.css (:root): green = available,
+   amber = partial / at least one source missing, red = not available. Status is always carried
+   by an icon and a word as well, never by color alone. */
 
-.source-chips {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.4rem 0.5rem;
+.ds {
+    position: relative;
+    display: inline-block;
 }
 
-.source-chips__title {
-    margin-right: 0.25rem;
-    color: var(--text-muted);
-    font-size: 0.78rem;
-    font-weight: 600;
-}
-
-.source-chip {
+/* Trigger: a real <button>, label + n/total badge. */
+.ds-trigger {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.2rem 0.65rem;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    font-size: 0.78rem;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-default);
+    font-size: 0.85rem;
+    font-weight: 600;
     line-height: 1.2;
     white-space: nowrap;
+    cursor: pointer;
 }
 
-.source-chip__label {
-    font-weight: 600;
+.ds-trigger:hover {
+    background: var(--surface-2);
 }
 
-.source-chip__status {
-    font-weight: 400;
-    opacity: 0.85;
+.ds-trigger[aria-expanded="true"] {
+    border-color: var(--blue);
+    background: var(--blue-light);
 }
 
-.source-chip__freshness {
-    font-weight: 400;
-    opacity: 0.85;
+.ds-trigger:focus-visible,
+.ds-close:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
 }
 
-.source-chip--available {
+.ds-trigger__icon {
+    color: var(--text-muted);
+}
+
+.ds-badge {
+    padding: 0.05rem 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.ds-badge--ok {
     border-color: color-mix(in srgb, var(--green-text) 25%, transparent);
     background: var(--green-light);
     color: var(--green-text);
 }
 
-.source-chip--partial {
+.ds-badge--warn {
     border-color: color-mix(in srgb, var(--amber-text) 25%, transparent);
     background: var(--amber-light);
     color: var(--amber-text);
 }
 
-.source-chip--unavailable {
+/* Popover: opens below the trigger, right-aligned to it, caret pointing at it.
+   --ds-shift (set by data_sources_popover.js) nudges it back inside the viewport on narrow
+   screens; the caret moves the other way so it keeps pointing at the trigger. */
+.ds-popover {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 1050;
+    width: min(380px, calc(100vw - 32px));
+    padding: 0.75rem 0.9rem 0.5rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--shadow-md);
+    color: var(--text-default);
+    text-align: left;
+    transform: translateX(var(--ds-shift, 0px));
+}
+
+.ds-popover[hidden] {
+    display: none;
+}
+
+.ds-popover:focus {
+    outline: none;
+}
+
+.ds-popover__caret {
+    position: absolute;
+    top: -6px;
+    right: 22px;
+    width: 10px;
+    height: 10px;
+    border-top: 1px solid var(--border-strong);
+    border-left: 1px solid var(--border-strong);
+    background: var(--surface);
+    transform: translateX(calc(-1 * var(--ds-shift, 0px))) rotate(45deg);
+}
+
+.ds-popover__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.ds-popover__title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-default);
+}
+
+.ds-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.ds-close:hover {
+    background: var(--surface-2);
+    color: var(--text-default);
+}
+
+.ds-popover__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-height: min(60vh, 420px);
+    overflow-y: auto;
+}
+
+.ds-source {
+    padding: 0.55rem 0;
+    border-top: 1px solid var(--border);
+}
+
+.ds-source:first-child {
+    border-top: 0;
+}
+
+.ds-source__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem 0.75rem;
+}
+
+.ds-source__name {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.ds-source__updated {
+    margin-top: 0.15rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+/* Status chip: icon + word. */
+.ds-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.1rem 0.55rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+.ds-chip--available {
+    border-color: color-mix(in srgb, var(--green-text) 25%, transparent);
+    background: var(--green-light);
+    color: var(--green-text);
+}
+
+.ds-chip--partial {
+    border-color: color-mix(in srgb, var(--amber-text) 25%, transparent);
+    background: var(--amber-light);
+    color: var(--amber-text);
+}
+
+.ds-chip--unavailable {
     border-color: color-mix(in srgb, var(--red-text) 25%, transparent);
     background: var(--red-light);
     color: var(--red-text);
+}
+
+/* Header placement: the button sits to the right of the page title block. */
+.ds-header-slot {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+}
+
+@media (max-width: 575.98px) {
+    .ds-header-slot {
+        justify-content: flex-start;
+        margin-top: 0.5rem;
+    }
 }

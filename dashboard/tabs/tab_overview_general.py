@@ -33,16 +33,16 @@ def create_layout() -> html.Div:
                     className="text-muted mb-0"
                 ),
                 # Metadata caption under the subtitle (ui_notes_improved.md §5): the last
-                # update and the data sources are context, not content competing for
-                # attention with the units.
+                # update is context, not content competing for attention with the units.
                 html.Div([
                     html.Small([
                         t("tab_overview_general.ultima_actualizacion"),
                         html.Span(id='overview-last-update', children=t("common.loading"))
                     ], className="text-muted"),
-                    html.Div(id="overview-source-status"),
                 ], className="overview-meta"),
-            ], md=12),
+            ], xs=12, sm=True),
+            # "Fuentes de Datos" button + popover, filled by update_overview_source_status.
+            dbc.Col(html.Div(id="overview-source-status"), xs=12, sm="auto", className="ds-header-slot"),
         ], className="mb-3"),
 
         html.Div([
