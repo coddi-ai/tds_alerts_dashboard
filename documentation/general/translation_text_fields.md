@@ -47,7 +47,7 @@ To add a column, add it to `scripts/translation_mapping.json`, read it at its di
 ## Running it
 
 Needs `OPENAI_API_KEY` (environment or `.env`). The upload also needs `BUCKET_NAME` and
-`ACCESS_KEY`/`SECRET_KEY` (or `STAGE_NAME` on AWS) — the same variables as `src/data/s3_downloader.py`.
+optional `ACCESS_KEY`/`SECRET_KEY` (on AWS the task role is used) — the same behavior as `src/data/s3_downloader.py`.
 
 ```bash
 python scripts/translate_text_fields.py --list     # what would be processed, no API calls
