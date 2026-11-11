@@ -48,6 +48,9 @@ import dashboard.callbacks.telemetry_callbacks
 # Import oil callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.oil_callbacks
 
+# "Fuentes de Datos" popover of the remaining pages (auto-registered on import)
+import dashboard.callbacks.data_sources_callbacks
+
 # Import lab compliance callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.lab_compliance_callbacks
 

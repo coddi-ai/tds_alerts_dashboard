@@ -513,7 +513,8 @@ def create_layout() -> dbc.Container:
             html.Header(
                 [
                     html.Div(
-                        [
+                        style={"flex": "1 1 280px", "minWidth": 0},
+                        children=[
                             html.H1(t("nav.service.integration-validacion-avisos"), className="erp-page-title"),
                             html.P(
                                 t("tab_integration_validacion_avisos.revise_edite_y_apruebe_los_avisos"),
@@ -521,6 +522,8 @@ def create_layout() -> dbc.Container:
                             ),
                         ]
                     ),
+                    # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+                    html.Div(id="erp-validacion-source-status", className="ds-header-slot"),
                     _operator_field(),
                 ],
                 className="erp-page-header",

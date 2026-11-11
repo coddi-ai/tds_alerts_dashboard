@@ -76,3 +76,9 @@ GET/LIST on both prefixes; compaction + migration = GET/PUT/DELETE/LIST on `auth
   `centinela` client and `centinela_user`, `a.casanga` (cda), `e.carvajal` and `f.vilches`
   (internal). **Open item 2/6: confirm these mappings.**
 - Weekly buckets above 90 days: tooltip reads `Sem. D Mmm – D Mmm · n inicios de sesión`.
+- Narrow screens: figures carry every x-axis label plus the desktop interval (`layout.meta.urTicks`);
+  `dashboard/assets/user_registry_axis.js` widens the interval to the plot width so labels never
+  overlap, and keeps the last day labelled when it had to thin them. At desktop width nothing changes.
+- Relative-time phrases, "Nuevo" and the weekly tooltip go through the catalogs; dates and numbers
+  stay es-CL in both languages.
+- A client with `active = false` opened by URL shows "Cliente no encontrado" (open item 5, as built).

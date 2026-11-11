@@ -96,12 +96,16 @@ def layout(report=None, **kwargs):
     initial_view = {"tab": "current", "key": report if isinstance(report, str) else None, "list_date": None}
     return html.Div([
         html.Div([
-            html.H3([
-                html.I(className="fas fa-file-alt me-2"),
-                t("nav.service.reporting-main"),
-            ], className="text-primary mb-2"),
-            html.P(t("reporting.subtitle"), className="text-muted"),
-        ], className="mb-3"),
+            html.Div([
+                html.H3([
+                    html.I(className="fas fa-file-alt me-2"),
+                    t("nav.service.reporting-main"),
+                ], className="text-primary mb-2"),
+                html.P(t("reporting.subtitle"), className="text-muted"),
+            ]),
+            # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+            html.Div(id="reporting-source-status", className="ds-header-slot"),
+        ], className="mb-3 d-flex flex-wrap justify-content-between align-items-start gap-3"),
 
         dcc.Store(id="reporting-catalog-store"),
         dcc.Store(id="reporting-action"),

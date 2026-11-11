@@ -214,9 +214,13 @@ def _history_card() -> dbc.Card:
 def layout(**kwargs):
     return html.Div([
         html.Header([
-            html.H1(t("nav.service.reporting-informe-falla"), className="informe-page-title"),
-            html.P(t("informe_falla.subtitle"), className="informe-page-subtitle"),
-        ], className="informe-page-header"),
+            html.Div([
+                html.H1(t("nav.service.reporting-informe-falla"), className="informe-page-title"),
+                html.P(t("informe_falla.subtitle"), className="informe-page-subtitle"),
+            ]),
+            # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+            html.Div(id="informe-source-status", className="ds-header-slot"),
+        ], className="informe-page-header d-flex flex-wrap justify-content-between align-items-start gap-3"),
 
         # Imagenes cargadas: [{id, filename, mime, size, data, caption}].
         dcc.Store(id="informe-images-store", data=[]),

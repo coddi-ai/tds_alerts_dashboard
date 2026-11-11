@@ -314,3 +314,44 @@ def test_seed_registry_is_valid_and_maps_known_users():
 class _SeedStorage:
     def get(self, key):
         return (SEED / key.rsplit("/", 1)[-1]).read_bytes()
+
+
+# --- TR-A: as-built amendments ------------------------------------------------------------
+
+@pytest.mark.parametrize("value, expected", [
+    ("poc", "production"), ("POC", "production"), ("Poc", "production"), (" prod ", "production"),
+    ("production", "production"), ("PRODUCTION", "production"),
+    ("test", "development"), ("TEST", "development"), ("Dev", "development"),
+    ("development", "development"), ("DEVELOPMENT", "development"),
+    ("", "unknown"), ("   ", "unknown"), ("staging", "unknown"), ("qa", "unknown"),
+])
+def test_environment_mapping_of_deploy_status(monkeypatch, value, expected):
+    monkeypatch.delenv("AUTH_EVENTS_ENVIRONMENT", raising=False)
+    monkeypatch.setenv("DEPLOY_STATUS", value)
+    assert settings.current_environment() == expected
+
+
+def test_environment_unset_is_unknown_and_override_wins(monkeypatch):
+    monkeypatch.delenv("DEPLOY_STATUS", raising=False)
+    monkeypatch.delenv("AUTH_EVENTS_ENVIRONMENT", raising=False)
+    assert settings.current_environment() == "unknown"
+    monkeypatch.setenv("DEPLOY_STATUS", "POC")
+    monkeypatch.setenv("AUTH_EVENTS_ENVIRONMENT", "test")
+    assert settings.current_environment() == "development"
+
+
+def test_display_timezone_defaults_to_santiago_and_can_be_overridden(monkeypatch):
+    monkeypatch.delenv("AUTH_EVENTS_DISPLAY_TZ", raising=False)
+    assert settings.display_timezone() == "America/Santiago"
+    monkeypatch.setenv("AUTH_EVENTS_DISPLAY_TZ", "UTC")
+    assert settings.display_timezone() == "UTC"
+
+
+def test_default_timezone_drives_day_bucketing(store, monkeypatch):
+    monkeypatch.delenv("AUTH_EVENTS_DISPLAY_TZ", raising=False)
+    # 02:30 UTC on 6 Nov is 23:30 on 5 Nov in Santiago (UTC-3 in November): day 5 by default.
+    _put_raw(store, _event(event_id="tz", when="2026-11-06T02:30:00.000Z"))
+    assert list(data_access.get_events(date(2026, 11, 5), date(2026, 11, 5))["event_id"]) == ["tz"]
+    monkeypatch.setenv("AUTH_EVENTS_DISPLAY_TZ", "UTC")
+    data_access.clear_cache()
+    assert list(data_access.get_events(date(2026, 11, 6), date(2026, 11, 6))["event_id"]) == ["tz"]

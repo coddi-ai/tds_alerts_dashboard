@@ -721,12 +721,19 @@ def create_campbell_ai_layout(user_data: dict | None = None) -> html.Div:
                                         ),
                                     ]
                                 ),
-                                dbc.Badge(
-                                    t("js.status_initializing") + "…",
-                                    id="campbell-ai-status",
-                                    color="secondary",
-                                    pill=True,
-                                    className="px-3 py-2",
+                                html.Div(
+                                    [
+                                        # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+                                        html.Div(id="campbell-ai-source-status"),
+                                        dbc.Badge(
+                                            t("js.status_initializing") + "…",
+                                            id="campbell-ai-status",
+                                            color="secondary",
+                                            pill=True,
+                                            className="px-3 py-2",
+                                        ),
+                                    ],
+                                    className="d-flex align-items-center flex-wrap gap-3",
                                 ),
                             ],
                             className="d-flex justify-content-between align-items-center flex-wrap gap-3",

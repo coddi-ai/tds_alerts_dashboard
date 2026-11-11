@@ -12,10 +12,11 @@ The lists below are the result of the audit in
 documentation/general/data_sources_documentation_dashboard.md: each entry is a source the
 tab's code actually reads, and each missing one is a discrepancy to be fixed there first.
 
-Tabs still pending confirmation of their backend dependencies are deliberately absent:
-monitoring-mantenciones, agents-campbell-ai, agents-troubleshooting,
-integration-validacion-avisos, integration-seguimiento-avisos, reporting-main. The admin
-tabs are configuration, not data pipelines, and stay out for good.
+Every page that has data sources has an entry (the seven pages added later are listed at the
+end of SERVICE_DATA_SOURCES). Pages with no data to show -- the Administración placeholder -- stay
+out. `total` in the popover is the length of the list that applies to the current client and
+component: sources that do not apply are neither listed nor counted (CLIENT_GATED_SOURCES, the
+per-component predictive list).
 """
 
 from __future__ import annotations
@@ -40,7 +41,42 @@ SERVICE_DATA_SOURCES: dict[str, tuple[str, ...]] = {
         "predictive_risk_scores", "predictive_unit_status", "predictive_curve", "predictive_unit_analysis",
         "predictive_signal_status", "oil_classified", "oil_limits_four", "predictive_oil_meter",
     ),
+    # --- Pages added to the popover in the amendment (documented in section 6 onwards of
+    # data_sources_documentation_dashboard.md) ---
+    "monitoring-mantenciones": (
+        "maintenance_query_1", "maintenance_query_2", "maintenance_query_3", "maintenance_query_4",
+        "maintenance_query_5", "maintenance_query_6", "maintenance_query_7", "maintenance_query_8",
+        "maintenance_query_9", "maintenance_query_10", "maintenance_weekly", "oil_classified",
+    ),
+    "agents-campbell-ai": (
+        "alerts_consolidated", "telemetry_alert_detail", "oil_classified", "oil_machine_status",
+        "oil_limits", "oil_limits_four", "telemetry_machine_status", "telemetry_classified",
+        "maintenance_query_3", "maintenance_summary", "predictive_legacy_motor",
+        "predictive_legacy_transmision", "campbell_manifest",
+    ),
+    "agents-troubleshooting": ("troubleshooting_agent",),
+    "reporting-main": ("reporting_store", "reporting_analysis_history", "reporting_curve_history"),
+    "reporting-informe-falla": (
+        "predictive_unit_status", "predictive_risk_scores", "predictive_curve", "predictive_unit_analysis",
+        "oil_classified", "maintenance_query_3", "maintenance_query_7",
+    ),
+    "integration-validacion-avisos": ("erp_warnings", "erp_sap_config"),
+    "integration-seguimiento-avisos": ("erp_warnings",),
+    "admin-user-registry": ("auth_events_store",),
+    "admin-mailing": ("alerts_consolidated",),
 }
+
+# Sources that are not a catalog probe: their status comes from configuration (an agent URL, a
+# bucket, a client YAML) or from several predictive components at once. Resolved in
+# dashboard/components/source_status.py.
+RESOLVED_SOURCES = frozenset({
+    "troubleshooting_agent", "reporting_store", "reporting_analysis_history", "reporting_curve_history",
+    "erp_sap_config", "auth_events_store",
+})
+
+# Pages whose predictive v2 tables belong to one fixed component rather than the page's own.
+# The preliminary failure report analyses engines only (src/informe_falla/catalog.py::COMPONENTE).
+PAGE_PREDICTIVE_COMPONENT = {"reporting-informe-falla": "motor"}
 
 # Sources a tab lists only for some clients (the tab never reads them for the others).
 # `oil_component_hours`: the Horas Componente column of the oil machine detail
@@ -79,6 +115,9 @@ SOURCE_DATE_FIELDS: dict[str, DateField] = {
     "oil_machine_status": DateField("latest_sample_date"),
     "oil_limits_four": DateField("calculation_date"),
     "oil_component_hours": DateField("sampleDate"),
+    "maintenance_query_10": DateField("reference_date"),
+    "predictive_legacy_motor": DateField("Fecha"),
+    "predictive_legacy_transmision": DateField("Fecha"),
     "data_freshness": DateField("Ultima Fecha de Actualizacion"),
     "telemetry_unit_health": DateField("evaluation_timestamp", glob="**/*.parquet"),
     "telemetry_system_health": DateField("evaluation_timestamp", glob="**/*.parquet"),
@@ -91,7 +130,11 @@ SOURCE_DATE_FIELDS: dict[str, DateField] = {
 NO_DATE_SOURCES = frozenset({
     "maintenance_weekly", "telemetry_ai_comments", "telemetry_deviation", "telemetry_trends",
     "telemetry_events", "telemetry_limits", "telemetry_silver_weekly",
-})
+    "maintenance_query_1", "maintenance_query_2", "maintenance_query_3", "maintenance_query_4",
+    "maintenance_query_5", "maintenance_query_6", "maintenance_query_7", "maintenance_query_8",
+    "maintenance_query_9", "maintenance_summary", "oil_limits", "telemetry_machine_status",
+    "telemetry_classified", "campbell_manifest", "erp_warnings",
+}) | RESOLVED_SOURCES
 
 # The date column of every partitioned `predictive_*` table (read from the newest partition).
 PREDICTIVE_DATE_FIELD = DateField("Fecha", glob="*.parquet")

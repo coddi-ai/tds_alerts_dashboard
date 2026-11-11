@@ -15,6 +15,7 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from dashboard.components import user_registry_views as v
+from dashboard.components.source_status import render_service_data_sources
 from src.auth_events import metrics as m
 from src.auth_events.data_access import AuthDataUnavailable, display_timezone, get_events, get_registry, last_loaded_at
 from src.i18n import t
@@ -72,7 +73,14 @@ def overview_layout(q: dict) -> html.Div:
     return _shell([
         dcc.Store(id="ur-ov-url-sync"),
         _crumbs((t("user_registry.title"), None, None)),
-        header_title(t("user_registry.title"), "ur-ov-subtitle", t("user_registry.subtitle.loading")),
+        html.Div(
+            [
+                header_title(t("user_registry.title"), "ur-ov-subtitle", t("user_registry.subtitle.loading")),
+                # "Fuentes de Datos" button + popover: the login-event store does not depend on the client.
+                html.Div(render_service_data_sources("", "admin-user-registry"), className="ds-header-slot"),
+            ],
+            className="d-flex flex-wrap justify-content-between align-items-start gap-3",
+        ),
         html.Div([
             *v.period_filters(q["period"], q["start"], q["end"], q["env"]),
             html.Div(dbc.Checkbox(id="ur-internal", label=t("user_registry.filter.internal"), value=q["internal"], className="ur-check"),

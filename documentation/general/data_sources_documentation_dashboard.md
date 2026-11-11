@@ -8,21 +8,40 @@ reference the "Fuentes de Datos" popover is built from
 - **Method:** every page/tab was traced from its layout, through its callbacks, to the loader that
   reads the data and the file it opens. The predictive finding (section 7) was also reproduced
   with the local data mirror (`data/predictive/golden/capstone`, `.../cda`).
-- **Scope of the UI change:** only the pages that showed the old strip get the popover (Resumen
-  General, Alertas, Telemetría, Aceite, Predictivo Motor/Transmisión). The remaining pages are
-  audited here but have no sources indicator; see section 10.
+- **Amended 2026-11-10** (`technical_requirement_data_sources_popover_amendment.md`): the popover
+  was first built for the five pages that had the strip (Resumen General, Alertas, Telemetría,
+  Aceite, Predictivo Motor/Transmisión) and is now on **every page with data sources**: Informe de
+  Confiabilidad, Campbell AI, Troubleshooting, Reportabilidad, Informe preliminar de falla,
+  Validación y Seguimiento de Avisos and Administración (Registro de Usuarios, Mailing). The
+  `/admin` landing page is a placeholder with no data, so it has none. The tables of sections 6, 8,
+  9 and 10 are exactly the lists the popovers show.
 
 ## 1. How a source's status and "last update" are determined
 
 These rules are shared by every popover and are unchanged by the redesign.
 
-**Availability** (`dashboard/components/source_status.py`, `src/data/catalog.py`)
+**Three-state status model** (`dashboard/components/source_status.py`, `src/data/catalog.py`)
 
-| Status | Meaning |
-|---|---|
-| Disponible | The catalog probe found the file/folder (a folder needs at least one data file). |
-| Parcial | The folder exists but holds no usable data (shown as its own amber chip, counts as not available in `n/total`). |
-| No Disponible | No compatible file/folder, or no probe result. An unknown status is never shown as healthy. |
+| Status | Chip | Meaning |
+|---|---|---|
+| Disponible | green, check icon | The probe found the file/folder (a folder needs at least one data file), or the configured service answers. |
+| Parcial | amber, warning-triangle icon | The source exists but is incomplete: a folder without data files, only some levels of the AI comments, or a source spread over several components of which only some publish it (Reportabilidad's history). |
+| No Disponible | red, exclamation icon | No compatible file/folder, no configuration, or no probe result. An unknown status is never shown as healthy. |
+
+The chip always shows its icon **and** its word; the optional note of a source (`reason`, `detail`)
+goes to the hover text and never replaces the word.
+
+**How `n/total` is counted**
+
+- `total` is the number of sources the popover **lists for the current client and component**.
+  A source that does not apply is neither listed nor counted. Examples: Aceite lists *Horas de
+  Componente* only for CDA, ENEX and CAPSTONE (total 4, otherwise 3); Predictivo lists 8 sources for
+  a component that publishes `oil_meter_history` (Capstone Motor) and 7 for one that does not
+  (`total` therefore differs between Motor and Transmisión); Resumen General lists only the
+  techniques the client has enabled.
+- `n` counts **only "Disponible"** sources. "Parcial" and "No Disponible" are not counted.
+- The badge is **green** when `n == total` and **amber** when any listed source is not
+  "Disponible" (including "Parcial").
 
 Resumen General is the exception: its rows are techniques, and a technique is "Disponible" only if
 at least one unit has a real reading for it (`fleet_overview.technique_availability`), so the
@@ -59,14 +78,36 @@ Telemetría and Aceite freshness labels (it is folded into those two rows, not a
 The Unit Detail drill-down additionally reads `telemetry/.../system_health` and the predictive
 status frame, both already represented by the Telemetría and Predictivo rows.
 
+**Date rule of the Resumen General rows.** Each row's "Hace N días" is the newest date inside a
+**data file of that technique**, measured the same way for every row:
+
+| Row | File its date is read from | Same as before the change set? |
+|---|---|---|
+| Alertas | `consolidated_alerts.csv` (`Timestamp`) | yes |
+| Telemetría | `telemetry/.../unit_health` (`evaluation_timestamp`) | yes (kept, not `Data_Date_Last_Update.csv`) |
+| Aceite | `oil/.../classified.parquet` (`sampleDate`) | yes (kept) |
+| Mantención | `query_10_equipment_status.parquet` (`reference_date`) | yes |
+| Predictivo | `unit_status_summary` of each enabled component (`Fecha`), the **oldest** one | **No: documented exception, see below** |
+
+**Explicit exception: Predictivo.** Before the change set the row took its date from the legacy
+`predictive/golden/<client>/<component>.csv`. Engineering keeps the **oldest v2 model run date**
+instead, for this reason: no Predictivo page, nor the Resumen cell itself, reads that CSV any more,
+so its date describes a file the row's own status does not come from. That produced "Hace 59 días"
+next to a model run of 06 Nov 2026 (section 7). Reading `unit_status_summary` follows the same
+principle as the other rows (the date comes from the file the row's status reads) and is the same
+date the cell's freshness label already uses. Reverting is one line: restore
+`"predictive": "predictive_components"` in `TECHNIQUE_SOURCE` and delete the
+`predictive_run_days` branch in `fleet_overview_data_sources`; the row would then show the legacy
+file's age again.
+
 **Differences (old strip vs. real):**
 - **D1** Predictivo's "Hace N días" came from the legacy `predictive/golden/<client>/<component>.csv`,
   which no Predictivo page reads. The page's own freshness (the cell label) and the "Fecha Ejecución
-  Modelo" come from `unit_status_summary`. Corrected in code (section 7).
-- **D2** (informational, not changed) Telemetría and Aceite rows take their "Hace N días" from the
-  data file of their own status source or, for Aceite, from `classified.parquet`, while the
+  Modelo" come from `unit_status_summary`. Corrected in code; recorded above as the exception.
+- **D2** (informational, **not changed**) Telemetría and Aceite rows take their "Hace N días" from
+  the data file of their own status source or, for Aceite, from `classified.parquet`, while the
   per-unit cells use `Data_Date_Last_Update.csv`. These are different dates of the same technique.
-  They are kept as is so the values shown before the change do not move.
+  They are kept as they were so the values shown before the change do not move.
 
 ## 3. Monitoreo > Alertas
 
@@ -150,16 +191,29 @@ Static reference: `oil/essays_elements.xlsx` (essay mapping), not shown.
 ## 6. Monitoreo > Informe de Confiabilidad
 
 Page: `/monitoring/mantenciones` (`tab_mantenciones_general.py`,
-`mantenciones_general_callbacks.py`, `src/data/maintenance_repository.py`). No strip (pending
-confirmation).
+`mantenciones_general_callbacks.py`, `src/data/maintenance_repository.py`). The repository is
+created with `get_repository(mode="parquet", client=…)` and reads the maintenance contract. Its
+own `source_status` (ok / partial / missing / error per query) drives the in-page notices; the
+popover only reports whether each file is there.
 
-Origin: `data/mantentions/golden/<client>/Maintance_Labeler_Views/query_1…query_10_*.parquet`
-(component maintenance, unit records, actions, business KPIs, reliability monthly, component failure
-ranking, intervention hours daily/monthly, fleet intervention daily, equipment status), the weekly
-snapshots `mantentions/golden/<client>/<WW-YYYY>.csv`, and `oil/golden/<client>/classified.parquet`.
-Read by `get_repository(mode="parquet")` (dummy mode generates in-memory data and reads nothing).
-Availability per query is tracked internally by the repository (`source_status`: ok / partial /
-missing / error) and surfaced in-page as notices.
+| Source | Origin (`data/mantentions/golden/<client>/…`) | Read by | UI sections | Last update |
+|---|---|---|---|---|
+| Mantención por Componente | `Maintance_Labeler_Views/query_1_component_maintenance.parquet` | `load_maintenance_component_maintenance` | component maintenance tables | — |
+| Registros de Unidad y Acciones | `…/query_2_unit_records_actions.parquet` | `load_maintenance_unit_records_actions` | unit records / actions | — |
+| Acciones de Mantención | `…/query_3_actions_all_equipment.parquet` | `load_maintenance_actions_all_equipment` | actions, Paretos, monthly counts | — |
+| KPIs de Negocio | `…/query_4_business_kpis.parquet` | `load_business_kpis` | KPI cards (hours) | — |
+| Confiabilidad Mensual | `…/query_5_reliability_monthly.parquet` | `load_maintenance_reliability_monthly` | MTBF / MTTR | — |
+| Ranking de Fallas por Componente | `…/query_6_component_failure_ranking.parquet` | `load_maintenance_component_failure_ranking` | failure ranking | — |
+| Horas de Intervención (Diarias) | `…/query_7_intervention_hours_daily.parquet` | `load_maintenance_intervention_hours_daily` | daily hours | — |
+| Horas de Intervención (Mensuales) | `…/query_8_intervention_hours_monthly.parquet` | `load_maintenance_intervention_hours_monthly` | monthly hours | — |
+| Intervención de Flota (Diaria) | `…/query_9_fleet_intervention_daily.parquet` | `load_maintenance_fleet_intervention_daily` | fleet daily view | — |
+| Estado de Equipos | `…/query_10_equipment_status.parquet` | `load_maintenance_equipment_status` | equipment status | newest `reference_date` |
+| Mantenciones Semanales | `<WW-YYYY>.csv` snapshots | `list_maintenance_weeks`, `load_maintenance_week` | weekly summary | — |
+| Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `load_oil_classified` | oil cross-reference | newest `sampleDate` |
+
+Availability: file exists (the weekly snapshots: at least one `WW-YYYY.csv`). The queries carry no
+single date column the dashboard reads, so their "Última actualización" is `—`. **Popover list:**
+the twelve above (total 12; fewer files on disk lower `n`, never `total`).
 
 ## 7. Predictivo > Motor / Transmisión
 
@@ -221,58 +275,136 @@ Inteligente, Estado de Señales de Telemetría, Clasificación de Aceite, Límit
 
 ## 8. Agentes
 
-**Campbell AI** (`/agents/campbell-ai`, `dashboard/campbell_ai/`, `src/campbell_ai/data.py`). No strip.
-The agent reads through a declared dataset registry (`DATASETS`) under `data/`:
-`alerts/.../consolidated_alerts.csv`, `oil/.../classified.parquet`, `machine_status.parquet`,
-`stewart_limits.parquet`, `stewart_limits_four.parquet`, `telemetry/.../machine_status.parquet`,
-`classified.parquet`, `alerts_detail_wide_with_gps.csv`, `mantentions/.../query_3_actions_all_equipment.parquet`,
-`Resumen_Semanal_Completo.csv`, `predictive/.../motor.csv`, `transmision.csv`; plus
-`auxiliar/manifest.json` (data manifest status) and an external LLM API.
-- **D10** Campbell AI still reads the **legacy** predictive CSVs (`predictive_motor`,
-  `predictive_transmission`) that the Predictivo pages have replaced with the v2 tables. Not changed
-  here (out of scope; Campbell AI has no indicator); flagged for the team.
+### Campbell AI
 
-**Troubleshooting** (`/agents/troubleshooting`). A static card with a link to an external agent
-(`?client=`); it reads no data source.
+Page `/agents/campbell-ai` (`dashboard/campbell_ai/`, `src/campbell_ai/data.py`). The agent reads
+through a declared dataset registry (`DATASETS`), so the popover lists exactly those datasets for
+the current client, plus the data manifest (13 sources). An LLM API is also used; it is a service,
+not a data source, and is not listed.
+
+| Source | Origin (`data/…`) | `DATASETS` key |
+|---|---|---|
+| Alertas Consolidadas | `alerts/golden/<client>/consolidated_alerts.csv` | `alerts` |
+| Detalle de Alertas (Telemetría) | `telemetry/golden/<client>/alerts_detail_wide_with_gps.csv` | `alerts_detail` |
+| Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `oil_classified` |
+| Estado de Máquina (Aceite) | `oil/golden/<client>/machine_status.parquet` | `oil_machine_status` |
+| Límites de Aceite (Formato Legado) | `oil/golden/<client>/stewart_limits.parquet` | `oil_limits` |
+| Límites de Aceite | `oil/golden/<client>/stewart_limits_four.parquet` | `oil_limits_four` |
+| Estado de Equipos (Telemetría) | `telemetry/golden/<client>/machine_status.parquet` | `telemetry_machine_status` |
+| Componentes Clasificados (Telemetría) | `telemetry/golden/<client>/classified.parquet` | `telemetry_classified` |
+| Acciones de Mantención | `mantentions/golden/<client>/Maintance_Labeler_Views/query_3_actions_all_equipment.parquet` | `maintenance_actions` |
+| Resumen Semanal de Mantención | `mantentions/golden/<client>/Resumen_Semanal_Completo.csv` | `maintenance_summary` |
+| Modelo Predictivo de Motor (Legado) | `predictive/golden/<client>/motor.csv` | `predictive_motor` |
+| Modelo Predictivo de Transmisión (Legado) | `predictive/golden/<client>/transmision.csv` | `predictive_transmission` |
+| Manifiesto de Datos | `auxiliar/manifest.json` | (manifest status) |
+
+Availability: file exists. Dates: only the files with a date column show one (alerts `Timestamp`,
+alert detail `Alert_TimeStart`, oil `sampleDate`, machine status `latest_sample_date`, limits
+`calculation_date`, the legacy predictive CSVs `Fecha`); the rest show `—`.
+
+> **Technical debt (D10), no code change in this change set.** Campbell AI still reads the **legacy
+> predictive CSVs**, `predictive/golden/<client>/motor.csv` and `predictive/golden/<client>/transmision.csv`
+> (`DATASETS` keys `predictive_motor`, `predictive_transmission`; required columns `Unit`/`unitId`
+> and `ranking`). Predictivo's pages stopped reading them when the Predictive Data Contract v2.0
+> landed, so the agent can answer from a model state that is months older than the one on screen
+> (its popover rows are dated "Hace N días" from the file's own `Fecha`, e.g. 59 days for Capstone).
+> **Target source:** the v2 tables of `predictive/golden/<client>/<component>/`, read through
+> `src/data/predictive_v2.py`: `unit_status_summary` (has `Unit`, `ranking`, `estado` per unit and
+> the run date `Fecha`) for the current state, `risk_scores` for the per-mode history and
+> `unit_failure_analisis` for the narrative. The exact column mapping for the agent's tools is not
+> defined yet and needs the Campbell AI owner to confirm it.
+
+### Troubleshooting
+
+Page `/agents/troubleshooting`. A card with a link to an external agent (`?client=`); it reads no
+data file. Its single source is the **agent itself**: *Agente de Troubleshooting* is "Disponible"
+when the agent URL is configured (`config/troubleshooting_integration.json` or
+`TROUBLESHOOTING_AGENT_URL`) and the service is enabled for the client (not dummy); otherwise "No
+Disponible". No date (`—`). **Popover list:** 1 source (total 1).
 
 ## 9. Reportes y Conexión ERP
 
-| Page | Origin | Read by | Notes |
-|---|---|---|---|
-| Reportabilidad `/reporting` | S3 report store `{REPORTS_S3_ROOT}/<client>/reports/<date>/<file>` (bucket `BUCKET_NAME`) | `ReportStore.list_reports` / `open_report` | The state chips read `predictive_v2.load_unit_state_history` (`unit_failure_analisis` history) and `load_curve_state_history` (`cumulative_risk_curve`), plus the status scale. |
-| Informe preliminar de falla `/reporting/informe-falla` | Predictivo v2 golden tables (`unit_status_summary`, `risk_scores`, `cumulative_risk_curve`, `unit_failure_analisis`) from the local copy or S3 (`INFORME_FALLA_ORIGEN`), `oil/.../classified.parquet`, maintenance `query_3` and `query_7`, an LLM API | `src/informe_falla/*` | The unit list comes from the Fleet Overview's ordered units. |
-| Validación de Avisos `/integration/validacion-avisos` | `data/warnings/<client>/<state>.parquet`, states `pending`, `validated`, `rejected`, `sent`; per-client SAP config `config/clients/<client>.yaml` | `erp_warning_store.load_all_warnings` | Writes to the same store (state changes, SAP send). |
-| Seguimiento de Avisos `/integration/seguimiento-avisos` | same store | `erp_warning_store` | Read-only follow-up. |
+### Reportabilidad (`/reporting`)
+
+| Source | Origin | Read by | Availability | Last update |
+|---|---|---|---|---|
+| Reportes en S3 | `{REPORTS_S3_ROOT}/<client>/reports/<date>/<file>` in bucket `BUCKET_NAME` | `ReportStore.list_reports` / `open_report` | the service is enabled for the client and a bucket is configured | — |
+| Historial de Análisis Predictivo | `predictive/golden/<client>/<component>/unit_failure_analisis/` of every component of the predictive technique (motor, transmisión) | `predictive_v2.load_unit_state_history` (state chips, `report_health`) | all components publish it → Disponible; only some → **Parcial**; none → No Disponible | oldest newest `Fecha` across components |
+| Historial de Curva de Riesgo Acumulado | `…/<component>/cumulative_risk_curve/` | `predictive_v2.load_curve_state_history` | same rule | same |
+
+**Popover list:** the three above (total 3). The S3 listing itself is not probed on render (no
+network on a header), so a bucket that is configured but unreachable still reads "Disponible"; the
+page's own notice shows that failure.
+
+### Informe preliminar de falla (`/reporting/informe-falla`)
+
+Reads the Predictivo v2 tables of the **motor** component (`src/informe_falla/catalog.py::COMPONENTE`)
+from the local copy, or from S3 when `INFORME_FALLA_ORIGEN=s3`; the oil samples and two maintenance
+queries; and an LLM API (a service, not listed).
+
+| Source | Origin | Read by |
+|---|---|---|
+| Estado de Unidades | `predictive/golden/<client>/motor/unit_status_summary/` | `load_unit_status_history` (`evidence.py`) |
+| Puntaje de Riesgo | `…/motor/risk_scores/` | `load_risk_scores_history` |
+| Curva de Riesgo Acumulado | `…/motor/cumulative_risk_curve/` | `curva.py` |
+| Análisis Inteligente | `…/motor/unit_failure_analisis/` | `analisis_unidad.py` |
+| Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `aceite.py` |
+| Acciones de Mantención | `…/query_3_actions_all_equipment.parquet` | `mantenciones.py` |
+| Horas de Intervención (Diarias) | `…/query_7_intervention_hours_daily.parquet` | `mantenciones.py` |
+
+With the S3 origin the four predictive rows report only whether the bucket (`ERS_S3_BUCKET`) is
+configured, without a date; the local-copy probes would be misleading there. **Popover list:** the
+seven above (total 7).
+
+### Validación de Avisos (`/integration/validacion-avisos`)
+
+| Source | Origin | Read by |
+|---|---|---|
+| Avisos del ERP | `data/warnings/<client>/<state>.parquet`, states `pending`, `validated`, `rejected`, `sent` | `erp_warning_store.load_all_warnings`; the page also writes state changes |
+| Configuración SAP del Cliente | `config/clients/<client>.yaml` | `erp_client_config.load_client_config` (approve and send) |
+
+"Avisos del ERP" is Disponible when at least one state file exists. **Popover list:** 2 sources.
+
+### Seguimiento de Avisos (`/integration/seguimiento-avisos`)
+
+Read-only follow-up of the same store: *Avisos del ERP* only (total 1).
 
 ## 10. Administración
 
-`/admin` is a placeholder; `/admin/registro-usuarios` reads authentication events
-(`data/auxiliar/authentication_register.parquet`, rebuilt from S3 event files);
-`/admin/mailing` is the mailing configuration. They are configuration/operations pages, not data
-pipelines, and never get a sources indicator.
+- **`/admin`** is a placeholder ("en construcción"): no data, **no popover**.
+- **`/admin/registro-usuarios`** (Registro de Usuarios, overview view). Reads login events and the
+  registry only through `src/auth_events/data_access.py` (`auth_events/raw|daily/`,
+  `auth_registry/*.json` in S3 under `MultiTechnique Alerts/auxiliar/`, or `AUTH_EVENTS_LOCAL_DIR`).
+  Source: *Eventos de Acceso*, Disponible when a backend is configured (`get_storage()` is not
+  `None`); it does not depend on the client; no date. Total 1.
+- **`/admin/mailing`** (Mailing). The summary e-mails are built from the same alert pipeline as the
+  Alertas page (`src/mailing/alert_summary.py` → `load_alerts_data`), so the source is *Alertas
+  Consolidadas* of the selected client (`consolidated_alerts.csv`, newest `Timestamp`). Total 1.
+  Only the **header** of this page changed (an empty slot for the button); `src/mailing`, the
+  mailing callbacks, `mailing.css` and `config.py` are untouched.
 
-Pages without an indicator today (Informe de Confiabilidad, Campbell AI, Troubleshooting,
-Reportabilidad, Informe preliminar de falla, Validación/Seguimiento de Avisos, Admin) stay
-as they are: the requirement replaces the existing strip, it does not add one to new pages.
-The tables above are the starting point if the team wants to adopt them (add the probes and one
-line in `config/service_data_sources.py`).
+Pages without a popover: `/admin` only.
 
 ## 11. Discrepancy list (old strip vs. audit)
 
 | # | Page | Old strip | Finding | Resolution |
 |---|---|---|---|---|
-| D1 | Resumen General | Predictivo "Hace N días" from legacy CSV | Page uses `unit_status_summary` run date | Corrected: row date = oldest v2 run date |
-| D2 | Resumen General | Telemetría/Aceite dates from their status files | Cells use `Data_Date_Last_Update.csv` | Documented, **not changed** (keeps pre-existing values) |
+| D1 | Resumen General | Predictivo "Hace N días" from legacy CSV | Page uses `unit_status_summary` run date | Corrected: row date = oldest v2 run date. **Documented exception** to the "keep previous values" rule (section 2) |
+| D2 | Resumen General | Telemetría/Aceite dates from their status files | Cells use `Data_Date_Last_Update.csv` | Documented, **not changed** |
 | D3 | Alertas | no Límites de Aceite | Used by Vista Detallada | Added |
 | D4 | Alertas | no Mantenciones Semanales | Used by Vista Detallada | Added |
 | D5 | Telemetría | 3 sources | 6 more are read (AI comments, deviation, trends, events, limits, weekly silver) | Added |
 | D6 | Aceite | no component hours | Used by machine detail (CDA/ENEX/CAPSTONE) | Added for those clients |
 | D7 | Predictivo | Componentes Predictivos, IA Predictiva | Neither is read by the page; "59 days" vs 06 Nov explained in section 7 | Removed |
 | D8 | Predictivo | — | Eight v2 sources used and not listed | Added |
-| D9 | Predictivo | same list for every component | Sources depend on the component's published tables | Built per component |
-| D10 | Campbell AI | (no strip) | Still reads legacy predictive CSVs | Documented only |
+| D9 | Predictivo | same list for every component | Sources depend on the component's published tables | Built per component (7 or 8) |
+| D10 | Campbell AI | (no strip) | Still reads legacy predictive CSVs | **Technical debt**, documented only (section 8) |
+| D11 | Seven pages | (no strip) | Had documented sources but no indicator | Popover added (sections 6, 8, 9, 10) |
+| D12 | Troubleshooting | (no strip) | Reads no data file | Single source: the configured agent |
+| D13 | Reportabilidad | (no strip) | History from several components can be incomplete | "Parcial" state used for it |
 
 Also noted: `data/predictive/golden/<client>/analisis_inteligente*.parquet`,
 `unit_failure_analisis_<client>.parquet` and the legacy `<component>.csv` files are orphans for the
-dashboard pages; the catalog probes `predictive_components` and `predictive_ai` are no longer used by
-any page after this change.
+Predictivo pages; the catalog probes `predictive_components` and `predictive_ai` are no longer used
+by any page after this change. The legacy CSVs are still read by Campbell AI (D10).
+

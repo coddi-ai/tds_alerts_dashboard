@@ -36,8 +36,9 @@ _ICONS = {
 
 @dataclass(frozen=True)
 class DataSource:
-    """One source to show. `reason` is a short visible note (e.g. "Desactualizado desde
-    14:20") that replaces the generic status word; `detail` is the hover text.
+    """One source to show. `reason` is a short note (e.g. "Desactualizado desde 14:20") and
+    `detail` the file or note behind it; both go to the hover text, the chip always shows the
+    state's own word.
     `days_since_update` is shown as "Última actualización" and never changes the status;
     ``None`` (not known) shows "—"."""
 
@@ -65,12 +66,13 @@ def _freshness_value(days: Optional[int]) -> str:
     return t("source_status.updated_days_ago", days=days)
 
 
-def _chip(status: str, source: DataSource) -> html.Span:
-    status_text = source.reason or t(f"data_sources_popover.status_{status}")
+def _chip(status: str) -> html.Span:
+    """The three states -- Disponible (green), Parcial (amber), No Disponible (red) -- each with
+    an icon and its word. The word is always the state's own; a `reason` goes to the hover text."""
     return html.Span(
         [
             html.I(className=f"fas {_ICONS[status]} ds-chip__icon", **{"aria-hidden": "true"}),
-            html.Span(status_text, className="ds-chip__text"),
+            html.Span(t(f"data_sources_popover.status_{status}"), className="ds-chip__text"),
         ],
         className=f"ds-chip ds-chip--{status}",
     )
@@ -79,12 +81,13 @@ def _chip(status: str, source: DataSource) -> html.Span:
 def _entry(source: DataSource) -> html.Li:
     status = _status_of(source)
     props = {"data-source": source.key, "data-status": status}
-    if source.detail:
-        props["title"] = source.detail
+    hover = " · ".join(text for text in (source.reason, source.detail) if text)
+    if hover:
+        props["title"] = hover
     return html.Li(
         [
             html.Div(
-                [html.Span(source.label, className="ds-source__name"), _chip(status, source)],
+                [html.Span(source.label, className="ds-source__name"), _chip(status)],
                 className="ds-source__head",
             ),
             html.Div(
