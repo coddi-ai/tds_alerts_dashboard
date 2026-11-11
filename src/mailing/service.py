@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from src.utils.logger import get_logger
 
-from . import config, delivery, periods, recipients, report, state
+from . import config, data_sync, delivery, periods, recipients, report, state
 from .errors import (
     MailingBusyError,
     MailingError,
@@ -247,7 +247,8 @@ def run_scheduled(
 
     `skipped` means another process/thread (or an earlier run) already owns the marker for
     `(client, scheduled_date)`: this is what makes the send exactly-once across workers and
-    restarts. Failures are retried with growing waits (`MAILING_RETRY_DELAYS`), then logged.
+    restarts. The data is synced from S3 once before the first build (data_sync.py). Failures are
+    retried with growing waits (`MAILING_RETRY_DELAYS`), then logged.
     """
     key = config.normalize_client(client)
     schedule = config.get_schedule(key)
@@ -259,6 +260,9 @@ def run_scheduled(
     if not state.claim(key, scheduled_date):
         logger.info("mailing: scheduled run already claimed (client=%s date=%s)", key, scheduled_date)
         return "skipped"
+
+    # Fresh data first (the app's own S3 sync, once per date); a failure only logs and the email goes out.
+    data_sync.sync_before_send(scheduled_date)
 
     emails = recipients.scheduled_emails(key)
     delays = list(config.get_retry_delays())

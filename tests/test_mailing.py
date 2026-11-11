@@ -59,6 +59,8 @@ def hermetic(monkeypatch, tmp_path):
     monkeypatch.setenv("MAILING_RETRY_DELAYS", "1,2,3")
     monkeypatch.setenv("MAILING_MANUAL_COOLDOWN_SECONDS", "0")
     monkeypatch.delenv("MAILING_SCHEDULER_ENABLED", raising=False)
+    monkeypatch.setenv("SYNC_DATA", "false")  # never touch S3 from a test (the sync has its own tests)
+    __import__("src.mailing.data_sync", fromlist=["x"])._DONE.clear()
     service_module = __import__("src.mailing.service", fromlist=["x"])
     service_module._manual_locks.clear()
     service_module._manual_last_success.clear()
@@ -395,6 +397,106 @@ def test_scheduled_and_manual_share_builder_and_delivery(builder, sent, flask_ap
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [], admin)
     assert len(builder.calls) == 2 and len(sent["calls"]) == 2
+
+
+# --------------------------------------------------------------------------- data sync before a scheduled send
+
+
+@pytest.fixture
+def sync(monkeypatch):
+    """Turn the pre-send sync on with a fake S3 function; `box["events"]` records the order of things."""
+    from src.mailing import data_sync
+
+    box = {"events": [], "fail": None}
+
+    def fake_s3_sync():
+        box["events"].append("sync")
+        if box["fail"]:
+            raise box["fail"]
+
+    monkeypatch.setenv("SYNC_DATA", "true")
+    monkeypatch.setattr(data_sync, "_s3_sync", fake_s3_sync)
+    data_sync._DONE.clear()
+    return box
+
+
+def test_scheduled_send_syncs_the_data_before_building_the_email(builder, sent, sync, monkeypatch):
+    events = sync["events"]
+
+    def recording_builder(request):
+        events.append("build")
+        return ReportContent(subject=periods.build_subject(request.send_date), html="<html></html>")
+
+    def recording_send(subject, html, emails):
+        events.append("send")
+        return delivery.DeliveryResult(True)
+
+    register_report_builder(report.ALERT_SUMMARY, recording_builder)  # the `builder` fixture removes it afterwards
+    monkeypatch.setattr(delivery, "send_email", recording_send)
+    run_scheduled("emin", date(2026, 11, 10))
+    assert events == ["sync", "build", "send"]
+
+
+def test_the_sync_runs_once_for_both_clients_of_the_same_date(builder, sent, sync):
+    run_scheduled("emin", date(2026, 11, 11))
+    run_scheduled("capstone", date(2026, 11, 11))
+    assert sync["events"] == ["sync"] and len(sent["calls"]) == 2
+
+
+def test_the_sync_runs_again_for_another_date(builder, sent, sync):
+    run_scheduled("emin", date(2026, 11, 10))
+    run_scheduled("emin", date(2026, 11, 11))
+    assert sync["events"] == ["sync", "sync"]
+
+
+def test_a_failing_sync_never_blocks_the_email(builder, sent, sync, caplog):
+    sync["fail"] = RuntimeError("secret-bucket-name https://abc123secret.example/")
+    with caplog.at_level(logging.WARNING):
+        outcome = run_scheduled("emin", date(2026, 11, 10))
+    assert outcome == "sent" and len(sent["calls"]) == 1
+    assert any("data sync before send failed (RuntimeError)" in r.getMessage() for r in caplog.records)
+    assert "secret-bucket-name" not in caplog.text and "abc123secret" not in caplog.text
+
+
+def test_a_failed_sync_is_not_retried_for_the_other_client_of_the_same_date(builder, sent, sync):
+    sync["fail"] = OSError("read-only file system")
+    run_scheduled("emin", date(2026, 11, 10))
+    run_scheduled("capstone", date(2026, 11, 10))
+    assert sync["events"] == ["sync"] and len(sent["calls"]) == 2
+
+
+def test_the_app_wide_sync_data_switch_turns_it_off(builder, sent, sync, monkeypatch):
+    monkeypatch.setenv("SYNC_DATA", "false")
+    run_scheduled("emin", date(2026, 11, 10))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_the_code_constant_turns_it_off(builder, sent, sync, monkeypatch):
+    monkeypatch.setattr(config, "SYNC_DATA_BEFORE_SCHEDULED_SEND", False)
+    run_scheduled("emin", date(2026, 11, 10))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_a_run_that_is_skipped_does_not_sync(builder, sent, sync):
+    state.claim("emin", date(2026, 11, 10))
+    assert run_scheduled("emin", date(2026, 11, 10)) == "skipped"
+    assert sync["events"] == [] and sent["calls"] == []
+
+
+def test_a_manual_send_does_not_sync(builder, sent, sync, flask_app):
+    send_manual("emin", [], as_user(flask_app, ADMIN))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_the_sync_is_the_function_the_app_runs_at_startup(monkeypatch):
+    """The 'proper function': src.data.s3_downloader.main, the one dashboard/app.py calls."""
+    import src.data.s3_downloader as downloader
+    from src.mailing import data_sync
+
+    called = []
+    monkeypatch.setattr(downloader, "main", lambda: called.append("startup-sync"))
+    data_sync._s3_sync()
+    assert called == ["startup-sync"]
 
 
 # --------------------------------------------------------------------------- manual send

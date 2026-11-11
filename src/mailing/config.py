@@ -71,6 +71,11 @@ MAILING_SCHEDULES: Dict[str, dict] = {
     "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
 }
 
+# Refresh `data/` from S3 (the app's own startup sync) right before a scheduled email is built, so a
+# process that has been up for days does not send a summary from stale files. Failure never blocks
+# the email. The app-wide `SYNC_DATA=false` switch also turns it off. See data_sync.py.
+SYNC_DATA_BEFORE_SCHEDULED_SEND = True
+
 WEEKDAYS = (
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 )  # index == datetime.weekday()
