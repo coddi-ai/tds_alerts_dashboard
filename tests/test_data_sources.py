@@ -138,7 +138,8 @@ def test_each_source_shows_its_name_a_status_chip_with_icon_and_text_and_its_las
     assert "Última actualización: —" in _text(unavailable)
 
     assert "ds-chip--partial" in _by_class(partial, "ds-chip")[0].className
-    assert "Desactualizado desde 14:20" in _text(partial) and "fa-exclamation-triangle" in str(partial)
+    assert "Parcial" in _text(partial) and "fa-exclamation-triangle" in str(partial)
+    assert "Desactualizado desde 14:20" in _props(partial)["title"]  # the reason is hover text, not the chip
 
 
 def test_partial_without_a_reason_falls_back_to_the_generic_word():
@@ -203,7 +204,7 @@ def test_last_update_never_changes_the_status_tier(status, days):
 # ---------------------------------------------------------------------------
 
 def test_a_tab_without_configured_sources_has_none():
-    for service in ("admin-main", "admin-user-registry", "agents-campbell-ai", "not-a-service"):
+    for service in ("admin-main", "not-a-service"):
         assert data_sources_for_service(service) == ()
 
 
@@ -449,7 +450,7 @@ def test_adapter_measures_from_the_data_date_not_the_file(tmp_path, monkeypatch)
 def test_every_catalog_source_a_tab_lists_has_a_date_field_or_is_documented_without_one():
     for service, sources in SERVICE_DATA_SOURCES.items():
         for source in sources:
-            if service == "predictive-*" and source.startswith("predictive_"):
+            if source.startswith("predictive_") and not source.startswith("predictive_legacy"):
                 continue  # v2 tables: dated from their newest partition, not from this mapping
             assert source in SOURCE_DATE_FIELDS or source in NO_DATE_SOURCES, source
     assert not NO_DATE_SOURCES & set(SOURCE_DATE_FIELDS)

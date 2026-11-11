@@ -190,6 +190,42 @@ def _probe_maintenance_weekly(client: str, root: Path) -> SourceProbe:
     )
 
 
+# Reliability report (Informe de Confiabilidad): one Parquet per query of the maintenance contract.
+MAINTENANCE_QUERY_FILES = {
+    "maintenance_query_1": "query_1_component_maintenance.parquet",
+    "maintenance_query_2": "query_2_unit_records_actions.parquet",
+    "maintenance_query_3": "query_3_actions_all_equipment.parquet",
+    "maintenance_query_4": "query_4_business_kpis.parquet",
+    "maintenance_query_5": "query_5_reliability_monthly.parquet",
+    "maintenance_query_6": "query_6_component_failure_ranking.parquet",
+    "maintenance_query_7": "query_7_intervention_hours_daily.parquet",
+    "maintenance_query_8": "query_8_intervention_hours_monthly.parquet",
+    "maintenance_query_9": "query_9_fleet_intervention_daily.parquet",
+    "maintenance_query_10": "query_10_equipment_status.parquet",
+}
+
+# Conexión ERP keeps one Parquet per lifecycle state: data/warnings/<client>/<state>.parquet.
+ERP_WARNING_STATES = ("pending", "validated", "rejected", "sent")
+
+
+def _probe_erp_warnings(client: str, root: Path) -> SourceProbe:
+    """The warning store of one client: available when it holds at least one state file."""
+    candidates = tuple(root / "warnings" / client.lower() / f"{state}.parquet" for state in ERP_WARNING_STATES)
+    present = [path for path in candidates if path.is_file()]
+    base = dict(
+        client=client.upper(), technique="warnings", source="erp_warnings",
+        candidates=tuple(str(path) for path in candidates),
+    )
+    if not present:
+        return SourceProbe(**base, status="missing", path=None, note="No hay avisos del ERP para este cliente.")
+    return SourceProbe(
+        **base, status="available", path=str(present[0].parent),
+        size_bytes=sum(path.stat().st_size for path in present),
+        modified_utc=datetime.fromtimestamp(max(path.stat().st_mtime for path in present), tz=timezone.utc).isoformat(),
+        note=f"Estados con datos: {', '.join(path.stem for path in present)}.",
+    )
+
+
 def _build_client_availability_uncached(
     client: str,
     root: str | os.PathLike[str] | Path | None = None,
@@ -285,6 +321,26 @@ def _build_client_availability_uncached(
                 "note": f"Se detectaron {len(weekly_files)} CSV semanales, pero no el contrato Parquet esperado.",
             }
         )
+
+    # Sources of the pages added to the popover later (data_sources_documentation_dashboard.md):
+    # Informe de Confiabilidad, Campbell AI, Conexión ERP and Administración > Mailing.
+    for source, filename in MAINTENANCE_QUERY_FILES.items():
+        views = (
+            root_path / "mantentions" / "golden" / client_lower / "Maintance_Labeler_Views",
+            root_path / "mantentions" / "golden" / client / "Maintance_Labeler_Views",
+        )
+        result[source] = _probe_file(
+            client, "mantentions", source, tuple(view / filename for view in views),
+        )
+    file_probe("mantentions", "maintenance_summary", "Resumen_Semanal_Completo.csv")
+    file_probe("telemetry", "telemetry_machine_status", "machine_status.parquet")
+    file_probe("telemetry", "telemetry_classified", "classified.parquet")
+    file_probe("predictive", "predictive_legacy_motor", "motor.csv")
+    file_probe("predictive", "predictive_legacy_transmision", "transmision.csv")
+    result["campbell_manifest"] = _probe_file(
+        client, "auxiliar", "campbell_manifest", (root_path / "auxiliar" / "manifest.json",),
+    )
+    result["erp_warnings"] = _probe_erp_warnings(client, root_path)
 
     return result
 

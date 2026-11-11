@@ -275,11 +275,17 @@ def create_layout() -> dbc.Container:
         [
             html.Header(
                 [
-                    html.H1(t("nav.service.integration-seguimiento-avisos"), className="erp-page-title"),
-                    html.P(
-                        t("tab_integration_seguimiento_avisos.vision_global_del_ciclo_de_vida"),
-                        className="erp-page-subtitle",
+                    html.Div(
+                        [
+                            html.H1(t("nav.service.integration-seguimiento-avisos"), className="erp-page-title"),
+                            html.P(
+                                t("tab_integration_seguimiento_avisos.vision_global_del_ciclo_de_vida"),
+                                className="erp-page-subtitle",
+                            ),
+                        ]
                     ),
+                    # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+                    html.Div(id="erp-seguimiento-source-status", className="ds-header-slot"),
                 ],
                 className="erp-page-header",
             ),

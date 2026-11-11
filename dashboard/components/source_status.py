@@ -10,12 +10,14 @@ readings) into `DataSource` rows.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from dash import html
 
 from config.service_data_sources import (
+    PAGE_PREDICTIVE_COMPONENT,
     PREDICTIVE_DATE_FIELD,
+    RESOLVED_SOURCES,
     SOURCE_DATE_FIELDS,
     TECHNIQUE_SOURCE,
     data_sources_for_service,
@@ -61,6 +63,30 @@ SOURCE_LABELS_ES: dict[str, str] = {
     "predictive_unit_analysis": "Análisis Inteligente",
     "predictive_signal_status": "Estado de Señales de Telemetría",
     "predictive_oil_meter": "Historial de Desgaste Acumulado",
+    "maintenance_query_1": "Mantención por Componente",
+    "maintenance_query_2": "Registros de Unidad y Acciones",
+    "maintenance_query_3": "Acciones de Mantención",
+    "maintenance_query_4": "KPIs de Negocio",
+    "maintenance_query_5": "Confiabilidad Mensual",
+    "maintenance_query_6": "Ranking de Fallas por Componente",
+    "maintenance_query_7": "Horas de Intervención (Diarias)",
+    "maintenance_query_8": "Horas de Intervención (Mensuales)",
+    "maintenance_query_9": "Intervención de Flota (Diaria)",
+    "maintenance_query_10": "Estado de Equipos",
+    "maintenance_summary": "Resumen Semanal de Mantención",
+    "oil_limits": "Límites de Aceite (Formato Legado)",
+    "telemetry_machine_status": "Estado de Equipos (Telemetría)",
+    "telemetry_classified": "Componentes Clasificados (Telemetría)",
+    "predictive_legacy_motor": "Modelo Predictivo de Motor (Legado)",
+    "predictive_legacy_transmision": "Modelo Predictivo de Transmisión (Legado)",
+    "campbell_manifest": "Manifiesto de Datos",
+    "troubleshooting_agent": "Agente de Troubleshooting",
+    "reporting_store": "Reportes en S3",
+    "reporting_analysis_history": "Historial de Análisis Predictivo",
+    "reporting_curve_history": "Historial de Curva de Riesgo Acumulado",
+    "erp_warnings": "Avisos del ERP",
+    "erp_sap_config": "Configuración SAP del Cliente",
+    "auth_events_store": "Eventos de Acceso",
 }
 
 # Predictivo's v2 tables (`predictive_v2` is the one place that knows their paths): source id ->
@@ -154,19 +180,98 @@ def predictive_run_days(client: str) -> Optional[int]:
     return max(days) if days else None
 
 
+def _aggregate_predictive_table(client: str, components: Sequence[str], source: str, key: str) -> DataSource:
+    """One predictive table across several components (Reportabilidad reads the history of all
+    of them): Disponible when every component has it, Parcial when only some do, No Disponible
+    when none. The date is the oldest newest-run across the components that have it."""
+    rows = [predictive_table_source(client, component, source) for component in components]
+    rows = [row for row in rows if row is not None]
+    present = [row for row in rows if row.status == AVAILABLE]
+    if not present:
+        status = UNAVAILABLE
+    else:
+        status = AVAILABLE if len(present) == len(rows) else PARTIAL
+    dates = [row.days_since_update for row in present if row.days_since_update is not None]
+    return DataSource(key, _source_label(key), status, days_since_update=max(dates) if dates else None)
+
+
+def _resolved_source(client: str, source: str) -> DataSource:
+    """A source whose status comes from configuration rather than from a data file. A failure to
+    resolve it is "No Disponible", never an error on the page."""
+    label = _source_label(source)
+    try:
+        if source == "troubleshooting_agent":
+            from config.client_services import is_service_dummy, is_service_enabled, normalize_client_id
+            from dashboard.troubleshooting_handoff import SERVICE_ID, troubleshooting_agent_configured
+
+            normalized = normalize_client_id(client)
+            ok = (
+                troubleshooting_agent_configured() and bool(normalized)
+                and is_service_enabled(normalized, SERVICE_ID) and not is_service_dummy(normalized, SERVICE_ID)
+            )
+        elif source == "reporting_store":
+            from dashboard.report_files import reporting_available
+            from src.data.report_store import get_report_store
+
+            ok = reporting_available(client) and get_report_store() is not None
+        elif source in ("reporting_analysis_history", "reporting_curve_history"):
+            from src.data.report_store import TECHNIQUE_PREDICTIVE, TECHNIQUE_SYSTEMS
+
+            table = "predictive_unit_analysis" if source == "reporting_analysis_history" else "predictive_curve"
+            return _aggregate_predictive_table(client, TECHNIQUE_SYSTEMS[TECHNIQUE_PREDICTIVE], table, source)
+        elif source == "erp_sap_config":
+            from src.data.erp_client_config import CLIENTS_DIR
+
+            ok = (CLIENTS_DIR / f"{str(client).lower()}.yaml").is_file()
+        elif source == "auth_events_store":
+            from src.auth_events.storage import get_storage
+
+            ok = get_storage() is not None
+        else:
+            ok = False
+    except Exception:
+        ok = False
+    return DataSource(
+        source, label, AVAILABLE if ok else UNAVAILABLE,
+        detail=None if ok else t("source_status.no_compatible_source"),
+    )
+
+
+def _informe_table_source(client: str, component: str, source: str) -> Optional[DataSource]:
+    """A predictive table as the preliminary failure report reads it: from the local copy, or from
+    S3 when `INFORME_FALLA_ORIGEN=s3` (then only the configured bucket can be checked)."""
+    from src.informe_falla.config import get_informe_settings
+
+    settings = get_informe_settings()
+    if settings.origen == "s3":
+        status = AVAILABLE if settings.s3_bucket else UNAVAILABLE
+        return DataSource(source, _source_label(source), status, detail="S3")
+    return predictive_table_source(client, component, source)
+
+
 def service_data_sources(client: str, service_id: str) -> list[DataSource]:
-    """The configured sources of a tab, each with its current status for `client`."""
+    """The configured sources of a tab, each with its current status for `client`. Only the sources
+    that apply to this client and component are listed (and so counted)."""
     names = data_sources_for_service(service_id)
     if not names:
         return []
     if service_id.startswith("predictive-"):
         return predictive_data_sources(client, service_id.split("predictive-", 1)[1])
     availability = build_client_availability(client)
-    return [
-        data_source_from_probe(name, availability.get(name))
-        for name in names
-        if source_applies_to_client(name, client)
-    ]
+    component = PAGE_PREDICTIVE_COMPONENT.get(service_id)
+    rows = []
+    for name in names:
+        if not source_applies_to_client(name, client):
+            continue
+        if name in RESOLVED_SOURCES:
+            row = _resolved_source(client, name)
+        elif component and name in _PREDICTIVE_TABLES:
+            row = _informe_table_source(client, component, name)
+        else:
+            row = data_source_from_probe(name, availability.get(name))
+        if row is not None:
+            rows.append(row)
+    return rows
 
 
 def render_service_data_sources(client: str, service_id: str) -> Optional[html.Div]:

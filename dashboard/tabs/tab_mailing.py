@@ -94,6 +94,8 @@ def create_layout() -> html.Div:
                         className="mailing-title-block",
                     ),
                     html.Div(id="mailing-chips", className="mailing-chips"),
+                    # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+                    html.Div(id="mailing-source-status", className="ds-header-slot"),
                 ],
                 className="mailing-header",
             ),

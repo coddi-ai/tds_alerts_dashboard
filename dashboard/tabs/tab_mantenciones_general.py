@@ -583,9 +583,13 @@ def layout_mantenciones_general():
                         md=7,
                     ),
                     dbc.Col(
-                        dbc.Button([html.I(className="fas fa-sync-alt me-2"), t("tab_mantenciones_general.refrescar")], id="btn-refresh-maintenance", color="primary"),
+                        [
+                            # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+                            html.Div(id="mantenciones-source-status"),
+                            dbc.Button([html.I(className="fas fa-sync-alt me-2"), t("tab_mantenciones_general.refrescar")], id="btn-refresh-maintenance", color="primary"),
+                        ],
                         md=5,
-                        className="d-flex justify-content-end align-items-center",
+                        className="d-flex justify-content-end align-items-center flex-wrap gap-3",
                     ),
                 ],
                 className="mb-3",
