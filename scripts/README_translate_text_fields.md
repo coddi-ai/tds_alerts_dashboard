@@ -17,7 +17,7 @@ Run everything from the project root.
 | Variable (in `.env` or the environment) | Needed for |
 |---|---|
 | `OPENAI_API_KEY` | every run except `--list` |
-| `BUCKET_NAME`, `ACCESS_KEY`, `SECRET_KEY` (or `STAGE_NAME` on AWS) | full runs that upload to S3 |
+| `BUCKET_NAME` (+ optional `ACCESS_KEY`, `SECRET_KEY`; on AWS the task role is used) | full runs that upload to S3 |
 
 Python packages are already in `requirements.txt` (`openai`, `pandas`, `pyarrow`, `boto3`, `tqdm`).
 
