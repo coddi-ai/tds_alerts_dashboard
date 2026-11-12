@@ -112,6 +112,68 @@
   margin-top: 5px;
 }
 
+/* ── Evidencia: Resumen de Condición tiles ────────────────── */
+
+/* No left accent border: severity is stated by the chip and the gauge, not by a
+   colored edge. Four tiles, so keep them on one row while there is room. */
+.ev-kpi-row { grid-template-columns: repeat(4, 1fr); }
+.ev-tile { padding: 16px 18px; }
+
+.ev-tile-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.ev-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* 0-100 gauge shared by Riesgo Acumulado 90d and Ranking 7 Días; the ticks sit on
+   the chip thresholds */
+.ev-gauge {
+  position: relative;
+  height: 8px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: #E5E7EB;
+  overflow: hidden;
+}
+.ev-gauge-fill { height: 100%; border-radius: 999px; }
+.ev-gauge-tick { position: absolute; top: 0; width: 1px; height: 100%; background: rgba(255,255,255,0.9); }
+.ev-gauge-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-light);
+}
+
+.ev-trend-value { display: flex; align-items: center; gap: 8px; font-size: 22px; line-height: 1.2; }
+.ev-trend-arrow { font-size: 18px; }
+
+/* Dominant mode is a category, not a severity: violet, outside the red/amber/green
+   palette of the two risk tiles */
+.ev-tile--mode { background: #F5F3FF; border-color: rgba(124, 58, 237, 0.25); }
+.ev-tile--mode .kpi-title,
+.ev-tile--mode .kpi-sub { color: #5B21B6; }
+.ev-mode-value { font-size: 20px; line-height: 1.25; letter-spacing: -0.01em; color: #4C1D95; }
+
+.ev-subtitle-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+}
+.ev-meta { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.ev-meta strong { color: var(--text-default); font-weight: 600; }
+
+/* Acciones checklist in Análisis Inteligente */
+.ev-checklist { display: flex; flex-direction: column; gap: 6px; }
+.ev-checklist-item { display: flex; align-items: flex-start; gap: 8px; margin: 0; line-height: 1.5; cursor: pointer; }
+.ev-checklist-input { margin-top: 5px; flex-shrink: 0; }
+
 /* Enhanced KPI cards */
 .kpi-card-enhanced {
   background: var(--surface);
@@ -270,12 +332,12 @@
 @media (max-width: 900px) {
   .ev-two-col { grid-template-columns: 1fr; }
   .ev-page-header { flex-direction: column; gap: 12px; }
-  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  .kpi-row, .ev-kpi-row { grid-template-columns: repeat(2, 1fr); }
   .priority-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
-  .kpi-row { grid-template-columns: 1fr; }
+  .kpi-row, .ev-kpi-row { grid-template-columns: 1fr; }
 }
 
 /* ── Card utilities ───────────────────────────────────────── */
@@ -373,3 +435,46 @@
 .insight-obs-item:last-child {
   margin-bottom: 0;
 }
+
+/* ── Resumen layer-2 charts: Short View and Long View share a 2.5:1 (w:h) frame ── */
+
+.predictive-chart-ratio {
+  --predictive-chart-ratio: 5 / 2;
+  width: 100%;
+  aspect-ratio: var(--predictive-chart-ratio);
+}
+
+/* ── Unit selection (dropdown, risk badges, risk-grouped chips) of both layer-2 charts ──
+   Badges and chips are colored by the risk group they stand for, in the same
+   red / yellow / green as the chart points: --sel-color fills the active badge or
+   selected chip, --sel-ink is the text on that fill, --sel-text the text off it. */
+
+.unit-sel { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.unit-sel-label { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block; }
+
+.unit-badge, .unit-chip { --sel-color: #6c757d; --sel-ink: #fff; --sel-text: #6c757d; }
+.unit-badge--anormal, .unit-chip--anormal { --sel-color: #e24b4a; --sel-ink: #fff; --sel-text: #a32d2d; }
+.unit-badge--alerta,  .unit-chip--alerta  { --sel-color: #eab308; --sel-ink: #3b2a00; --sel-text: #7a5a05; }
+.unit-badge--normal,  .unit-chip--normal  { --sel-color: #1d9e75; --sel-ink: #fff; --sel-text: #0b5a43; }
+
+.unit-sel-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+.unit-badge {
+  border: 1.5px solid var(--sel-color); background: #fff; color: var(--sel-text);
+  border-radius: 999px; padding: 3px 14px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.unit-badge--active { background: var(--sel-color); color: var(--sel-ink); }
+
+.unit-sel-note { font-size: 11px; color: var(--text-muted); }
+
+/* Badges + chips: locked while the panel's callback runs, so clicks cannot overlap (see RISK_BUSY_CLASS). */
+.unit-sel-risk { display: flex; flex-direction: column; gap: 10px; }
+.unit-sel-risk--busy { pointer-events: none; opacity: 0.6; cursor: progress; }
+
+.unit-chip-groups { display: flex; flex-direction: column; gap: 8px; }
+.unit-chip-heading { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 4px; }
+.unit-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.unit-chip {
+  border: 1.5px solid var(--sel-color); background: #fff; color: var(--sel-text);
+  border-radius: 999px; padding: 1px 9px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; opacity: 0.55;
+}
+.unit-chip--on { background: var(--sel-color); color: var(--sel-ink); opacity: 1; }

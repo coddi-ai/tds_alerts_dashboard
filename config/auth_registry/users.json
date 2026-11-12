@@ -1,0 +1,17 @@
+[
+  { "username": "capstone_user",   "user_type": "client",   "client_id": "capstone" },
+  { "username": "emin_user",       "user_type": "client",   "client_id": "emin" },
+  { "username": "lomas_user",      "user_type": "client",   "client_id": "lomas" },
+  { "username": "cda_user",        "user_type": "client",   "client_id": "cda" },
+  { "username": "cda_tester",      "user_type": "client",   "client_id": "cda" },
+  { "username": "a.casanga",       "user_type": "client",   "client_id": "cda" },
+  { "username": "enex_user",       "user_type": "client",   "client_id": "enex" },
+  { "username": "centinela_user",  "user_type": "client",   "client_id": "centinela" },
+  { "username": "admin",           "user_type": "internal", "client_id": null },
+  { "username": "p.ortiz",         "user_type": "internal", "client_id": null },
+  { "username": "p.cancino",       "user_type": "internal", "client_id": null },
+  { "username": "r.monsalves",     "user_type": "internal", "client_id": null },
+  { "username": "data_team",       "user_type": "internal", "client_id": null },
+  { "username": "e.carvajal",      "user_type": "internal", "client_id": null },
+  { "username": "f.vilches",       "user_type": "internal", "client_id": null }
+]

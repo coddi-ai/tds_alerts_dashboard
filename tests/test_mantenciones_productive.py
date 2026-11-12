@@ -33,14 +33,20 @@ def test_component_view_mixed_offsets_follow_client_clock_contract(tmp_path):
     assert emin.loc[0, "event_ts"].month == 7
 
 
-def test_emin_large_pareto_keeps_the_initial_80_percent_prefix_with_readable_axis_labels():
-    from dashboard.tabs.tab_mantenciones_general import create_emin_hours_pareto_chart
+def test_large_pareto_stops_at_the_bar_cap_and_names_the_folded_units():
+    from dashboard.tabs.tab_mantenciones_general import create_hours_pareto_chart
     rows = pd.DataFrame({"equipment": [f"EQ-{i:03d}" for i in range(200)], "value": list(range(200, 0, -1))})
-    figure = create_emin_hours_pareto_chart(rows)
-    assert len(figure.data[0].x) == len(figure.data[1].x) < 200
-    assert len(figure.layout.xaxis.tickvals) <= 6
-    assert figure.layout.xaxis.tickvals[0] == "EQ-000"
-    assert figure.layout.xaxis.tickvals[-1] == figure.data[0].x[-1]
+    figure = create_hours_pareto_chart(rows)
+    assert list(figure.data[0].x) == list(figure.data[1].x)
+    # 80% of this flat distribution needs far more than 15 units: the cap binds.
+    assert list(figure.data[1].x) == [f"EQ-{i:03d}" for i in range(15)] + ["Otras (185)"]
+    assert list(figure.layout.xaxis.tickvals) == list(figure.data[1].x)
+    # data[0] is the cumulative line, data[1] the bars.
+    assert figure.data[1].y[-1] == pytest.approx(sum(range(1, 186)))
+    assert figure.data[0].y[-1] == pytest.approx(100.0)
+    # The aggregate is hatched and outlined so it cannot pass for a unit.
+    assert list(figure.data[1].marker.pattern.shape) == [""] * 15 + ["/"]
+    assert list(figure.data[1].marker.line.width) == [0] * 15 + [1.5]
 
 
 def _actions():
@@ -258,14 +264,14 @@ def test_emin_global_system_filter_includes_general_and_scopes_attributed_metric
     available = all_systems["meta"]["filter_systems"]
     assert "Equipo" in available
     assert all_systems["kpis"]["actions"] == 5
-    assert sum(row["value"] for row in all_systems["data"]["emin_hours_pareto"]) == 6.0
+    assert sum(row["value"] for row in all_systems["data"]["hours_pareto"]) == 6.0
 
     general_only = repo.get_monthly_payload("2026-01", systems=["Equipo"])
     assert general_only["filters"]["systems"] == ["Equipo"]
     assert general_only["kpis"]["actions"] == 1
     assert {row["system_name"] for row in general_only["data"]["system_mix"]} == {"Equipo"}
     assert general_only["kpis"]["downtime_est_hours"] is None
-    assert general_only["data"]["emin_hours_pareto"] == []
+    assert general_only["data"]["hours_pareto"] == []
     assert general_only["data"]["daily"]
     assert all(row["hours_out_of_service"] is None for row in general_only["data"]["daily"])
 
@@ -288,8 +294,7 @@ def test_emin_global_system_filter_includes_general_and_scopes_attributed_metric
     assert next(option["label"] for option in options if option["value"] == "Equipo") == "General del equipo (sin sistema técnico atribuido)"
 
     payload, _ = handlers["load_monthly_payload"](
-        "EMIN", "2026-01", [], "__all__", ["Equipo"],
-        None, None, None, [], "actions", None,
+        "EMIN", "2026-01", [], "__all__", ["Equipo"], None,
     )
     assert payload["filters"]["systems"] == ["Equipo"]
     assert payload["kpis"]["actions"] == 1
@@ -334,7 +339,7 @@ def test_emin_ten_view_payload_reconciles_hours_and_scopes_pareto_independently(
     assert one_system["meta"]["pareto"]["hours_available"] is False
     assert one_system["kpis"]["actions"] == 2
     assert one_system["kpis"]["downtime_est_hours"] is None
-    assert one_system["data"]["emin_hours_pareto"] == []
+    assert one_system["data"]["hours_pareto"] == []
     assert next(row["count"] for row in one_system["data"]["pareto"] if row["equipment"] == "T_01") == 2
     assert several_systems["meta"]["pareto"]["selected_systems"] == ["Sistema de Motor", "Sistema Hidráulico", "Sin sistema"]
     assert several_systems["kpis"]["downtime_est_hours"] == 6.0
@@ -359,8 +364,8 @@ def test_emin_ten_view_payload_reconciles_hours_and_scopes_pareto_independently(
     assert hours_only["meta"]["source_status"] == "partial"
     assert hours_only["kpis"]["availability_est_pct"] == 93.8
     assert hours_only["kpis"]["downtime_est_hours"] == 6.0
-    assert sum(row["value"] for row in hours_only["data"]["emin_hours_pareto"]) == 6.0
-    assert hours_only["data"]["emin_action_systems"] == []
+    assert sum(row["value"] for row in hours_only["data"]["hours_pareto"]) == 6.0
+    assert hours_only["data"]["action_systems"] == []
 
 
 def test_monthly_payload_uses_canonical_monthly_and_fleet_views(monkeypatch):
@@ -704,7 +709,7 @@ def test_refresh_invalidates_tribologia_fleet_catalog(monkeypatch):
     assert repo._fleet_for_machine_code("T_01") == "excavadora"
 
 
-def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypatch):
+def test_pareto_groups_and_orders_equipment_across_every_system_for_any_client(monkeypatch):
     frame = _actions().copy()
     frame.loc[frame["action_id"] == "a3", ["machine_code", "action_system_name"]] = ["T_02", "Sistema de Motor"]
     frame.loc[frame["action_id"] == "a4", ["machine_code", "action_system_name"]] = ["T_02", "Sistema Hidráulico"]
@@ -730,120 +735,11 @@ def test_motor_pareto_groups_and_orders_equipment_without_other_systems(monkeypa
     payload = repo.get_monthly_payload("2026-01")
     pareto = payload["data"]["pareto"]
 
-    assert pareto == [
-        {"equipment": "T_01", "value": 2, "count": 2, "cumulative_pct": 50.0},
-        {"equipment": "T_02", "value": 2, "count": 2, "cumulative_pct": 100.0},
-    ]
-    assert all("Hidráulico" not in str(row) for row in pareto)
+    assert [(row["equipment"], row["value"]) for row in pareto] == [("T_02", 4), ("T_01", 2)]
+    assert pareto[0]["cumulative_pct"] == pytest.approx(200 / 3)
+    assert pareto[-1]["cumulative_pct"] == 100.0
+    assert payload["meta"]["pareto"]["selected_systems"] == payload["meta"]["filter_systems"]
     assert payload["data"]["train_force_pareto"] == [{"equipment": "T_02", "count": 1, "cumulative_pct": 100.0}]
-
-
-@pytest.mark.parametrize("client", ["emin", "capstone"])
-def test_emin_and_capstone_pareto_and_mix_include_all_systems(monkeypatch, client):
-    frame = _actions()
-    extra = frame.iloc[[0, 1, 2]].copy().reset_index(drop=True)
-    extra["action_id"] = ["a5", "a6", "a7"]
-    extra["record_id"] = ["r4", "r5", "r6"]
-    extra["job_id"] = ["j4", "j5", "j6"]
-    extra["machine_id"] = "m2"
-    extra["machine_code"] = "T_02"
-    extra["action_system_name"] = [
-        "Equipo",
-        "Estación del Operador - Cabina",
-        "Sistema de Dirección",
-    ]
-    extra["job_system_name"] = extra["action_system_name"]
-    extra["change_date"] = ["2026-01-07", "2026-01-08", "2026-01-09"]
-    extra["event_ts"] = [
-        "2026-01-07T05:00:00Z",
-        "2026-01-08T05:00:00Z",
-        "2026-01-09T05:00:00Z",
-    ]
-    frame = pd.concat([frame, extra], ignore_index=True)
-    monkeypatch.setattr(repository_module, "load_maintenance_actions_all_equipment", lambda client: frame.copy())
-    monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: pd.DataFrame())
-
-    payload = MaintenanceRepository(mode="parquet", client=client).get_monthly_payload("2026-01")
-
-    assert payload["meta"]["client"] == client.upper()
-    assert payload["meta"]["pareto_scope"]["mode"] == "all_systems"
-    assert payload["meta"]["pareto_scope"]["system_filter"] is None
-    assert payload["meta"]["pareto_scope"]["system_aliases"] == []
-    assert {row["system_name"] for row in payload["data"]["system_pareto"]} >= {
-        "Equipo",
-        "Estación del Operador - Cabina",
-        "Sistema de Dirección",
-    }
-    assert {row["system_name"] for row in payload["data"]["system_mix"]} >= {
-        "Equipo",
-        "Estación del Operador - Cabina",
-        "Sistema de Dirección",
-    }
-    assert {row["equipment"]: row["count"] for row in payload["data"]["pareto"]}["T_02"] == 4
-    assert payload["data"]["train_force_pareto"] == []
-    assert payload["data"]["system_pareto"][-1]["cumulative_pct"] == 100.0
-
-
-@pytest.mark.parametrize("client, expected_generic_systems", [
-    ("emin", {"Equipo", "Estación del Operador - Cabina"}),
-    ("capstone", {"Equipo", "Estación del Operador - Cabina"}),
-    ("cda", set()),
-])
-def test_legacy_system_pareto_is_unrestricted_only_for_emin_and_capstone(monkeypatch, client, expected_generic_systems):
-    frame = _actions()
-    extra = frame.iloc[[0, 1]].copy().reset_index(drop=True)
-    extra["action_id"] = ["generic-equipment", "generic-cabina"]
-    extra["action_system_name"] = ["Equipo", "Estación del Operador - Cabina"]
-    frame = pd.concat([frame, extra], ignore_index=True)
-    repo = MaintenanceRepository(mode="parquet", client=client)
-    monkeypatch.setattr(repo, "_filtered_actions", lambda **kwargs: frame.copy())
-
-    pareto = repo.get_maintenance_by_system()
-
-    assert expected_generic_systems <= set(pareto["system_name"])
-    if client == "cda":
-        assert not expected_generic_systems.intersection(set(pareto["system_name"]))
-    assert pareto.iloc[-1]["cumulative_pct"] == 100.0
-
-
-def test_system_activity_charts_can_include_all_systems_and_large_legends():
-    from dashboard.tabs.tab_mantenciones_general import (
-        _system_color_map,
-        create_equipment_activity_chart,
-        create_system_activity_chart,
-    )
-
-    systems = ["Equipo", "Estación del Operador - Cabina"] + [f"Sistema auxiliar {i}" for i in range(1, 12)]
-    detailed = pd.DataFrame(
-        [
-            {"machine_code": "T_01", "equipment": "T_01", "system_name": system, "count": len(systems) - index}
-            for index, system in enumerate(systems)
-        ]
-    )
-
-    system_figure = create_system_activity_chart(detailed.drop(columns="machine_code"), include_all_systems=True)
-    equipment_figure = create_equipment_activity_chart(detailed, include_all_systems=True)
-
-    assert {trace.name for trace in system_figure.data} == {"Acciones registradas"}
-    assert list(system_figure.data[0].x) == systems
-    assert {trace.name for trace in equipment_figure.data} == set(systems)
-    assert len(_system_color_map(systems)) == len(systems)
-    assert _system_color_map(systems) == _system_color_map(reversed(systems))
-
-
-def test_pareto_titles_are_unrestricted_only_for_emin_and_capstone():
-    from dashboard.callbacks.mantenciones_general_callbacks import _pareto_presentation
-
-    emin = _pareto_presentation("EMIN")
-    capstone = _pareto_presentation("CAPSTONE")
-    cda = _pareto_presentation("CDA")
-
-    assert emin["all_systems"] is True
-    assert emin["equipment_title"] == "Pareto de acciones por unidad"
-    assert emin["system_title"] == "Pareto de horas intervenidas por unidad"
-    assert "por sistema" in capstone["system_title"]
-    assert cda["all_systems"] is False
-    assert "Motor por equipo" in cda["equipment_title"]
 
 
 def test_equipment_pareto_builder_uses_equipment_axis():
@@ -881,76 +777,72 @@ def test_emin_pareto_compact_mode_keeps_all_equipment_and_the_80_percent_crossin
         index for index, value in enumerate(counts.cumsum() / counts.sum() * 100)
         if value >= 80
     )
-    assert len(figure.data[0].x) == 40
-    assert len(figure.layout.xaxis.tickvals) <= 9
-    assert figure.layout.xaxis.tickvals[0] == "EQ-00"
-    assert figure.layout.xaxis.tickvals[-1] == "EQ-39"
-    assert frame.sort_values("count", ascending=False).iloc[threshold_index]["equipment"] in figure.layout.xaxis.tickvals
-    assert sum(bool(label) for label in figure.data[0].text) < 40
+    # 80% of these forty units needs 32, so the 15-bar cap binds: 15 units plus "Otras (25)".
+    assert list(figure.data[0].x) == [f"EQ-{i:02d}" for i in range(15)] + ["Otras (25)"]
+    assert list(figure.layout.xaxis.tickvals) == list(figure.data[0].x)
     assert figure.data[1].mode == "lines"
-    assert figure.layout.shapes[0].x0 == threshold_index
+    assert figure.data[1].y[-1] == pytest.approx(100.0)
+    assert figure.data[0].y[-1] == counts.iloc[15:].sum()
+    assert figure.layout.shapes[0].x0 == next(
+        index for index, value in enumerate(figure.data[1].y) if value >= 80
+    )
 
 
-def test_emin_equipment_ranking_shows_top_fifteen_high_to_low():
-    from dashboard.tabs.tab_mantenciones_general import create_equipment_activity_chart
+def test_emin_equipment_ranking_shows_top_eight_high_to_low_with_legend():
+    from dashboard.tabs.tab_mantenciones_general import (
+        count_activity_equipment,
+        create_equipment_activity_chart,
+    )
 
-    rows = [
+    rows = pd.DataFrame([
         {"machine_code": f"EQ-{unit:02d}", "system_name": system, "count": 40 - unit}
         for unit in range(35)
         for system in ("Sistema de Motor", "Sistema Hidráulico")
-    ]
-    figure = create_equipment_activity_chart(
-        pd.DataFrame(rows), include_all_systems=True, compact=True
-    )
+    ])
+    figure = create_equipment_activity_chart(rows, include_all_systems=True, compact=True)
 
-    assert list(figure.data[0].y) == [f"EQ-{unit:02d}" for unit in range(15)]
-    assert len(figure.data[0].x) == 15
+    top = [f"EQ-{unit:02d}" for unit in range(8)]
+    assert list(figure.data[0].y) == top
     assert figure.layout.yaxis.autorange == "reversed"
-    assert list(figure.layout.yaxis.categoryarray) == [f"EQ-{unit:02d}" for unit in range(15)]
-    assert len(figure.layout.yaxis.tickvals) == 15
+    assert list(figure.layout.yaxis.categoryarray) == top
     assert figure.layout.xaxis.title.text == "Acciones únicas"
+    assert figure.layout.showlegend is True
+    assert {trace.name for trace in figure.data} == {"Sistema de Motor", "Sistema Hidráulico"}
+    assert count_activity_equipment(rows, include_all_systems=True) == 35
+
+    everything = create_equipment_activity_chart(rows, include_all_systems=True, compact=True, limit=None)
+    assert len(everything.data[0].y) == 35
 
 
-def test_emin_system_display_labels_do_not_change_filter_values_or_other_clients():
+def test_emin_equipment_legend_only_lists_systems_with_a_visible_segment():
+    from dashboard.tabs.tab_mantenciones_general import create_equipment_activity_chart
+
+    rows = pd.DataFrame(
+        [{"machine_code": f"EQ-{unit:02d}", "system_name": "Sistema de Motor", "count": 50 - unit} for unit in range(10)]
+        + [{"machine_code": "EQ-09", "system_name": "Sistema Hidráulico", "count": 1}]
+    )
+    figure = create_equipment_activity_chart(rows, include_all_systems=True, compact=True)
+    assert [trace.name for trace in figure.data] == ["Sistema de Motor"]
+
+
+def test_system_display_labels_do_not_change_filter_values():
     from dashboard.callbacks.mantenciones_general_callbacks import (
         _display_system_label,
         _display_system_rows,
         _pareto_system_options,
     )
 
-    options = _pareto_system_options("EMIN", ["Equipo", "Sistema de Motor"])
+    options = _pareto_system_options(["Equipo", "Sistema de Motor"])
     assert options[0] == {
         "label": "General del equipo (sin sistema técnico atribuido)",
         "value": "Equipo",
     }
-    assert _display_system_label("EMIN", "Equipo") == "General del equipo"
-    assert _display_system_label("CDA", "Equipo") == "Equipo"
+    assert _display_system_label("Equipo") == "General del equipo"
     rows = _display_system_rows(
-        [{"system_name": "Equipo", "count": 7}], "EMIN"
+        [{"system_name": "Equipo", "count": 7}]
     )
     assert rows.iloc[0]["system_name"] == "General del equipo"
     assert rows.iloc[0]["count"] == 7
-
-
-def test_emin_pareto_metric_falls_back_to_actions_for_partial_scope_or_client_change():
-    from dashboard.callbacks.mantenciones_general_callbacks import _effective_pareto_metric
-
-    available = ["Equipo", "Sistema de Motor", "Sistema Hidráulico"]
-    assert _effective_pareto_metric(
-        "EMIN", "hours", available, available, True
-    ) == "hours"
-    assert _effective_pareto_metric(
-        "EMIN", "hours", ["Sistema de Motor"], available, True
-    ) == "actions"
-    assert _effective_pareto_metric(
-        "EMIN", "hours", available, available, True, client_changed=True
-    ) == "actions"
-    assert _effective_pareto_metric(
-        "EMIN", "hours", [], available, True
-    ) == "actions"
-    assert _effective_pareto_metric(
-        "EMIN", "hours", available, available, False
-    ) == "actions"
 
 
 def test_emin_compact_activity_table_prioritizes_executive_columns():
@@ -983,15 +875,16 @@ def test_emin_compact_activity_table_prioritizes_executive_columns():
     )
 
 
-def test_emin_responsive_shell_rules_are_scoped_to_reliability_view():
+def test_responsive_shell_rules_are_scoped_to_the_reliability_view():
     css = (Path(__file__).parents[1] / "dashboard" / "assets" / "custom_layout.css").read_text(encoding="utf-8")
-    from dashboard.callbacks.mantenciones_general_callbacks import _maintenance_root_class
 
-    assert _maintenance_root_class("EMIN").endswith("maintenance-emin")
-    assert not _maintenance_root_class("CDA").endswith("maintenance-emin")
-    assert "#dashboard-shell:has(#maintenance-view-root.maintenance-emin)" in css
+    root = layout_mantenciones_general()
+    assert root.id == "maintenance-view-root"
+    assert "maintenance-report" in root.className
+    assert "#dashboard-shell:has(#maintenance-view-root.maintenance-report)" in css
     assert "mobile-nav-open" in css
-    assert '#maintenance-view-root.maintenance-emin .text-warning[role="status"]' in css
+    assert '#maintenance-view-root.maintenance-report .text-warning[role="status"]' in css
+    assert "maintenance-emin" not in css
     assert "color: #854d0e !important" in css
 
 
@@ -1127,7 +1020,10 @@ def test_layout_keeps_future_views_mounted_but_hides_monthly_reliability_section
     assert "maintenance-reliability-components-table" not in rendered
     assert "maintenance-reliability-equipment" not in rendered
     assert "(proxy)" not in rendered
-    assert "maintenance-source-alert" in rendered
+    assert "maintenance-source-alert" not in rendered
+    assert "maintenance-pareto-systems" not in rendered
+    assert "maintenance-pareto-metric" not in rendered
+    assert "maintenance-emin-only" not in rendered
     assert "maintenance-view-root" in rendered
     assert "maintenance-system-mix-note" not in rendered
     assert "maintenance-chart-equipment-note" not in rendered
@@ -1260,7 +1156,8 @@ def test_pareto_hours_uses_hours_units_and_marks_first_80_percent_equipment():
         metric="hours",
     )
 
-    assert list(figure.data[0].x) == ["T_01", "T_02"]
+    # T_01 alone reaches 80%; the single unit left is folded into "Otras (1)".
+    assert list(figure.data[0].x) == ["T_01", "Otras (1)"]
     assert list(figure.data[0].y) == [80.0, 20.0]
     assert figure.layout.yaxis.title.text == "Horas-equipo (h)"
     assert figure.data[1].mode == "lines"
@@ -1291,7 +1188,7 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     register_mantenciones_general_callbacks(app)
 
     output_keys = list(app.callback_map)
-    assert len(output_keys) == 9
+    assert len(output_keys) == 11
     assert any("maintenance-monthly-store" in key for key in output_keys)
     assert any("maintenance-summary-detail-table" in key for key in output_keys)
     monthly_callback = next(entry for key, entry in app.callback_map.items() if "maintenance-monthly-store" in key)
@@ -1299,7 +1196,12 @@ def test_callbacks_register_on_concrete_app_and_layout_ids_are_unique():
     output_ids = []
     for entry in app.callback_map.values():
         outputs = entry["output"] if isinstance(entry["output"], list) else [entry["output"]]
-        output_ids.extend((output.component_id, output.component_property) for output in outputs)
+        # Only outputs declared allow_duplicate may be written by two callbacks.
+        output_ids.extend(
+            (output.component_id, output.component_property)
+            for output in outputs
+            if not getattr(output, "allow_duplicate", False)
+        )
     assert len(output_ids) == len(set(output_ids))
 
 
@@ -1355,27 +1257,6 @@ def test_estimated_kpi_formatter_keeps_estimated_values_explicit():
     assert _format_estimated(86.25, "%") == "86.2%"
     assert _format_estimated(1128.0, "h") == "1,128.0 h"
     assert _format_estimated(None, "h") == "—"
-
-
-def test_source_alert_exposes_estimated_source_window_and_fallback_reason():
-    from dashboard.callbacks.mantenciones_general_callbacks import _source_alert
-
-    alert = _source_alert(
-        {
-            "source_start": "2024-12-01",
-            "source_end": "2026-01-22",
-            "estimated_kpis": {
-                "source": ["query_3_actions_all_equipment.parquet"],
-                "coverage": {"window_label": "mes seleccionado"},
-                "reason": "query_4 rechazado por plausibilidad",
-            },
-        }
-    )
-
-    rendered = str(alert)
-    assert "query_3_actions_all_equipment.parquet" in rendered
-    assert "mes seleccionado" in rendered
-    assert "Fallback" in rendered
 
 
 def test_monthly_intervals_drive_downtime_and_availability(monkeypatch):
@@ -1480,11 +1361,15 @@ def test_system_filter_does_not_infer_hours_from_action_proxy(monkeypatch):
     monkeypatch.setattr(repository_module, "load_business_kpis", lambda client: business.copy())
     repo = MaintenanceRepository(mode="parquet", client="cda")
 
+    everything = repo.get_monthly_payload("2026-01")
+    assert everything["kpis"]["downtime_est_hours"] is not None
+
     payload = repo.get_monthly_payload("2026-01", systems=["Motor"])
 
-    assert payload["meta"]["estimated_kpis"]["source_kind"] == "record_intervals"
-    assert payload["kpis"]["downtime_est_hours"] == 24.0
-    assert payload["kpis"]["availability_est_pct"] == 96.8
+    assert payload["meta"]["pareto"]["system_filter_partial"] is True
+    assert payload["kpis"]["downtime_est_hours"] is None
+    assert payload["kpis"]["availability_est_pct"] is None
+    assert all(row["hours_out_of_service"] is None for row in payload["data"]["daily"])
 
 
 def test_monthly_downtime_is_bounded_by_union_of_source_intervals(monkeypatch):
@@ -1535,39 +1420,48 @@ def test_monthly_downtime_clips_month_and_unions_overlapping_equipment_intervals
 
 
 @pytest.mark.parametrize(
-    "values, expected",
+    "values, bars, folded",
     [
-        ([40, 40, 5, 5, 4, 3, 3], 5),  # Exact 80% after two units, then three.
-        ([80, 20], 2),                  # Fewer than three remaining.
-        ([79, 21], 2),                  # Crossing occurs at the last unit.
+        ([40, 40, 5, 5, 4, 3, 3], 2, 5),       # two units reach exactly 80%
+        ([80, 20], 1, 1),
+        ([79, 21], 2, 0),                      # the last unit is needed: nothing to fold
+        ([10] * 8, 7, 1),                      # seven of eight equal units already hold 87.5%
+        ([10] * 5, 4, 1),                      # 4 of 5 = exactly 80%
+        ([10] * 9, 8, 1),
+        ([45, 20, 10, 5, 4, 4, 3, 3, 2, 2, 1, 1], 4, 8),
     ],
 )
-def test_emin_pareto_initial_prefix_without_expand_control(values, expected):
+def test_pareto_draws_bars_until_the_cumulative_share_then_folds_the_rest(values, bars, folded):
     from dashboard.tabs.tab_mantenciones_general import pareto_visible_equipment
 
     rows = pd.DataFrame({"equipment": [f"EQ-{i}" for i in range(len(values))], "value": values})
-    initial = pareto_visible_equipment(rows)
-    assert len(initial) == expected
-    assert list(initial["value"]) == sorted(values, reverse=True)[:expected]
-    assert initial.iloc[-1]["cumulative_pct"] <= 100
+    ranked = pareto_visible_equipment(rows)
+    assert len(ranked) == bars + (1 if folded else 0)
+    assert ranked["value"].sum() == sum(values)
+    assert ranked.iloc[-1]["cumulative_pct"] == pytest.approx(100)
+    if folded:
+        assert ranked.iloc[-1]["equipment"] == f"Otras ({folded})"
+        assert ranked.iloc[-1]["units"] == folded and bool(ranked.iloc[-1]["is_others"])
+    else:
+        assert not ranked["is_others"].any()
 
 
 def test_emin_pareto_actions_are_unique_and_hours_stay_independent(monkeypatch):
     _patch_emin_ten_views(monkeypatch)
     repo = MaintenanceRepository(mode="parquet", client="emin")
     payload = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
-    actions = payload["data"]["emin_action_systems"]
+    actions = payload["data"]["action_systems"]
     assert sum(row["count"] for row in actions) == 2  # a1 is duplicated in the source.
     assert {row["equipment"] for row in actions} == {"T_01"}
-    assert payload["data"]["emin_hours_pareto"] == []
+    assert payload["data"]["hours_pareto"] == []
     assert payload["kpis"]["actions"] == 2
     all_systems = repo.get_monthly_payload("2026-01")
-    assert sum(row["value"] for row in all_systems["data"]["emin_hours_pareto"]) == 6.0
+    assert sum(row["value"] for row in all_systems["data"]["hours_pareto"]) == 6.0
     assert all_systems["kpis"]["actions"] == 4
 
 
-def test_emin_pareto_charts_show_system_legend_and_lines_without_markers():
-    from dashboard.tabs.tab_mantenciones_general import create_emin_actions_pareto_chart, create_emin_hours_pareto_chart
+def test_pareto_charts_show_system_legend_and_a_marker_on_every_cumulative_point():
+    from dashboard.tabs.tab_mantenciones_general import create_actions_pareto_chart, create_hours_pareto_chart
 
     actions = pd.DataFrame([
         {"equipment": "EQ-1", "system_name": "Sistema de Motor", "count": 4},
@@ -1575,11 +1469,12 @@ def test_emin_pareto_charts_show_system_legend_and_lines_without_markers():
         {"equipment": "EQ-2", "system_name": "Sistema de Motor", "count": 2},
     ])
     hours = pd.DataFrame([{"equipment": "EQ-1", "value": 5.0}, {"equipment": "EQ-2", "value": 2.0}])
-    action_fig = create_emin_actions_pareto_chart(actions)
-    hour_fig = create_emin_hours_pareto_chart(hours)
+    action_fig = create_actions_pareto_chart(actions)
+    hour_fig = create_hours_pareto_chart(hours)
     assert {trace.name for trace in action_fig.data if trace.type == "bar"} == {"Sistema de Motor", "Sistema Hidráulico"}
-    assert action_fig.data[0].mode == hour_fig.data[0].mode == "lines"
-    assert action_fig.layout.shapes[0].line.dash == hour_fig.layout.shapes[0].line.dash == "dot"
+    assert action_fig.data[0].mode == hour_fig.data[0].mode == "lines+markers"
+    assert action_fig.data[0].marker.size == hour_fig.data[0].marker.size == 6
+    assert action_fig.layout.shapes[0].line.dash == hour_fig.layout.shapes[0].line.dash == "dash"
     assert hour_fig.layout.yaxis.title.text == "Horas-equipo (h)"
 
 
@@ -1628,8 +1523,7 @@ def test_emin_reset_controls_preserve_month_and_fleet(monkeypatch):
     )
     assert unchanged is callbacks.no_update
     app.handlers["load_monthly_payload"](
-        "EMIN", "2026-01", ["Camiones"], unit, ["Sistema de Motor"],
-        None, None, None, [], "actions", None,
+        "EMIN", "2026-01", ["Camiones"], unit, ["Sistema de Motor"], None,
     )
 
 
@@ -1650,15 +1544,17 @@ def _capture_maintenance_callbacks():
 
 
 @pytest.mark.parametrize("client", ["cda", "capstone"])
-def test_activity_system_filter_does_not_narrow_other_clients_pareto(monkeypatch, client):
+def test_system_filter_is_page_wide_for_every_client(monkeypatch, client):
     _patch_emin_ten_views(monkeypatch)
     repo = MaintenanceRepository(mode="parquet", client=client)
-    payload = repo.get_monthly_payload(
-        "2026-01", systems=["Sistema de Motor"],
-        pareto_systems=["Sistema Hidráulico"],
-    )
+    payload = repo.get_monthly_payload("2026-01", systems=["Sistema de Motor"])
     assert payload["kpis"]["actions"] == 2
-    assert sum(row["value"] for row in payload["data"]["pareto"]) == 1
+    assert payload["meta"]["pareto"]["selected_systems"] == ["Sistema de Motor"]
+    assert sum(row["value"] for row in payload["data"]["pareto"]) == 2
+    assert sum(row["count"] for row in payload["data"]["action_systems"]) == 2
+    assert {row["system_name"] for row in payload["data"]["system_mix"]} == {"Sistema de Motor"}
+    assert payload["data"]["hours_pareto"] == []
+    assert payload["kpis"]["downtime_est_hours"] is None
 
 
 def test_emin_unattributed_actions_count_as_a_system_and_have_consistent_detail(monkeypatch):
@@ -1683,12 +1579,11 @@ def test_emin_hidden_activity_filters_do_not_leak_into_global_scope(monkeypatch)
     repo = MaintenanceRepository(mode="parquet", client="emin")
     monkeypatch.setattr(callbacks, "get_repository", lambda **kwargs: repo)
     payload, _ = _capture_maintenance_callbacks()["load_monthly_payload"](
-        "EMIN", "2026-01", [], "__all__", [],
-        ["Sistema de Motor"], ["Lubricación"], ["T_01"], [], "hours", None,
+        "EMIN", "2026-01", [], "__all__", None, None,
     )
     assert payload["kpis"]["actions"] == 4
     assert payload["filters"]["subsystems"] == []
-    assert sum(row["value"] for row in payload["data"]["emin_hours_pareto"]) == 6
+    assert sum(row["value"] for row in payload["data"]["hours_pareto"]) == 6
 
 
 def test_emin_empty_fleet_unit_intersection_does_not_restore_fleet_reliability(monkeypatch):
@@ -1703,7 +1598,7 @@ def test_emin_empty_fleet_unit_intersection_does_not_restore_fleet_reliability(m
         assert payload["kpis"]["actions"] == 0
         for metric in ("availability_est_pct", "downtime_est_hours", "mtbf_est_hours", "mttr_est_hours"):
             assert payload["kpis"][metric] is None
-        assert payload["data"]["emin_hours_pareto"] == []
+        assert payload["data"]["hours_pareto"] == []
 
 
 def test_emin_mobile_unavailable_notice_and_small_equipment_counts_remain_readable(monkeypatch):
@@ -1736,7 +1631,7 @@ def test_emin_system_colors_survive_unit_and_system_filter_changes():
     def charts(selected_rows):
         payload["data"]["equipment_system_mix"] = selected_rows
         payload["data"]["system_mix"] = [{"system_name": row["system_name"], "count": row["count"]} for row in selected_rows]
-        payload["data"]["emin_action_systems"] = [{"equipment": row["machine_code"], "system_name": row["system_name"], "count": row["count"]} for row in selected_rows]
+        payload["data"]["action_systems"] = [{"equipment": row["machine_code"], "system_name": row["system_name"], "count": row["count"]} for row in selected_rows]
         result = render(payload)
         return (
             dict(zip(result[15].data[0].x, result[15].data[0].marker.color)),
@@ -1749,7 +1644,7 @@ def test_emin_system_colors_survive_unit_and_system_filter_changes():
         assert original["Sistema Eléctrico"] == filtered["Sistema Eléctrico"]
 
 
-def test_emin_pareto_always_keeps_initial_prefix_without_an_expand_control():
+def test_pareto_charts_use_the_cumulative_cutoff_without_an_expand_control():
     from copy import deepcopy
     from dashboard.callbacks.mantenciones_general_callbacks import _empty_contract
 
@@ -1758,11 +1653,11 @@ def test_emin_pareto_always_keeps_initial_prefix_without_an_expand_control():
     payload["status"] = "ok"
     payload["meta"].update({"client": "EMIN", "period": "2026-01"})
     payload["filters"].update({"fleets": ["Camiones"], "equipment": ["T_01"]})
-    payload["data"]["emin_action_systems"] = [
+    payload["data"]["action_systems"] = [
         {"equipment": f"EQ-{i:02d}", "system_name": "Sistema de Motor", "count": value}
         for i, value in enumerate(values)
     ]
-    payload["data"]["emin_hours_pareto"] = [
+    payload["data"]["hours_pareto"] = [
         {"equipment": f"EQ-{i:02d}", "value": value}
         for i, value in enumerate(values)
     ]
@@ -1770,8 +1665,11 @@ def test_emin_pareto_always_keeps_initial_prefix_without_an_expand_control():
     render = _capture_maintenance_callbacks()["render_monthly_payload"]
     initial = render(payload)
     for index in (13, 14):
-        assert len(initial[index].data[0].x) == 7
-        assert initial[index].data[0].y[-1] == pytest.approx(91)
+        # 45 + 20 + 10 + 5 = 80% of the total: four units, then "Otras (8)".
+        assert list(initial[index].data[0].x) == [f"EQ-{i:02d}" for i in range(4)] + ["Otras (8)"]
+        assert initial[index].data[0].y[-1] == pytest.approx(100)
+    assert initial[30] == "4 de 12 unidades concentran el 80% de las acciones."
+    assert initial[31] == "4 de 12 unidades concentran el 80% de las horas."
     assert payload == original
     rendered_layout = str(layout_mantenciones_general())
     assert "Mostrar todos" not in rendered_layout
@@ -1788,7 +1686,7 @@ def test_emin_visible_messages_hide_internal_sources_and_ranking_disclaimer(monk
     monkeypatch.setattr(callbacks, "get_repository", lambda **kwargs: repo)
     monkeypatch.setattr(callbacks, "ctx", SimpleNamespace(triggered_id=None))
     handlers = _capture_maintenance_callbacks()
-    assert handlers["load_maintenance_metadata"]("EMIN", None)[1] is None
+    assert len(handlers["load_maintenance_metadata"]("EMIN", None)) == 11
     payload = repo.get_monthly_payload("2026-01")
     rendered = handlers["render_monthly_payload"](payload)
     detail = handlers["render_unit_detail"](payload, "T_01")
@@ -1802,30 +1700,39 @@ def test_emin_visible_messages_hide_internal_sources_and_ranking_disclaimer(monk
     ):
         assert forbidden.lower() not in visible_notes.lower()
     assert "Días según fecha operacional" in rendered[25]
-    assert "estimaciones" in str(rendered[10])
+    # The methodology note moved off the page body into the KPI tooltips.
+    assert "estimaciones" not in str(rendered[10])
+    assert "no confirma una detención operacional" in str(layout_mantenciones_general())
     payload["data"]["historical_failures"] = []
     assert "No se dispone de esta información momentáneamente" in str(handlers["render_unit_detail"](payload, "T_01"))
 
 
 @pytest.mark.parametrize("client", ["CDA", "CAPSTONE"])
-def test_other_clients_keep_the_existing_pareto_rendering(client):
+def test_every_client_renders_the_same_pareto_pair(client):
     from dashboard.callbacks.mantenciones_general_callbacks import _empty_contract
 
     payload = _empty_contract()
     payload["status"] = "ok"
     payload["meta"].update({"client": client, "period_label": "2026-01", "reliability_kpis": {"rows": 2}})
-    payload["data"]["pareto"] = [{"equipment": f"EQ-{i:02d}", "value": 100 - i} for i in range(12)]
+    payload["data"]["action_systems"] = [
+        {"equipment": f"EQ-{i:02d}", "system_name": "Sistema de Motor", "count": 100 - i} for i in range(12)
+    ]
+    payload["data"]["hours_pareto"] = [{"equipment": f"EQ-{i:02d}", "value": 100 - i} for i in range(12)]
     rendered = _capture_maintenance_callbacks()["render_monthly_payload"](payload)
-    assert len(rendered[13].data[0].x) == 12
-    assert rendered[13].data[0].type == "bar"
-    assert "Query 5" in str(rendered[10])
-    assert "horas intervenidas por unidad" not in rendered[21]
+    # Linear 100..89 over twelve units: 80% of the total needs ten, so two are folded.
+    for index in (13, 14):
+        assert len(rendered[index].data[0].x) == 11
+        assert rendered[index].data[0].x[-1] == "Otras (2)"
+        assert rendered[index].data[0].y[-1] == pytest.approx(100.0)
+    assert "Query" not in str(rendered[10])
+    assert rendered[20] == "Pareto de acciones por unidad · Todos los sistemas" or rendered[20].startswith("Pareto de acciones por unidad")
+    assert rendered[21] == "Pareto de horas intervenidas por unidad"
 
 
 def test_emin_actions_pareto_shares_the_equipment_legend_palette():
     from dashboard.tabs.tab_mantenciones_general import (
         create_equipment_activity_chart,
-        create_emin_actions_pareto_chart,
+        create_actions_pareto_chart,
         create_system_activity_chart,
     )
 
@@ -1835,13 +1742,13 @@ def test_emin_actions_pareto_shares_the_equipment_legend_palette():
         {"equipment": "T_02", "system_name": "Otro sistema", "count": 1},
     ])
     equipment = create_equipment_activity_chart(rows.rename(columns={"equipment": "machine_code"}), include_all_systems=True, compact=True)
-    pareto = create_emin_actions_pareto_chart(rows, palette_systems=rows["system_name"])
-    filtered = create_emin_actions_pareto_chart(rows[rows["system_name"].eq("Otro sistema")], palette_systems=rows["system_name"])
+    pareto = create_actions_pareto_chart(rows, palette_systems=rows["system_name"])
+    filtered = create_actions_pareto_chart(rows[rows["system_name"].eq("Otro sistema")], palette_systems=rows["system_name"])
     mix = create_system_activity_chart(rows, include_all_systems=True)
     equipment_colors = {trace.name: trace.marker.color for trace in equipment.data}
     action_colors = {trace.name: trace.marker.color for trace in pareto.data if trace.type == "bar"}
     mix_colors = dict(zip(mix.data[0].x, mix.data[0].marker.color))
-    assert equipment.layout.showlegend is False
+    assert equipment.layout.showlegend is True
     assert all(system in trace.hovertemplate for system, trace in zip(equipment_colors, equipment.data))
     for system, color in equipment_colors.items():
         assert action_colors[system] == color

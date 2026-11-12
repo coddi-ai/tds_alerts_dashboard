@@ -1,0 +1,364 @@
+/* Unit Detail (dashboard/components/unit_summary.py + unit_summary_content.py).
+   Layout is all in-flow: nothing is sticky or positioned over the sections. Status chips
+   and icon badges come from status_chip.css. */
+
+:root {
+    --unit-muted: #4b5563; /* 7.5:1 on white, 7:1 on the card header */
+}
+
+.unit-muted {
+    color: var(--unit-muted);
+}
+
+.unit-block-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0 0 12px;
+}
+
+/* ── Navigation bar ─────────────────────────────────────────────────────────── */
+
+.unit-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+    margin-bottom: 14px;
+}
+
+.unit-nav .breadcrumb {
+    background: transparent;
+    padding: 0;
+    font-size: 0.85rem;
+}
+
+.unit-nav__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.unit-nav__disabled {
+    padding: 6px 10px;
+    white-space: nowrap;
+}
+
+.unit-nav__switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.unit-nav__label {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.unit-nav__select {
+    width: auto;
+    min-width: 150px;
+    max-width: 220px;
+}
+
+.unit-summary-back-link:hover,
+.unit-nav__controls a:hover {
+    background-color: rgba(52, 152, 219, 0.08);
+}
+
+/* ── Unit banner ────────────────────────────────────────────────────────────── */
+
+.unit-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px 32px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    border: 1px solid var(--border-strong, #dee2e6);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.unit-banner__identity {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 24px;
+}
+
+.unit-banner__icon {
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+}
+
+.unit-banner__eyebrow {
+    color: var(--unit-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.unit-banner__title {
+    margin: 0;
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.unit-banner__estado {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.unit-banner__facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 32px;
+    margin: 0;
+}
+
+.unit-banner__item dt {
+    color: var(--unit-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.unit-banner__item dd {
+    margin: 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+/* ── "Estado por Técnica" tiles: all the same height ────────────────────────── */
+
+.unit-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 12px;
+}
+
+.unit-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    height: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--border-strong, #dee2e6);
+    border-radius: 10px;
+    background: var(--surface, #fff);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    color: inherit;
+    text-decoration: none;
+}
+
+.unit-tile:hover {
+    color: inherit;
+    text-decoration: none;
+    border-color: var(--blue, #2563eb);
+}
+
+.unit-tile:focus-visible,
+.unit-normal-toggle:focus-visible,
+.unit-diagnosis-toggle:focus-visible {
+    outline: 2px solid var(--blue, #2563eb);
+    outline-offset: 2px;
+}
+
+.unit-tile__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.unit-tile__name {
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+
+.unit-tile__date {
+    font-size: 12px;
+}
+
+.unit-tile__link {
+    margin-top: auto;
+    color: var(--blue-text, #1d4ed8);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ── Card extras ────────────────────────────────────────────────────────────── */
+
+.unit-card-summary {
+    white-space: nowrap;
+}
+
+.unit-rule-note {
+    line-height: 1.4;
+}
+
+/* Telemetría / Tribología rows */
+.unit-rows-table {
+    width: 100%;
+    max-width: 960px;
+    margin-right: auto;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.unit-rows-table th {
+    padding: 6px 8px;
+    border-bottom: 2px solid var(--border-strong, #dee2e6);
+    color: var(--unit-muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.unit-rows-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+    overflow-wrap: anywhere;
+    vertical-align: top;
+}
+
+.unit-normal-details {
+    margin-top: 8px;
+}
+
+.unit-normal-toggle,
+.unit-diagnosis-toggle {
+    cursor: pointer;
+    color: var(--blue-text, #1d4ed8);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.unit-normal-toggle {
+    padding: 6px 0;
+}
+
+.unit-diagnosis-text {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+}
+
+@media (max-width: 575px) {
+    .unit-nav__select {
+        max-width: 100%;
+    }
+}
+
+/* ── Banner takes the color of the unit's Estado ───────────────────────────── */
+
+.unit-banner--alerta,
+.unit-banner--anormal {
+    border-color: transparent;
+    color: #fff;
+}
+.unit-banner--alerta  { background: var(--st-alerta-solid); }
+.unit-banner--anormal { background: var(--st-anormal-solid); }
+
+.unit-banner--alerta .unit-banner__eyebrow,
+.unit-banner--anormal .unit-banner__eyebrow,
+.unit-banner--alerta .unit-banner__item dt,
+.unit-banner--anormal .unit-banner__item dt,
+.unit-banner--alerta .unit-banner__note,
+.unit-banner--anormal .unit-banner__note {
+    color: #fff7ed;
+}
+
+.unit-banner--alerta .icon-badge,
+.unit-banner--anormal .icon-badge {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+
+.unit-banner__note {
+    display: block;
+    margin-top: 2px;
+    color: var(--unit-muted);
+    font-size: 11px;
+    font-weight: 400;
+}
+
+/* ── Layout: cards are as tall as their content ─────────────────────────────── */
+
+.unit-pair {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+
+.unit-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.unit-card {
+    width: 100%;
+}
+
+.unit-predictive-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+}
+
+/* ── Component tabs (Predictivo): real buttons, role="tab" ──────────────────── */
+
+.unit-tablist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-strong, #dee2e6);
+}
+
+.unit-tab {
+    padding: 10px 16px;
+    border: 1px solid var(--border-strong, #dee2e6);
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    background: var(--surface-2, #f7f8fa);
+    color: var(--unit-muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.unit-tab--selected {
+    margin-bottom: -1px;
+    border-top: 3px solid var(--blue, #2563eb);
+    background: #fff;
+    color: #111827;
+}
+
+.unit-tab:focus-visible {
+    outline: 2px solid var(--blue, #2563eb);
+    outline-offset: -2px;
+}
+
+.unit-tabpanel {
+    padding-top: 12px;
+}

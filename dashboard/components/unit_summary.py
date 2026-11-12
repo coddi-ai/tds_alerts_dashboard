@@ -1,36 +1,47 @@
 """
-Unit Summary — per-unit drill-down navigation shell (Phase 2).
+Unit Detail (Resumen > Unidad): per-unit drill-down.
 
-Implements documentation/general/general_specs/02_unit_summary_navigation_shell.md:
-entry from a Fleet Overview card, a sticky header identifying the unit and its
-current overall status, a control to return to the Fleet Overview, and
-prev/next + a unit switcher for lateral navigation between units — all
-through Dash Pages' client-side router (dcc.Link everywhere), so switching
-units or returning to the Fleet Overview never triggers a full page reload.
+Implements documentation/general/general_specs/02_unit_summary_navigation_shell.md as
+revised by the Unit Detail requirements of ui_notes_improved.md: entry from a Fleet
+Overview row, a navigation bar (breadcrumb, return to the Fleet Overview, previous / next
+and a labeled unit selector) that sits in the page flow and never covers content, and a
+banner identifying the unit: its Estado, monitored components, horómetro and last sample.
+All navigation goes through Dash Pages' client-side router (dcc.Link for links, the shared
+assets/client_nav.js for the selector), so switching units or returning to the Fleet
+Overview never triggers a full page reload.
 
-Content (per-technique charts, maintenance summary, monitored-components
-list) is Phase 3 — documentation/general/general_specs/03_unit_summary_content.md
-— built by dashboard/components/unit_summary_content.py and assembled into
-the body below.
+Content (status tiles, per-technique cards) is built by
+dashboard/components/unit_summary_content.py and assembled into the body below.
 """
 
-from src.i18n import t
+from typing import Optional
+
+from src.i18n import current_language, t
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from dashboard.components.fleet_overview import get_ordered_units, get_unit_snapshot, status_badge
-from dashboard.components.unit_summary_content import build_unit_summary_content
+from dashboard.components.fleet_overview import get_ordered_units, get_unit_snapshot
+from dashboard.components.labels import status_label
+from dashboard.components.status_chip import canonical_status, status_chip
+from dashboard.components.unit_summary_content import (
+    build_unit_summary_content,
+    last_sample_date,
+    monitored_components,
+)
 from dashboard.services_registry import nav_path, relative_path, unit_summary_path
+from src.data.unit_horometer import unit_horometer
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Shown where a banner value is missing.
+NO_VALUE = "—"
+
 
 def _back_link():
-    """Return-to-Fleet-Overview control. Rendered inside the sticky header,
-    so it stays available from anywhere in the Unit Summary (Functional
-    Rules: "available from anywhere ... not only from a specific sub-tab or
-    scroll position")."""
+    """Return-to-Fleet-Overview control. Part of the navigation bar, so it is available
+    from anywhere in the Unit Detail (Functional Rules: "available from anywhere ...
+    not only from a specific sub-tab or scroll position")."""
     return dcc.Link([
         html.I(className="fas fa-arrow-left me-2"), t("unit_summary.volver_a_fleet_overview"),
     ], href=relative_path(nav_path("overview-general")),
@@ -38,46 +49,116 @@ def _back_link():
         style={"whiteSpace": "nowrap"})
 
 
-def _nav_control(label: str, icon: str, target_unit, disabled_text: str):
+def _nav_control(label: str, icon: str, target_unit, disabled_text: str, icon_after: bool = False):
     """One prev/next lateral-navigation control (Required Changes #4)."""
+    def content(text):
+        glyph = html.I(className=f"{icon} {'ms-1' if icon_after else 'me-1'}", **{"aria-hidden": "true"})
+        return [text, glyph] if icon_after else [glyph, text]
+
     if target_unit is None:
-        return html.Span([
-            html.I(className=f"{icon} me-1"), disabled_text,
-        ], className="text-muted small", style={"padding": "6px 10px", "whiteSpace": "nowrap"})
-    return dcc.Link([
-        html.I(className=f"{icon} me-1"), label,
-    ], href=relative_path(unit_summary_path(target_unit)),
-        className="btn btn-outline-secondary btn-sm", style={"whiteSpace": "nowrap"})
-
-
-def _unit_switcher(ordered: list, current_unit: str):
-    """Dropdown-based unit switcher - the "e.g. ... or a unit switcher"
-    alternative lateral-navigation control called out in Required Changes #4,
-    on top of prev/next. Every entry is a plain link (`href`), so picking a
-    unit routes through Dash Pages' client-side router exactly like prev/next."""
-    items = [
-        dbc.DropdownMenuItem(
-            [
-                html.Span(entry["unit"], style={"fontWeight": "700" if entry["unit"] == current_unit else "400"}),
-                html.Span(f" · {entry['band']}", className="text-muted ms-1", style={"fontSize": "11px"}),
-            ],
-            href=relative_path(unit_summary_path(entry["unit"])),
-            active=(entry["unit"] == current_unit),
-        )
-        for entry in ordered
-    ]
-    return dbc.DropdownMenu(
-        items,
-        label=[html.I(className="fas fa-truck me-2"), t("unit_summary.cambiar_unidad")],
-        color="light",
-        size="sm",
-        className="unit-summary-switcher",
-        align_end=True,
+        return html.Span(content(disabled_text), className="text-muted small unit-nav__disabled",
+                         **{"aria-disabled": "true"})
+    return dcc.Link(
+        content(label),
+        href=relative_path(unit_summary_path(target_unit)),
+        className="btn btn-outline-secondary btn-sm", style={"whiteSpace": "nowrap"},
     )
 
 
+def _unit_selector(ordered: list, current_unit: str):
+    """"Cambiar unidad": a real `<select>` with its `<label for>`. Each option's value is the
+    unit's URL; picking one navigates through the router (assets/client_nav.js)."""
+    options = [
+        html.Option(
+            f"{entry['unit']} · {status_label(entry['band'])}",
+            value=relative_path(unit_summary_path(entry["unit"])),
+            selected=(entry["unit"] == current_unit),
+        )
+        for entry in ordered
+    ]
+    return html.Div([
+        html.Label(t("unit_summary.cambiar_unidad"), htmlFor="unit-switcher", className="unit-nav__label"),
+        html.Select(options, id="unit-switcher", className="form-select form-select-sm unit-nav__select",
+                    **{"data-unit-nav": "true"}),
+    ], className="unit-nav__switcher")
+
+
+def _navigation_bar(ordered: list, unit: str, prev_unit: Optional[str], next_unit: Optional[str]) -> html.Div:
+    """Breadcrumb on the left; Volver, Anterior / Primera unidad, Cambiar unidad and
+    Siguiente on the right. It is part of the page flow - not sticky, nothing overlays the
+    sections below it."""
+    breadcrumb = html.Nav(
+        html.Ol([
+            html.Li(dcc.Link(t("unit_summary.fleet_overview"), href=relative_path(nav_path("overview-general")),
+                             className="text-muted text-decoration-none"), className="breadcrumb-item"),
+            html.Li(unit, className="breadcrumb-item active fw-bold", **{"aria-current": "page"}),
+        ], className="breadcrumb mb-0"),
+        **{"aria-label": t("unit_summary.breadcrumb")},
+    )
+    controls = html.Nav([
+        _back_link(),
+        _nav_control(t("unit_summary.anterior"), "fas fa-chevron-left", prev_unit, t("unit_summary.primera_unidad")),
+        _unit_selector(ordered, unit),
+        _nav_control(t("unit_summary.siguiente"), "fas fa-chevron-right", next_unit, t("unit_summary.ultima_unidad"),
+                     icon_after=True),
+    ], className="unit-nav__controls", **{"aria-label": t("unit_summary.navegacion_entre_unidades")})
+    return html.Div([breadcrumb, controls], className="unit-nav")
+
+
+def _format_hours(hours: float) -> str:
+    """"116.846 h" in Spanish, "116,846 h" in English."""
+    grouped = f"{hours:,.0f}"
+    if current_language() == "es":
+        grouped = grouped.replace(",", ".")
+    return t("unit_summary.hours_value", value=grouped)
+
+
+def _banner_item(label: str, value: str, note: Optional[str] = None) -> html.Div:
+    """A labeled fact of the banner; `note` is a small visible line under the value."""
+    return html.Div([
+        html.Dt(label),
+        html.Dd([value, html.Span(note, className="unit-banner__note")] if note else value),
+    ], className="unit-banner__item")
+
+
+def _banner(client: str, unit: str, estado: str) -> html.Section:
+    """Unit identification: id, Estado, number of monitored components, the unit's horómetro and
+    the last oil sample. The banner takes the color of the unit's Estado (Alerta orange, Anormal
+    deep red, anything else neutral). A value that cannot be resolved shows "—"."""
+    components = monitored_components(client, unit)
+    horometer = unit_horometer(client, unit)
+    sample = last_sample_date(client, unit)
+    items = [
+        _banner_item(t("unit_summary.componentes_monitoreados"), str(len(components)) if components else NO_VALUE),
+        _banner_item(
+            t("unit_summary.horometro"),
+            _format_hours(horometer.hours) if horometer else NO_VALUE,
+            note=(t("unit_summary.horometro_as_of", date=horometer.as_of.strftime("%d/%m/%Y"))
+                  if horometer and horometer.as_of else None),
+        ),
+        _banner_item(t("unit_summary.ultima_muestra"), sample.strftime("%d/%m/%Y") if sample is not None else NO_VALUE),
+    ]
+    tier = canonical_status(estado)
+    on_dark = tier in ("Alerta", "Anormal")
+    return html.Section([
+        html.Div([
+            html.Span(html.I(className="fas fa-truck"), className="icon-badge icon-badge--nodata unit-banner__icon",
+                      **{"aria-hidden": "true"}),
+            html.Div([
+                html.Div(t("unit_summary.unidad"), className="unit-banner__eyebrow"),
+                html.H1(unit, className="unit-banner__title"),
+            ]),
+            html.Div([
+                html.Div(t("fleet_overview.col_status"), className="unit-banner__eyebrow"),
+                status_chip(estado, solid=not on_dark, on_dark=on_dark),
+            ], className="unit-banner__estado"),
+        ], className="unit-banner__identity"),
+        html.Dl(items, className="unit-banner__facts"),
+    ], className=f"unit-banner unit-banner--{tier.replace(' ', '').lower()}", **{"aria-label": t("unit_summary.unidad")})
+
+
 def build_unit_summary(client: str, unit: str) -> html.Div:
-    """Build the Unit Summary shell for `unit`, or an explanatory empty
+    """Build the Unit Detail for `unit`, or an explanatory empty
     state if the client/unit combination can't be resolved."""
     if not client:
         return dbc.Alert([
@@ -113,54 +194,16 @@ def _build_unit_summary(client: str, unit: str) -> html.Div:
     prev_unit = unit_ids[idx - 1] if idx > 0 else None
     next_unit = unit_ids[idx + 1] if idx < len(unit_ids) - 1 else None
 
-    badges = [status_badge(snapshot["overall_status"])]
-    if snapshot["maintenance_status"] is not None:
-        badges.append(status_badge(snapshot["maintenance_status"]))
+    # The banner's Estado is the unit's, the same one the Fleet Overview row shows.
+    banner = _banner(client, unit, snapshot["overall_status"])
 
-    # Persistent unit identification (Required Changes #2): breadcrumb +
-    # unit id + current overall status, kept visible while scrolling via
-    # `position: sticky` (Functional Rules item 3).
-    header = html.Div([
-        html.Div([
-            html.Nav([
-                dcc.Link(t("unit_summary.fleet_overview"), href=relative_path(nav_path("overview-general")),
-                         className="text-muted text-decoration-none"),
-                html.Span(" / ", className="mx-1 text-muted"),
-                html.Span(unit, style={"fontWeight": "700"}),
-            ], className="text-muted mb-1 small"),
-            html.Div([
-                html.H4([
-                    html.I(className="fas fa-truck me-2"), unit,
-                ], className="text-primary mb-0 me-2 d-inline-block"),
-                html.Span(badges, style={"display": "inline-flex", "gap": "6px", "verticalAlign": "middle"}),
-            ]),
-        ], style={"flex": "1", "minWidth": "200px"}),
-
-        html.Div([
-            _back_link(),
-            _nav_control(t("unit_summary.anterior"), "fas fa-chevron-left", prev_unit, t("unit_summary.primera_unidad")),
-            _unit_switcher(ordered, unit),
-            _nav_control(t("unit_summary.siguiente"), "fas fa-chevron-right", next_unit, t("unit_summary.ultima_unidad")),
-        ], style={"display": "flex", "alignItems": "center", "gap": "8px", "flexWrap": "wrap"}),
-    ], className="unit-summary-sticky-header", style={
-        "display": "flex", "alignItems": "center", "gap": "16px", "flexWrap": "wrap",
-        "position": "sticky", "top": "80px", "zIndex": "50",
-        "background": "var(--surface-1, #fff)", "borderBottom": "1px solid var(--border-strong, #dee2e6)",
-        "padding": "14px 16px", "marginBottom": "20px", "borderRadius": "6px",
-        "boxShadow": "0 1px 3px rgba(0,0,0,0.08)",
-    })
-
-    # Phase 3: per-technique charts, maintenance summary, monitored
-    # components (documentation/general/general_specs/03_unit_summary_content.md).
-    # Isolated from the header/nav above in its own try/except so a content
-    # failure degrades to an inline error card instead of blanking the whole
-    # shell (prev/next, back-link, sticky header stay usable either way).
+    # Per-technique content, isolated from the header in its own try/except so a content
+    # failure degrades to an inline error card instead of blanking the whole shell (the
+    # navigation bar and banner stay usable either way). Every status in it is read from the
+    # same snapshot as the banner's Estado and the Fleet Overview - never recalculated
+    # independently (documentation/general/general_specs/
+    # 05_unit_summary_restructure_and_predictive_comparison.md, Functional Rules).
     try:
-        # Sourced from the same status computation as the sticky header's
-        # badges above and the Fleet Overview cards - never recalculated
-        # independently (documentation/general/general_specs/
-        # 05_unit_summary_restructure_and_predictive_comparison.md,
-        # Functional Rules).
         body = build_unit_summary_content(client, unit, technique_status=snapshot.get("technique_status"))
     except Exception:
         logger.exception("Error building Unit Summary content for client=%s unit=%s", client, unit)
@@ -169,4 +212,4 @@ def _build_unit_summary(client: str, unit: str) -> html.Div:
             t("unit_summary.error_al_generar_el_contenido_de"),
         ], color="danger", className="text-center")
 
-    return html.Div([header, body])
+    return html.Div([_navigation_bar(ordered, unit, prev_unit, next_unit), banner, body])

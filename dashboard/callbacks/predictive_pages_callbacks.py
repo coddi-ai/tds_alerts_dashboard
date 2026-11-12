@@ -38,14 +38,11 @@ def _render_component(client: str, component: str):
         logger.warning(f"Predictive module accessed by client without access: {client}")
         return create_placeholder_content(t("predictive.unavailable_for_client"))
 
-    # Change 1: single shared discovery function - no more inline CSV-only
-    # existence check. A component is available whether it's on the new
-    # partitioned layout (risk_scores) or still legacy-CSV-only.
+    # Change 1: single shared discovery function. A component is available when it
+    # has the partitioned `risk_scores` table.
     layout = predictive_v2.discover_predictive_layout(client)
     availability = layout.get(component)
-    has_data = availability is not None and (
-        availability.risk_scores or availability.legacy_csv is not None
-    )
+    has_data = availability is not None and availability.risk_scores
 
     if not has_data:
         logger.warning(

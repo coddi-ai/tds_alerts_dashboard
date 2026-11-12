@@ -162,6 +162,20 @@ def is_admin(user: Dict) -> bool:
     return user.get('role') == 'admin'
 
 
+def allowed_clients(user_data: Dict | None) -> List[str]:
+    """
+    Clients the signed-in user may use, read from the server-side registry.
+
+    `user_data` is only used to name the user: the list itself never comes from
+    the browser, so a client value tampered with in the page cannot widen it.
+    Empty when the identity cannot be resolved.
+    """
+    username = resolve_authenticated_username(user_data)
+    if not username:
+        return []
+    return list(USERS[username].get("clients", []))
+
+
 def can_access_client(user: Dict, client: str) -> bool:
     """
     Check if user can access specific client data.

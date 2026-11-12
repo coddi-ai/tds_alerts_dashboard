@@ -1,0 +1,71 @@
+{
+  "umbrales_criticidad": {
+    "_nota": "Generado por calibrar_umbrales_capstone.py. No editar a mano.",
+    "metodo": "Percentiles P75/P90/P98 de la media movil de 7 dias del valor ponderado de risk_scores, por modo, sobre toda la historia de la flota",
+    "calibrado_el": "2026-10-21",
+    "historia_desde": "2024-01-01",
+    "historia_hasta": "2026-10-17",
+    "modos": {
+      "abrasive_wear_risk": {
+        "p75": 0.1,
+        "p90": 3.9916,
+        "p98": 37.259,
+        "n": 31783
+      },
+      "accumulated_wear_risk": {
+        "p75": 0.1,
+        "p90": 8.6886,
+        "p98": 33.3666,
+        "n": 20702
+      },
+      "bearing_wear_risk": {
+        "p75": 5.8292,
+        "p90": 16.3931,
+        "p98": 42.9137,
+        "n": 32417
+      },
+      "blowby_risk": {
+        "p75": 1.6812,
+        "p90": 11.2073,
+        "p98": 35.2993,
+        "n": 32417
+      },
+      "combustion_risk": {
+        "p75": 5.4471,
+        "p90": 11.1019,
+        "p98": 20.0692,
+        "n": 32350
+      },
+      "coolant_contamination_risk": {
+        "p75": 12.032,
+        "p90": 20.0184,
+        "p98": 49.1587,
+        "n": 32417
+      },
+      "lubrication_failure_risk": {
+        "p75": 21.0572,
+        "p90": 31.6898,
+        "p98": 46.9086,
+        "n": 32417
+      },
+      "oil_degradation_risk": {
+        "p75": 1.7819,
+        "p90": 3.3871,
+        "p98": 20.0221,
+        "n": 32417
+      },
+      "thermal_imbalance_risk": {
+        "p75": 8.2172,
+        "p90": 20.3647,
+        "p98": 32.433,
+        "n": 32417
+      },
+      "turbocharger_risk": {
+        "p75": 16.0533,
+        "p90": 22.7543,
+        "p98": 39.4168,
+        "n": 32417
+      }
+    }
+  }
+}

@@ -71,6 +71,59 @@ def translate_component_label(value: Any) -> str:
     return label.replace("_", " ").replace("-", " ").strip().title()
 
 
+# Display names for the General tab's rows (Unit Detail): raw component and system names come from
+# the data in lower case and without accents ("sistema de direccion"), and telemetry systems in English.
+_ACCENTED_WORDS = {
+    "direccion": "Dirección", "hidraulico": "Hidráulico", "hidraulica": "Hidráulica",
+    "transmision": "Transmisión", "trasmision": "Transmisión", "refrigeracion": "Refrigeración",
+    "rotacion": "Rotación", "traccion": "Tracción", "damper": "Dámper", "lubricacion": "Lubricación",
+    "aceleracion": "Aceleración", "suspension": "Suspensión", "inyeccion": "Inyección", "ignicion": "Ignición",
+    "electrico": "Eléctrico", "electrica": "Eléctrica", "camara": "Cámara", "carter": "Cárter",
+    "excitatriz": "Excitatriz", "propulsion": "Propulsión", "tension": "Tensión",
+}
+_LOWER_WORDS = {"de", "del", "la", "el", "los", "las", "y", "e", "o", "en", "con", "para"}
+# Telemetry systems arrive in English; the catalog (label.system.<key>) holds Spanish and English.
+_SYSTEM_KEYS = {
+    "engine": "engine", "transmission": "transmission", "steering": "steering", "brakes": "brakes",
+    "hydraulics": "hydraulics", "hydraulic": "hydraulics", "cooling": "cooling", "electrical": "electrical",
+    "suspension": "suspension", "drivetrain": "drivetrain", "fuel": "fuel",
+}
+
+
+def display_component_name(value: Any) -> str:
+    """A component name for the UI: accents restored and Title Case with the connectors lower
+    ("sistema de direccion" -> "Sistema de Dirección", "transmision" -> "Transmisión"). Names the
+    shared component catalog already knows go through `translate_component_label`."""
+    label = str(value or "").strip()
+    if not label:
+        return t("labels.no_component")
+    key = re.sub(r"[\s-]+", "_", label.casefold())
+    if key in _COMPONENT_LABELS:
+        return translate_component_label(label)
+    words = re.split(r"(\s+|-)", label.replace("_", " "))
+    shown = []
+    for index, word in enumerate(words):
+        folded = word.casefold()
+        if not folded.strip() or word == "-":
+            shown.append(word)
+        elif folded in _ACCENTED_WORDS:
+            shown.append(_ACCENTED_WORDS[folded])
+        elif folded in _LOWER_WORDS and index > 0:
+            shown.append(folded)
+        else:
+            shown.append(word[:1].upper() + word[1:].lower())
+    return "".join(shown)
+
+
+def display_system_name(value: Any) -> str:
+    """A telemetry system for the UI: the English names of the pipeline translated through the
+    catalog (Engine -> Motor), any other name shown as `display_component_name` would."""
+    key = _SYSTEM_KEYS.get(str(value or "").strip().casefold())
+    if key is not None:
+        return t(f"label.system.{key}")
+    return display_component_name(value)
+
+
 # Status vocabulary produced by the data pipeline (raw values are Spanish and are
 # also what filters, sorting and styling key off). `status_label` is display-only:
 # it translates the text a user reads without ever touching the raw value.
@@ -151,6 +204,12 @@ _SOURCE_CANONICAL = {
     "Tribología": "tribology",
     "Mixto": "multi",
 }
+
+
+# Accent of the "Alertas multitécnicas" KPI card. It is a count, not a source, so it must
+# not borrow any SOURCE_STYLE color: on the same screen as the Fuente chips (table column,
+# legend), reusing the Multitécnica purple made the card read as one more Fuente chip.
+MULTITECHNICAL_KPI_COLOR = "#a23b72"
 
 
 def source_style(value: Any) -> tuple[str, str]:

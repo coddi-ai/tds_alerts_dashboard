@@ -1,0 +1,948 @@
+/* Conexión ERP: Validación de Avisos and Seguimiento de Avisos.
+   Shape and layout only - chip, bar and icon-badge colors are inline styles from
+   dashboard/components/erp_chips.py, which is their single definition. The few literals below
+   are neutrals (text, borders, surfaces) and the blue "selected / primary" accent.
+   Text is #475569 or darker on white (>= 4.5:1); controls are 44px high, 40px when compact. */
+
+.erp-page {
+    --erp-border: #e2e8f0;
+    --erp-text: #0f172a;
+    --erp-muted: #475569;
+    --erp-accent: #1d4ed8;
+    --erp-focus: #2563eb;
+    padding: 24px;
+    color: var(--erp-text);
+}
+
+/* Seguimiento is laid out for 1280-1440px; wider screens keep that measure. */
+.erp-page--tracking {
+    max-width: 1440px;
+    margin: 0 auto;
+}
+
+/* ---- Page header ---- */
+.erp-page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px 32px;
+    margin-bottom: 20px;
+}
+
+.erp-page-title {
+    margin: 0 0 4px;
+    color: #0a58ca;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.erp-page-subtitle {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--erp-muted);
+}
+
+/* ---- Fields ---- */
+.erp-field-label {
+    margin: 0;
+    color: #1e293b;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.erp-field-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    margin-bottom: 4px;
+}
+
+.erp-required {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.erp-field-optional {
+    color: var(--erp-muted);
+    font-size: 0.8rem;
+}
+
+.erp-input.form-control,
+.erp-input.form-select {
+    min-height: 44px;
+}
+
+.erp-input--compact.form-control,
+.erp-input--compact.form-select,
+.erp-input--compact.btn {
+    min-height: 40px;
+}
+
+.erp-input:focus-visible,
+.erp-action-btn:focus-visible,
+.btn.erp-input--compact:focus-visible {
+    outline: 2px solid var(--erp-focus);
+    outline-offset: 2px;
+}
+
+.erp-field-msg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.erp-field-msg--error {
+    color: #b91c1c;
+}
+
+.erp-field-msg--ok {
+    color: #166534;
+}
+
+/* Operator: labelled input in the page header, its message right under it. */
+.erp-operator {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 0 1 340px;
+    min-width: 260px;
+}
+
+.erp-operator__feedback {
+    min-height: 1.3rem;
+    margin-top: 4px;
+}
+
+.erp-counter {
+    margin-left: auto;
+    color: var(--erp-muted);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.erp-counter--full {
+    color: #92400e;
+    font-weight: 700;
+}
+
+.erp-counter--over {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.erp-ai-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #eef2ff;
+    color: #3730a3;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.erp-readonly-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #334155;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+/* ---- Chips: shape only (colors are inline) ---- */
+.erp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.erp-chip__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.erp-icon-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 1rem;
+}
+
+/* ---- Panels and cards ---- */
+.erp-panel,
+.erp-card,
+.erp-kpi {
+    border: 1px solid var(--erp-border);
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.erp-card {
+    margin-bottom: 16px;
+    padding: 16px 20px;
+}
+
+.erp-card__title {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.erp-card__hint {
+    margin: -8px 0 12px;
+    color: var(--erp-muted);
+    font-size: 0.9rem;
+}
+
+.erp-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 28px 16px;
+    color: var(--erp-muted);
+    text-align: center;
+}
+
+.erp-empty i {
+    color: #94a3b8;
+    font-size: 1.5rem;
+}
+
+.erp-empty--detail {
+    min-height: 320px;
+}
+
+/* ---- Validación de Avisos ---- */
+.erp-validator-grid {
+    display: grid;
+    grid-template-columns: 380px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+/* Each column is as tall as the viewport allows and scrolls on its own. */
+.erp-pending-panel,
+.erp-detail {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 250px);
+    min-height: 520px;
+}
+
+.erp-panel__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--erp-border);
+}
+
+.erp-panel__title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.erp-count-pill {
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #1e293b;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.erp-list-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--erp-border);
+}
+
+.erp-list-controls > div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.erp-pending-list-wrap {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.erp-pending-list {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    padding: 12px;
+    overflow-y: auto;
+}
+
+.erp-list-empty {
+    margin: 0;
+    padding: 16px;
+    color: var(--erp-muted);
+}
+
+/* Neutral card, a real button. Severity lives in its chip, never in the border. */
+.erp-pending-item {
+    flex: none;
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid var(--erp-border);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--erp-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.erp-pending-item:hover {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+}
+
+.erp-pending-item:focus-visible {
+    outline: 2px solid var(--erp-focus);
+    outline-offset: 2px;
+}
+
+/* The one blue border + light-blue fill of the selected card. */
+.erp-pending-item.is-selected {
+    border-color: var(--erp-focus);
+    background: #eff6ff;
+    box-shadow: inset 0 0 0 1px var(--erp-focus);
+}
+
+.erp-pending-item__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.erp-pending-item__asset {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.erp-pending-item__meta,
+.erp-pending-item__age {
+    display: block;
+    color: var(--erp-muted);
+    font-size: 0.8rem;
+}
+
+.erp-pending-item__meta {
+    margin-top: 4px;
+}
+
+/* Segmented Todos / Anormal / Alerta: real radio buttons, drawn as joined segments. */
+.erp-segmented {
+    display: inline-flex;
+}
+
+.erp-segmented .form-check {
+    margin: 0;
+    padding: 0;
+}
+
+.erp-segmented__input.form-check-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    opacity: 0;
+}
+
+.erp-segmented__label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    margin: 0;
+    padding: 0 16px;
+    border: 1px solid #94a3b8;
+    background: #fff;
+    color: #1e293b;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.erp-segmented .form-check:first-child .erp-segmented__label {
+    border-radius: 8px 0 0 8px;
+}
+
+.erp-segmented .form-check:last-child .erp-segmented__label {
+    border-radius: 0 8px 8px 0;
+}
+
+.erp-segmented .form-check + .form-check .erp-segmented__label {
+    margin-left: -1px;
+}
+
+.erp-segmented__label--checked {
+    position: relative;
+    border-color: var(--erp-accent);
+    background: var(--erp-accent);
+    color: #fff;
+}
+
+.erp-segmented__input:focus-visible + .erp-segmented__label {
+    position: relative;
+    outline: 2px solid var(--erp-focus);
+    outline-offset: 2px;
+}
+
+/* Detail: scrolling body, footer pinned under it. */
+.erp-detail__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 16px 20px;
+    overflow-y: auto;
+}
+
+.erp-detail__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-bottom: 20px;
+}
+
+.erp-detail__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+}
+
+.erp-detail__asset {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.erp-detail__generated {
+    color: var(--erp-muted);
+    font-size: 0.9rem;
+}
+
+.erp-section {
+    margin-bottom: 24px;
+}
+
+.erp-section__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--erp-border);
+}
+
+.erp-section__head--stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.erp-section__title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.erp-section__hint {
+    margin: 0;
+    color: var(--erp-muted);
+    font-size: 0.9rem;
+}
+
+.erp-context {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px 20px;
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--erp-border);
+    border-radius: 10px;
+    background: #f8fafc;
+}
+
+.erp-context dt {
+    color: var(--erp-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.erp-context dd {
+    margin: 2px 0 0;
+    font-weight: 600;
+}
+
+.erp-severity-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 20px;
+}
+
+.erp-severity-select.form-select {
+    flex: 0 1 240px;
+}
+
+.erp-severity-preview {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.erp-detail__footer {
+    flex: none;
+    padding: 12px 20px;
+    border-top: 1px solid var(--erp-border);
+    border-radius: 0 0 12px 12px;
+    background: #fff;
+}
+
+.erp-detail__footer[hidden] {
+    display: none;
+}
+
+.erp-detail__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.erp-detail__note {
+    flex: 1 1 220px;
+    color: #334155;
+    font-size: 0.9rem;
+}
+
+.erp-detail__buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.erp-reject {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding-bottom: 12px;
+}
+
+.erp-reject .form-control {
+    width: 100%;
+}
+
+.erp-action-btn.btn {
+    min-height: 44px;
+    padding-inline: 20px;
+    font-weight: 600;
+}
+
+/* Darker than Bootstrap's defaults so the labels clear 4.5:1. */
+.erp-action-btn.btn-primary {
+    --bs-btn-bg: #1d4ed8;
+    --bs-btn-border-color: #1d4ed8;
+    --bs-btn-hover-bg: #1e40af;
+    --bs-btn-hover-border-color: #1e40af;
+    --bs-btn-active-bg: #1e3a8a;
+    --bs-btn-active-border-color: #1e3a8a;
+    --bs-btn-disabled-bg: #1d4ed8;
+    --bs-btn-disabled-border-color: #1d4ed8;
+}
+
+.erp-action-btn.btn-outline-danger,
+.erp-action-btn.btn-danger {
+    --bs-btn-color: #b91c1c;
+    --bs-btn-border-color: #b91c1c;
+    --bs-btn-hover-bg: #b91c1c;
+    --bs-btn-hover-border-color: #b91c1c;
+    --bs-btn-active-bg: #991b1b;
+    --bs-btn-active-border-color: #991b1b;
+    --bs-btn-disabled-color: #b91c1c;
+    --bs-btn-disabled-border-color: #b91c1c;
+}
+
+.erp-action-btn.btn-danger {
+    --bs-btn-bg: #b91c1c;
+    --bs-btn-color: #fff;
+    --bs-btn-disabled-bg: #b91c1c;
+}
+
+@media (max-width: 991px) {
+    .erp-validator-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .erp-pending-panel {
+        height: 420px;
+        min-height: 0;
+    }
+
+    .erp-detail {
+        height: auto;
+        min-height: 0;
+    }
+
+    .erp-detail__body {
+        overflow: visible;
+    }
+}
+
+/* ---- Seguimiento de Avisos ---- */
+.erp-card--filters {
+    padding: 14px 20px;
+}
+
+.erp-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.erp-filter {
+    display: flex;
+    flex: 1 1 130px;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 120px;
+}
+
+.erp-filter--dates {
+    flex: 2 1 280px;
+    min-width: 260px;
+}
+
+.erp-filter--action {
+    flex: 0 0 auto;
+}
+
+.erp-date-range input {
+    min-height: 40px;
+}
+
+.erp-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    align-items: stretch;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+/* White card + tinted icon badge: no tinted background, no left border. */
+.erp-kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+}
+
+.erp-kpi__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.erp-kpi__label {
+    color: #334155;
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.erp-kpi__value {
+    color: var(--erp-text);
+    font-size: 1.9rem;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.erp-kpi__caption {
+    min-height: 1.2em;
+    color: var(--erp-muted);
+    font-size: 0.8rem;
+}
+
+.erp-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.erp-chart-grid .erp-card {
+    margin-bottom: 0;
+}
+
+.erp-chart-caption {
+    margin: 8px 0 0;
+    color: var(--erp-muted);
+    font-size: 0.85rem;
+}
+
+/* Lifecycle bar */
+.erp-lifecycle__bar {
+    display: flex;
+    height: 28px;
+    overflow: hidden;
+    border-radius: 8px;
+    background: #f1f5f9;
+}
+
+.erp-bar__segment {
+    display: block;
+    height: 100%;
+}
+
+.erp-bar__segment + .erp-bar__segment {
+    border-left: 2px solid #fff;
+}
+
+.erp-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.erp-legend__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+}
+
+.erp-legend__swatch {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+}
+
+/* Horizontal bar rows: label | bar | value */
+.erp-bar-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.erp-legend + .erp-bar-list {
+    margin-top: 14px;
+}
+
+.erp-bar-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px 12px;
+}
+
+.erp-bar-row__label {
+    color: #1e293b;
+    font-size: 0.85rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* The bar gets the whole card width, on its own line under label and value. */
+.erp-bar-row__track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 14px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: #f1f5f9;
+}
+
+.erp-bar-row__fill {
+    display: flex;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 6px;
+}
+
+.erp-bar-row__value {
+    color: var(--erp-text);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Registro de Avisos: scrolls inside its own container, header stays put. */
+.erp-table-wrap {
+    max-height: 520px;
+    overflow: auto;
+    border: 1px solid var(--erp-border);
+    border-radius: 10px;
+}
+
+.erp-table-wrap:focus-visible {
+    outline: 2px solid var(--erp-focus);
+    outline-offset: 2px;
+}
+
+.erp-table {
+    width: 100%;
+    min-width: 1180px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.875rem;
+}
+
+.erp-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 10px 12px;
+    border-bottom: 1px solid #cbd5e1;
+    background: #f1f5f9;
+    color: #1e293b;
+    font-weight: 700;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.erp-table td {
+    height: 44px;
+    padding: 6px 12px;
+    border-bottom: 1px solid #eef2f7;
+    color: var(--erp-text);
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.erp-table tbody tr:hover td {
+    background: #f8fafc;
+}
+
+.erp-table td.erp-table__warning_id {
+    padding: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.erp-table td.erp-table__warning_id > span {
+    display: block;
+    padding: 0 12px;
+}
+
+.erp-table__id-button {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--erp-accent);
+    font: inherit;
+    text-align: left;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.erp-table__id-button:focus-visible {
+    outline: 2px solid var(--erp-focus);
+    outline-offset: -2px;
+}
+
+.erp-table td.erp-table__empty {
+    padding: 28px 12px;
+    color: var(--erp-muted);
+    text-align: center;
+}
+
+.erp-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.erp-pager__label,
+.erp-pager__page {
+    color: #334155;
+    font-size: 0.9rem;
+}
+
+.erp-pager__buttons {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* ---- Sidebar: pending count on the Validación de Avisos link ---- */
+.nav-section-links .nav-menu-item:has(.nav-link-badge) {
+    gap: 8px;
+}
+
+.nav-link-badge {
+    flex: none;
+    min-width: 24px;
+    margin-left: auto;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #fff;
+    color: #1e293b;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.5;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}

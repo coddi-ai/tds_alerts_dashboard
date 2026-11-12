@@ -21,6 +21,21 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# "Con Tribología" (or "Con Multitécnica" for EMIN) is a three-state filter.
+SOURCE_FILTER_ALL = 'all'
+SOURCE_FILTER_YES = 'yes'
+SOURCE_FILTER_NO = 'no'
+SOURCE_FILTER_DEFAULT = SOURCE_FILTER_YES
+
+
+def source_filter_options() -> list:
+    """Segmented-control options for the source filter, in display order."""
+    return [
+        {'label': t("tab_alerts_detail.todas"), 'value': SOURCE_FILTER_ALL},
+        {'label': t("common.yes"), 'value': SOURCE_FILTER_YES},
+        {'label': t("common.no"), 'value': SOURCE_FILTER_NO},
+    ]
+
 
 def create_layout() -> html.Div:
     """
@@ -106,14 +121,17 @@ def create_layout() -> html.Div:
                             html.I(className="fas fa-oil-can me-1"),
                             t("tab_alerts_detail.con_tribologia")
                         ], id='detail-source-filter-label', className="fw-bold mb-2"),
-                        dcc.Dropdown(
+                        # Three mutually exclusive states, so a segmented
+                        # control rather than a dropdown plus a clear button.
+                        # Like the other filters it applies on selection.
+                        dbc.RadioItems(
                             id='detail-filter-tribology',
-                            options=[
-                                {'label': t("tab_alerts_detail.si"), 'value': 'yes'},
-                                {'label': t("tab_alerts_detail.no"), 'value': 'no'}
-                            ],
-                            placeholder=t("tab_alerts_detail.todos"),
-                            clearable=True
+                            options=source_filter_options(),
+                            value=SOURCE_FILTER_DEFAULT,
+                            className="segmented-control btn-group w-100",
+                            inputClassName="btn-check",
+                            labelClassName="btn btn-outline-primary",
+                            labelCheckedClassName="active",
                         )
                     ], md=3)
                 ], className="g-3")

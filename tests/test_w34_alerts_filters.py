@@ -80,22 +80,19 @@ def test_tribology_filter_still_present_after_removing_telemetry():
     assert "detail-filter-tribology" in layout_str
 
 
-def test_emin_source_filter_label_and_plain_yes_no_options():
-    label, options = configure_detail_source_filter('emin')
-    assert 'Con Multitécnica' in str(label)
-    assert options == [{'label': 'Sí', 'value': 'yes'}, {'label': 'No', 'value': 'no'}]
+def test_emin_source_filter_is_labelled_multitecnica():
+    assert 'Con Multitécnica' in str(configure_detail_source_filter('emin'))
 
 
 @pytest.mark.parametrize('client', ['cda', 'capstone'])
 def test_other_clients_keep_the_tribology_filter(client):
-    label, options = configure_detail_source_filter(client)
-    assert 'Con Tribología' in str(label)
-    assert [option['value'] for option in options] == ['yes', 'no']
+    assert 'Con Tribología' in str(configure_detail_source_filter(client))
 
 
 @pytest.mark.parametrize('choice,expected', [
     ('yes', {'F-multi'}),
     ('no', {'F-telemetry', 'F-oil'}),
+    ('all', {'F-multi', 'F-telemetry', 'F-oil'}),
     (None, {'F-multi', 'F-telemetry', 'F-oil'}),
 ])
 def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, choice, expected):
@@ -115,7 +112,11 @@ def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, 
     assert {option['value'] for option in options} == expected
 
 
-@pytest.mark.parametrize('choice,expected', [('yes', {'F-oil'}), ('no', {'F-multi'})])
+@pytest.mark.parametrize('choice,expected', [
+    ('yes', {'F-oil'}),
+    ('no', {'F-multi'}),
+    ('all', {'F-oil', 'F-multi'}),
+])
 def test_other_client_filter_still_uses_oil_presence(monkeypatch, choice, expected):
     from dashboard.callbacks import alerts_callbacks as callbacks
 

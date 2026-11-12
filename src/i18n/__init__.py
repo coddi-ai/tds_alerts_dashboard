@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 from collections.abc import Mapping
@@ -54,8 +56,26 @@ def normalize_language(value) -> str:
     return code if code in LANGUAGES else DEFAULT_LANGUAGE
 
 
+# Set by `forced_language`: output that must not depend on who is looking (an email built
+# for the preview and for the scheduled send alike) pins its language here.
+_forced_language: ContextVar = ContextVar("forced_language", default=None)
+
+
+@contextmanager
+def forced_language(language: str):
+    """Within the block `t()` and the data-text helpers use `language`, whatever the request says."""
+    token = _forced_language.set(normalize_language(language))
+    try:
+        yield
+    finally:
+        _forced_language.reset(token)
+
+
 def current_language() -> str:
     """Language of the request being served; Spanish when there is no request."""
+    forced = _forced_language.get()
+    if forced is not None:
+        return forced
     try:
         from flask import has_request_context, request
     except ImportError:  # pragma: no cover - flask always ships with dash
@@ -196,7 +216,7 @@ def t_or(key: str, default: str) -> str:
     return default
 
 
-def page_title(key: str, suffix: str = " | Multi-Technical Alerts"):
+def page_title(key: str, suffix: str = " | CODDI ASSET HEALTH"):
     """Browser-tab title for `dash.register_page(title=...)`.
 
     Dash accepts a callable and evaluates it on every page load and navigation, which
@@ -227,4 +247,5 @@ __all__ = [
     "VOCAB_PREFIX",
     "VocabMapping",
     "vocab",
+    "forced_language",
 ]

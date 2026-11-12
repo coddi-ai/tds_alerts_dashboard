@@ -362,10 +362,10 @@ The Detail tab is divided into **4 main sections**:
    - Options: Sí / No / Todos
    - Filters alerts with/without telemetry evidence
 
-4. **Tribology Filter** (`detail-filter-tribology`):
-   - Type: Single-select
-   - Options: Sí / No / Todos
-   - Filters alerts with/without oil analysis evidence
+4. **Tribology Filter** (`detail-filter-tribology`, labelled "Con Multitécnica" for EMIN):
+   - Type: three-option segmented control (`dbc.RadioItems`), one selected at a time, applied on selection
+   - Options: Todas (`all`) / Sí (`yes`) / No (`no`); default **Sí**
+   - Filters alerts with/without oil analysis evidence (EMIN: published `Mixto` type)
 
 **Behavior**: Filters dynamically update the Alert Selector dropdown options
 

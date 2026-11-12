@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<g fill="none" stroke="#3b82f6" stroke-width="1.2" stroke-linecap="round">
+<path d="M-80,620 C 240,430 470,760 800,600 S 1230,430 1540,580" stroke-opacity="0.11"/>
+<path d="M-80,633 C 240,449 470,769 800,613 S 1230,448 1540,596" stroke-opacity="0.14"/>
+<path d="M-80,646 C 240,468 470,778 800,626 S 1230,466 1540,612" stroke-opacity="0.17"/>
+<path d="M-80,659 C 240,487 470,787 800,639 S 1230,484 1540,628" stroke-opacity="0.20"/>
+<path d="M-80,672 C 240,506 470,796 800,652 S 1230,502 1540,644" stroke-opacity="0.22"/>
+<path d="M-80,685 C 240,525 470,805 800,665 S 1230,520 1540,660" stroke-opacity="0.25"/>
+<path d="M-80,698 C 240,544 470,814 800,678 S 1230,538 1540,676" stroke-opacity="0.28"/>
+<path d="M-80,711 C 240,563 470,823 800,691 S 1230,556 1540,692" stroke-opacity="0.31"/>
+<path d="M-80,724 C 240,582 470,832 800,704 S 1230,574 1540,708" stroke-opacity="0.31"/>
+<path d="M-80,737 C 240,601 470,841 800,717 S 1230,592 1540,724" stroke-opacity="0.28"/>
+<path d="M-80,750 C 240,620 470,850 800,730 S 1230,610 1540,740" stroke-opacity="0.25"/>
+<path d="M-80,763 C 240,639 470,859 800,743 S 1230,628 1540,756" stroke-opacity="0.22"/>
+<path d="M-80,776 C 240,658 470,868 800,756 S 1230,646 1540,772" stroke-opacity="0.20"/>
+<path d="M-80,789 C 240,677 470,877 800,769 S 1230,664 1540,788" stroke-opacity="0.17"/>
+<path d="M-80,802 C 240,696 470,886 800,782 S 1230,682 1540,804" stroke-opacity="0.14"/>
+<path d="M-80,815 C 240,715 470,895 800,795 S 1230,700 1540,820" stroke-opacity="0.11"/>
+<path d="M 760,-30 C 960,120 1180,-90 1540,140" stroke-opacity="0.11"/>
+<path d="M 760,-19 C 960,136 1180,-76 1540,157" stroke-opacity="0.13"/>
+<path d="M 760,-8 C 960,152 1180,-62 1540,174" stroke-opacity="0.16"/>
+<path d="M 760,3 C 960,168 1180,-48 1540,191" stroke-opacity="0.19"/>
+<path d="M 760,14 C 960,184 1180,-34 1540,208" stroke-opacity="0.21"/>
+<path d="M 760,25 C 960,200 1180,-20 1540,225" stroke-opacity="0.24"/>
+<path d="M 760,36 C 960,216 1180,-6 1540,242" stroke-opacity="0.27"/>
+<path d="M 760,47 C 960,232 1180,8 1540,259" stroke-opacity="0.27"/>
+<path d="M 760,58 C 960,248 1180,22 1540,276" stroke-opacity="0.24"/>
+<path d="M 760,69 C 960,264 1180,36 1540,293" stroke-opacity="0.21"/>
+<path d="M 760,80 C 960,280 1180,50 1540,310" stroke-opacity="0.19"/>
+<path d="M 760,91 C 960,296 1180,64 1540,327" stroke-opacity="0.16"/>
+<path d="M 760,102 C 960,312 1180,78 1540,344" stroke-opacity="0.13"/>
+<path d="M 760,113 C 960,328 1180,92 1540,361" stroke-opacity="0.11"/>
+</g>
+</svg>

@@ -9,8 +9,10 @@ source with any color at all.
 
 After: `labels.py::SOURCE_STYLE` is the single (label, color) source of
 truth for a Trigger_type value, consumed by the table's row-highlight rule
-(both the match text AND the border color), the new color legend, the KPI
-card's accent, and the detail header's Fuente badge.
+(both the match text AND the border color), the new color legend and the
+selected-row card's Fuente. The KPI card is the deliberate exception: its
+accent is its own color, distinct from every Fuente color (see
+`labels.py::MULTITECHNICAL_KPI_COLOR`).
 
 The user confirmed "Multitécnica" as the final label for Trigger_type ==
 "Mixto" (the raw value is unchanged, only the display text). This test suite
@@ -21,7 +23,7 @@ the confirmed wording.
 import pandas as pd
 import pytest
 
-from dashboard.components.labels import SOURCE_STYLE, source_style, source_color
+from dashboard.components.labels import MULTITECHNICAL_KPI_COLOR, SOURCE_STYLE, source_style, source_color
 from dashboard.components.alerts_report import (
     translate_alert_source,
     prepare_alert_rows,
@@ -150,30 +152,37 @@ def test_legend_shows_the_same_three_colors_as_source_style():
         assert color in legend_str
 
 
-def test_kpi_card_mixed_alerts_accent_matches_source_style():
-    card = create_summary_stats_display(total_alerts=10, total_units=3, mixed_count=2)
-    rendered = str(card)
-    assert source_color("Mixto") in rendered
+def test_kpi_card_mixed_alerts_accent_is_not_a_fuente_color():
+    """The count card sits on the same screen as the Fuente chips (table column,
+    legend); sharing the Multitécnica purple made it read as one more chip."""
+    rendered = str(create_summary_stats_display(total_alerts=10, total_units=3, mixed_count=2))
+    assert MULTITECHNICAL_KPI_COLOR in rendered
+    fuente_colors = {color for _, color in SOURCE_STYLE.values()}
+    assert MULTITECHNICAL_KPI_COLOR not in fuente_colors
+    assert not any(color in rendered for color in fuente_colors)
 
 
-def test_detail_header_fuente_badge_matches_source_style():
+def test_detail_header_no_longer_shows_a_single_fuente_pill():
+    """The header names the contributing evidence sources as chips
+    (tests/test_alert_detail_redesign.py); the one "Fuente: <Trigger_type>" pill
+    that duplicated them is gone, so the source color is not painted there."""
     row = pd.Series({
         "FusionID": "F-1", "Timestamp": pd.Timestamp("2026-07-10 16:00:00"),
         "UnitId": "CA-42", "sistema": "motor", "subsistema": "engine",
         "componente": "engine", "Trigger_type": "Mixto",
         "Trigger_Var": "EngCoolTemp", "mensaje_ia": "",
+        "has_telemetry": True, "has_tribology": True,
     })
-    header = _alert_case_header(row)
-    rendered = str(header)
-    label, color = source_style("Mixto")
-    assert color in rendered
-    assert label in rendered
+    rendered = str(_alert_case_header(row))
+    assert "alert-source-badge" not in rendered
+    assert source_style("Mixto")[1] not in rendered
 
 
-def test_all_four_surfaces_agree_on_the_mixto_color(monkeypatch):
+def test_fuente_surfaces_agree_on_the_mixto_color_and_the_kpi_does_not_follow(monkeypatch):
     """The strongest form of the guarantee: patch SOURCE_STYLE once and
-    confirm every surface picks up the new color — proving there is exactly
-    one place this is defined, not four that happen to currently agree."""
+    confirm every Fuente surface picks up the new color — proving there is
+    exactly one place this is defined, not several that happen to currently
+    agree. The KPI card is not a Fuente surface and must not follow."""
     patched = dict(SOURCE_STYLE)
     patched["Mixto"] = ("Mixto", "#123456")
     monkeypatch.setitem(SOURCE_STYLE, "Mixto", patched["Mixto"])
@@ -181,16 +190,8 @@ def test_all_four_surfaces_agree_on_the_mixto_color(monkeypatch):
     table = create_alerts_report_table(_sample_alerts_df())
     legend = str(_build_source_legend())
     kpi = str(create_summary_stats_display(total_alerts=1, total_units=1, mixed_count=1))
-    row = pd.Series({
-        "FusionID": "F-1", "Timestamp": pd.Timestamp("2026-07-10 16:00:00"),
-        "UnitId": "CA-42", "sistema": "motor", "subsistema": "engine",
-        "componente": "engine", "Trigger_type": "Mixto",
-        "Trigger_Var": "EngCoolTemp", "mensaje_ia": "",
-    })
-    header = str(_alert_case_header(row))
 
     table_borders = [rule.get("borderLeft", "") for rule in table.style_data_conditional]
     assert any("#123456" in border for border in table_borders)
     assert "#123456" in legend
-    assert "#123456" in kpi
-    assert "#123456" in header
+    assert "#123456" not in kpi

@@ -906,111 +906,21 @@ def load_oil_classified(client: str) -> pd.DataFrame:
     ).copy(deep=True)
 
 
-@lru_cache(maxsize=8)
-def _load_analisis_inteligente_cached(
-    client: str,
-    path: str,
-    mtime_ns: int,
-    size: int,
-) -> pd.DataFrame:
-    """
-    Load AI-generated risk analysis/recommendation for Predictivo -> Evidencia
-    (one row per Unit per Fecha). Callers filter to a single Unit and take the
-    most recent Fecha.
-
-    Args:
-        client: Client identifier (e.g., 'cda')
-
-    Returns:
-        DataFrame with columns including Unit, Fecha, diagnostico,
-        causa_probable, acciones. Empty DataFrame if the file is missing.
-    """
-    file_path = Path(path)
-    logger.info(f"Loading analisis inteligente data from {file_path}")
-
-    if not file_path.exists():
-        logger.warning(f"Analisis inteligente file not found: {file_path}")
-        return pd.DataFrame()
-
-    try:
-        df = safe_read_parquet(file_path)
-        if "Fecha" in df.columns:
-            df["Fecha"] = pd.to_datetime(df["Fecha"])
-        logger.info(f"Loaded {len(df)} analisis inteligente rows")
-        return df
-
-    except Exception as e:
-        logger.error(f"Error loading analisis inteligente data: {e}")
-        return pd.DataFrame()
-
-
-def load_analisis_inteligente(client: str) -> pd.DataFrame:
-    """Return the current AI analysis generation as a defensive copy."""
-    client_key = (client or '').lower()
-    file_path = _data_path(
-        "predictive", "golden", client_key, "analisis_inteligente.parquet"
-    )
-    if not file_path.exists():
-        return pd.DataFrame()
-    stat = file_path.stat()
-    return _load_analisis_inteligente_cached(
-        client_key, str(file_path), stat.st_mtime_ns, stat.st_size
-    ).copy(deep=True)
-
-
-def _filter_analisis_inteligente_component(df: pd.DataFrame, component: str = None) -> pd.DataFrame:
-    """Narrow analisis_inteligente rows to `component` when the column supports it.
-
-    Falls back to the unfiltered frame if `componente` is absent or the filter
-    would drop every row, so callers on clients/files without this column
-    keep working exactly as before.
-    """
-    if not component or "componente" not in df.columns:
-        return df
-    filtered = df[df["componente"].astype(str).str.lower() == str(component).lower()]
-    return filtered if not filtered.empty else df
-
-
-def get_latest_analisis_inteligente(client: str, component: str = None) -> pd.DataFrame:
-    """One row per Unit: the most recent analisis_inteligente.parquet row.
-
-    Used by Predictivo -> Estado de Flota (REQ-PR-04) to read `estado` per
-    unit instead of computing status from ranking thresholds, mirroring how
-    Evidencia (REQ-PR-03) already reads this file.
-    """
-    df = load_analisis_inteligente(client)
-    if df.empty or "Unit" not in df.columns:
-        return df
-    df = _filter_analisis_inteligente_component(df, component)
-    if "Fecha" in df.columns:
-        df = df.sort_values("Fecha")
-    return df.groupby("Unit", as_index=False).last()
-
-
 def get_model_run_date(client: str, component: str = None):
-    """Latest `Fecha` in analisis_inteligente.parquet — the model's last run date.
+    """Latest `Fecha` of the component's `unit_status_summary` - the model's last run date.
 
     Shared by Estado de Flota and Evidencia (REQ-PR-08) so both tabs always
-    show the same date. Falls back to the Data Contract v2 `unit_status_summary`
-    partition when the legacy flat file doesn't exist for this client/component
-    (e.g. capstone/motor, which was migrated fully to v2). Returns None if
-    unavailable from either source.
+    show the same date. Returns None if unavailable.
     """
-    df = load_analisis_inteligente(client)
-    if not df.empty and "Fecha" in df.columns:
-        df = _filter_analisis_inteligente_component(df, component)
-        if not df.empty:
-            return df["Fecha"].max()
-
-    if component:
-        from src.data import predictive_v2
-        try:
-            df_v2 = predictive_v2.load_unit_status_summary(client, component)
-        except Exception:
-            return None
-        if not df_v2.empty and "Fecha" in df_v2.columns:
-            return df_v2["Fecha"].max()
-
+    if not component:
+        return None
+    from src.data import predictive_v2
+    try:
+        df_v2 = predictive_v2.load_unit_status_summary(client, component)
+    except Exception:
+        return None
+    if not df_v2.empty and "Fecha" in df_v2.columns:
+        return df_v2["Fecha"].max()
     return None
 
 

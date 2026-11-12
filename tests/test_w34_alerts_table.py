@@ -47,9 +47,11 @@ def test_published_source_is_visible_while_id_and_evidence_remain_metadata():
 def test_id_fuente_evidencia_still_present_in_row_data():
     """store_selected_alert and render_selected_alert_summary
     (alerts_callbacks.py) read these three fields from
-    `derived_virtual_data` — all three must survive presentation changes."""
+    the table's `data` (matched by the row's `id`) — all three must survive
+    presentation changes."""
     table = create_alerts_report_table(_sample_alerts_df())
     for row in table.data:
+        assert row["id"] == row["ID"]
         assert "ID" in row and row["ID"] in ("F-1", "F-2")
         assert "Fuente" in row and row["Fuente"] in ("Multitécnica", "Telemetría")
         assert "Evidencia" in row and row["Evidencia"]

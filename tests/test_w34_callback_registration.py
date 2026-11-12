@@ -219,7 +219,7 @@ def _combined_layout_ids() -> set[str]:
         "client-selector", "alerts-navigation-state", "alerts-internal-tabs",
         "alerts-tab-content", "telemetry-health-tabs", "telemetry-health-tab-content",
         "telemetry-navigation-state", "telemetry-reference-date",
-        "telemetry-availability-notice", "telemetry-fleet-model-filter",
+        "telemetry-availability-notice", "telemetry-source-status", "telemetry-fleet-model-filter",
         "telemetry-fleet-status-filter",
     })
     return found
@@ -242,6 +242,9 @@ KNOWN_DYNAMIC_IDS = {
     "alert-oil-tendencia-date-range",
     "alert-oil-tendencia-date-clear",
     "alert-oil-view-selector",
+    "alert-signals-toggle",          # create_signal_evidence (only with signals beyond the visible N)
+    "alert-signals-collapse",
+    "alert-signals-toggle-labels",
     "telemetry-fleet-status-table",  # _fleet_status_table (telemetry-fleet-table-container)
 }
 

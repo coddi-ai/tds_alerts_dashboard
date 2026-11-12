@@ -24,6 +24,30 @@
     font-weight: 600;
 }
 
+/* Predictivo Resumen / Evidencia tabs. Dash gives every .tab `flex: 1 1 0`, so each
+   tab, and the indicator drawn on it, spanned an equal share of the whole bar. Here the
+   tab is only as wide as its label and the indicator is inset by the tab's padding, so
+   it sits under the label alone. */
+.pred-tab {
+    flex: 0 0 auto !important;
+    position: relative;
+}
+
+.pred-tab--selected {
+    border-top: 1px solid #dee2e6 !important;
+    border-bottom: none !important;
+}
+
+.pred-tab--selected::after {
+    content: "";
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 0;
+    height: 2px;
+    background: #007bff;
+}
+
 /* Tab container styling */
 .tabs__container {
     border-bottom: 1px solid #dee2e6;

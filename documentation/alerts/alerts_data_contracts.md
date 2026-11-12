@@ -148,6 +148,15 @@ Local: data/alerts/golden/{client}/consolidated_alerts.csv
   - System knowledge base
   - Recent maintenance activities
 
+- **Structured form** (Capstone): a JSON object. `diagnostic` (string) and `recommended_actions` (list of
+  strings, the narrative action text) are as before. `verification_question` (string, **nullable**) is the
+  yes/no check a technician should make (e.g. "¿Se realizó un cambio de aceite después de esa fecha?").
+  The generator (rules engine / LLM prompt) owns the split: the dashboard reads `verification_question`
+  as its own field and shows it in a "Verificar" callout above the actions; when it is missing, null or
+  blank no callout is rendered. The dashboard never extracts a question from `recommended_actions`.
+  The translation script translates every string in the JSON, so the new key needs no mapping change.
+- **Legacy text form** (CDA): sections `DIAGNÓSTICO` / `CAUSA PROBABLE` / `ACCIONES`; has no verification field.
+
 **Example Messages**:
 ```
 "Se observa temperatura elevada en el sistema de enfriamiento del motor 

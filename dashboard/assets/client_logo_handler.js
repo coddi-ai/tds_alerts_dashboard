@@ -1,61 +1,32 @@
 /**
- * Client Logo Error Handler
- * 
- * Automatically hides the client logo if the image fails to load.
- * This prevents broken image icons from appearing in the header.
+ * Client logo fallback.
+ *
+ * The top bar shows the current client's logo (#client-logo-img, set by update_client_logo).
+ * If the image cannot be loaded, the wrapper switches to data-logo-state="fallback" and the
+ * CSS shows the bordered initials placeholder in its place - never a broken image or a gap.
+ * A successful load switches it back.
+ *
+ * `error` and `load` do not bubble, so they are caught in the capture phase on document: that
+ * works for an image Dash creates or re-sources at any time, with no per-element wiring.
  */
-
-// Wait for DOM to be ready
-document.addEventListener('DOMContentLoaded', function() {
-    
-    /**
-     * Setup error handler for client logo image
-     */
-    function setupLogoErrorHandler() {
-        const logoImg = document.getElementById('client-logo-img');
-        
-        if (logoImg) {
-            // Add error event listener to hide logo if it fails to load
-            logoImg.addEventListener('error', function() {
-                console.warn('Client logo failed to load, hiding element');
-                this.style.display = 'none';
-            });
-            
-            // Add load event listener to show logo when it loads successfully
-            logoImg.addEventListener('load', function() {
-                // Only show if src is not empty
-                if (this.src && this.src !== window.location.href && this.src !== '') {
-                    console.log('Client logo loaded successfully');
-                    // Style will be set by callback, but ensure display is not none if callback set it
-                    if (this.style.display === 'none' && this.src.includes('/logos/')) {
-                        this.style.display = 'block';
-                    }
-                }
-            });
-        }
-    }
-    
-    // Setup handler immediately
-    setupLogoErrorHandler();
-    
-    // Also setup after a short delay to handle dynamic content
-    setTimeout(setupLogoErrorHandler, 500);
-    
-    // Use MutationObserver to detect when logo is added to DOM dynamically
-    const observer = new MutationObserver(function(mutations) {
-        mutations.forEach(function(mutation) {
-            if (mutation.addedNodes.length) {
-                setupLogoErrorHandler();
+(function () {
+    function onImageEvent(state) {
+        return function (event) {
+            var img = event.target;
+            if (!img || img.id !== 'client-logo-img') {
+                return;
             }
-        });
-    });
-    
-    // Observe the header area for changes
-    const headerArea = document.querySelector('body');
-    if (headerArea) {
-        observer.observe(headerArea, {
-            childList: true,
-            subtree: true
-        });
+            // An empty src (no client yet) can raise `error`; that is not a missing asset.
+            if (state === 'fallback' && !img.getAttribute('src')) {
+                return;
+            }
+            var wrap = img.closest('.topbar-client-logo-wrap');
+            if (wrap) {
+                wrap.setAttribute('data-logo-state', state);
+            }
+        };
     }
-});
+
+    document.addEventListener('error', onImageEvent('fallback'), true);
+    document.addEventListener('load', onImageEvent('loaded'), true);
+})();

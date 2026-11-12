@@ -48,6 +48,9 @@ import dashboard.callbacks.telemetry_callbacks
 # Import oil callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.oil_callbacks
 
+# "Fuentes de Datos" popover of the remaining pages (auto-registered on import)
+import dashboard.callbacks.data_sources_callbacks
+
 # Import lab compliance callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.lab_compliance_callbacks
 
@@ -78,6 +81,7 @@ from dashboard.callbacks.predictive_pages_callbacks import register_predictive_p
 
 # Import admin callbacks (login events chart)
 from dashboard.callbacks.admin_callbacks import register_admin_callbacks
+from dashboard.callbacks.mailing_callbacks import register_mailing_callbacks
 
 # Import the centralized route guard (role + client-service route protection)
 from dashboard.callbacks.access_control_callbacks import register_access_control_callbacks
@@ -92,6 +96,10 @@ from dashboard.troubleshooting_handoff import register_troubleshooting_handoff
 # Reportabilidad: S3 report browser + Flask route that streams each PDF
 from dashboard.callbacks.reporting_callbacks import register_reporting_callbacks
 from dashboard.report_files import register_report_files
+
+# Informe preliminar de falla: formulario, generacion en segundo plano (src/informe_falla) y ruta Flask que entrega el PDF
+from dashboard.callbacks.informe_falla_callbacks import register_informe_falla_callbacks
+from dashboard.informe_falla_files import register_informe_falla_files
 
 # Validate the client service register at startup - critical structural
 # errors raise (fail fast); field-level issues are logged, not fatal.
@@ -130,7 +138,7 @@ app = dash.Dash(
     pages_folder="",  # Pages are registered explicitly below, no folder auto-discovery
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.FONT_AWESOME],
     suppress_callback_exceptions=True,
-    title="Multi-Technical Alerts",
+    title="CODDI ASSET HEALTH",
     url_base_pathname=PATH_PREFIX,
     serve_locally=True
 )
@@ -162,8 +170,10 @@ import dashboard.pages.agents_troubleshooting
 import dashboard.pages.integration_validacion_avisos
 import dashboard.pages.integration_seguimiento_avisos
 import dashboard.pages.reporting_main
+import dashboard.pages.reporting_informe_falla
 import dashboard.pages.admin_main
 import dashboard.pages.admin_user_registry
+import dashboard.pages.admin_mailing
 import dashboard.pages.no_services
 
 # Set app layout
@@ -236,14 +246,25 @@ register_campbell_ai_callbacks(app)
 # CAMPBELL_AI_STREAMING is enabled.
 register_campbell_ai_stream(app)
 register_admin_callbacks(app)
+register_mailing_callbacks(app)
 register_access_control_callbacks(app)
 register_sidebar_callbacks(app)
 register_troubleshooting_callbacks(app)
 # Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.
 register_troubleshooting_handoff(app)
 register_reporting_callbacks(app)
+register_informe_falla_callbacks(app)
 # Flask route {PATH_PREFIX}reports/file: re-checks access and streams the PDF from S3.
 register_report_files(app)
+# Flask route {PATH_PREFIX}informe-falla/file: re-checks access and serves a generated informe preliminar PDF.
+register_informe_falla_files(app)
+
+# Automatic alert-summary emails (Emin daily, Capstone weekly, 08:00 America/Santiago).
+# On by default (MAILING_SCHEDULER_ENABLED=false turns it off); several workers are safe
+# (persisted marker). Not started when the module is imported by the test suite.
+if "pytest" not in sys.modules:
+    from src.mailing import start_mailing_scheduler
+    start_mailing_scheduler()
 
 
 @app.server.after_request
@@ -316,6 +337,3 @@ if __name__ == '__main__':
         debug=debug,
         threaded=True,
     )
-    
-    
-    

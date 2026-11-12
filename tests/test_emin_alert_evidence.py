@@ -261,7 +261,7 @@ def test_table_summary_and_detail_keep_source_type_and_show_matching_context(tmp
     assert table.data[0]["Fuente"] == "Telemetría"
     assert table.data[0]["Evidencia"] == "Telemetría + Mantenimiento"
     assert alert_summary(loaded)["mixed"] == 0
-    summary = _visible(callbacks.render_selected_alert_summary({"row": 0}, table.data))
+    summary = _visible(callbacks.render_selected_alert_summary({"row": 0, "row_id": table.data[0]["id"]}, table.data))
     assert "Contexto de mantenciones" in summary and "28-2026" in summary
     assert "2026-06-15" in summary and "2026-07-13" in summary
     assert "Inspección del motor." in summary
@@ -287,7 +287,7 @@ def test_detail_and_summary_filter_tasks_by_system_across_four_weeks(tmp_path, m
         pd.DataFrame([_weekly(Summary="Resumen fuera", Tasks_List=_task(day, activity="Motor fuera"))]).to_csv(week_path.parent / f"{week}.csv", index=False)
     loaded = load_alerts_data("emin")
     table = create_alerts_report_table(loaded)
-    summary = _visible(callbacks.render_selected_alert_summary({"row": 0}, table.data))
+    summary = _visible(callbacks.render_selected_alert_summary({"row": 0, "row_id": table.data[0]["id"]}, table.data))
     detail = _visible(callbacks.create_maintenance_evidence_section(loaded.iloc[0], "emin"))
     for rendered in (summary, detail):
         assert "Motor reciente" in rendered and "Motor límite" in rendered
@@ -338,7 +338,9 @@ def test_detail_sections_follow_published_sources_with_or_without_maintenance(
         monkeypatch.setattr(callbacks, f"create_{name}_evidence_section", render)
     detail = callbacks.update_detail_view("F-1", "emin", None)
     assert called == sections
-    assert ("Multitécnica" in str(detail)) is (source_type == "Mixto")
+    header = _visible(detail)
+    assert ("Tribología" in header) is (source_type in {"Mixto", "Tribologia"})
+    assert "Multitécnica" not in header
     assert load_alerts_data("emin").iloc[0].Trigger_type == source_type
 
 

@@ -242,13 +242,12 @@ def main():
     BUCKET_NAME = os.getenv("BUCKET_NAME")
     ACCESS_KEY = os.getenv("ACCESS_KEY")
     SECRET_KEY = os.getenv("SECRET_KEY")
-    STAGE_NAME = os.getenv("STAGE_NAME") # Only defined when deployed to the cloud
     S3_PREFIX = "MultiTechnique Alerts/"
     
     if not BUCKET_NAME:
         raise ValueError("BUCKET_NAME not found in .env file")
-    if not STAGE_NAME and (not ACCESS_KEY or not SECRET_KEY):
-        raise ValueError("ACCESS_KEY and SECRET_KEY not found in .env file")
+    # ACCESS_KEY/SECRET_KEY are optional: on AWS the task role provides credentials
+    # through boto3's default chain; locally they come from .env.
     
     local_data_dir = project_root / "data"
     

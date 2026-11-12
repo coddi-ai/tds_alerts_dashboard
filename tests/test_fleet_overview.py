@@ -20,17 +20,11 @@ import pytest
 from dash import dcc, html
 
 import dashboard.components.fleet_overview as fo
-from dashboard.callbacks.machines_callbacks import (
-    _MACHINE_STATUS_BG,
-    _MACHINE_STATUS_FG,
-    _STATUS_BG,
-    _STATUS_FG,
-)
 
 
 def _patch_all_sources(monkeypatch, *, enabled, alerts=None, telemetry=None, oil=None,
                         maintenance=None, predictive_components=None, predictive=None,
-                        freshness=None):
+                        freshness=None, alert_counts=None):
     """Wire every per-technique data source to canned values so
     `build_fleet_overview` can run end-to-end without touching real data
     files. `enabled` gates monitoring-alerts/telemetry/oil/mantenciones via
@@ -39,7 +33,7 @@ def _patch_all_sources(monkeypatch, *, enabled, alerts=None, telemetry=None, oil
     `telemetry`/`oil` take a plain {unit: status} dict (no severity value -
     tests that need one patch `_telemetry_status_map`/`_oil_status_map`
     directly) and `freshness` the {(technique, unit): (label, elapsed)} map
-    they share. `alerts`/`predictive` take the full
+    they share. `alert_counts` is {unit: (last week, 4 weeks, 8 weeks)}. `alerts`/`predictive` take the full
     ({unit: status}, {unit: value}, freshness_label, freshness_elapsed)
     tuple since freshness is central to what most of these tests assert."""
     monkeypatch.setattr(
@@ -47,6 +41,7 @@ def _patch_all_sources(monkeypatch, *, enabled, alerts=None, telemetry=None, oil
         lambda client, service_id: enabled.get(service_id, False),
     )
     monkeypatch.setattr(fo, "_alerts_status_map", lambda client: alerts or ({}, {}, "Sin Datos", "N/A"))
+    monkeypatch.setattr(fo, "_alerts_window_counts", lambda client: alert_counts or {})
     monkeypatch.setattr(fo, "_telemetry_status_map", lambda client: (telemetry or {}, {}))
     monkeypatch.setattr(fo, "_oil_status_map", lambda client: (oil or {}, {}))
     monkeypatch.setattr(fo, "_maintenance_status_map", lambda client: maintenance or ({}, "Sin Datos", "N/A"))
@@ -110,15 +105,30 @@ def _all_rows(result) -> dict:
     return out
 
 
-def _link(td) -> dcc.Link:
-    return td.children
+def _tooltip(td) -> str:
+    """The explanation a cell's chip button opens (hover, focus, click)."""
+    return getattr(td.children, "data-tip")
+
+
+def _chip(td) -> html.Span:
+    """The status chip inside a table cell's button."""
+    button = td.children
+    assert isinstance(button, html.Button) and "chip-button" in button.className
+    chip = button.children
+    assert isinstance(chip, html.Span) and "status-chip" in chip.className
+    return chip
+
+
+def _toggles(result) -> list:
+    return [
+        n for n in _walk(result)
+        if isinstance(n, html.Button) and getattr(n, "data-fleet-band-toggle", None)
+    ]
 
 
 def _band_titles(result) -> list:
-    return [
-        _text(n) for n in _walk(result)
-        if isinstance(n, html.Span) and "UNIDADES" in _text(n)
-    ]
+    """"UNIDADES ANORMAL (2)" for each band header, in order."""
+    return [f"{_text(b.children[1])} {_text(b.children[2])}" for b in _toggles(result)]
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +209,7 @@ def test_max_risk_tooltip_includes_severity_value_only_while_it_still_explains_t
 # ---------------------------------------------------------------------------
 
 def test_table_has_unidad_estado_then_one_column_per_applicable_technique(monkeypatch):
+    """Maintenance is enabled here and still gets no column (it is hidden on the Fleet Overview)."""
     enabled = {"monitoring-alerts": True, "monitoring-oil": True, "monitoring-mantenciones": True}
     _patch_all_sources(
         monkeypatch, enabled=enabled,
@@ -209,7 +220,7 @@ def test_table_has_unidad_estado_then_one_column_per_applicable_technique(monkey
     )
     tables = _tables(fo.build_fleet_overview("TESTCO"))
     assert len(tables) == 1
-    assert _header(tables[0]) == ["Unidad", "Estado", "Alertas", "Tribología", "Mantención"]
+    assert _header(tables[0]) == ["Unidad", "Estado", "Alertas", "Tribología"]
 
 
 def test_disabled_technique_gets_no_column_at_all(monkeypatch):
@@ -250,7 +261,7 @@ def test_all_text_is_spanish(monkeypatch):
     )
     result = fo.build_fleet_overview("TESTCO")
     table = _tables(result)[0]
-    assert _header(table) == ["Unidad", "Estado", "Alertas", "Tribología", "Mantención"]
+    assert _header(table) == ["Unidad", "Estado", "Alertas", "Tribología"]
     for node in _walk(table):
         title = getattr(node, "title", None)
         if title:
@@ -272,7 +283,7 @@ def test_cell_shows_worse_of_label_and_estado_datos_with_matching_tooltip(monkey
     table = _tables(fo.build_fleet_overview("TESTCO"))[0]
     cell = _cells(_rows(table)[0])[2]
     assert _text(cell) == "Anormal"
-    tooltip = _link(cell).title
+    tooltip = _tooltip(cell)
     assert "Estado de la técnica: Normal" in tooltip
     assert "Estado de los datos: Preocupante (última actualización hace 25 días)" in tooltip
     assert "peor que el estado de la técnica (Normal)" in tooltip
@@ -285,32 +296,55 @@ def test_technique_worse_than_its_data_drives_the_cell(monkeypatch):
     )
     cell = _cells(_rows(_tables(fo.build_fleet_overview("TESTCO"))[0])[0])[2]
     assert _text(cell) == "Anormal"
-    assert "El estado de la técnica (Anormal) es peor" in _link(cell).title
+    assert "El estado de la técnica (Anormal) es peor" in _tooltip(cell)
 
 
-def test_cell_colors_reuse_the_monitoring_oil_table_scheme(monkeypatch):
-    enabled = {"monitoring-alerts": True}
+def test_every_status_is_a_chip_with_a_shape_and_the_status_word(monkeypatch):
+    """No status is colored text alone: each is a chip carrying the word and a shape
+    element (the CSS gives it a different silhouette per status)."""
     _patch_all_sources(
-        monkeypatch, enabled=enabled,
-        alerts=({"A": "Normal", "B": "Alerta", "C": "Anormal"}, {}, "Ok", "1h"),
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"A": "Normal", "B": "Alerta", "C": "Anormal", "D": "Sin Datos"}, {}, "Ok", "1h"),
     )
     result = fo.build_fleet_overview("TESTCO")
-    rows = {}
-    for t in _tables(result):
-        for r in _rows(t):
-            rows[_text(_cells(r)[0])] = r
-    for unit, status in (("A", "Normal"), ("B", "Alerta"), ("C", "Anormal")):
-        technique_cell = _cells(rows[unit])[2]
-        assert technique_cell.style["backgroundColor"] == _STATUS_BG[status]
-        assert technique_cell.style["color"] == _STATUS_FG[status]
-        estado_cell = _cells(rows[unit])[1]
-        assert estado_cell.style["backgroundColor"] == _MACHINE_STATUS_BG[status]
-        assert estado_cell.style["color"] == _MACHINE_STATUS_FG[status]
+    rows = {_text(_cells(r)[0]): r for t in _tables(result) for r in _rows(t)}
+    for unit, status in (("A", "Normal"), ("B", "Alerta"), ("C", "Anormal"), ("D", "Sin Datos")):
+        for td in _cells(rows[unit])[1:]:
+            assert getattr(td.children, "aria-label")  # a real button with an accessible name
+            chip = _chip(td)
+            shape, word = chip.children
+            assert "status-chip__shape" in shape.className
+            assert _text(word) == status
+            assert getattr(chip, "data-status") == status
 
 
-def test_whole_row_links_to_the_unit_summary(monkeypatch):
-    """Clicking a unit's row - any of its cells - opens that unit's Unit
-    Summary: every cell's content is a link to the same href."""
+def test_estado_is_a_solid_chip_and_technique_cells_are_tinted(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"U1": "Alerta"}, {}, "Ok", "1h"),
+    )
+    row = _rows(_tables(fo.build_fleet_overview("TESTCO"))[0])[0]
+    estado, technique = _cells(row)[1], _cells(row)[2]
+    assert "status-chip--solid" in _chip(estado).className
+    assert "status-chip--solid" not in _chip(technique).className
+    assert "status-chip--alerta" in _chip(technique).className
+
+
+def test_alerta_and_anormal_use_distinct_tiers_and_there_is_no_critico(monkeypatch):
+    from dashboard.components.status_chip import STATUS_SOLID_COLORS, canonical_status
+
+    assert STATUS_SOLID_COLORS["Alerta"] != STATUS_SOLID_COLORS["Anormal"]
+    assert canonical_status("Crítico") == "Anormal"
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"U1": "Crítico"}, {}, "Ok", "1h"),
+    )
+    assert _all_rows(fo.build_fleet_overview("TESTCO"))["U1"] == ["Anormal", "Anormal"]
+
+
+def test_row_has_one_real_link_to_the_unit_detail(monkeypatch):
+    """The unit id is a real link (`<a href>` via dcc.Link); the other cells carry chip
+    buttons that explain themselves instead of links."""
     enabled = {"monitoring-alerts": True, "monitoring-oil": True}
     _patch_all_sources(
         monkeypatch, enabled=enabled,
@@ -319,10 +353,102 @@ def test_whole_row_links_to_the_unit_summary(monkeypatch):
         freshness={("oil", "U1"): ("Ok", "2 días")},
     )
     row = _rows(_tables(fo.build_fleet_overview("TESTCO"))[0])[0]
-    hrefs = {_link(td).href for td in _cells(row)}
-    assert len(hrefs) == 1
-    assert next(iter(hrefs)).endswith(fo.unit_summary_path("U1"))
-    assert all(isinstance(_link(td), dcc.Link) for td in _cells(row))
+    links = [n for n in _walk(row) if isinstance(n, dcc.Link)]
+    assert len(links) == 1
+    assert links[0].href.endswith(fo.unit_summary_path("U1"))
+    assert _cells(row)[0].children is links[0]
+
+
+def test_band_headers_are_buttons_with_aria_expanded_and_a_tinted_icon_badge(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"N": "Normal", "A": "Alerta", "X": "Anormal"}, {}, "Ok", "1h"),
+    )
+    result = fo.build_fleet_overview("TESTCO")
+    toggles = _toggles(result)
+    assert len(toggles) == 3
+    for button in toggles:
+        assert getattr(button, "aria-controls").startswith("fleet-band-body-")
+        assert "icon-badge" in button.children[0].className
+        assert not hasattr(button, "style")  # no inline left-border accent
+    controlled = {n.id for n in _walk(result) if getattr(n, "data-fleet-band-body", None)}
+    assert {getattr(b, "aria-controls") for b in toggles} == controlled
+
+
+def test_anormal_starts_expanded_and_alerta_and_normal_collapsed_with_their_counts(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"N1": "Normal", "N2": "Normal", "A": "Alerta", "X": "Anormal"}, {}, "Ok", "1h"),
+    )
+    result = fo.build_fleet_overview("TESTCO")
+    states = {_text(b.children[1]): getattr(b, "aria-expanded") for b in _toggles(result)}
+    assert states == {"UNIDADES ANORMAL": "true", "UNIDADES ALERTA": "false", "UNIDADES NORMAL": "false"}
+    assert _band_titles(result) == ["UNIDADES ANORMAL (1)", "UNIDADES ALERTA (1)", "UNIDADES NORMAL (2)"]
+    bodies = {getattr(n, "id"): n for n in _walk(result) if getattr(n, "data-fleet-band-body", None)}
+    assert bodies["fleet-band-body-anormal"].style is None
+    assert bodies["fleet-band-body-normal"].style == {"display": "none"}
+
+
+# ---------------------------------------------------------------------------
+# 3b. Search ("Buscar Unidad")
+# ---------------------------------------------------------------------------
+
+def _patch_search_fleet(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"CA-9": "Normal", "CA-90": "Anormal", "CA-93": "Alerta", "CA-2": "Normal", "CA-10": "Anormal"},
+                {}, "Ok", "1h"),
+    )
+    fo._SNAPSHOTS.clear()
+
+
+def test_search_lists_only_matching_units_and_opens_their_sections(monkeypatch):
+    _patch_search_fleet(monkeypatch)
+    result = fo.build_fleet_overview("TESTCO", "CA-9")
+    assert list(_all_rows(result)) == ["CA-90", "CA-93", "CA-9"]  # band by band, natural order inside
+    states = {_text(b.children[1]): getattr(b, "aria-expanded") for b in _toggles(result)}
+    assert states == {"UNIDADES ANORMAL": "true", "UNIDADES ALERTA": "true", "UNIDADES NORMAL": "true"}
+    assert getattr(result, "data-fleet-search") == "active"
+
+
+def test_search_does_not_change_the_counts_in_the_headers(monkeypatch):
+    _patch_search_fleet(monkeypatch)
+    plain = _band_titles(fo.build_fleet_overview("TESTCO"))
+    assert _band_titles(fo.build_fleet_overview("TESTCO", "CA-9", refresh=False)) == plain
+    assert plain == ["UNIDADES ANORMAL (2)", "UNIDADES ALERTA (1)", "UNIDADES NORMAL (2)"]
+
+
+def test_search_is_case_insensitive_and_a_band_without_matches_stays_closed(monkeypatch):
+    _patch_search_fleet(monkeypatch)
+    result = fo.build_fleet_overview("TESTCO", "ca-93", refresh=False)
+    assert list(_all_rows(result)) == ["CA-93"]
+    states = {_text(b.children[1]): getattr(b, "aria-expanded") for b in _toggles(result)}
+    assert states == {"UNIDADES ANORMAL": "false", "UNIDADES ALERTA": "true", "UNIDADES NORMAL": "false"}
+
+
+def test_search_without_results_says_so(monkeypatch):
+    _patch_search_fleet(monkeypatch)
+    result = fo.build_fleet_overview("TESTCO", "ZZ", refresh=False)
+    assert _all_rows(result) == {}
+    assert "Ninguna unidad coincide" in _text(result)
+
+
+def test_search_and_load_more_agree_on_the_matches(monkeypatch):
+    _many_units(monkeypatch)
+    result = fo.build_fleet_overview("TESTCO", "U01")  # U010..U019
+    assert list(_all_rows(result)) == [f"U01{i}" for i in range(10)]
+    rows, remaining = fo.get_band_rows_chunk("TESTCO", "Normal", 1, "U01")
+    assert (rows, remaining) == ([], 0)
+
+
+def test_the_search_field_is_labeled():
+    from dashboard.tabs.tab_overview_general import create_layout
+
+    layout = create_layout()
+    label = next(n for n in _walk(layout) if isinstance(n, html.Label))
+    field = next(n for n in _walk(layout) if getattr(n, "id", None) == "fleet-search")
+    assert label.htmlFor == "fleet-search" and _text(label) == "Buscar Unidad"
+    assert field.type == "search"
 
 
 # ---------------------------------------------------------------------------
@@ -347,12 +473,13 @@ def test_unit_with_every_technique_sin_datos_is_not_labeled_normal(monkeypatch):
     enabled = {"monitoring-alerts": True, "monitoring-mantenciones": True}
     _patch_all_sources(
         monkeypatch, enabled=enabled,
-        alerts=({}, {}, "Sin Datos", "N/A"),  # enabled, but no record for U1
+        alerts=({"U1": "Sin Datos"}, {}, "Sin Datos", "N/A"),  # enabled, but no reading for U1
         maintenance=({"U1": "SANO"}, "Ok", "1 día"),
     )
     result = fo.build_fleet_overview("TESTCO")
     assert _band_titles(result) == ["UNIDADES SIN DATOS (1)"]
-    assert _all_rows(result)["U1"] == ["Sin Datos", "Sin Datos", "SANO"]  # Maintenance still shown
+    assert _all_rows(result)["U1"] == ["Sin Datos", "Sin Datos"]  # Maintenance is not a column
+    assert "Mantención" not in _header(_tables(result)[0])
 
 
 def test_technique_availability_matches_table_sin_datos_signal(monkeypatch):
@@ -382,6 +509,33 @@ def test_stale_but_real_reading_counts_as_available_and_never_normal(monkeypatch
     assert _band_titles(result) == ["UNIDADES ANORMAL (1)"]
 
 
+def test_maintenance_has_no_status_but_keeps_its_data_source_availability(monkeypatch):
+    """Mantención has no column and no status in the General tab - not in the unit's
+    snapshot either - but "Fuentes de datos" still reports whether its data is there."""
+    enabled = {"monitoring-alerts": True, "monitoring-mantenciones": True}
+    _patch_all_sources(
+        monkeypatch, enabled=enabled,
+        alerts=({"U1": "Normal"}, {}, "Ok", "1h"),
+        maintenance=({"U1": "DETENIDO"}, "Ok", "1 día"),
+    )
+    assert fo.technique_availability("TESTCO") == {"alerts": True, "maintenance": True}
+    snapshot = fo.get_unit_snapshot("TESTCO", "U1")
+    assert "maintenance" not in snapshot["technique_status"]
+    assert "maintenance_status" not in snapshot
+    assert "Mantención" not in _header(_tables(fo.build_fleet_overview("TESTCO"))[0])
+
+
+def test_unit_known_only_to_maintenance_is_dropped(monkeypatch):
+    enabled = {"monitoring-alerts": True, "monitoring-mantenciones": True}
+    _patch_all_sources(
+        monkeypatch, enabled=enabled,
+        alerts=({"U1": "Normal"}, {}, "Ok", "1h"),
+        maintenance=({"U1": "SANO", "M-ONLY": "DETENIDO"}, "Ok", "1 día"),
+    )
+    assert list(_all_rows(fo.build_fleet_overview("TESTCO"))) == ["U1"]
+    assert [u["unit"] for u in fo.get_ordered_units("TESTCO")] == ["U1"]
+
+
 def test_alerts_critico_is_a_synonym_for_anormal_in_priority():
     assert fo.STATUS_PRIORITY["Crítico"] == fo.STATUS_PRIORITY["Anormal"]
 
@@ -409,7 +563,7 @@ def test_maintenance_detenido_never_pulls_a_unit_into_a_worse_band(monkeypatch):
     )
     result = fo.build_fleet_overview("TESTCO")
     assert _band_titles(result) == ["UNIDADES NORMAL (1)"]
-    assert _all_rows(result)["U1"] == ["Normal", "Normal", "DETENIDO"]
+    assert _all_rows(result)["U1"] == ["Normal", "Normal"]
 
 
 def test_estado_tooltip_names_the_techniques_that_determine_it(monkeypatch):
@@ -421,7 +575,7 @@ def test_estado_tooltip_names_the_techniques_that_determine_it(monkeypatch):
         freshness={("oil", "U1"): ("Ok", "2 días")},
     )
     row = _rows(_tables(fo.build_fleet_overview("TESTCO"))[0])[0]
-    tooltip = _link(_cells(row)[1]).title
+    tooltip = _tooltip(_cells(row)[1])
     assert "Anormal" in tooltip and "Tribología" in tooltip and "Alertas" not in tooltip
 
 
@@ -430,25 +584,59 @@ def test_estado_tooltip_names_the_techniques_that_determine_it(monkeypatch):
 #    alphabetical - verified with mixed technique availability.
 # ---------------------------------------------------------------------------
 
-def test_ranking_tiebreak_orders_by_count_of_alerta_or_anormal_techniques(monkeypatch):
-    """Both units are worst-case Alerta overall, but U-TWO is Alerta on two
-    techniques while U-ONE is Alerta on only one - U-TWO must sort first."""
+def test_units_follow_natural_ascending_id_order_within_a_band(monkeypatch):
+    """CA-2 before CA-10, whatever the units' readings: the ranking by number of techniques
+    in Alerta and by alert counts no longer orders a band."""
     enabled = {"monitoring-alerts": True, "monitoring-oil": True}
     _patch_all_sources(
         monkeypatch, enabled=enabled,
-        alerts=({"U-ONE": "Alerta", "U-TWO": "Alerta"}, {}, "Ok", "1h"),
-        oil={"U-ONE": "Normal", "U-TWO": "Alerta"},
-        freshness={("oil", "U-ONE"): ("Ok", "1 día"), ("oil", "U-TWO"): ("Ok", "1 día")},
+        alerts=({"CA-10": "Alerta", "CA-2": "Alerta", "CA-1": "Alerta", "CA-9": "Alerta"}, {}, "Ok", "1h"),
+        oil={"CA-10": "Alerta", "CA-2": "Normal", "CA-1": "Normal", "CA-9": "Normal"},
+        freshness={("oil", u): ("Ok", "1 día") for u in ("CA-10", "CA-2", "CA-1", "CA-9")},
+        alert_counts={"CA-10": (9, 9, 9), "CA-2": (0, 1, 1)},
     )
-    assert list(_all_rows(fo.build_fleet_overview("TESTCO"))) == ["U-TWO", "U-ONE"]
+    assert list(_all_rows(fo.build_fleet_overview("TESTCO"))) == ["CA-1", "CA-2", "CA-9", "CA-10"]
 
 
-def test_ranking_falls_back_to_alphabetical_when_counts_tie(monkeypatch):
+def test_natural_key_compares_numbers_as_numbers():
+    assert sorted(["CA-10", "CA-2", "T_9", "CA-1", "ca-3"], key=fo.natural_key) == ["CA-1", "CA-2", "ca-3", "CA-10", "T_9"]
+
+
+def test_alerts_tooltip_lists_the_three_window_counts(monkeypatch):
     _patch_all_sources(
         monkeypatch, enabled={"monitoring-alerts": True},
-        alerts=({"Z-UNIT": "Alerta", "A-UNIT": "Alerta"}, {}, "Ok", "1h"),
+        alerts=({"U1": "Alerta", "U2": "Alerta"}, {}, "Ok", "1h"),
+        alert_counts={"U1": (2, 7, 11)},  # U2 has no alert at all
     )
-    assert list(_all_rows(fo.build_fleet_overview("TESTCO"))) == ["A-UNIT", "Z-UNIT"]
+    rows = {_text(_cells(r)[0]): r for r in _rows(_tables(fo.build_fleet_overview("TESTCO"))[0])}
+    assert "Alertas: última semana 2 · últimas 4 semanas 7 · últimas 8 semanas 11" in _tooltip(_cells(rows["U1"])[2])
+    assert "última semana 0 · últimas 4 semanas 0 · últimas 8 semanas 0" in _tooltip(_cells(rows["U2"])[2])
+
+
+def test_alerts_tooltip_has_no_counts_line_without_an_alert_feed(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"U1": "Alerta"}, {}, "Ok", "1h"),
+    )
+    row = _rows(_tables(fo.build_fleet_overview("TESTCO"))[0])[0]
+    assert "última semana" not in _tooltip(_cells(row)[2])
+
+
+def test_count_alerts_by_window_uses_nested_trailing_windows():
+    from datetime import datetime, timedelta
+
+    import pandas as pd
+
+    from dashboard.callbacks.overview_general_callbacks import count_alerts_by_window
+
+    now = datetime.now()
+    ago = lambda days: now - timedelta(days=days, hours=1)  # noqa: E731 - just inside the window edge
+    df = pd.DataFrame({
+        "UnitId": ["U1", "U1", "U1", "U1", "U1", "U2"],
+        "Timestamp": [ago(1), ago(6), ago(27), ago(55), ago(70), ago(100)],
+    })
+    assert count_alerts_by_window(df) == {"U1": (2, 3, 4), "U2": (0, 0, 0)}
+    assert count_alerts_by_window(pd.DataFrame()) == {}
 
 
 def test_rows_are_grouped_into_bands_worst_first(monkeypatch):
@@ -474,7 +662,7 @@ def test_rows_are_grouped_into_bands_worst_first(monkeypatch):
             "FULLCO",
             {"monitoring-alerts": True, "monitoring-telemetry": True, "monitoring-oil": True,
              "monitoring-mantenciones": True},
-            ["Alertas", "Telemetría", "Tribología", "Mantención"],
+            ["Alertas", "Telemetría", "Tribología"],
         ),
         ("OILONLYCO", {"monitoring-oil": True}, ["Tribología"]),
     ],
@@ -551,7 +739,8 @@ def _many_units(monkeypatch, n=120):
 
 
 def _buttons(result):
-    return [n for n in _walk(result) if isinstance(n, html.Button)]
+    """The "show more" buttons (not the band toggles)."""
+    return [n for n in _walk(result) if isinstance(n, html.Button) and isinstance(getattr(n, "id", None), dict)]
 
 
 def test_band_renders_only_the_first_page_and_offers_the_next(monkeypatch):
@@ -582,7 +771,7 @@ def test_chunk_rows_are_identical_to_what_the_first_render_would_show(monkeypatc
     fo.build_fleet_overview("TESTCO")
     rows, _ = fo.get_band_rows_chunk("TESTCO", "Normal", 1)
     assert all(len(_cells(r)) == 3 for r in rows)  # Unidad, Estado, Alertas - full columns
-    assert all(_link(_cells(r)[2]).title for r in rows)  # tooltips still attached
+    assert all(_tooltip(_cells(r)[2]) for r in rows)  # tooltips still attached
 
 
 def test_small_band_has_no_button_and_unknown_band_is_empty(monkeypatch):

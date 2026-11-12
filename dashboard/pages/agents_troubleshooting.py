@@ -9,15 +9,19 @@ def layout(**kwargs):
     # dashboard/callbacks/troubleshooting_callbacks.py from client-selector.
     return html.Div([
         html.Div([
-            html.H3([
-                html.I(className="fas fa-screwdriver-wrench me-2"),
-                t("troubleshooting_page.heading"),
-            ], className="text-primary mb-2"),
-            html.P(
-                t("troubleshooting_page.subtitle"),
-                className="text-muted",
-            ),
-        ], className="mb-4"),
+            html.Div([
+                html.H3([
+                    html.I(className="fas fa-screwdriver-wrench me-2"),
+                    t("troubleshooting_page.heading"),
+                ], className="text-primary mb-2"),
+                html.P(
+                    t("troubleshooting_page.subtitle"),
+                    className="text-muted",
+                ),
+            ]),
+            # "Fuentes de Datos" button + popover (dashboard/callbacks/data_sources_callbacks.py).
+            html.Div(id="troubleshooting-source-status", className="ds-header-slot"),
+        ], className="mb-4 d-flex flex-wrap justify-content-between align-items-start gap-3"),
         html.Div(id="troubleshooting-agent-card"),
     ], className="container-fluid p-4")
 

@@ -23,7 +23,7 @@ import dash
 from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from dashboard.auth import is_admin
+from dashboard.auth import allowed_clients, is_admin
 from dashboard.services_registry import first_enabled_service_path, resolve_service_id_for_pathname
 from config.client_services import is_service_dummy, is_service_enabled
 from src.utils.logger import get_logger
@@ -45,8 +45,12 @@ def register_access_control_callbacks(app: dash.Dash) -> None:
             raise PreventUpdate
 
         rel_path = dash.strip_relative_path(pathname) or ""
-        user_clients = user_data.get("clients", [])
-        effective_client = selected_client or (user_clients[0] if user_clients else None)
+        # The selector is admin-only in the UI, but the value it carries comes from the
+        # browser: only honour a client the user is actually granted.
+        user_clients = allowed_clients(user_data)
+        effective_client = selected_client if selected_client in user_clients else (
+            user_clients[0] if user_clients else None
+        )
 
         def _fallback():
             target = first_enabled_service_path(effective_client)

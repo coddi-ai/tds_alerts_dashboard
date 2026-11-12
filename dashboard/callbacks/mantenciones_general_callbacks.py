@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.i18n import t
+import logging
 from datetime import datetime
 
 import pandas as pd
@@ -10,6 +11,8 @@ from dash import Input, Output, State, ctx, html, no_update
 from dash.exceptions import MissingCallbackContextException, PreventUpdate
 
 from dashboard.tabs.tab_mantenciones_general import (
+    EQUIPMENT_TOP_N,
+    count_activity_equipment,
     create_activity_matrix,
     create_activity_table,
     create_daily_activity_chart,
@@ -17,44 +20,180 @@ from dashboard.tabs.tab_mantenciones_general import (
     create_daily_intervention_hours_chart,
     create_empty_figure,
     create_equipment_activity_chart,
-    create_equipment_pareto_chart,
-    create_emin_actions_pareto_chart,
-    create_emin_hours_pareto_chart,
+    create_actions_pareto_chart,
+    create_hours_pareto_chart,
     create_system_activity_chart,
     create_week_summary_table,
     create_week_task_table,
+    actions_pareto_summary,
+    hours_pareto_summary,
+    percent_value,
 )
 from src.data.maintenance_repository import PARETO_SCOPE, get_repository
 
-_EMIN_GENERIC_SYSTEM = "Equipo"
-_EMIN_GENERIC_SYSTEM_OPTION = "General del equipo (sin sistema técnico atribuido)"
-_EMIN_GENERIC_SYSTEM_CHART = "General del equipo"
+logger = logging.getLogger(__name__)
+
+# Source value for actions with no technical system attributed.
+_GENERIC_SYSTEM = "Equipo"
+
+# Placeholder values the repository writes into the data itself, with the
+# catalog key that renders each one. Real data values are never translated.
+_SENTINEL_KEYS = {
+    "Sin sistema": "reliability_report.no_system",
+    "Sin subsistema": "reliability_report.no_subsystem",
+    "Sin detalle": "reliability_report.no_detail",
+    "Sin atribución única": "reliability_report.no_unique_component",
+    "Sin estado": "reliability_report.no_status",
+    "Sin dato": "reliability_report.no_data",
+    "Sí": "reliability_report.yes",
+    "No": "reliability_report.no",
+}
+
+
+def _pareto_actions_title() -> str:
+    return t("reliability_report.pareto_actions_title")
+
+
+def _pareto_hours_title() -> str:
+    return t("reliability_report.pareto_hours_title")
+
+
+def _unavailable_message() -> str:
+    """Shown instead of any exception text or source diagnostic: end users never
+    see internal detail, which goes to the log."""
+    return t("reliability_report.unavailable")
+
+
+def _localize(value):
+    """Render a repository placeholder in the current language; other values pass through."""
+    key = _SENTINEL_KEYS.get(value) if isinstance(value, str) else None
+    return t(key) if key else value
+
+
+def _localize_columns(rows, columns):
+    return [
+        {**row, **{column: _localize(row[column]) for column in columns if column in row}}
+        for row in rows or []
+    ]
+
+# Confirmed Disponibilidad targets by client (upper case), in percent. None are
+# confirmed yet, so the card keeps the same neutral treatment as its siblings
+# instead of inventing a threshold.
+AVAILABILITY_TARGET_PCT_BY_CLIENT: dict[str, float] = {}
+
+_EQUIPMENT_GRAPH_BASE_HEIGHT = 340
+_EQUIPMENT_GRAPH_ROW_HEIGHT = 26
 
 
 def _options(values):
     return [{"label": value, "value": value} for value in values]
 
 
-def _maintenance_root_class(client):
-    classes = ["p-4", "maintenance-view-root"]
-    if str(client or "").strip().upper() == "EMIN":
-        classes.append("maintenance-emin")
-    return " ".join(classes)
+def systems_summary_label(selected, available) -> str:
+    """Summary text of the Sistema control for none, every and some systems."""
+    chosen = list(selected or [])
+    if not chosen:
+        return t("reliability_report.systems_none")
+    if not available or set(chosen) >= set(available):
+        return t("reliability_report.systems_all")
+    return t("reliability_report.systems_count", count=len(chosen))
 
 
-def _pareto_system_options(client, values):
+def availability_status(value, client):
+    """Severity dot + caption for Disponibilidad, or None when no target is confirmed."""
+    target = AVAILABILITY_TARGET_PCT_BY_CLIENT.get(str(client or "").strip().upper())
+    if target is None or not isinstance(value, (int, float)) or isinstance(value, bool) or pd.isna(value):
+        return None
+    meets = value >= target
+    return [
+        html.Span(className=f"maintenance-status-dot maintenance-status-dot--{'ok' if meets else 'below'}", **{"aria-hidden": "true"}),
+        html.Span(
+            t("reliability_report.target_met" if meets else "reliability_report.target_below", target=f"{target:g}"),
+            className="maintenance-status-caption",
+        ),
+    ]
+
+
+def _format_days(value) -> str:
+    """Days since maintenance always render with one decimal."""
+    number = pd.to_numeric(value, errors="coerce")
+    return t("reliability_report.no_data") if pd.isna(number) else f"{number:.1f}"
+
+
+def _unit_status_rows(rows):
+    """Unit table rows with the days column numeric (the table formats it)."""
+    cleaned = []
+    for row in rows or []:
+        number = pd.to_numeric(row.get("days_since_last_maintenance"), errors="coerce")
+        cleaned.append({**row, "days_since_last_maintenance": None if pd.isna(number) else float(number)})
+    return _localize_columns(cleaned, ("has_open_intervention", "equipment_status"))
+
+
+def _system_palette(meta, data, available_systems):
+    """System colour universe shared by every system-coloured chart."""
+    equipment_systems = _display_system_rows(data.get("equipment_system_mix", []))
+    return [
+        _display_system_label(system)
+        for system in meta.get("filter_systems", available_systems)
+    ] or equipment_systems.get("system_name", pd.Series(dtype=str)).dropna().tolist()
+
+
+def _equipment_toggle_label(total: int, expanded: bool) -> str:
+    if expanded:
+        return t("reliability_report.show_less")
+    extra = total - EQUIPMENT_TOP_N
+    return t("reliability_report.show_one_more") if extra == 1 else t("reliability_report.show_more", count=extra)
+
+
+def _equipment_view(payload, expanded):
+    """Equipos con Mayor Actividad: figure, toggle label, toggle hidden, graph style.
+
+    Shows the top units and folds the rest behind the toggle.
+    """
+    meta = (payload or {}).get("meta", {}) or {}
+    data = (payload or {}).get("data", {}) or {}
+    available_systems = (meta.get("pareto", {}) or {}).get("available_systems", [])
+    frame = _display_system_rows(data.get("equipment_system_mix") or data.get("equipment", []))
+    total = count_activity_equipment(frame, include_all_systems=True)
+    collapsible = total > EQUIPMENT_TOP_N
+    show_all = bool(expanded) and collapsible
+    figure = create_equipment_activity_chart(
+        frame,
+        include_all_systems=True,
+        compact=True,
+        palette_systems=_system_palette(meta, data, available_systems),
+        limit=None if show_all else EQUIPMENT_TOP_N,
+    )
+    rows = total if show_all else min(total, EQUIPMENT_TOP_N)
+    height = max(_EQUIPMENT_GRAPH_BASE_HEIGHT, 120 + _EQUIPMENT_GRAPH_ROW_HEIGHT * rows)
+    return (
+        figure,
+        _equipment_toggle_label(total, show_all) if collapsible else "",
+        not collapsible,
+        {"height": f"{height}px"},
+    )
+
+
+def _pareto_system_options(values):
     options = _options(values)
-    if str(client or "").strip().upper() == "EMIN":
-        for option in options:
-            if option["value"] == _EMIN_GENERIC_SYSTEM:
-                option["label"] = _EMIN_GENERIC_SYSTEM_OPTION
+    for option in options:
+        if option["value"] == _GENERIC_SYSTEM:
+            option["label"] = t("reliability_report.general_system_option")
+        else:
+            option["label"] = _localize(option["label"])
     return options
 
 
-def _effective_emin_system_filter(client, selected_systems, available_systems):
-    """Treat an empty or complete EMIN selection as the existing all-systems scope."""
-    if str(client or "").strip().upper() != "EMIN":
-        return None
+def _fleet_options(values):
+    """Fleet options: "otros" is the repository's label for units outside the catalog."""
+    return [
+        {"label": t("reliability_report.fleet_other") if value == "otros" else value, "value": value}
+        for value in values
+    ]
+
+
+def _effective_system_filter(selected_systems, available_systems):
+    """Treat an empty or complete Sistema selection as the all-systems scope."""
     selected = list(selected_systems or [])
     available = list(available_systems or [])
     if not selected or set(selected) == set(available):
@@ -62,54 +201,29 @@ def _effective_emin_system_filter(client, selected_systems, available_systems):
     return selected
 
 
-def _display_system_label(client, value):
+def _display_system_label(value):
     if value is None or pd.isna(value):
-        return "Sin sistema"
-    if str(client or "").strip().upper() == "EMIN" and value == _EMIN_GENERIC_SYSTEM:
-        return _EMIN_GENERIC_SYSTEM_CHART
-    return str(value)
+        return t("reliability_report.no_system")
+    if value == _GENERIC_SYSTEM:
+        return t("reliability_report.general_system")
+    return str(_localize(value))
 
 
-def _display_system_rows(rows, client):
+def _display_system_rows(rows):
     frame = pd.DataFrame(rows)
-    if (
-        str(client or "").strip().upper() == "EMIN"
-        and "system_name" in frame.columns
-    ):
-        frame["system_name"] = frame["system_name"].map(
-            lambda value: _display_system_label(client, value)
-        )
+    if "system_name" in frame.columns:
+        frame["system_name"] = frame["system_name"].map(_display_system_label)
     return frame
 
 
-def _effective_pareto_metric(
-    client,
-    metric,
-    selected_systems,
-    available_systems,
-    hours_available,
-    client_changed=False,
-):
-    """Keep EMIN's Hours choice only when its complete system scope is selected."""
-    if metric != "hours":
-        return metric or "actions"
-    if str(client or "").strip().upper() != "EMIN":
-        return "actions"
-    available = set(available_systems or [])
-    selected = set(selected_systems or [])
-    if client_changed or not hours_available or not available or selected != available:
-        return "actions"
-    return "hours"
-
-
-def _pareto_system_selection_label(client, selected_systems, available_systems):
+def _pareto_system_selection_label(selected_systems, available_systems):
     selected = list(selected_systems or [])
     available = list(available_systems or [])
     if not selected:
         return ""
     if available and set(selected) == set(available):
-        return "Todos los sistemas"
-    return ", ".join(_display_system_label(client, system) for system in selected)
+        return t("reliability_report.systems_all")
+    return ", ".join(_display_system_label(system) for system in selected)
 
 
 def _equipment_options(values):
@@ -125,33 +239,7 @@ def _empty_contract():
         "meta": {"period": None, "period_label": "Sin datos", "available_months": [], "filter_systems": [], "source_start": None, "source_end": None, "is_current_period": False, "detail_total": 0, "pareto_scope": pareto_scope, "pareto": {"available_systems": [], "selected_systems": [], "metric": "actions", "hours_available": False, "system_filter_partial": False, "metric_options": [{"label": "Acciones", "value": "actions"}, {"label": "Horas", "value": "hours", "disabled": True}]}, "estimated_kpis": {"status": "unavailable", "label": "FUENTE", "reason": t("mantenciones_general_callbacks.sin_fuente_cargada")}},
         "filters": {"fleets": [], "systems": [], "equipment": [], "subsystems": []},
         "kpis": {"equipment": 0, "actions": 0, "records": 0, "systems": 0, "activity_days": 0, "motor_share_pct": None, "availability_est_pct": None, "downtime_est_hours": None, "mtbf_est_hours": None, "mttr_est_hours": None},
-        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "emin_action_systems": [], "emin_hours_pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": [], "unit_status": []},
-    }
-
-
-def _pareto_presentation(client, meta=None):
-    """Select client-specific Pareto labels and all-system chart semantics."""
-    client_name = str(client or (meta or {}).get("client") or "").strip().upper()
-    if client_name == "EMIN":
-        return {
-            "all_systems": True,
-            "equipment_title": "Pareto de acciones por unidad",
-            "system_title": "Pareto de horas intervenidas por unidad",
-            "system_label": t("mantenciones_general_callbacks.todos_los_sistemas"),
-        }
-    scope_mode = ((meta or {}).get("pareto_scope") or {}).get("mode")
-    if client_name in {"EMIN", "CAPSTONE"} or scope_mode == "all_systems":
-        return {
-            "all_systems": True,
-            "equipment_title": t("mantenciones_general_callbacks.pareto_de_actividad_de_mantenimiento_todos"),
-            "system_title": t("mantenciones_general_callbacks.pareto_de_actividad_de_mantenimiento_todos_2"),
-            "system_label": t("mantenciones_general_callbacks.todos_los_sistemas"),
-        }
-    return {
-        "all_systems": False,
-        "equipment_title": t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_motor"),
-        "system_title": t("tab_mantenciones_general.pareto_de_actividad_de_mantenimiento_tren"),
-        "system_label": t("label.component.engine"),
+        "data": {"daily": [], "system_mix": [], "system_mix_detail": [], "pareto": [], "action_systems": [], "hours_pareto": [], "system_pareto": [], "train_force_pareto": [], "equipment": [], "equipment_system_mix": [], "matrix": [], "detail": [], "unit_status": []},
     }
 
 
@@ -172,48 +260,28 @@ def _format_estimated(value, suffix: str) -> str:
     return f"{value:,.1f} h"
 
 
-def _source_alert(meta: dict):
-    end = meta.get("source_end")
-    estimated = meta.get("estimated_kpis", {})
-    if not end:
-        if estimated.get("status") == "source":
-            coverage = estimated.get("coverage", {})
-            reference_date = coverage.get("reference_date")
-            label = "No hay detalle de acciones disponible; los indicadores usan las vistas de horas." if meta.get("source_status") == "partial" else "Cobertura de horas disponible desde las vistas de confiabilidad."
-            if reference_date:
-                label += f" El estado puntual corresponde al {reference_date}; no representa necesariamente el día de hoy."
-            return html.Div([html.I(className="fas fa-database me-2"), label], className="alert alert-info")
-        return html.Div([html.I(className="fas fa-database me-2"), t("mantenciones_general_callbacks.no_hay_datos_de_mantenciones_disponibles")], className="alert alert-warning")
-    date_label = str(end)[:10]
-    coverage = estimated.get("coverage", {})
-    coverage_label = coverage.get("window_label")
-    source_files = estimated.get("source") or []
-    source_name = str(source_files[0]).replace("\\", "/").rsplit("/", 1)[-1] if source_files else t("mantenciones_general_callbacks.fuente_de_actividad")
-    source_label = (
-        t("mantenciones_general_callbacks.horas_y_kpis_de_fuente")
-        if estimated.get("source_kind") in {"calendar_intervention_hours", "intervention_hours_monthly", "business_kpis_monthly", "business_kpis_70d"}
-        else t("mantenciones_general_callbacks.horas_kpis_no_disponibles")
+def _log_source_diagnostics(meta: dict) -> None:
+    """Source names, coverage, fallbacks and reconciliation are diagnostics:
+    they go to the log, never to the page."""
+    estimated = meta.get("estimated_kpis", {}) or {}
+    coverage = estimated.get("coverage", {}) or {}
+    logger.info(
+        "Mantenciones source: kind=%s coverage=%s partial_month=%s reason=%s",
+        estimated.get("source_kind"), coverage.get("window_label"),
+        coverage.get("partial_month"), estimated.get("reason"),
     )
-    estimated_note = t("mantenciones_general_callbacks.fuente_cobertura", source_label=source_label, source_name=source_name, coverage_label_or_=coverage_label or t("mantenciones_general_callbacks.not_available"))
-    reference_start = coverage.get("reference_start")
-    reference_end = coverage.get("reference_end")
-    if reference_start and reference_end:
-        estimated_note += t("mantenciones_general_callbacks.referencia_a", str_reference_star=str(reference_start)[:10], str_reference_end_=str(reference_end)[:10])
-    reason = estimated.get("reason")
-    if reason:
-        estimated_note += t("mantenciones_general_callbacks.fallback", reason=reason)
-    return html.Div(
-        [
-            html.I(className="fas fa-database me-2"),
-            html.Span(t("mantenciones_general_callbacks.cobertura_de_fuente"), className="fw-bold"),
-            html.Span(f"{str(meta.get('source_start') or '')[:10]} a {date_label}. "),
-            html.Span(t("mantenciones_general_callbacks.el_ultimo_periodo_disponible_se_muestra"), className="text-muted"),
-            html.Br(),
-            html.Span(estimated_note, className="text-muted small"),
-        ],
-        className="alert alert-info",
-        style={"overflowWrap": "anywhere"},
-    )
+    reconciliation = estimated.get("reconciliation", {}) or {}
+    if reconciliation.get("status") in {"mismatch", "incomplete"}:
+        logger.warning("Mantenciones hours reconciliation: %s", reconciliation)
+    reliability = meta.get("reliability_kpis", {}) or {}
+    if reliability:
+        logger.info(
+            "Reliability rows: %s valid MTBF, %s valid MTTR of %s; %s low confidence; reason=%s",
+            reliability.get("valid_mtbf_rows"), reliability.get("valid_mttr_rows"),
+            reliability.get("rows"), reliability.get("low_confidence_rows"), reliability.get("reason"),
+        )
+    if coverage.get("long_records") or coverage.get("touched_by_long_record"):
+        logger.info("Mantenciones source has abnormally long intervention records (hours not truncated)")
 
 
 def register_mantenciones_general_callbacks(app):
@@ -221,7 +289,6 @@ def register_mantenciones_general_callbacks(app):
 
     @app.callback(
         Output("maintenance-metadata-store", "data"),
-        Output("maintenance-source-alert", "children"),
         Output("maintenance-month", "options"),
         Output("maintenance-month", "value"),
         Output("maintenance-summary-fleet", "options"),
@@ -230,19 +297,18 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-week", "value"),
         Output("maintenance-week-equipment", "options"),
         Output("maintenance-activity-system", "options"),
-        Output("maintenance-pareto-systems", "options"),
-        Output("maintenance-pareto-systems", "value"),
-        Output("maintenance-pareto-metric", "options"),
-        Output("maintenance-view-root", "className"),
         Output("maintenance-summary-systems", "options"),
         Output("maintenance-summary-systems", "value"),
         Input("client-selector", "value"),
         Input("btn-refresh-maintenance", "n_clicks"),
+        State("maintenance-month", "value"),
+        State("maintenance-summary-fleet", "value"),
+        State("maintenance-summary-systems", "value"),
         prevent_initial_call=False,
     )
-    def load_maintenance_metadata(client, n_clicks):
+    def load_maintenance_metadata(client, n_clicks, current_month=None, current_fleets=None, current_systems=None):
         if not client:
-            return {}, _source_alert({}), [], None, [], [], [], None, [], [], [], [], [{"label": "Acciones", "value": "actions"}, {"label": "Horas", "value": "hours", "disabled": True}], _maintenance_root_class(client), [], []
+            return {}, [], None, [], [], [], None, [], [], [], []
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
@@ -264,54 +330,53 @@ def register_mantenciones_general_callbacks(app):
             )
             filter_systems = pareto_meta.get("available_systems", meta["systems"])
             meta["filter_systems"] = filter_systems
+            _log_source_diagnostics(meta)
+            # Refrescar re-queries the source; it must not move the selection.
+            keep = _refresh_requested()
+            month_value = current_month if keep and current_month in months else (months[-1] if months else None)
+            fleet_value = [fleet for fleet in (current_fleets or []) if fleet in meta["fleets"]] if keep else []
+            system_value = filter_systems
+            if keep and current_systems is not None:
+                system_value = [system for system in current_systems if system in filter_systems]
             return (
                 meta,
-                None if str(client).upper() == "EMIN" else _source_alert(meta),
                 _options(months),
-                months[-1] if months else None,
-                _options(meta["fleets"]),
-                [],
+                month_value,
+                _fleet_options(meta["fleets"]),
+                fleet_value,
                 _options(weeks),
                 weeks[-1] if weeks else None,
                 _options(meta["equipment"]),
                 _options(meta["systems"]),
-                _pareto_system_options(client, pareto_meta.get("available_systems", [])),
-                pareto_meta.get("selected_systems", []),
-                pareto_meta.get("metric_options", [{"label": "Acciones", "value": "actions"}]),
-                _maintenance_root_class(client),
-                _pareto_system_options(client, filter_systems),
-                filter_systems if str(client).upper() == "EMIN" else [],
+                _pareto_system_options(filter_systems),
+                system_value,
             )
-        except Exception as exc:
-            error_text = "No se dispone de esta información momentáneamente." if str(client).upper() == "EMIN" else f"Error al cargar la fuente de mantenciones: {exc}"
-            return {}, html.Div(error_text, className="alert alert-danger"), [], None, [], [], [], None, [], [], [], [], [{"label": "Acciones", "value": "actions"}, {"label": "Horas", "value": "hours", "disabled": True}], _maintenance_root_class(client), [], []
+        except Exception:
+            logger.exception("Mantenciones metadata failed for client %s", client)
+            return {}, [], None, [], [], [], None, [], [], [], []
 
 
     @app.callback(
-        Output("maintenance-pareto-metric", "value"),
-        Input("client-selector", "value"),
-        Input("maintenance-pareto-systems", "value"),
-        Input("maintenance-metadata-store", "data"),
-        State("maintenance-pareto-metric", "value"),
-        State("maintenance-pareto-systems", "options"),
+        Output("maintenance-systems-toggle", "children"),
+        Input("maintenance-summary-systems", "value"),
+        Input("maintenance-summary-systems", "options"),
+    )
+    def update_systems_summary(selected, options):
+        available = [option.get("value") for option in (options or []) if isinstance(option, dict)]
+        return systems_summary_label(selected, available)
+
+
+    @app.callback(
+        Output("maintenance-summary-systems", "value", allow_duplicate=True),
+        Input("maintenance-systems-all", "n_clicks"),
+        Input("maintenance-systems-none", "n_clicks"),
+        State("maintenance-summary-systems", "options"),
         prevent_initial_call=True,
     )
-    def keep_pareto_metric_available(client, selected_systems, metadata, metric, system_options):
-        pareto = ((metadata or {}).get("pareto") or {})
-        available = [
-            option.get("value")
-            for option in (system_options or [])
-            if isinstance(option, dict) and option.get("value") is not None
-        ] or pareto.get("available_systems", [])
-        next_metric = _effective_pareto_metric(
-            client,
-            metric,
-            selected_systems,
-            available,
-            pareto.get("hours_available"),
-            client_changed=ctx.triggered_id == "client-selector",
-        )
-        return no_update if next_metric == metric else next_metric
+    def set_all_or_no_systems(all_clicks, none_clicks, options):
+        if ctx.triggered_id == "maintenance-systems-none":
+            return []
+        return [option.get("value") for option in (options or []) if isinstance(option, dict)]
 
 
     @app.callback(
@@ -332,12 +397,12 @@ def register_mantenciones_general_callbacks(app):
             return _equipment_options([]), "__all__"
         repo = get_repository(mode="parquet", client=client)
         available_systems = (metadata or {}).get("filter_systems", [])
-        system_filter = _effective_emin_system_filter(client, selected_systems, available_systems)
+        system_filter = _effective_system_filter(selected_systems, available_systems)
         equipment = repo.get_available_equipment(systems=system_filter, fleets=selected_fleets or None)
         try:
             if ctx.triggered_id == "client-selector":
                 current_equipment = "__all__"
-            elif ctx.triggered_id == "maintenance-reset-unit" and str(client).upper() == "EMIN":
+            elif ctx.triggered_id == "maintenance-reset-unit":
                 current_equipment = "__all__"
             elif ctx.triggered_id == "maintenance-unit-navigation-table" and selected_rows:
                 row_index = selected_rows[0]
@@ -350,7 +415,7 @@ def register_mantenciones_general_callbacks(app):
         next_equipment = current_equipment or "__all__"
         # Rendering either Pareto also clears the navigation-table selection.
         # Avoid re-emitting the unchanged unit and resetting the expanded view.
-        value = no_update if str(client).upper() == "EMIN" and next_equipment == previous_equipment else next_equipment
+        value = no_update if next_equipment == previous_equipment else next_equipment
         return _equipment_options(equipment), value
 
 
@@ -385,34 +450,33 @@ def register_mantenciones_general_callbacks(app):
         Input("maintenance-summary-fleet", "value"),
         Input("maintenance-summary-equipment", "value"),
         Input("maintenance-summary-systems", "value"),
-        Input("maintenance-activity-system", "value"),
-        Input("maintenance-activity-subsystem", "value"),
-        Input("maintenance-activity-equipment", "value"),
-        Input("maintenance-pareto-systems", "value"),
-        Input("maintenance-pareto-metric", "value"),
         Input("btn-refresh-maintenance", "n_clicks"),
+        State("maintenance-metadata-store", "data"),
         prevent_initial_call=False,
     )
-    def load_monthly_payload(client, month, selected_fleets, summary_equipment, summary_systems, activity_systems, subsystems, equipment, pareto_systems, pareto_metric, n_clicks):
+    def load_monthly_payload(client, month, selected_fleets, summary_equipment, summary_systems, n_clicks, metadata=None):
         if not client:
             return _empty_contract(), None
+        # An explicit empty Sistema selection is "none", not "no filter". Before
+        # the metadata for this client has loaded the control is still unset.
+        if summary_systems == [] and str((metadata or {}).get("client") or "").upper() == str(client).upper():
+            empty = _empty_contract()
+            empty["meta"].update({"client": str(client).upper(), "period": month, "period_label": month or "Sin datos", "no_systems_selected": True})
+            return empty, datetime.now().isoformat()
         try:
             repo = get_repository(mode="parquet", client=client)
             if _refresh_requested():
                 repo.refresh()
             selected_equipment = None if summary_equipment in (None, "", "__all__") else [summary_equipment]
-            selected_systems = summary_systems if str(client).upper() == "EMIN" else activity_systems
             payload = repo.get_monthly_payload(
                 month,
-                systems=selected_systems,
+                systems=summary_systems,
                 equipment=selected_equipment,
-                subsystems=None if str(client).upper() == "EMIN" else subsystems,
                 fleets=selected_fleets or None,
-                pareto_systems=selected_systems if str(client).upper() == "EMIN" else pareto_systems,
-                pareto_metric="actions" if str(client).upper() == "EMIN" else pareto_metric or "actions",
             )
             return payload, datetime.now().isoformat()
         except Exception as exc:
+            logger.exception("Mantenciones monthly payload failed for client %s", client)
             return {
                 **_empty_contract(),
                 "status": "error",
@@ -447,171 +511,77 @@ def register_mantenciones_general_callbacks(app):
         Output("maintenance-unit-navigation-table", "data"),
         Output("maintenance-unit-navigation-table", "selected_rows"),
         Output("maintenance-context-kpi-note", "children"),
+        Output("maintenance-kpi-availability-status", "children"),
+        Output("maintenance-equipment-toggle", "children"),
+        Output("maintenance-equipment-toggle", "hidden"),
+        Output("maintenance-chart-equipment", "style"),
+        Output("maintenance-pareto-actions-summary", "children"),
+        Output("maintenance-pareto-hours-summary", "children"),
         Input("maintenance-monthly-store", "data"),
+        State("maintenance-equipment-expanded", "data"),
     )
-    def render_monthly_payload(payload):
+    def render_monthly_payload(payload, expanded=False):
         payload = payload or _empty_contract()
         status = payload.get("status")
         meta = payload.get("meta", {}) or {}
         client = str(meta.get("client") or "").strip().upper()
-        presentation = _pareto_presentation(meta.get("client"), meta)
         if status == "error":
-            message = "No se dispone de esta información momentáneamente." if client == "EMIN" else payload.get("meta", {}).get("error", t("mantenciones_general_callbacks.unknown_error"))
+            logger.error("Mantenciones payload error: %s", meta.get("error"))
+            message = _unavailable_message()
             empty = create_empty_figure(t("mantenciones_general_callbacks.error_al_cargar_datos"))
             detail_message = html.P(t("mantenciones_general_callbacks.no_se_pudo_cargar_el_detalle"), className="text-danger")
-            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(f"Error al cargar mantenciones: {message}", className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"], "", [], [], ""
+            return "—", "—", "—", "—", "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-danger"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, _pareto_actions_title(), _pareto_hours_title(), "", [], [], "", None, "", True, _equipment_view(None, False)[3], "", ""
         if status != "ok":
             empty = create_empty_figure(t("mantenciones.no_data_for_period"))
-            message = t("mantenciones_general_callbacks.no_hay_acciones_registradas_para_los")
+            message = (
+                t("reliability_report.select_one_system")
+                if meta.get("no_systems_selected")
+                else t("mantenciones_general_callbacks.no_hay_acciones_registradas_para_los")
+            )
             detail_message = html.P(message, className="text-muted text-center p-3")
             kpis = payload.get("kpis", {}) or {}
-            return _format_estimated(kpis.get("availability_est_pct"), "%"), _format_estimated(kpis.get("downtime_est_hours"), "h"), _format_estimated(kpis.get("mtbf_est_hours"), "h"), _format_estimated(kpis.get("mttr_est_hours"), "h"), "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, presentation["equipment_title"], presentation["system_title"], "", [], [], ""
+            return _format_estimated(kpis.get("availability_est_pct"), "%"), _format_estimated(kpis.get("downtime_est_hours"), "h"), _format_estimated(kpis.get("mtbf_est_hours"), "h"), _format_estimated(kpis.get("mttr_est_hours"), "h"), "—", "—", "—", "—", "—", "—", html.Div(message, className="alert alert-warning"), empty, empty, empty, empty, empty, empty, empty, detail_message, detail_message, _pareto_actions_title(), _pareto_hours_title(), "", [], [], "", None, "", True, _equipment_view(None, False)[3], "", ""
 
         kpis = payload.get("kpis", {})
         data = payload.get("data", {})
-        banner = None
-        context_items = []
-        if client != "EMIN" and not meta.get("is_current_period"):
-            context_items.append(html.Span(
-                f"Período {meta.get('period_label', 'N/A')} · histórico respecto a hoy",
-                className="badge text-bg-light border me-2",
-            ))
-        time_coverage = (meta.get("estimated_kpis") or {}).get("coverage", {})
-        time_meta = meta.get("estimated_kpis", {}) or {}
+        _log_source_diagnostics(meta)
         pareto_meta = meta.get("pareto", {}) or {}
-        system_filter_partial = client == "EMIN" and bool(pareto_meta.get("system_filter_partial"))
+        system_filter_partial = bool(pareto_meta.get("system_filter_partial"))
+        context_items = []
         if system_filter_partial:
             context_items.append(html.Span(
-                "Las horas y los indicadores de confiabilidad no están disponibles para una selección parcial de sistemas.",
+                t("reliability_report.partial_note"),
                 className="text-warning small d-block",
                 role="status",
             ))
-        if client != "EMIN" and time_meta.get("status") != "source" and time_meta.get("reason"):
-            context_items.append(html.Span(
-                f"Disponibilidad/downtime sin estimación: {time_meta['reason']}",
-                className="text-warning small d-block",
-            ))
-        reconciliation = time_meta.get("reconciliation", {}) or {}
-        if client != "EMIN" and reconciliation.get("status") == "mismatch":
-            context_items.append(html.Span(
-                f"Advertencia: query 4/7/8/9 no concilian (diferencia máxima {reconciliation.get('max_delta_hours')} h).",
-                className="text-warning small d-block",
-            ))
-        elif client != "EMIN" and reconciliation.get("status") == "incomplete" and reconciliation.get("source_totals_hours"):
-            sources = ", ".join(reconciliation["source_totals_hours"])
-            context_items.append(html.Span(
-                f"Conciliación parcial de horas; fuentes comparables disponibles: {sources}.",
-                className="text-muted small d-block",
-            ))
-        if client != "EMIN" and time_coverage.get("partial_month"):
-            observed = time_coverage.get("observed_days")
-            calendar = time_coverage.get("calendar_days")
-            context_items.append(html.Span(
-                f"Mes parcial · {observed}/{calendar} días observados",
-                className="badge text-bg-warning me-2",
-            ))
-        reliability = meta.get("reliability_kpis", {}) or {}
-        confidence_note = None
-        if client != "EMIN" and reliability.get("rows"):
-            low = int(reliability.get("low_confidence_rows") or 0)
-            total = int(reliability.get("rows") or 0)
-            valid_mtbf = int(reliability.get("valid_mtbf_rows") or 0)
-            valid_mttr = int(reliability.get("valid_mttr_rows") or 0)
-            confidence_note = html.Span(
-                f"Query 5: {valid_mtbf}/{total} filas válidas MTBF, {valid_mttr}/{total} MTTR; {low} con baja confianza.",
-                className="text-muted small me-2",
-            )
-            context_items.append(confidence_note)
-        elif client != "EMIN" and reliability.get("reason"):
-            context_items.append(html.Span(
-                f"MTBF/MTTR sin estimación: {reliability['reason']}",
-                className="text-warning small d-block",
-            ))
-        reference_date = time_coverage.get("reference_date")
-        reference_note = html.Span(
-            f"Estado puntual de equipos al {reference_date} (no es estado de hoy).",
-            className="text-muted small me-2",
-        ) if reference_date else None
-        if client != "EMIN" and reference_note:
-            context_items.append(reference_note)
-        long_note = html.Span(
-            "La fuente identifica registros de intervención anormalmente largos; las horas no se truncaron.",
-            className="text-warning small",
-        ) if time_coverage.get("long_records") or time_coverage.get("touched_by_long_record") else None
-        if client != "EMIN" and long_note:
-            context_items.append(long_note)
-        downtime_note = html.Span(
-            "Disponibilidad calendario y downtime son estimaciones sobre horas-equipo intervenidas; no confirman una detención operacional.",
-            className="text-muted small d-block mt-1",
-        )
-        context_items.append(downtime_note)
         banner = html.Div(context_items, className="small")
-        motor_share = kpis.get("motor_share_pct")
-        motor_share_label = f"{motor_share:.1f}%" if isinstance(motor_share, (int, float)) else "—"
         selected_systems = pareto_meta.get("selected_systems", [])
         available_systems = pareto_meta.get("available_systems", [])
-        pareto_metric = pareto_meta.get("metric", "actions")
-        selected_label = _pareto_system_selection_label(
-            client, selected_systems, available_systems
-        )
-        chart_system_label = selected_label if selected_systems else presentation["system_label"]
-        context_kpi_note = (
-            "Días según fecha operacional · Actividad en Motor como porcentaje de acciones únicas."
-            if client == "EMIN"
-            else ""
-        )
-        if client == "EMIN":
-            if system_filter_partial:
-                pareto_status = "El Pareto de horas no está disponible porque las horas no están distribuidas por sistema. Selecciona todos los sistemas para ver horas por unidad."
-            elif not pareto_meta.get("hours_available"):
-                pareto_status = "No hay horas intervenidas para el período y la unidad seleccionados."
-            else:
-                pareto_status = "Las acciones se filtran por sistema; las horas se muestran para todos los sistemas seleccionados."
-        elif not selected_systems:
-            pareto_status = "Selecciona uno o más sistemas para ver el Pareto. Este filtro no afecta los KPIs ni los otros gráficos."
-        elif pareto_meta.get("reason"):
-            pareto_status = f"{pareto_meta['reason']} El filtro aplica solo a este Pareto."
+        selected_label = _pareto_system_selection_label(selected_systems, available_systems)
+        if system_filter_partial:
+            pareto_status = t("reliability_report.pareto_status_partial")
+        elif not pareto_meta.get("hours_available"):
+            pareto_status = t("reliability_report.pareto_status_no_hours")
         else:
-            unit = "horas-equipo" if pareto_metric == "hours" else "acciones únicas"
-            pareto_status = f"{selected_label} · {unit} por equipo. Filtro exclusivo de este Pareto."
-        pareto_title = (
-            f"Pareto de horas intervenidas por equipo · {selected_label}"
-            if pareto_metric == "hours"
-            else f"Pareto de actividad por equipo · {selected_label}"
-        ) if selected_systems else "Pareto de actividad por equipo"
-        if client == "EMIN":
-            equipment_systems = _display_system_rows(data.get("equipment_system_mix", []), client)
-            palette_systems = [
-                _display_system_label(client, system)
-                for system in meta.get("filter_systems", available_systems)
-            ] or equipment_systems.get("system_name", pd.Series(dtype=str)).dropna().tolist()
-            action_chart = create_emin_actions_pareto_chart(
-                _display_system_rows(data.get("emin_action_systems", []), client),
-                palette_systems=palette_systems,
-            )
-            hours_chart = (
-                create_empty_figure("No disponible: las horas no se atribuyen por sistema.", wrap_width=32)
-                if system_filter_partial
-                else create_emin_hours_pareto_chart(pd.DataFrame(data.get("emin_hours_pareto", [])))
-            )
-            pareto_title = f"Pareto de acciones por unidad · {selected_label}" if selected_systems else "Pareto de acciones por unidad"
-            second_title = "Pareto de horas intervenidas por unidad"
-        else:
-            palette_systems = None
-            action_chart = create_equipment_pareto_chart(
-                pd.DataFrame(data.get("pareto", [])),
-                system_label=chart_system_label,
-                metric=pareto_metric,
-                compact=False,
-            )
-            hours_chart = create_equipment_pareto_chart(
-                _display_system_rows(data.get("system_pareto", []) if presentation["all_systems"] else data.get("train_force_pareto", []), client),
-                system_label=presentation["system_label"] if presentation["all_systems"] else "Tren de Fuerza",
-            )
-            second_title = presentation["system_title"]
-        detail_rows = data.get("detail", [])
-        if client == "EMIN":
-            detail_rows = _display_system_rows(detail_rows, client).to_dict("records")
+            pareto_status = t("reliability_report.pareto_status_all")
+        pareto_title = f"{_pareto_actions_title()} · {selected_label}" if selected_systems else _pareto_actions_title()
+        palette_systems = _system_palette(meta, data, available_systems)
+        action_chart = create_actions_pareto_chart(
+            _display_system_rows(data.get("action_systems", [])),
+            palette_systems=palette_systems,
+        )
+        hours_chart = (
+            create_empty_figure(t("reliability_report.hours_unavailable_chart"), wrap_width=32)
+            if system_filter_partial
+            else create_hours_pareto_chart(pd.DataFrame(data.get("hours_pareto", [])))
+        )
+        equipment_chart, equipment_toggle_label, equipment_toggle_hidden, equipment_style = _equipment_view(payload, expanded)
+        action_rows = _display_system_rows(data.get("action_systems", []))
+        hours_rows = pd.DataFrame(data.get("hours_pareto", []))
+        detail_rows = _localize_columns(
+            _display_system_rows(data.get("detail", [])).to_dict("records"),
+            ("subsystem_name", "detail", "component"),
+        )
         return (
             _format_estimated(kpis.get("availability_est_pct"), "%"),
             _format_estimated(kpis.get("downtime_est_hours"), "h"),
@@ -622,38 +592,56 @@ def register_mantenciones_general_callbacks(app):
             str(kpis.get("records", "—")),
             str(kpis.get("systems", "—")),
             str(kpis.get("activity_days", "—")),
-            motor_share_label,
+            percent_value(kpis.get("motor_share_pct")),
             banner,
-            create_empty_figure("No disponible: las horas no se atribuyen por sistema.", wrap_width=32)
+            create_empty_figure(t("reliability_report.hours_unavailable_chart"), wrap_width=32)
             if system_filter_partial
             else create_daily_intervention_hours_chart(
                 pd.DataFrame(data.get("daily", [])),
-                unavailable_message="No se dispone de esta información momentáneamente." if client == "EMIN" else "La fuente no trae horas-equipo intervenidas",
+                unavailable_message=_unavailable_message(),
             ),
-            create_daily_equipment_chart(pd.DataFrame(data.get("daily", [])), integer_ticks=client == "EMIN"),
+            create_daily_equipment_chart(pd.DataFrame(data.get("daily", [])), integer_ticks=True),
             action_chart,
             hours_chart,
             create_system_activity_chart(
-                _display_system_rows(data.get("system_mix", []), client),
-                include_all_systems=presentation["all_systems"],
+                _display_system_rows(data.get("system_mix", [])),
+                include_all_systems=True,
                 palette_systems=palette_systems,
             ),
-            create_equipment_activity_chart(
-                _display_system_rows(data.get("equipment_system_mix") or data.get("equipment", []), client),
-                include_all_systems=presentation["all_systems"],
-                compact=client == "EMIN",
-                palette_systems=palette_systems,
-            ),
+            equipment_chart,
             create_activity_matrix(pd.DataFrame(data.get("matrix", []))),
             create_activity_table(detail_rows),
-            create_activity_table(detail_rows, compact=client == "EMIN"),
+            create_activity_table(detail_rows, compact=True),
             pareto_title,
-            second_title,
+            _pareto_hours_title(),
             html.Span(pareto_status),
-            data.get("unit_status", []),
+            _unit_status_rows(data.get("unit_status", [])),
             [],
-            context_kpi_note,
+            t("reliability_report.kpi_note"),
+            availability_status(kpis.get("availability_est_pct"), client),
+            equipment_toggle_label,
+            equipment_toggle_hidden,
+            equipment_style,
+            actions_pareto_summary(action_rows) if not action_rows.empty else "",
+            "" if system_filter_partial else hours_pareto_summary(hours_rows),
         )
+
+
+    @app.callback(
+        Output("maintenance-equipment-expanded", "data"),
+        Output("maintenance-chart-equipment", "figure", allow_duplicate=True),
+        Output("maintenance-equipment-toggle", "children", allow_duplicate=True),
+        Output("maintenance-chart-equipment", "style", allow_duplicate=True),
+        Input("maintenance-equipment-toggle", "n_clicks"),
+        State("maintenance-equipment-expanded", "data"),
+        State("maintenance-monthly-store", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_equipment_view(n_clicks, expanded, payload):
+        """Expand or collapse the ranking in place, leaving every filter alone."""
+        expanded = not expanded
+        figure, label, _hidden, style = _equipment_view(payload, expanded)
+        return expanded, figure, label, style
 
 
     @app.callback(
@@ -662,20 +650,18 @@ def register_mantenciones_general_callbacks(app):
         Input("maintenance-summary-equipment", "value"),
     )
     def render_unit_detail(payload, selected_equipment):
-        is_emin = str(((payload or {}).get("meta") or {}).get("client") or "").upper() == "EMIN"
         if selected_equipment in (None, "", "__all__"):
             return html.Div(
-                [html.I(className="fas fa-hand-pointer me-2"), "Selecciona una unidad en la tabla o en el filtro superior."],
+                [html.I(className="fas fa-hand-pointer me-2"), t("reliability_report.pick_unit")],
                 className="alert alert-light h-100 mb-0",
             )
         rows = (((payload or {}).get("data") or {}).get("unit_status") or [])
         unit = next((row for row in rows if str(row.get("equipment")) == str(selected_equipment)), None)
         if unit is None:
             return html.Div(
-                [html.Strong(str(selected_equipment)), html.P("No se dispone de esta información momentáneamente." if is_emin else "No hay estado puntual disponible en query 10 para esta unidad.", className="small text-muted mb-0 mt-2")],
+                [html.Strong(str(selected_equipment)), html.P(_unavailable_message(), className="small text-muted mb-0 mt-2")],
                 className="alert alert-warning h-100 mb-0",
             )
-        reference = unit.get("reference_date") or "sin fecha de referencia"
         historical = [
             row for row in (((payload or {}).get("data") or {}).get("historical_failures") or [])
             if str(row.get("machine_code")) == str(selected_equipment)
@@ -690,27 +676,26 @@ def register_mantenciones_general_callbacks(app):
         ranking = html.Ul(
             [
                 html.Li(
-                    f"{row.get('component_name') or 'Componente sin nombre'} · "
-                    f"{row.get('n_failure_records') or 0} registros / "
-                    f"{row.get('n_failure_actions') or 0} acciones"
+                    t(
+                        "reliability_report.ranking_item",
+                        component=row.get("component_name") or t("reliability_report.unnamed_component"),
+                        records=row.get("n_failure_records") or 0,
+                        actions=row.get("n_failure_actions") or 0,
+                    )
                 )
                 for row in historical[:5]
             ],
             className="small ps-3 mb-0",
-        ) if historical else html.P("No se dispone de esta información momentáneamente." if is_emin else "Sin filas en el ranking histórico.", className="small text-muted mb-0")
+        ) if historical else html.P(_unavailable_message(), className="small text-muted mb-0")
         items = [
             html.H5(str(selected_equipment), className="mb-2"),
-            html.P([html.Span("Estado: ", className="fw-semibold"), str(unit.get("equipment_status") or "Sin estado")], className="mb-2"),
-            html.P([html.Span("Intervención abierta: ", className="fw-semibold"), str(unit.get("has_open_intervention") or "Sin dato")], className="mb-2"),
-            html.P([html.Span("Última acción: ", className="fw-semibold"), str(unit.get("last_action_date") or "Sin dato")], className="mb-2"),
-            html.P([html.Span("Días desde mantención: ", className="fw-semibold"), str(unit.get("days_since_last_maintenance") if unit.get("days_since_last_maintenance") is not None else "Sin dato")], className="mb-2"),
-            html.Small(f"Fotografía de estado al {reference}. No equivale a una detención operacional confirmada.", className="text-muted") if not is_emin else None,
-            html.H6("Ranking histórico de componentes", className="mt-3 mb-1"),
-            html.Small("Query 6 · histórico acumulado; no se limita al mes seleccionado.", className="text-muted d-block mb-1") if not is_emin else None,
+            html.P([html.Span(t("reliability_report.label_status"), className="fw-semibold"), str(_localize(unit.get("equipment_status") or "Sin estado"))], className="mb-2"),
+            html.P([html.Span(t("reliability_report.label_open_intervention"), className="fw-semibold"), str(_localize(unit.get("has_open_intervention") or "Sin dato"))], className="mb-2"),
+            html.P([html.Span(t("reliability_report.label_last_action"), className="fw-semibold"), str(unit.get("last_action_date") or t("reliability_report.no_data"))], className="mb-2"),
+            html.P([html.Span(t("reliability_report.label_days_since"), className="fw-semibold"), _format_days(unit.get("days_since_last_maintenance"))], className="mb-2"),
+            html.H6(t("reliability_report.ranking_title"), className="mt-3 mb-1"),
             ranking,
         ]
-        if unit.get("n_long_records") and not is_emin:
-            items.append(html.P(f"Registros largos reportados: {unit['n_long_records']}", className="text-warning small mt-2 mb-0"))
         return html.Div(items, className="border rounded bg-light p-3 h-100")
 
 

@@ -232,7 +232,7 @@ FAILURE_MODE_CONFIG = {
             # (columnas {Metal}_acum_total por ciclo_motor). Sin variables
             # asociadas a propósito: no hay mapeo modo -> variable que inventar.
             "accumulated_wear_risk": {
-                "label": "Riesgo Acumulado",
+                "label": "Desgaste Acumulado",
                 "oil_variables": [],
                 "telemetry_variables": [],
                 "description": "Desgaste metálico acumulado del componente en su vida actual"

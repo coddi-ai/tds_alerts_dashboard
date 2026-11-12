@@ -14,7 +14,7 @@ from dashboard.tabs.tab_predictive_evidence import (
     _load_component_data as _load_evidence_data,
 )
 from src.utils.logger import get_logger
-from dashboard.components.source_status import render_service_source_status
+from dashboard.components.source_status import render_service_data_sources
 
 logger = get_logger(__name__)
 
@@ -106,12 +106,15 @@ def layout(client: str, component: str):
         # Page header
         html.Div([
             html.Div([
-                html.I(className=f"{icon} me-2"),
-                t("tab_predictive_component.predictivo", component_title=component.title())
-            ], className="page-title", style={"display": "flex", "alignItems": "center"}),
-            html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
-        ], style={"marginBottom": "16px"}),
-        render_service_source_status(client, "predictive"),
+                html.Div([
+                    html.I(className=f"{icon} me-2"),
+                    t("tab_predictive_component.predictivo", component_title=component.title())
+                ], className="page-title", style={"display": "flex", "alignItems": "center"}),
+                html.Div(t("tab_predictive_component.analisis_predictivo_de_condicion", component=component), className="page-subtitle"),
+            ]),
+            # "Fuentes de Datos" button + popover, to the right of the title block.
+            html.Div(render_service_data_sources(client, f"predictive-{component}"), className="ds-header-slot"),
+        ], className="d-flex flex-wrap align-items-start justify-content-between gap-3", style={"marginBottom": "16px"}),
 
         # Internal tabs: Resumen / Evidencia
         dcc.Tabs(
@@ -119,9 +122,9 @@ def layout(client: str, component: str):
             value='resumen',
             children=[
                 dcc.Tab(label=t("tab_predictive_component.resumen"), value='resumen',
-                        className='custom-tab', selected_className='custom-tab--selected'),
+                        className='custom-tab pred-tab', selected_className='custom-tab--selected pred-tab--selected'),
                 dcc.Tab(label=t("tab_predictive_component.evidencia"), value='evidencia',
-                        className='custom-tab', selected_className='custom-tab--selected'),
+                        className='custom-tab pred-tab', selected_className='custom-tab--selected pred-tab--selected'),
             ],
             className='mb-4'
         ),

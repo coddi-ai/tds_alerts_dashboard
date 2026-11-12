@@ -5,6 +5,7 @@ Complete refactored implementation with 4-level hierarchy and auto-loading.
 """
 
 from src.i18n import t, vocab
+from src.i18n.data_text import is_eng_column, localized_value
 from dash import Input, Output, State, html, dash_table
 from dash.exceptions import PreventUpdate
 import pandas as pd
@@ -152,7 +153,7 @@ def calculate_breached_essays_from_data(sample, limits, client, machine, compone
     
     # Check each essay
     for col in sample.index:
-        if col in metadata_cols:
+        if col in metadata_cols or is_eng_column(col):
             continue
         
         try:
@@ -824,7 +825,7 @@ def register_reports_callbacks(app):
             # Build comment history table data
             table_rows = []
             for _, row in history.iterrows():
-                rec = row.get('ai_recommendation', None)
+                rec = localized_value(row, 'ai_recommendation')
                 comment = str(rec) if pd.notna(rec) and rec else '—'
                 anomaly = row.get('anomalyType', None)
                 anomaly_str = str(anomaly) if pd.notna(anomaly) and anomaly != 'Normal' else '—'
@@ -1108,7 +1109,7 @@ def create_historical_comparison(sample, df, equipo, component):
     comparison_data = []
     
     for col in current.index:
-        if col not in metadata_cols and pd.notna(current[col]):
+        if col not in metadata_cols and not is_eng_column(col) and pd.notna(current[col]):
             try:
                 current_val = float(current[col])
                 previous_val = float(previous[col]) if col in previous.index and pd.notna(previous[col]) else None
@@ -1226,7 +1227,7 @@ def get_essay_options(df):
                     'group_element', 'essays_broken', 'severity_score', 'report_status',
                     'breached_essays', 'ai_recommendation', 'ai_generated_at',
                     'unitId_generated', 'componentName_generated', 'sampleDate_generated', 'client_generated'}
-    essays = [col for col in df.columns if col not in metadata_cols]
+    essays = [col for col in df.columns if col not in metadata_cols and not is_eng_column(col)]
     return [{'label': e, 'value': e} for e in sorted(essays)]
 
 
@@ -1627,7 +1628,7 @@ def create_ai_diagnosis_and_action(sample):
 
     Returns: (full_recommendation_element, empty_element)
     """
-    ai_rec = sample.get('ai_recommendation', '')
+    ai_rec = localized_value(sample, 'ai_recommendation', '')
 
     # Handle NaN, None, or empty string
     if ai_rec is None or (isinstance(ai_rec, float) and pd.isna(ai_rec)) or ai_rec == '' or not isinstance(ai_rec, str):

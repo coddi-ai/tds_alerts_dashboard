@@ -34,11 +34,13 @@ def create_layout() -> html.Div:
                     t("tab_alerts.identifique_unidades_afectadas_causa_evide"),
                     className="text-muted"
                 )
-            ])
+            ], xs=12, sm=True),
+            # "Fuentes de Datos" button + popover, filled by update_alerts_source_status.
+            dbc.Col(html.Div(id="alerts-source-status"), xs=12, sm="auto", className="ds-header-slot"),
         ], className="mb-4"),
-        html.Div(id="alerts-source-status"),
-        
-        # Internal Tabs
+
+        # Internal Tabs. pred-tab: each tab is only as wide as its label and its
+        # indicator sits under that label alone (same as Predictivo Resumen / Evidencia).
         dcc.Tabs(
             id='alerts-internal-tabs',
             value='general',
@@ -46,14 +48,14 @@ def create_layout() -> html.Div:
                 dcc.Tab(
                     label=t("tab_alerts.vista_general"),
                     value='general',
-                    className='custom-tab',
-                    selected_className='custom-tab--selected'
+                    className='custom-tab pred-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
                 ),
                 dcc.Tab(
                     label=t("tab_alerts.vista_detallada"),
                     value='detail',
-                    className='custom-tab',
-                    selected_className='custom-tab--selected'
+                    className='custom-tab pred-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
                 )
             ],
             className='mb-4'

@@ -10,6 +10,7 @@ and is unrelated to page routing.
 from dash import Input, Output
 import dash
 
+from dashboard.layout import _client_mark
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,11 +24,14 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
         app: Dash application instance
     """
 
-    # Update client logo when client selector changes
+    # Update client logo when client selector changes. Nothing else confirms a switch to an
+    # admin, so this must follow the selector with no intermediate state.
     @app.callback(
         [Output('client-logo-img', 'src'),
          Output('client-logo-img', 'style'),
-         Output('client-logo-img', 'className')],
+         Output('client-logo-img', 'className'),
+         Output('client-logo-img', 'alt'),
+         Output('client-logo-placeholder', 'children')],
         [Input('client-selector', 'value')],
         prevent_initial_call=False
     )
@@ -39,18 +43,14 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
             selected_client: Client selected in the dropdown
 
         Returns:
-            Tuple of (logo_src, logo_style, logo_className)
+            Tuple of (logo_src, logo_style, logo_className, logo_alt, placeholder_text). The
+            placeholder is what client_logo_handler.js shows if the image cannot be loaded.
         """
+        # Size and padding come from .topbar-client-logo (custom_layout.css); the callback
+        # only toggles visibility, and must keep that class when it rewrites className.
         if not selected_client:
             # No client selected - hide logo
-            return '', {
-                "height": "48px",
-                "width": "auto",
-                "maxWidth": "120px",
-                "padding": "4px 12px",
-                "marginLeft": "12px",
-                "display": "none"
-            }, ''
+            return '', {"display": "none"}, 'topbar-client-logo', '', ''
 
         # Construct logo URL - use GitHub raw content URL for production reliability
         client_lower = selected_client.lower()
@@ -64,14 +64,7 @@ def register_navigation_callbacks(app: dash.Dash) -> None:
 
         # Add client-specific class for conditional styling
         # ENEX logo doesn't need white background, others do
-        client_class = f'client-logo client-logo-{client_lower}'
+        client_class = f'topbar-client-logo client-logo client-logo-{client_lower}'
 
         # Return URL, style, and className
-        return logo_url, {
-            "height": "48px",
-            "width": "auto",
-            "maxWidth": "120px",
-            "padding": "4px 12px",
-            "marginLeft": "12px",
-            "display": "block"
-        }, client_class
+        return logo_url, {"display": "block"}, client_class, selected_client, _client_mark(selected_client)

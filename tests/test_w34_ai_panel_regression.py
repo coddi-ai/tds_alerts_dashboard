@@ -59,11 +59,21 @@ def test_panel_renders_provided_diagnostico_and_causa_verbatim():
     assert "No disponible" in rendered  # only acciones is missing
 
 
-def test_panel_renders_json_array_acciones_as_a_bulleted_list():
+def test_panel_renders_json_array_acciones_as_a_checklist():
     panel = create_ai_analysis_panel("d", "c", '["Revisar presión", "Cambiar filtro"]')
     rendered = str(panel)
     assert "Revisar presión" in rendered
     assert "Cambiar filtro" in rendered
+    assert "Checklist" in rendered and "Ul(" not in rendered
+
+
+def test_panel_cards_use_no_colored_left_border():
+    rendered = str(create_ai_analysis_panel("d", "c", '["a"]'))
+    assert "borderLeft" not in rendered and "border-left" not in rendered
+
+
+def test_panel_header_is_accented():
+    assert "Análisis Inteligente" in str(create_ai_analysis_panel("d", "c", None))
 
 
 def test_panel_never_raises_for_any_combination_of_missing_fields():
@@ -116,21 +126,18 @@ def test_parse_acciones_never_raises_for_malformed_input():
 # parse_ia_message_sections — empty input produces the documented empty shape
 # ---------------------------------------------------------------------------
 
-def test_parse_ia_message_sections_empty_input_produces_three_empty_keys():
+def test_parse_ia_message_sections_empty_input_produces_four_empty_keys():
     sections = parse_ia_message_sections("")
-    assert sections == {"diagnostico": "", "causa_probable": "", "acciones": ""}
+    assert sections == {"diagnostico": "", "causa_probable": "", "acciones": "", "verificacion": ""}
 
 
 def test_parse_ia_message_sections_none_and_nan_produce_the_same_empty_shape():
     """None and float('nan') — the two shapes `mensaje_ia` actually takes for
     a missing value once loaded from CSV via pandas (an object-dtype column's
     missing cell is float NaN, not pandas' nullable pd.NA sentinel)."""
-    assert parse_ia_message_sections(None) == {"diagnostico": "", "causa_probable": "", "acciones": ""}
-    assert parse_ia_message_sections(float("nan")) == {
-        "diagnostico": "",
-        "causa_probable": "",
-        "acciones": "",
-    }
+    empty = {"diagnostico": "", "causa_probable": "", "acciones": "", "verificacion": ""}
+    assert parse_ia_message_sections(None) == empty
+    assert parse_ia_message_sections(float("nan")) == empty
 
 
 def test_parse_ia_message_sections_decodes_structured_capstone_json():

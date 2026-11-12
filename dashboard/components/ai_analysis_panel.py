@@ -11,7 +11,7 @@ import json
 
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html
+from dash import dcc, html
 
 
 def _parse_acciones(acciones) -> list:
@@ -39,7 +39,7 @@ def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=
     Build the "Analisis Inteligente" card: Diagnostico / Causa probable / Acciones.
 
     `acciones` is parsed from a JSON-array string (or accepted as a list
-    already) and rendered as a bullet list instead of raw text.
+    already) and rendered as a checklist instead of raw text.
     """
 
     if header_text is None:
@@ -56,9 +56,13 @@ def create_ai_analysis_panel(diagnostico, causa_probable, acciones, header_text=
 
     actions = _parse_acciones(acciones)
     if actions:
-        actions_body = html.Ul(
-            [html.Li(action, style={"marginBottom": "4px"}) for action in actions],
-            className="mb-0 ps-3",
+        # Display-only checklist: ticking an item changes nothing stored
+        actions_body = dcc.Checklist(
+            options=[{"label": action, "value": str(i)} for i, action in enumerate(actions)],
+            value=[],
+            className="ev-checklist",
+            inputClassName="ev-checklist-input",
+            labelClassName="ev-checklist-item",
         )
     else:
         actions_body = html.P(t("tab_alerts_detail.no_disponible"), className="mb-0")

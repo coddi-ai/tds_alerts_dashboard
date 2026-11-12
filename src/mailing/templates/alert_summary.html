@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
+<title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;">
+{#- Email-safe: tables + inline CSS only (no flex/grid/SVG/JS/external assets). Bars are table cells. -#}
+{% macro bar(pct, color) -%}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#e2e8f0" style="background-color:#e2e8f0;"><tr><td width="{{ pct }}%" bgcolor="{{ color }}" style="background-color:{{ color }};height:10px;line-height:10px;font-size:1px;">&nbsp;</td>{% if pct < 100 %}<td width="{{ 100 - pct }}%" style="height:10px;line-height:10px;font-size:1px;">&nbsp;</td>{% endif %}</tr></table>
+{%- endmacro %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f5f9" style="background-color:#f1f5f9;">
+<tr><td align="center" style="padding:16px 8px;">
+
+<table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:100%;max-width:640px;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+
+  <!-- Top bar -->
+  <tr><td bgcolor="#1d4ed8" height="6" style="background-color:#1d4ed8;height:6px;font-size:0;line-height:0;">&nbsp;</td></tr>
+
+  <!-- Header -->
+  <tr><td style="padding:24px 24px 8px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="font-size:12px;line-height:16px;font-weight:bold;letter-spacing:1px;color:#1d4ed8;">CODDI · MONITOREO DE ALERTAS</div>
+    <h1 style="margin:8px 0 4px 0;font-size:24px;line-height:30px;font-weight:bold;color:#0f172a;">{{ title }}</h1>
+    <div style="font-size:14px;line-height:20px;color:#475569;">{{ subtitle }}</div>
+  </td></tr>
+
+  <!-- Headline and summary -->
+  <tr><td style="padding:16px 24px 8px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="font-size:20px;line-height:26px;font-weight:bold;color:#0f172a;">{{ headline }}</div>
+    {% if sentence %}<div style="margin-top:6px;font-size:14px;line-height:21px;color:#0f172a;">{{ sentence }}</div>{% endif %}
+    {% if empty %}<div style="margin-top:6px;font-size:14px;line-height:21px;color:#475569;">Sin alertas registradas en el período.</div>{% endif %}
+  </td></tr>
+
+{% if not empty %}
+  <!-- KPI tiles -->
+  <tr><td style="padding:8px 24px 8px 24px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+      {% for kpi in kpis %}
+        <td width="33%" valign="top" bgcolor="{{ kpi.bg }}" style="background-color:{{ kpi.bg }};padding:12px 10px;font-family:Arial,Helvetica,sans-serif;">
+          <div style="font-size:12px;line-height:16px;font-weight:bold;color:#334155;">{{ kpi.label }}</div>
+          <div style="margin-top:4px;font-size:{{ kpi.size }}px;line-height:30px;font-weight:bold;color:{{ kpi.fg }};">{{ kpi.value }}</div>
+          <div style="margin-top:2px;font-size:12px;line-height:16px;color:#475569;">{{ kpi.caption }}</div>
+        </td>
+        {% if not loop.last %}<td width="8" style="font-size:0;line-height:0;">&nbsp;</td>{% endif %}
+      {% endfor %}
+      </tr>
+    </table>
+  </td></tr>
+
+  <!-- Alertas por Unidad -->
+  <tr><td style="padding:20px 24px 4px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <h2 style="margin:0 0 8px 0;font-size:16px;line-height:22px;font-weight:bold;color:#0f172a;">Alertas por Unidad</h2>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td style="padding:0 6px 4px 0;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">Unidad</td>
+        <td style="padding:0 6px 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">&nbsp;</td>
+        <td align="right" style="padding:0 6px 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">Alertas</td>
+        <td align="right" style="padding:0 0 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">% Acumulado</td>
+      </tr>
+      {% for row in unit_rows %}
+      <tr>
+        <td width="26%" valign="middle" style="padding:6px 6px 6px 0;font-size:13px;line-height:18px;{% if row.is_other %}color:#475569;{% else %}color:#0f172a;font-weight:bold;{% endif %}border-bottom:1px solid #e2e8f0;">{{ row.label }}</td>
+        <td valign="middle" style="padding:6px;border-bottom:1px solid #e2e8f0;">
+          {{ bar(row.bar_pct, '#94a3b8' if row.is_other else '#2f5675') }}
+        </td>
+        <td width="60" align="right" valign="middle" style="padding:6px;font-size:13px;line-height:18px;color:#0f172a;border-bottom:1px solid #e2e8f0;white-space:nowrap;">{{ row.shown }}</td>
+        <td width="76" align="right" valign="middle" style="padding:6px 0 6px 6px;font-size:13px;line-height:18px;color:#475569;border-bottom:1px solid #e2e8f0;">{{ row.cumulative_pct }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if unit_note %}<div style="margin-top:6px;font-size:12px;line-height:17px;color:#475569;">c/u = cada una. Las unidades con la misma cantidad de alertas se agrupan en una sola fila.</div>{% endif %}
+  </td></tr>
+
+  <!-- Alertas por Sistema -->
+  <tr><td style="padding:20px 24px 4px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <h2 style="margin:0 0 8px 0;font-size:16px;line-height:22px;font-weight:bold;color:#0f172a;">Alertas por Sistema</h2>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td style="padding:0 6px 4px 0;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">Sistema</td>
+        <td style="padding:0 6px 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">&nbsp;</td>
+        <td align="right" style="padding:0 6px 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">Alertas</td>
+        <td align="right" style="padding:0 0 4px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#475569;border-bottom:1px solid #cbd5e1;">% del Total</td>
+      </tr>
+      {% for row in system_rows %}
+      <tr>
+        <td width="26%" valign="middle" style="padding:6px 6px 6px 0;font-size:13px;line-height:18px;color:#0f172a;font-weight:bold;border-bottom:1px solid #e2e8f0;">{{ row.name }}</td>
+        <td valign="middle" style="padding:6px;border-bottom:1px solid #e2e8f0;">
+          {{ bar(row.bar_pct, row.color) }}
+        </td>
+        <td width="60" align="right" valign="middle" style="padding:6px;font-size:13px;line-height:18px;color:#0f172a;border-bottom:1px solid #e2e8f0;">{{ row.count }}</td>
+        <td width="76" align="right" valign="middle" style="padding:6px 0 6px 6px;font-size:13px;line-height:18px;color:#475569;border-bottom:1px solid #e2e8f0;">{{ row.pct }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </td></tr>
+
+  <!-- Alertas Destacadas del Período -->
+  <tr><td style="padding:20px 24px 4px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <h2 style="margin:0 0 8px 0;font-size:16px;line-height:22px;font-weight:bold;color:#0f172a;">Alertas Destacadas del Período</h2>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td bgcolor="#1e293b" style="background-color:#1e293b;padding:8px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#ffffff;">Fecha</td>
+        <td bgcolor="#1e293b" style="background-color:#1e293b;padding:8px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#ffffff;">Unidad</td>
+        <td bgcolor="#1e293b" style="background-color:#1e293b;padding:8px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#ffffff;">Fuente</td>
+        <td bgcolor="#1e293b" style="background-color:#1e293b;padding:8px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#ffffff;">Sistema / Componente</td>
+        <td bgcolor="#1e293b" style="background-color:#1e293b;padding:8px 6px;font-size:11px;line-height:14px;font-weight:bold;color:#ffffff;">Diagnóstico</td>
+      </tr>
+      {% for alert in featured %}
+      <tr>
+        <td valign="top" style="padding:8px 6px;font-size:12px;line-height:17px;color:#0f172a;border-bottom:1px solid #e2e8f0;white-space:nowrap;">{{ alert.date }}</td>
+        <td valign="top" style="padding:8px 6px;font-size:12px;line-height:17px;color:#0f172a;font-weight:bold;border-bottom:1px solid #e2e8f0;white-space:nowrap;">{{ alert.unit }}</td>
+        <td valign="top" style="padding:8px 6px;border-bottom:1px solid #e2e8f0;">
+          <span style="display:inline-block;padding:2px 8px;font-size:11px;line-height:16px;font-weight:bold;white-space:nowrap;background-color:{{ alert.chip_bg }};color:{{ alert.chip_fg }};">{{ alert.source }}</span>
+        </td>
+        <td valign="top" style="padding:8px 6px;font-size:12px;line-height:17px;color:#0f172a;border-bottom:1px solid #e2e8f0;">{{ alert.system }}<br><span style="color:#475569;">{{ alert.component }}</span></td>
+        <td valign="top" style="padding:8px 6px;font-size:12px;line-height:17px;color:#0f172a;border-bottom:1px solid #e2e8f0;">{{ alert.diagnosis }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <div style="margin-top:6px;font-size:12px;line-height:17px;color:#475569;">Mostrando {{ featured|length }} de {{ total }} alertas del período. Se priorizan las alertas multitécnicas y las unidades con más alertas.</div>
+  </td></tr>
+{% endif %}
+
+{% if button_url %}
+  <!-- Button -->
+  <tr><td align="center" style="padding:24px 24px 8px 24px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+      <tr><td align="center" bgcolor="#1d4ed8" style="background-color:#1d4ed8;">
+        <a href="{{ button_url }}" target="_blank" style="display:inline-block;padding:12px 28px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:bold;color:#ffffff;text-decoration:none;">Ver Alertas en el Dashboard</a>
+      </td></tr>
+    </table>
+  </td></tr>
+{% endif %}
+
+  <!-- Footer -->
+  <tr><td style="padding:20px 24px 24px 24px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="border-top:1px solid #e2e8f0;padding-top:12px;font-size:12px;line-height:18px;color:#475569;">{{ footer }}</div>
+    <div style="margin-top:6px;font-size:12px;line-height:18px;font-weight:bold;color:#475569;">Coddi · coddi.ai</div>
+  </td></tr>
+
+</table>
+
+</td></tr>
+</table>
+</body>
+</html>

@@ -1,0 +1,149 @@
+/* Status chips (dashboard/components/status_chip.py) and the General tab's icon badges.
+   Tiers follow ui_notes_improved.md §1.2: Normal is quiet green, Alerta the orange tier,
+   Anormal the deep-red tier. The shape in front of the word differs per status so the
+   state is readable without color: circle / triangle / diamond / dash. */
+
+:root {
+    --st-normal-solid: #15803d;
+    --st-normal-bg: #dcfce7;
+    --st-normal-text: #166534;
+    --st-normal-border: #86efac;
+
+    --st-alerta-solid: #c2410c;
+    --st-alerta-bg: #ffedd5;
+    --st-alerta-text: #9a3412;
+    --st-alerta-border: #fdba74;
+
+    --st-anormal-solid: #b91c1c;
+    --st-anormal-bg: #fee2e2;
+    --st-anormal-text: #991b1b;
+    --st-anormal-border: #fca5a5;
+
+    --st-nodata-solid: #4b5563;
+    --st-nodata-bg: #f3f4f6;
+    --st-nodata-text: #374151;
+    --st-nodata-border: #9ca3af;
+}
+
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px 2px 8px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.status-chip__shape {
+    flex: none;
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    background: currentColor;
+}
+
+.status-chip--normal .status-chip__shape {
+    border-radius: 50%;
+}
+
+.status-chip--alerta .status-chip__shape {
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
+.status-chip--anormal .status-chip__shape {
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.status-chip--nodata .status-chip__shape {
+    height: 3px;
+    border-radius: 1px;
+}
+
+.status-chip--normal  { background: var(--st-normal-bg);  color: var(--st-normal-text);  border-color: var(--st-normal-border); }
+.status-chip--alerta  { background: var(--st-alerta-bg);  color: var(--st-alerta-text);  border-color: var(--st-alerta-border); }
+.status-chip--anormal { background: var(--st-anormal-bg); color: var(--st-anormal-text); border-color: var(--st-anormal-border); }
+.status-chip--nodata  { background: var(--st-nodata-bg);  color: var(--st-nodata-text);  border-color: var(--st-nodata-border); }
+
+/* Stronger variant: a unit's Estado. */
+.status-chip--solid {
+    padding: 4px 14px 4px 11px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+}
+.status-chip--solid.status-chip--normal  { background: var(--st-normal-solid);  border-color: var(--st-normal-solid); }
+.status-chip--solid.status-chip--alerta  { background: var(--st-alerta-solid);  border-color: var(--st-alerta-solid); }
+.status-chip--solid.status-chip--anormal { background: var(--st-anormal-solid); border-color: var(--st-anormal-solid); }
+.status-chip--solid.status-chip--nodata  { background: var(--st-nodata-solid);  border-color: var(--st-nodata-solid); }
+
+/* Tinted rounded square behind a section icon (replaces the left-border accent). */
+.icon-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+.icon-badge--normal  { background: var(--st-normal-bg);  color: var(--st-normal-text); }
+.icon-badge--alerta  { background: var(--st-alerta-bg);  color: var(--st-alerta-text); }
+.icon-badge--anormal { background: var(--st-anormal-bg); color: var(--st-anormal-text); }
+.icon-badge--nodata  { background: var(--st-nodata-bg);  color: var(--st-nodata-text); }
+
+/* Metadata caption under a page subtitle: last update + data sources, in one wrapping row. */
+.overview-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    margin-top: 4px;
+}
+.overview-meta .source-chips.mb-3 {
+    margin-bottom: 0 !important;
+}
+
+/* Chip on a tier-colored surface (the Unit Detail banner): translucent white, white text. */
+.status-chip--on-dark {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.7);
+    color: #fff;
+    font-weight: 700;
+}
+
+/* A chip that explains itself: a real button around the chip, popover in chip_popover.js. */
+.chip-button {
+    display: inline-flex;
+    padding: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+}
+.chip-button:focus-visible {
+    outline: 2px solid var(--blue, #2563eb);
+    outline-offset: 2px;
+}
+#chip-popover {
+    position: absolute;
+    z-index: 2000;
+    max-width: 360px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #1f2937;
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.45;
+    text-align: left;
+    white-space: pre-line;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+#chip-popover[hidden] {
+    display: none;
+}

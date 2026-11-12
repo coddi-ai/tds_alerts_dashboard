@@ -1,0 +1,177 @@
+/* Informe de Confiabilidad (dashboard/tabs/tab_mantenciones_general.py).
+   Colour tokens come from predictive_styles.css (:root). Icons carry no hue:
+   a colour on this page always means severity. */
+
+/* The single visible tab only repeated the page title; the jump nav replaces it. */
+.maintenance-tabs__strip {
+    display: none !important;
+}
+
+/* ---- Jump navigation --------------------------------------------------- */
+.maintenance-jump-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-strong);
+}
+
+.maintenance-jump-link {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.maintenance-jump-link:hover,
+.maintenance-jump-link:focus-visible {
+    color: var(--blue-text);
+    text-decoration: underline;
+}
+
+.maintenance-section {
+    scroll-margin-top: 1rem;
+}
+
+/* ---- Icons: one neutral treatment ---------------------------------------- */
+.maintenance-icon--neutral {
+    color: var(--text-muted);
+}
+
+.maintenance-unit {
+    margin-left: 0.15em;
+    color: var(--text-muted);
+    font-size: 0.55em;
+    font-weight: 600;
+}
+
+/* ---- KPI methodology tooltip and Disponibilidad severity ------------------ */
+.maintenance-info-icon {
+    margin-left: 0.35rem;
+    color: var(--text-muted);
+    cursor: help;
+    font-weight: 400;
+}
+
+.maintenance-info-icon:hover,
+.maintenance-info-icon:focus-visible {
+    color: var(--blue-text);
+}
+
+.maintenance-kpi-status:empty {
+    display: none;
+}
+
+.maintenance-kpi-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+}
+
+.maintenance-status-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+}
+
+.maintenance-status-dot--ok {
+    background: var(--green-text);
+}
+
+.maintenance-status-dot--below {
+    background: var(--red-text);
+}
+
+.maintenance-status-caption {
+    color: var(--text-muted);
+}
+
+/* ---- Actividad: 2x2 chart grid -------------------------------------------- */
+.maintenance-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.maintenance-chart-grid > * {
+    min-width: 0;
+}
+
+@media (max-width: 991.98px) {
+    .maintenance-chart-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* ---- Link-style buttons --------------------------------------------------- */
+.maintenance-link-button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--blue-text);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.maintenance-link-button:hover,
+.maintenance-link-button:focus-visible {
+    text-decoration: underline;
+}
+
+.maintenance-equipment-toggle {
+    display: block;
+    margin: 0.5rem auto 0;
+}
+
+.maintenance-equipment-toggle[hidden] {
+    display: none;
+}
+
+/* ---- Sistema multi-select -------------------------------------------------- */
+.maintenance-systems-toggle {
+    text-align: left;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+.maintenance-systems-popover {
+    min-width: 260px;
+    max-width: 90vw;
+}
+
+.maintenance-systems-actions {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.maintenance-systems-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 18rem;
+    overflow-y: auto;
+}
+
+.maintenance-systems-item {
+    display: flex;
+    align-items: center;
+    font-size: 0.9rem;
+}
+
+/* ---- Pareto: one-line finding above each chart ----------------------------------- */
+.maintenance-pareto-summary {
+    margin-bottom: 0.35rem;
+    color: var(--text-default);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.maintenance-pareto-summary:empty {
+    display: none;
+}

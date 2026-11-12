@@ -111,7 +111,8 @@ class CentinelaWarningsTests(unittest.TestCase):
             {row["warning_id"] for row in table},
             {"centinela-inspection-1", "centinela-inspection-2", "centinela-inspection-3"},
         )
-        self.assertEqual(list(result[7].data[0].labels), ["Lubricación"])
+        by_system = json.dumps(result[13], cls=PlotlyJSONEncoder, ensure_ascii=False)
+        self.assertIn("Lubricación", by_system)
         layout = json.dumps(create_layout(), cls=PlotlyJSONEncoder, ensure_ascii=False)
         self.assertIn('"value": "inspections"', layout)
         self.assertIn('"label": "Pautas"', layout)
@@ -136,10 +137,9 @@ class CentinelaWarningsTests(unittest.TestCase):
         table = callbacks._refresh(
             "CENTINELA", None, None, None, None, None, None, None, None, None
         )[-1]
-        sent_row = next(i for i, row in enumerate(table) if row["warning_id"] == "centinela-inspection-3")
-        pending_row = next(i for i, row in enumerate(table) if row["warning_id"] == "centinela-inspection-1")
-        self.assertEqual(callbacks._row_detail({"row": pending_row, "column": 0}, table), "")
-        detail = callbacks._row_detail({"row": sent_row, "column": 0}, table)
+        by_id = {row["warning_id"]: row for row in table}
+        self.assertEqual(callbacks._row_detail_content(by_id["centinela-inspection-1"]), "")
+        detail = callbacks._row_detail_content(by_id["centinela-inspection-3"])
         self.assertIn("9000456789", json.dumps(detail, cls=PlotlyJSONEncoder, ensure_ascii=False))
 
     def test_approve_sends_to_erp_with_the_client_sap_config(self):

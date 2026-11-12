@@ -1,6 +1,6 @@
 """
 Predictive Evidence Tab - Per-unit detailed evidence with oil and telemetry.
-Supports multi-component model: auto-discovers component CSVs (motor, transmision, etc.)
+Supports multi-component model: auto-discovers the partitioned components (motor, transmision, etc.)
 """
 
 from src.i18n import t
@@ -22,7 +22,15 @@ from dashboard.components.predictive_config import (
     load_predictive_oil_limits_four,
     load_real_oil_samples,
 )
+from dashboard.components.labels import status_label
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
+from dashboard.components.predictive_state import (
+    RISK_LEVEL_STYLE,
+    RISK_LEVEL_NO_DATA_COLOR,
+    normalize_risk_level,
+    normalize_state,
+    risk_level_label,
+)
 from dashboard.components.predictive_charts import (
     create_comparative_bars,
     create_mode_status_calendar,
@@ -34,7 +42,7 @@ from dashboard.components.predictive_charts import (
 from dashboard.components.predictive_tables import create_oil_variables_table
 from dashboard.components.oil_charts import get_essay_limits_four, classify_four_limit_value
 from dashboard.components.ai_analysis_panel import create_ai_analysis_panel
-from src.data.loaders import load_analisis_inteligente
+from src.i18n.data_text import localized_value
 from src.data import predictive_v2
 from dashboard.tabs.tab_predictive_overview import (
     attach_status,
@@ -96,29 +104,180 @@ def _load_component_data(filepath: Path, component: str, client: str = "cda"):
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
-def _ranking_color(val):
-    if val >= 70:
-        return "#e24b4a"
-    if val >= 40:
-        return "#ef9f27"
-    return "#1d9e75"
+def _fmt_ranking(val):
+    return "—" if pd.isna(val) else f"{val:.1f}"
 
 
-def _kpi_card(label, value, color, sub):
+# ── Unit status banner ────────────────────────────────────────────────────────
+
+# The banner is styled from one value per unit: `status` as attach_status() sets it
+# (unit_status_summary.estado). That status maps to one of three banner tiers, and
+# each tier to one style, so no caller picks a banner color on its own. `Alerta`
+# keeps today's amber and `Anormal` today's red; `Normal` loses its alarm color.
+BANNER_TIER_BY_STATUS = {"Normal": "normal", "Alerta": "anormal", "Anormal": "critico"}
+
+UNIT_BANNER_STYLES = {
+    "normal": {
+        "banner": {"background": "#F3F4F6", "color": "#1F2937", "boxShadow": "0 4px 12px rgba(15,17,23,0.08)",
+                   "border": "1px solid #D1D5DB"},
+        "badge": {"background": "#FFFFFF", "border": "1px solid #9CA3AF"},
+    },
+    "anormal": {
+        "banner": {"background": "linear-gradient(135deg, #b45309 0%, #b45309dd 100%)", "color": "white",
+                   "boxShadow": "0 4px 12px #b4530944", "border": "1px solid transparent"},
+        "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+    },
+    "critico": {
+        "banner": {"background": "linear-gradient(135deg, #e24b4a 0%, #e24b4add 100%)", "color": "white",
+                   "boxShadow": "0 4px 12px #e24b4a44", "border": "1px solid transparent"},
+        "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+    },
+}
+
+# A unit with no usable status ("Sin Datos") is not one of the three tiers: it must
+# not borrow the light "normal" look and read as healthy.
+_UNIT_BANNER_NO_STATUS = {
+    "banner": {"background": "linear-gradient(135deg, #64748b 0%, #64748bdd 100%)", "color": "white",
+               "boxShadow": "0 4px 12px #64748b44", "border": "1px solid transparent"},
+    "badge": {"background": "rgba(255,255,255,0.2)", "border": "1px solid rgba(255,255,255,0.4)"},
+}
+
+
+def banner_tier(status):
+    """'normal' / 'anormal' / 'critico' for a unit's `status`, or None without a usable one."""
+    return BANNER_TIER_BY_STATUS.get(normalize_state(status))
+
+
+def unit_banner_style(status):
+    """{'tier', 'banner', 'badge'}: the colors of the Evidencia unit banner and its
+    Estado badge for a unit's `status`."""
+    tier = banner_tier(status)
+    return {"tier": tier, **UNIT_BANNER_STYLES.get(tier, _UNIT_BANNER_NO_STATUS)}
+
+
+# ── Shared 0-100 risk scale (Riesgo Acumulado 90d and Ranking 7 Días) ─────────
+
+# (lower bound, chip label, gauge fill, chip background, chip text), highest band
+# first. Provisional: the 40 / 70 cut-offs are the ones the ranking colors and score
+# cells already use (see tab_predictive_overview._score_cell_style); the team has not
+# confirmed them for the chips. Both tiles read this one table.
+RISK_SCALE_BANDS = (
+    (70, "Crítico", "#e24b4a", "#fcebeb", "#a32d2d"),
+    (40, "Atención", "#ef9f27", "#faeeda", "#854f0b"),
+    (0, "Normal", "#1d9e75", "#eaf3de", "#3b6d11"),
+)
+_RISK_SCALE_TICKS = (40, 70)
+_NO_DATA_CHIP = ("#E5E7EB", "#4B5563")
+
+
+def risk_band(value):
+    """The RISK_SCALE_BANDS row for a 0-100 score, or None when it is missing."""
+    if pd.isna(value):
+        return None
+    return next(band for band in RISK_SCALE_BANDS if value >= band[0])
+
+
+def _risk_tile(label, value, sub):
+    """KPI tile for a score on the shared 0-100 risk scale: value, severity chip and
+    a gauge whose ticks mark the chip thresholds."""
+    band = risk_band(value)
+    if band is None:
+        fill, chip_bg, chip_text, chip_label, pct = "#9CA3AF", *_NO_DATA_CHIP, status_label("Sin Datos"), 0.0
+    else:
+        _, chip_label, fill, chip_bg, chip_text = band
+        chip_label, pct = status_label(chip_label), max(0.0, min(100.0, float(value)))
+    meter = {"role": "meter", "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": label}
+    if band is not None:
+        meter["aria-valuenow"] = round(pct, 1)
     return html.Div([
-        html.Div(className="kpi-accent", style={"background": color}),
-        html.Div(label, className="kpi-label"),
-        html.Div(str(value), className="kpi-value"),
+        html.Div(label, className="kpi-title"),
+        html.Div([
+            html.Div(_fmt_ranking(value), className="kpi-value"),
+            html.Span(chip_label, className="ev-chip", style={"background": chip_bg, "color": chip_text}),
+        ], className="ev-tile-main"),
+        html.Div([
+            html.Div(className="ev-gauge-fill", style={"width": f"{pct}%", "background": fill}),
+            *[html.Span(className="ev-gauge-tick", style={"left": f"{tick}%"}) for tick in _RISK_SCALE_TICKS],
+        ], className="ev-gauge", **meter),
+        html.Div([html.Span("0"), html.Span("100")], className="ev-gauge-scale"),
         html.Div(sub, className="kpi-sub"),
-    ], className="kpi-card")
+    ], className="kpi-card ev-tile")
 
 
-def _status_colors(status):
-    return {
-        "Crítica":   {"border": "#e24b4a", "bg": "#fcebeb", "text": "#a32d2d"},
-        "Alerta":    {"border": "#ef9f27", "bg": "#faeeda", "text": "#854f0b"},
-        "Saludable": {"border": "#1d9e75", "bg": "#eaf3de", "text": "#3b6d11"},
-    }.get(status, {"border": "#888", "bg": "#f0f0f0", "text": "#444"})
+# ── Risk trend (ranking_7d vs ranking_90d) ───────────────────────────────────
+
+# Points of 7d-minus-90d difference tolerated before a trend is flagged
+RISK_TREND_TOLERANCE = 5.0
+
+# trend -> (word i18n key, text color, arrow); same direction convention as Short View's
+# "Peor / Mejor en la última semana" quadrants. The word carries the meaning, so it
+# never depends on the color alone.
+_RISK_TREND_STYLE = {
+    "increasing": ("tab_predictive_evidence.tendencia_empeorando", "#a32d2d", "▲"),
+    "decreasing": ("tab_predictive_evidence.tendencia_mejorando", "#3b6d11", "▼"),
+    "stable": ("tab_predictive_evidence.tendencia_estable", "#4B5563", "●"),
+}
+
+
+def risk_trend(ranking_7d, ranking_90d, tolerance=RISK_TREND_TOLERANCE):
+    """'increasing' / 'decreasing' / 'stable' from the 7-day vs 90-day ranking, or
+    None when either is missing. `diff = 7d - 90d`: beyond +tolerance the recent
+    window is worse than the baseline, beyond -tolerance it is better, and a
+    difference within +-tolerance (inclusive) is stable."""
+    if pd.isna(ranking_7d) or pd.isna(ranking_90d):
+        return None
+    diff = float(ranking_7d) - float(ranking_90d)
+    if diff > tolerance:
+        return "increasing"
+    if diff < -tolerance:
+        return "decreasing"
+    return "stable"
+
+
+def _risk_trend_card(ranking_7d, ranking_90d):
+    label = t("tab_predictive_evidence.tendencia_de_riesgo")
+    trend = risk_trend(ranking_7d, ranking_90d)
+    if trend is None:
+        return html.Div([
+            html.Div(label, className="kpi-title"),
+            html.Div("—", className="kpi-value"),
+            html.Div(t("tab_predictive_evidence.tendencia_sin_datos"), className="kpi-sub"),
+        ], className="kpi-card ev-tile")
+    key, color, arrow = _RISK_TREND_STYLE[trend]
+    return html.Div([
+        html.Div(label, className="kpi-title"),
+        html.Div([
+            html.Span(arrow, className="ev-trend-arrow"),
+            html.Span(t(key)),
+        ], className="kpi-value ev-trend-value", style={"color": color}),
+        html.Div(t("tab_predictive_evidence.tendencia_detalle", diff=float(ranking_7d) - float(ranking_90d)),
+                 className="kpi-sub"),
+    ], className="kpi-card ev-tile")
+
+
+def _risk_level_chip(level):
+    """Badge of a failure mode's `risk_level` (`risk_scores`), in the tone every
+    Predictivo surface gives that level. No level -> neutral "Sin datos" chip."""
+    normalized = normalize_risk_level(level)
+    if normalized is None:
+        bg, text = RISK_LEVEL_NO_DATA_COLOR, "#4B5563"
+    else:
+        bg, text = RISK_LEVEL_STYLE[normalized]["cell_bg"], RISK_LEVEL_STYLE[normalized]["cell_text"]
+    return html.Span(risk_level_label(normalized), className="ev-chip", style={"background": bg, "color": text})
+
+
+def _dominant_mode_card(label, mode_score, risk_level=None):
+    """Not a risk-severity tile: no gauge, red/amber/green or own thresholds. The badge
+    is the dominant mode's `risk_level` as `risk_scores` delivers it; the score beside
+    it is only displayed, it never picks the badge."""
+    return html.Div([
+        html.Div(t("tab_predictive_evidence.modo_dominante"), className="kpi-title"),
+        html.Div([
+            html.Div(label, className="kpi-value ev-mode-value"),
+            _risk_level_chip(risk_level),
+        ], className="ev-tile-main"),
+        html.Div(t("tab_predictive_evidence.score", fm_scores_dominant=mode_score), className="kpi-sub"),
+    ], className="kpi-card ev-tile ev-tile--mode")
 
 
 # ── Insight generation (AI-style explanations) ────────────────────────────────
@@ -308,6 +467,25 @@ def _analyze_telemetry_observations(df_unit, telem_vars, telem_labels, days=90):
     return observations
 
 
+def _unit_risk_levels(client, component, unit):
+    """One unit's wide `risk_level` frame (Fecha + one column per mode) from the same
+    `risk_scores` window as the rest of the page; empty when there is none."""
+    if not client:
+        return pd.DataFrame()
+    levels = predictive_v2.load_risk_levels(client, component)
+    if levels.empty or "Unit" not in levels.columns:
+        return pd.DataFrame()
+    return levels[levels["Unit"] == unit]
+
+
+def _latest_mode_level(unit_levels, mode):
+    """`risk_level` of `mode` on the latest day the unit has a row for it, or None."""
+    if unit_levels is None or unit_levels.empty or mode not in unit_levels.columns:
+        return None
+    series = unit_levels.sort_values("Fecha")[mode].dropna()
+    return normalize_risk_level(series.iloc[-1]) if not series.empty else None
+
+
 def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="motor", client="cda"):
     """Generate complete insight data for a failure mode and unit."""
     oil_labels, telem_labels, oil_limits_four = _resolve_client_dicts(client, component)
@@ -372,6 +550,9 @@ def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="mo
     return {
         "unit": unit,
         "score": score,
+        # The status of this mode: the `risk_level` `risk_scores` delivers, not a
+        # reading of `score`.
+        "risk_level": _latest_mode_level(_unit_risk_levels(client, component, unit), failure_mode),
         "label": label,
         "var_names": var_names,
         "methodology": methodology,
@@ -382,10 +563,8 @@ def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="mo
 
 
 def _get_unit_ai_analysis(df_analisis, unit):
-    """
-    Return the most recent analisis_inteligente.parquet row for `unit`
-    (one row per Unit per Fecha), or None if there's no AI analysis on file.
-    """
+    """Return the most recent `unit_failure_analisis` row for `unit`, or None if
+    there is no AI analysis on file."""
     if df_analisis is None or df_analisis.empty or not unit or "Unit" not in df_analisis.columns:
         return None
     rows = df_analisis[df_analisis["Unit"] == unit]
@@ -394,6 +573,49 @@ def _get_unit_ai_analysis(df_analisis, unit):
     if "Fecha" in rows.columns:
         rows = rows.sort_values("Fecha")
     return rows.iloc[-1]
+
+
+_AI_NARRATIVE_COLS = ("diagnostico", "causa_probable", "acciones")
+_EMPTY_AI_PANEL = {"diagnostico": None, "causa_probable": None, "acciones": None}
+
+
+def _unit_narrative_panel(ai_row):
+    """Panel kwargs from a `unit_failure_analisis` row, or None when the row
+    carries no narrative (`analisis_fuente == "omitida"`: the upstream LLM pass
+    is skipped for `normal` units; or the three columns are null/empty)."""
+    if ai_row is None or not all(col in ai_row.index for col in _AI_NARRATIVE_COLS):
+        return None
+    if str(ai_row.get("analisis_fuente", "")).strip().lower() == "omitida":
+        return None
+    if not any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _AI_NARRATIVE_COLS):
+        return None
+    return {
+        "diagnostico": localized_value(ai_row, "diagnostico"),
+        "causa_probable": localized_value(ai_row, "causa_probable"),
+        "acciones": localized_value(ai_row, "acciones"),
+        "header_text": t("tab_predictive_evidence.analisis_inteligente_2"),
+    }
+
+
+def _resolve_unit_ai_panel(client, component, unit):
+    """`create_ai_analysis_panel` kwargs for the unit-level Analisis Inteligente.
+
+    Diagnóstico, Causa probable and Acciones come from `unit_failure_analisis`
+    (`diagnostico`, `causa_probable`, `acciones`) and from nothing else: no other table
+    or file stands in for it. The partition read is the same `(year, week)` run as
+    the page's `risk_scores`, so the narrative never comes from a different run than
+    the scores beside it; if that run has no row for the unit (or the row carries no
+    narrative - `analisis_fuente == "omitida"`, null or empty text) the panel's own
+    "No disponible" layout is shown, so the card's shape never changes across units.
+    """
+    if not client:
+        return dict(_EMPTY_AI_PANEL)
+
+    run = predictive_v2.latest_risk_scores_run(client, component)
+    if run is None:
+        return dict(_EMPTY_AI_PANEL)
+    df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component, run=run)
+    return _unit_narrative_panel(_get_unit_ai_analysis(df_unit_analisis, unit)) or dict(_EMPTY_AI_PANEL)
 
 
 def _build_insight_panel(insight):
@@ -409,13 +631,13 @@ def _build_insight_panel(insight):
     observations = insight.get("observations", [])
     n_days = insight.get("n_days", 90)
 
-    # Score styling
-    if score >= 70:
-        score_color, score_level = "#e24b4a", t("predictive_evidence.risk_level_high")
-    elif score >= 40:
-        score_color, score_level = "#ef9f27", t("predictive_evidence.risk_level_medium")
+    # Status styling: the mode's `risk_level`. The score is displayed, never read for a tone.
+    level = normalize_risk_level(insight.get("risk_level"))
+    score_level = risk_level_label(level)
+    if level is None:
+        score_color = score_text_color = "#6B7280"
     else:
-        score_color, score_level = "#1d9e75", t("predictive_evidence.risk_level_low")
+        score_color, score_text_color = RISK_LEVEL_STYLE[level]["color"], RISK_LEVEL_STYLE[level]["cell_text"]
 
     vars_text = ", ".join(var_names) if var_names else "—"
 
@@ -497,8 +719,8 @@ def _build_insight_panel(insight):
                 t("tab_predictive_evidence.la_unidad"),
                 html.Strong(unit),
                 t("tab_predictive_evidence.tiene_un_puntaje_de"),
-                html.Strong(f"{score:.1f}/100", style={"color": score_color}),
-                t("tab_predictive_evidence.riesgo_para", score_level=score_level, label=label)
+                html.Strong(f"{score:.1f}/100", style={"color": score_text_color}),
+                t("tab_predictive_evidence.nivel_riesgo_para", score_level=score_level, label=label)
             ], style={"fontSize": "12px", "color": "#374151", "lineHeight": "1.5", "margin": "0"}),
         ], className="insight-section", style={
             "background": "#F9FAFB", "borderLeft": f"3px solid {score_color}"
@@ -523,8 +745,7 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     """Render KPIs and fleet comparison for a unit."""
     failure_modes = resolve_failure_modes(component, client)
 
-    # Status - unit_status_summary when it exists for this client/component,
-    # else analisis_inteligente.parquet (Change 4) - so the fleet scatter
+    # Status - unit_status_summary.estado (Change 4) - so the fleet scatter
     # never disagrees with the priority cards for the same unit.
     latest = attach_status(df_latest, client, component)
 
@@ -536,17 +757,21 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
         return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
     row = row.iloc[0]
 
-    # Dominant failure mode (use 30d averages for consistency)
+    # Dominant failure mode: the highest cutoff-day value (the unit's latest `risk_value`
+    # per mode), the same figure the PDF reports. Displayed only - the badge is its `risk_level`.
     fm_keys = list(failure_modes.keys())
-    fm_scores = {k: float(row[f"{k}_30d"]) if f"{k}_30d" in row.index and pd.notna(row[f"{k}_30d"]) else 0.0 for k in fm_keys}
+    fm_scores = {k: float(row[k]) if k in row.index and pd.notna(row[k]) else 0.0 for k in fm_keys}
     dominant_mode = max(fm_scores, key=fm_scores.get) if fm_scores else fm_keys[0]
     dominant_label = failure_modes[dominant_mode]
 
     # KPIs
-    ranking_val = float(row["ranking"])
-    ranking_30d_val = float(row.get("avg_ranking_30d", 0))
+    ranking_7d_val = float(row.get("avg_ranking_7d", float("nan")))
+    ranking_90d_val = float(row.get("ranking_acum_90d", float("nan")))
 
     df_unit = df[df["Unit"] == unit].sort_values("Fecha")
+    # `risk_level` per day and mode (`risk_scores`): the status the badge and the
+    # calendar show, read as delivered.
+    unit_levels = _unit_risk_levels(client, component, unit)
     last_evidence_date = df_unit["Fecha"].max() if not df_unit.empty else None
     last_date_str = last_evidence_date.strftime("%d %b %Y") if last_evidence_date is not None else "—"
 
@@ -554,10 +779,10 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # subview (dashboard/callbacks/predictive_callbacks.py's
     # update_unit_banner) — not repeated here as a KPI.
     kpis = [
-        _kpi_card(t("tab_predictive_evidence.ranking_actual"), f"{ranking_val:.0f}", _ranking_color(ranking_val), t("tab_predictive_evidence.escala_0_100")),
-        _kpi_card(t("tab_predictive_evidence.riesgo_acum_30d"), f"{ranking_30d_val:.1f}", _ranking_color(ranking_30d_val), t("tab_predictive_evidence.indice_historico")),
-        _kpi_card(t("tab_predictive_evidence.modo_dominante"), dominant_label, "#7C3AED", t("tab_predictive_evidence.score", fm_scores_dominant=fm_scores[dominant_mode])),
-        _kpi_card(t("tab_predictive_evidence.ultima_evidencia"), last_date_str, "#6B7280", t("tab_predictive_evidence.fecha_mas_reciente")),
+        _risk_tile(t("tab_predictive_evidence.riesgo_acum_90d"), ranking_90d_val, t("tab_predictive_evidence.indice_historico")),
+        _risk_tile(t("tab_predictive_evidence.ranking_7_dias"), ranking_7d_val, t("tab_predictive_evidence.escala_0_100")),
+        _risk_trend_card(ranking_7d_val, ranking_90d_val),
+        _dominant_mode_card(dominant_label, fm_scores[dominant_mode], _latest_mode_level(unit_levels, dominant_mode)),
     ]
 
     # Fleet charts
@@ -565,89 +790,15 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     # (`failure_modes` is data-driven). The window ends at the component's
     # latest date, not the unit's, so a unit that stopped reporting shows
     # trailing "Sin datos" instead of looking current.
-    calendar_fig = create_mode_status_calendar(df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS)
+    calendar_fig = create_mode_status_calendar(
+        df_unit, failure_modes, df["Fecha"].max(), CALENDAR_DAYS, risk_levels=unit_levels,
+    )
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
-    # AI analysis: `mode_failure_analisis` (Data Contract v2.3, formerly
-    # `failure_mode_diagnosis`) is the published contract - one row per unit x
-    # flagged mode, worst mode first via the modos_ordenados join (see
-    # predictive_v2.get_unit_mode_failure_analisis and
-    # documentation/predictive/predictive_data_contracts.md §3). Falls back to
-    # `unit_failure_analisis` (formerly `analisis_inteligente`, now live and
-    # partitioned rather than a frozen flat file) for units with no flagged
-    # mode this week, then to the deprecated flat `analisis_inteligente.parquet`
-    # for clients/components not yet on the new layout, then to the rule-based
-    # insight engine when none of those has narrative content.
-    diag_rows = predictive_v2.get_unit_mode_failure_analisis(client, component, unit) if client else pd.DataFrame()
-    diag_row = diag_rows.iloc[0] if not diag_rows.empty else None
-
-    ai_section = None
-    if diag_row is not None:
-        analysis_status = str(diag_row.get("analysis_status", "")).strip().lower()
-        if analysis_status == "error":
-            # Never surface raw exception text to the user - documented
-            # incident: a BadRequestError string once ended up rendered in a
-            # unit's report. Show a generic interface message instead of
-            # trusting probable_cause/recommended_actions' contents.
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    None,
-                    t("tab_predictive_evidence.el_analisis_para_este_modo_no"),
-                    None,
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-        else:
-            header_text = t("tab_predictive_evidence.analisis_inteligente_2")
-            if analysis_status == "fallback_rules":
-                # Model was unavailable upstream and this came from fixed
-                # rules instead - flag it visually so it doesn't read as more
-                # precise than it is.
-                header_text = t("tab_predictive_evidence.analisis_inteligente_basado_en_reglas")
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    diag_row.get("diagnostico"),
-                    diag_row.get("probable_cause"),
-                    diag_row.get("recommended_actions"),
-                    header_text=header_text,
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-    else:
-        df_unit_analisis = predictive_v2.load_unit_failure_analisis(client, component) if client else pd.DataFrame()
-        if df_unit_analisis.empty:
-            # Not on the new layout yet for this client/component - last
-            # resort is the deprecated frozen snapshot.
-            df_unit_analisis = load_analisis_inteligente(client) if client else pd.DataFrame()
-        ai_row = _get_unit_ai_analysis(df_unit_analisis, unit) if client else None
-        _narrative_cols = ("diagnostico", "causa_probable", "acciones")
-        has_narrative = (
-            ai_row is not None
-            and all(col in ai_row.index for col in _narrative_cols)
-            and str(ai_row.get("analisis_fuente", "")).strip().lower() != "omitida"
-            and any(pd.notna(ai_row.get(col)) and str(ai_row.get(col)).strip() for col in _narrative_cols)
-        )
-        if has_narrative:
-            ai_section = html.Div(
-                create_ai_analysis_panel(
-                    ai_row.get("diagnostico"),
-                    ai_row.get("causa_probable"),
-                    ai_row.get("acciones"),
-                ),
-                style={"marginBottom": "1.5rem"},
-            )
-
-    if ai_section is None:
-        # No narrative diagnosis on file for this unit in either the current
-        # contract or the legacy table (source 1/2 both empty) - show the
-        # same Diagnostico/Causa probable/Acciones layout as source 1 rather
-        # than the rule-based insight panel, so the card's shape never
-        # changes across units; create_ai_analysis_panel already renders
-        # "No disponible" for each column when passed None.
-        ai_section = html.Div(
-            create_ai_analysis_panel(None, None, None),
-            style={"marginBottom": "1.5rem"},
-        )
+    ai_section = html.Div(
+        create_ai_analysis_panel(**_resolve_unit_ai_panel(client, component, unit)),
+        style={"marginBottom": "1.5rem"},
+    )
 
     return html.Div([
         # KPIs
@@ -655,9 +806,16 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
             html.Div([
                 html.H4([html.I(className="fas fa-tachometer-alt me-2"), t("tab_predictive_evidence.resumen_de_condicion")],
                         className="text-primary mb-2"),
-                html.P(t("tab_predictive_evidence.indicadores_principales_de_riesgo_de_la", unit=unit), className="text-muted mb-3"),
+                html.Div([
+                    html.P(t("tab_predictive_evidence.indicadores_principales_de_riesgo_de_la", unit=unit), className="text-muted mb-0"),
+                    html.Span([
+                        html.I(className="far fa-clock me-1"),
+                        t("tab_predictive_evidence.ultima_evidencia") + ": ",
+                        html.Strong(last_date_str),
+                    ], className="ev-meta"),
+                ], className="ev-subtitle-row mb-3"),
             ]),
-            html.Div(kpis, className="kpi-row"),
+            html.Div(kpis, className="kpi-row ev-kpi-row"),
         ], className="card shadow-sm", style={"marginBottom": "1.5rem"}),
 
         # AI analysis
@@ -680,7 +838,11 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
                     ], style={"marginBottom": "8px"}),
                     dcc.Graph(figure=calendar_fig, config={"displayModeBar": False})
                     if calendar_fig is not None else
-                    html.P(t("tab_predictive_evidence.no_hay_datos_de_riesgo_para_esta_unidad"),
+                    # Scores without `risk_level` (a run that predates it) are not a calendar:
+                    # the status is never rebuilt from the numbers, and the message says why.
+                    html.P(t("tab_predictive_evidence.no_hay_datos_de_riesgo_para_esta_unidad"
+                             if df_unit.empty or not unit_levels.empty else
+                             "tab_predictive_evidence.sin_nivel_de_riesgo_publicado"),
                            className="text-muted text-center", style={"padding": "40px"}),
                 ], className="card shadow-sm", style={"padding": "16px"}),
                 html.Div([

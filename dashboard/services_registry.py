@@ -6,7 +6,7 @@ label, icon, and parent nav section - used by both the sidebar builder
 (dashboard/layout.py) and the centralized route guard
 (dashboard/callbacks/access_control_callbacks.py), so the two never drift.
 
-Admin routes (admin-main, admin-user-registry) are role-gated, not
+Admin routes (admin-main, admin-user-registry, admin-mailing) are role-gated, not
 client-service-gated, and are kept separate from KNOWN_SERVICE_IDS.
 """
 
@@ -18,7 +18,7 @@ import dash
 
 from config.client_services import KNOWN_SERVICE_IDS, is_service_dummy, is_service_enabled
 
-# Nav sections in display order. Each service id here must be one of
+# Nav sections in display order (Reportes before Conexión ERP, per 04_sidebar_menu_reorder). Each service id here must be one of
 # config.client_services.KNOWN_SERVICE_IDS. 'predictive' is a section on its
 # own, built dynamically per client from the per-component
 # `predictive-<component>` service ids (dashboard/layout.py::build_navigation_items),
@@ -43,16 +43,16 @@ SERVICE_SECTIONS = [
         "services": ["agents-campbell-ai", "agents-troubleshooting"],
     },
     {
+        "section": "reporting",
+        "label": "Reportes",
+        "icon": "fas fa-file-alt",
+        "services": ["reporting-main", "reporting-informe-falla"],
+    },
+    {
         "section": "integration",
         "label": "Conexión ERP",
         "icon": "fas fa-plug",
         "services": ["integration-validacion-avisos", "integration-seguimiento-avisos"],
-    },
-    {
-        "section": "reporting",
-        "label": "Reportes",
-        "icon": "fas fa-file-alt",
-        "services": ["reporting-main"],
     },
 ]
 
@@ -69,6 +69,7 @@ SERVICE_LABELS = {
     "integration-validacion-avisos": "Validación de Avisos",
     "integration-seguimiento-avisos": "Seguimiento de Avisos",
     "reporting-main": "Reportabilidad",
+    "reporting-informe-falla": "Informe preliminar de falla",
 }
 
 # service id / admin nav id -> URL path.
@@ -85,8 +86,32 @@ NAV_PATHS = {
     "integration-validacion-avisos": "/integration/validacion-avisos",
     "integration-seguimiento-avisos": "/integration/seguimiento-avisos",
     "reporting-main": "/reporting",
+    "reporting-informe-falla": "/reporting/informe-falla",
     "admin-main": "/admin",
     "admin-user-registry": "/admin/registro-usuarios",
+    "admin-mailing": "/admin/mailing",
+}
+
+# One Font Awesome icon per sidebar link. Every entry is unique, and none repeats a
+# section icon (SERVICE_SECTIONS plus the predictive/admin sections built in
+# dashboard/layout.py), so a link is never mistaken for its own section in the rail.
+NAV_ICONS = {
+    "overview-general": "fas fa-th-large",
+    "monitoring-alerts": "fas fa-bell",
+    "monitoring-telemetry": "fas fa-wave-square",
+    "monitoring-oil": "fas fa-oil-can",
+    "monitoring-mantenciones": "fas fa-tools",
+    "predictive-motor": "fas fa-cog",
+    "predictive-transmision": "fas fa-exchange-alt",
+    "agents-campbell-ai": "fas fa-comments",
+    "agents-troubleshooting": "fas fa-stethoscope",
+    "integration-validacion-avisos": "fas fa-check-double",
+    "integration-seguimiento-avisos": "fas fa-route",
+    "reporting-main": "fas fa-chart-pie",
+    "reporting-informe-falla": "fas fa-diagram-project",   # el mismo del titulo de la pagina
+    "admin-main": "fas fa-sliders-h",
+    "admin-user-registry": "fas fa-users",
+    "admin-mailing": "fas fa-envelope",
 }
 
 # Route guard resolution: stripped pathname ('dash.strip_relative_path' form,
@@ -102,6 +127,7 @@ SERVICE_EXACT_ROUTES = {
     "integration/validacion-avisos": "integration-validacion-avisos",
     "integration/seguimiento-avisos": "integration-seguimiento-avisos",
     "reporting": "reporting-main",
+    "reporting/informe-falla": "reporting-informe-falla",
 }
 
 
@@ -129,6 +155,32 @@ def nav_path(nav_id: str) -> str:
     if nav_id.startswith("predictive-"):
         return f"/predictive/{nav_id.split('predictive-', 1)[1]}"
     return NAV_PATHS[nav_id]
+
+
+def nav_icon(nav_id: str) -> str:
+    """Icon of a sidebar link; a predictive component added later still gets a neutral one."""
+    return NAV_ICONS.get(nav_id, "fas fa-microchip")
+
+
+def nav_id_for_pathname(pathname: Optional[str]) -> Optional[str]:
+    """
+    Sidebar link that "owns" a URL, for the active-link indicator.
+
+    A page listed in the sidebar owns its own path. A drill-down that no link
+    points at falls to the link of the service that gates it (see
+    resolve_service_id_for_pathname), so a unit's Unit Summary keeps
+    Resumen > General highlighted. Anything else (e.g. /sin-servicios) owns none.
+    """
+    if not pathname:
+        return None
+    try:
+        rel_path = dash.strip_relative_path(pathname) or ""
+    except AttributeError:  # no Dash app yet (unit tests), same fallback as relative_path()
+        rel_path = pathname.strip("/")
+    for nav_id, path in NAV_PATHS.items():
+        if rel_path == path.strip("/"):
+            return nav_id
+    return resolve_service_id_for_pathname(rel_path)
 
 
 def unit_summary_path(unit_id: str) -> str:

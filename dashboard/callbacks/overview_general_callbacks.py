@@ -12,7 +12,7 @@ documentation/general/general_specs/00_implementation_guide.md §3.4, even
 though Phase 1's Fleet Overview cards don't expose a component filter).
 """
 
-from dash import MATCH, Input, Output, Patch, State, callback, ctx, html
+from dash import MATCH, Input, Output, Patch, State, callback, ctx, html, no_update
 from dash.exceptions import PreventUpdate
 from datetime import datetime, timedelta
 import logging
@@ -25,7 +25,7 @@ from dashboard.components.fleet_overview import (
     more_button_label,
 )
 from dashboard.components.labels import translate_component_label
-from dashboard.components.source_status import render_fleet_overview_source_status
+from dashboard.components.source_status import render_fleet_overview_data_sources
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,34 @@ def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -
     return equipment_stats.sort_values('criticality_score', ascending=False)
 
 
+def count_alerts_by_window(df_alerts: pd.DataFrame, windows_days: tuple = (7, 28, 56)) -> dict:
+    """Number of alerts per unit in each trailing window (default: last week,
+    last 4 weeks, last 8 weeks).
+
+    Returns {unit: (count_in_window_1, count_in_window_2, ...)} in the order of
+    `windows_days`. Only units with at least one alert row appear; the windows
+    are nested, so counts never decrease from one window to the next.
+    """
+    if df_alerts is None or df_alerts.empty:
+        return {}
+    if not {'UnitId', 'Timestamp'}.issubset(df_alerts.columns):
+        logger.warning(f"Required columns not found. Available: {df_alerts.columns.tolist()}")
+        return {}
+
+    now = datetime.now()
+    alerts = df_alerts[['UnitId', 'Timestamp']].copy()
+    alerts['Timestamp'] = pd.to_datetime(alerts['Timestamp'], errors='coerce')
+    alerts = alerts.dropna(subset=['Timestamp'])
+    if alerts.empty:
+        return {}
+
+    counts = pd.DataFrame({
+        days: alerts['Timestamp'].ge(now - timedelta(days=days)).groupby(alerts['UnitId']).sum()
+        for days in windows_days
+    }).astype(int)
+    return {str(unit): tuple(int(c) for c in row) for unit, row in counts.iterrows()}
+
+
 def register_overview_general_callbacks(app):
     """Register callbacks for the Fleet Overview page."""
 
@@ -138,20 +166,25 @@ def register_overview_general_callbacks(app):
     )
     def update_overview_source_status(client):
         if not client:
-            return html.Div()
-        return render_fleet_overview_source_status(client)
+            return None
+        return render_fleet_overview_data_sources(client)
 
     @callback(
         [
             Output("overview-fleet-cards", "children"),
             Output("overview-last-update", "children"),
+            Output("fleet-search", "value"),
         ],
-        [Input("client-selector", "value")],
+        [Input("client-selector", "value"), Input("fleet-search", "value")],
     )
-    def update_fleet_overview(client):
+    def update_fleet_overview(client, query):
+        """Builds the bands. A new client reads the data again and clears the search; typing in
+        the search only lays the last build out again, filtered."""
         if not client:
-            return build_fleet_overview(None), "N/A"
-        return build_fleet_overview(client), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return build_fleet_overview(None), "N/A", no_update
+        if ctx.triggered_id == "fleet-search":
+            return build_fleet_overview(client, query, refresh=False), no_update, no_update
+        return build_fleet_overview(client), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), ""
 
     @callback(
         [
@@ -160,16 +193,16 @@ def register_overview_general_callbacks(app):
             Output({"type": "fleet-more", "band": MATCH}, "hidden"),
         ],
         Input({"type": "fleet-more", "band": MATCH}, "n_clicks"),
-        State("client-selector", "value"),
+        [State("client-selector", "value"), State("fleet-search", "value")],
         prevent_initial_call=True,
     )
-    def load_more_fleet_rows(n_clicks, client):
+    def load_more_fleet_rows(n_clicks, client, query):
         """Append the band's next chunk of rows (50 per click) - only the new
         rows travel to the browser; the ones already shown are not resent."""
         if not n_clicks or not client:
             raise PreventUpdate
         band = ctx.triggered_id["band"]
-        rows, remaining = get_band_rows_chunk(client, band, n_clicks)
+        rows, remaining = get_band_rows_chunk(client, band, n_clicks, query)
         patch = Patch()
         patch.extend(rows)
         return patch, more_button_label(remaining) if remaining else "", not remaining

@@ -144,6 +144,88 @@ def _probe_partitioned(
     )
 
 
+def _dir_has_files(path: Path) -> bool:
+    return path.is_dir() and any(item.is_file() for item in path.rglob("*"))
+
+
+def _with_data_first(candidates: Iterable[Path]) -> tuple[Path, ...]:
+    """The candidate folders that hold data come first, so a loader's fallback location
+    (an empty primary folder, a populated legacy one) is the one probed."""
+    candidates = tuple(candidates)
+    return tuple(sorted(candidates, key=lambda path: not _dir_has_files(path)))
+
+
+def _probe_ai_comments(client: str, telemetry_root: Path) -> SourceProbe:
+    """Telemetría's AI comments: one folder per level (`ai_<level>_comments`) with a legacy
+    `ai_comments` fallback. Fleet view needs unit and system; signal comments are detail only."""
+    levels = {level: telemetry_root / f"ai_{level}_comments" for level in ("unit", "system", "signal")}
+    legacy = telemetry_root / "ai_comments"
+    present = [level for level, path in levels.items() if _dir_has_files(path)]
+    candidates = tuple(str(path) for path in (*levels.values(), legacy))
+    base = dict(client=client.upper(), technique="telemetry", source="telemetry_ai_comments", candidates=candidates)
+    if _dir_has_files(legacy) or {"unit", "system"} <= set(present):
+        return SourceProbe(**base, status="available", path=str(telemetry_root))
+    if present:
+        return SourceProbe(
+            **base, status="partial", path=str(telemetry_root),
+            note=f"Comentarios de IA solo para: {', '.join(present)}.",
+        )
+    return SourceProbe(**base, status="missing", path=None)
+
+
+def _probe_maintenance_weekly(client: str, root: Path) -> SourceProbe:
+    """Weekly maintenance snapshots `<WW-YYYY>.csv` next to the Parquet contract folder."""
+    files = (
+        sorted(path for path in root.glob("*.csv") if path.stem != "Resumen_Semanal_Completo" and path.stem[:2].isdigit())
+        if root.is_dir() else []
+    )
+    base = dict(client=client.upper(), technique="mantentions", source="maintenance_weekly", candidates=(str(root),))
+    if not files:
+        return SourceProbe(**base, status="missing", path=None, note="No hay snapshots semanales de mantención.")
+    return SourceProbe(
+        **base, status="available", path=str(root),
+        size_bytes=sum(path.stat().st_size for path in files),
+        modified_utc=datetime.fromtimestamp(max(path.stat().st_mtime for path in files), tz=timezone.utc).isoformat(),
+        note=f"{len(files)} snapshots semanales.",
+    )
+
+
+# Reliability report (Informe de Confiabilidad): one Parquet per query of the maintenance contract.
+MAINTENANCE_QUERY_FILES = {
+    "maintenance_query_1": "query_1_component_maintenance.parquet",
+    "maintenance_query_2": "query_2_unit_records_actions.parquet",
+    "maintenance_query_3": "query_3_actions_all_equipment.parquet",
+    "maintenance_query_4": "query_4_business_kpis.parquet",
+    "maintenance_query_5": "query_5_reliability_monthly.parquet",
+    "maintenance_query_6": "query_6_component_failure_ranking.parquet",
+    "maintenance_query_7": "query_7_intervention_hours_daily.parquet",
+    "maintenance_query_8": "query_8_intervention_hours_monthly.parquet",
+    "maintenance_query_9": "query_9_fleet_intervention_daily.parquet",
+    "maintenance_query_10": "query_10_equipment_status.parquet",
+}
+
+# Conexión ERP keeps one Parquet per lifecycle state: data/warnings/<client>/<state>.parquet.
+ERP_WARNING_STATES = ("pending", "validated", "rejected", "sent")
+
+
+def _probe_erp_warnings(client: str, root: Path) -> SourceProbe:
+    """The warning store of one client: available when it holds at least one state file."""
+    candidates = tuple(root / "warnings" / client.lower() / f"{state}.parquet" for state in ERP_WARNING_STATES)
+    present = [path for path in candidates if path.is_file()]
+    base = dict(
+        client=client.upper(), technique="warnings", source="erp_warnings",
+        candidates=tuple(str(path) for path in candidates),
+    )
+    if not present:
+        return SourceProbe(**base, status="missing", path=None, note="No hay avisos del ERP para este cliente.")
+    return SourceProbe(
+        **base, status="available", path=str(present[0].parent),
+        size_bytes=sum(path.stat().st_size for path in present),
+        modified_utc=datetime.fromtimestamp(max(path.stat().st_mtime for path in present), tz=timezone.utc).isoformat(),
+        note=f"Estados con datos: {', '.join(path.stem for path in present)}.",
+    )
+
+
 def _build_client_availability_uncached(
     client: str,
     root: str | os.PathLike[str] | Path | None = None,
@@ -187,6 +269,26 @@ def _build_client_availability_uncached(
         (telemetry_root / "latest.json",),
     )
 
+    # Sources Telemetría > Detalle de Unidad (and the AI comments of Vista de Flota) read
+    # through `load_telemetry_*` in src/data/loaders.py; the folder candidates mirror those
+    # loaders (data_sources_documentation_dashboard.md, section 4).
+    telemetry_silver = root_path / "telemetry" / "silver" / client_lower
+    for source, candidates, note in (
+        ("telemetry_deviation", (telemetry_root / "deviation_summary", telemetry_root / "technique_results" / "deviation"), ""),
+        ("telemetry_trends", (telemetry_root / "trend_results", telemetry_root / "technique_results" / "trend"), ""),
+        ("telemetry_events", (telemetry_root / "event_results", telemetry_root / "technique_results" / "events"), ""),
+        ("telemetry_limits", (telemetry_silver / "limits", telemetry_silver / "baselines"), "Límites; si faltan, se usan los baselines."),
+        ("telemetry_silver_weekly", (telemetry_silver / "Telemetry_Wide_With_States",), ""),
+    ):
+        result[source] = _probe_partitioned(
+            client, "telemetry", source, _with_data_first(candidates), note=note,
+        )
+    result["telemetry_ai_comments"] = _probe_ai_comments(client, telemetry_root)
+
+    result["maintenance_weekly"] = _probe_maintenance_weekly(
+        client, root_path / "mantentions" / "golden" / client_lower,
+    )
+
     predictive_root = root_path / "predictive" / "golden" / client_lower
     predictive_files = tuple(sorted(predictive_root.glob("*.csv"))) if predictive_root.is_dir() else ()
     predictive_probe = _probe_partitioned(
@@ -219,6 +321,26 @@ def _build_client_availability_uncached(
                 "note": f"Se detectaron {len(weekly_files)} CSV semanales, pero no el contrato Parquet esperado.",
             }
         )
+
+    # Sources of the pages added to the popover later (data_sources_documentation_dashboard.md):
+    # Informe de Confiabilidad, Campbell AI, Conexión ERP and Administración > Mailing.
+    for source, filename in MAINTENANCE_QUERY_FILES.items():
+        views = (
+            root_path / "mantentions" / "golden" / client_lower / "Maintance_Labeler_Views",
+            root_path / "mantentions" / "golden" / client / "Maintance_Labeler_Views",
+        )
+        result[source] = _probe_file(
+            client, "mantentions", source, tuple(view / filename for view in views),
+        )
+    file_probe("mantentions", "maintenance_summary", "Resumen_Semanal_Completo.csv")
+    file_probe("telemetry", "telemetry_machine_status", "machine_status.parquet")
+    file_probe("telemetry", "telemetry_classified", "classified.parquet")
+    file_probe("predictive", "predictive_legacy_motor", "motor.csv")
+    file_probe("predictive", "predictive_legacy_transmision", "transmision.csv")
+    result["campbell_manifest"] = _probe_file(
+        client, "auxiliar", "campbell_manifest", (root_path / "auxiliar" / "manifest.json",),
+    )
+    result["erp_warnings"] = _probe_erp_warnings(client, root_path)
 
     return result
 
