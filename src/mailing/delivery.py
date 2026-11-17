@@ -95,7 +95,7 @@ def _signed_headers(url: str, body: str) -> Dict[str, str]:
     from botocore.awsrequest import AWSRequest
 
     request = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
-    SigV4Auth(credentials.get_frozen_credentials(), "lambda", match.group(1)).add_auth(request)
+    SigV4Auth(credentials.get_frozen_credentials(), "lambda", "us-east-2").add_auth(request)
     return {key: str(value) for key, value in request.headers.items()}
 
 
