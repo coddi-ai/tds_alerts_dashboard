@@ -81,7 +81,7 @@ def _credentials():
     return botocore.session.get_session().get_credentials()
 
 
-def _signed_headers(url: str, body: str) -> Dict[str, str]:
+def _signed_headers(url: str, body: bytes) -> Dict[str, str]:
     """Content-Type plus the SigV4 headers, or just Content-Type when nothing can sign."""
     headers = {"Content-Type": "application/json"}
     match = _REGION_IN_URL.search(url)
@@ -128,7 +128,9 @@ def send_email(subject: str, html: str, recipients: Sequence[str]) -> DeliveryRe
     if not recipients:
         return DeliveryResult(False, "No hay destinatarios.")
 
-    body = build_payload(subject, html, recipients)
+    # Bytes, not str: the signed hash and the bytes on the wire must be identical (UTF-8).
+    # A str body would be sent as Latin-1 by http.client and break the SigV4 signature.
+    body = build_payload(subject, html, recipients).encode("utf-8")
     try:
         response = requests.post(
             url,
