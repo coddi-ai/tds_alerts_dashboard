@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date as _date
+
 import dash
 import pytest
 from dash.exceptions import PreventUpdate
@@ -19,6 +21,8 @@ ADMIN = next(n for n, u in USERS.items() if u.get("role") == "admin")
 CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
 TECH = "tds@coddi.ai"
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
+LOCKED_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if not r.get("optional")]
+OPTIONAL_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if r.get("optional")]  # Warren
 EMIN_CLIENT = [r["email"] for r in config.MAILING_RECIPIENTS["emin"]]
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 
@@ -102,7 +106,8 @@ def render(app, client="EMIN", user=ADMIN):
     user_data = as_user(app, user)
     out = cb.render_context(client, user_data, True)
     keys = ["chips", "unavailable", "main_style", "title", "subtitle", "subject", "period", "help",
-            "t_client", "t_tech", "t_mgmt", "s_client", "s_tech", "s_mgmt", "rendered_for"]
+            "t_client", "t_tech", "t_mgmt", "s_client", "s_tech", "s_mgmt", "rendered_for",
+            "subject_placeholder", "start", "end", "max_date", "defaults"]
     return dict(zip(keys, out)), user_data
 
 
@@ -126,7 +131,8 @@ def text(component) -> str:
 def test_layout_has_every_piece_the_callbacks_use():
     layout = create_layout()
     for component_id in ("mailing-chips", "mailing-unavailable", "mailing-main", "mailing-report-title", "mailing-report-subtitle",
-                         "mailing-subject", "mailing-period", "mailing-counter", "mailing-send-summary", "mailing-preview-btn",
+                         "mailing-subject-input", "mailing-period-picker", "mailing-period", "mailing-defaults",
+                         "mailing-reset-btn", "mailing-custom-note", "mailing-counter", "mailing-send-summary", "mailing-preview-btn",
                          "mailing-send-btn", "mailing-feedback", "mailing-preview-modal", "mailing-preview-frame",
                          "mailing-send-result", "mailing-preview-result", "mailing-rendered-for", "mailing-recipients",
                          "mailing-help", "mailing-send-trigger", "mailing-confirm-modal", "mailing-confirm-cancel",
@@ -137,13 +143,12 @@ def test_layout_has_every_piece_the_callbacks_use():
             assert by_id(layout, group_ids(group)[key]) is not None, (group, key)
 
 
-def test_group_buttons_exist_for_client_and_management_but_not_for_technical():
+def test_every_group_has_a_select_all_button():
     layout = create_layout()
-    assert BUTTON_GROUPS == ("client", "management")
+    assert BUTTON_GROUPS == ("client", "technical", "management")
     for group in BUTTON_GROUPS:
         button = by_id(layout, group_ids(group)["button"])
         assert type(button).__name__ == "Button" and button.type == "button"
-    assert by_id(layout, group_ids("technical")["button"]) is None
 
 
 def test_two_columns_recipients_first_then_the_summary_card():
@@ -153,7 +158,7 @@ def test_two_columns_recipients_first_then_the_summary_card():
     recipients_card, summary_card = grid.children
     assert "mailing-card--recipients" in recipients_card.className and "mailing-card--summary" in summary_card.className
     assert by_id(recipients_card, "mailing-recipients") is not None
-    for component_id in ("mailing-report-title", "mailing-subject", "mailing-period", "mailing-send-summary",
+    for component_id in ("mailing-report-title", "mailing-subject-input", "mailing-period-picker", "mailing-send-summary",
                          "mailing-send-btn", "mailing-preview-btn", "mailing-feedback"):
         assert by_id(summary_card, component_id) is not None, component_id
     assert by_id(grid, "mailing-help") is by_id(recipients_card, "mailing-help")  # under the Destinatarios heading
@@ -189,7 +194,8 @@ def test_the_page_has_no_client_selector_and_no_send_mode_control():
 
 def test_groups_are_labelled_groups():
     layout = create_layout()
-    groups = [c for c in walk(layout) if getattr(c, "role", None) == "group"]
+    groups = [c for c in walk(layout) if getattr(c, "role", None) == "group"
+              and str(getattr(c, "aria-labelledby", "")).startswith("mailing-group-heading-")]
     assert len(groups) == 3
     for group, name in zip(groups, GROUP_IDS):
         assert getattr(group, "aria-labelledby") == group_ids(name)["heading"]
@@ -262,13 +268,21 @@ def test_render_in_production_prechecks_client_and_management(flask_app, product
     assert "Cliente: Emin" in chips and "Entorno: Producción" in chips
 
 
-def test_technical_is_checked_and_disabled_everywhere(flask_app, production):
-    for env in ("production", "development"):
+def test_technical_is_checked_everywhere_and_only_the_locked_contact_is_disabled(flask_app, monkeypatch):
+    for env in ("test", "POC"):
+        monkeypatch.setenv("DEPLOY_STATUS", env)
         state, _ = render(flask_app)
         options, value = checklist_state(state["s_tech"])
-        assert value == TECHS and all(o["disabled"] is True for o in options)
-        if env == "production":
-            continue
+        assert value == TECHS  # both checked by default, in every environment
+        assert {o["value"]: o["disabled"] for o in options} == {"tds@coddi.ai": True, "warren@coddi.ai": False}
+
+
+def test_warren_is_optional_with_a_text_tag_and_tds_is_always_included(flask_app):
+    state, _ = render(flask_app)
+    options, _value = checklist_state(state["s_tech"])
+    by_email = {o["value"]: text(o["label"]) for o in options}
+    assert "Siempre incluido" in by_email["tds@coddi.ai"] and "Opcional" not in by_email["tds@coddi.ai"]
+    assert "Opcional" in by_email["warren@coddi.ai"] and "Siempre incluido" not in by_email["warren@coddi.ai"]
 
 
 def test_outside_production_every_contact_is_selectable_and_only_technical_is_checked(flask_app):
@@ -280,7 +294,7 @@ def test_outside_production_every_contact_is_selectable_and_only_technical_is_ch
         assert not any(o["disabled"] for o in options)  # the environment disables nothing
         assert not any("Solo disponible en producción" in text(o["label"]) for o in options)
     options, value = checklist_state(state["s_tech"])
-    assert value == TECHS and all(o["disabled"] for o in options)
+    assert value == TECHS and [o["disabled"] for o in options] == [True, False]
 
 
 def test_contact_without_automatic_sending_is_unchecked_but_selectable(flask_app, production, monkeypatch):
@@ -308,7 +322,7 @@ def test_capstone_is_weekly(flask_app, production):
     state, _ = render(flask_app, "CAPSTONE")
     assert state["title"] == "Resumen Semanal de Alertas"
     assert "los miércoles a las 12:00" in state["subtitle"]
-    assert "últimos 7 días" in state["period"] and len(checklist_state(state["s_client"])[0]) == 10
+    assert "semana anterior, lunes a domingo" in state["period"] and len(checklist_state(state["s_client"])[0]) == 10
 
 
 def test_unconfigured_client_hides_the_card_and_says_so(flask_app):
@@ -371,12 +385,21 @@ def test_group_button_ignores_locked_rows_and_hides_when_nothing_is_selectable()
     assert cb.group_button_state([], [], "G")[2] == {"display": "none"}
 
 
-def test_counters_return_the_buttons_of_client_and_management_only():
+def test_counters_return_the_buttons_of_the_three_groups():
     opts = options_of(["a", "b"])
-    out = cb.update_counters(opts, ["a"], options_of(["t"], disabled=["t"]), ["t"], opts, ["a", "b"], "Cliente · Emin", "Coddi · Gerencia")
-    assert len(out) == 14
+    tech = options_of(["t", "w"], disabled=["t"])  # t locked, w optional (Warren)
+    out = cb.update_counters(opts, ["a"], tech, ["t", "w"], opts, ["a", "b"], "Cliente · Emin", "Coddi · Técnico", "Coddi · Gerencia")
+    assert len(out) == 17
     assert out[8:11] == ("Seleccionar todos", "Seleccionar todos los contactos de Cliente · Emin", {})
-    assert out[11:14] == ("Quitar todos", "Quitar todos los contactos de Coddi · Gerencia", {})
+    assert out[11:14] == ("Quitar todos", "Quitar todos los contactos de Coddi · Técnico", {})  # w is checked: nothing left to add
+    assert out[14:17] == ("Quitar todos", "Quitar todos los contactos de Coddi · Gerencia", {})
+
+
+def test_the_technical_button_only_moves_the_optional_contact():
+    tech = options_of(["tds", "warren"], disabled=["tds"])
+    assert cb.toggle_group(1, tech, ["tds", "warren"]) == ["tds"]  # Quitar todos leaves the locked one
+    assert cb.toggle_group(1, tech, ["tds"]) == ["tds", "warren"]  # Seleccionar todos brings Warren back
+    assert cb.group_button_state(tech, ["tds"], "Coddi · Técnico")[0] == "Seleccionar todos"
 
 
 def test_select_all_checks_every_selectable_row_of_that_group_only():
@@ -437,6 +460,116 @@ def test_the_old_environment_texts_appear_nowhere(flask_app, monkeypatch, produc
     everything = str(create_layout()) + labels + str(state["help"])
     for old in ("Solo disponible en producción", "Solo producción"):
         assert old not in everything
+
+
+# --------------------------------------------------------------------------- warren can be unchecked
+
+
+def test_unchecking_warren_sends_without_him_and_checking_him_includes_him(flask_app, builder, sent):
+    send(flask_app, [], selected_tech=[TECH])
+    assert sent["calls"][0]["emails"] == ["tds@coddi.ai"]
+    send(flask_app, [], selected_tech=[TECH, "warren@coddi.ai"])
+    assert sent["calls"][1]["emails"] == ["tds@coddi.ai", "warren@coddi.ai"]
+
+
+def test_the_locked_contact_is_added_even_if_the_page_omits_it(flask_app, builder, sent):
+    send(flask_app, [], selected_tech=["warren@coddi.ai"])
+    assert sent["calls"][0]["emails"] == ["warren@coddi.ai", "tds@coddi.ai"]
+
+
+# --------------------------------------------------------------------------- custom subject and period
+
+
+DEFAULTS = {"subject": "[CODDI] Monitoreo de Alertas 18/11/2026", "start": "2026-11-09", "end": "2026-11-15"}
+
+
+def test_render_fills_the_defaults_the_picker_and_its_limits(flask_app, production):
+    state, _ = render(flask_app, "CAPSTONE")
+    assert state["subject"] == state["subject_placeholder"] == state["defaults"]["subject"]
+    assert state["subject"].startswith("[CODDI] Monitoreo de Alertas ")
+    assert state["start"] == state["defaults"]["start"] and state["end"] == state["defaults"]["end"]
+    assert periods.build_subject(_date.fromisoformat(state["max_date"])) == state["subject"]  # max = the send date
+    first = _date.fromisoformat(state["start"])
+    assert first.weekday() == 0 and (_date.fromisoformat(state["end"]) - first).days == 6
+
+
+def test_an_untouched_screen_sends_no_overrides():
+    assert cb.overrides(DEFAULTS["subject"], "2026-11-09", "2026-11-15", DEFAULTS) == {}
+    assert cb.overrides("", "2026-11-09T00:00:00", "2026-11-15", DEFAULTS) == {}  # empty subject / a time part: still automatic
+    assert cb.overrides(None, None, None, None) == {}
+
+
+def test_only_what_changed_is_sent_as_an_override():
+    assert cb.overrides("Otro asunto ", "2026-11-09", "2026-11-15", DEFAULTS) == {"subject": "Otro asunto"}
+    assert cb.overrides(DEFAULTS["subject"], "2026-11-01", "2026-11-07", DEFAULTS) == {"period_start": "2026-11-01", "period_end": "2026-11-07"}
+    assert cb.overrides("X", "2026-11-01", None, DEFAULTS) == {"subject": "X", "period_start": "2026-11-01", "period_end": None}
+
+
+def test_the_custom_note_and_reset_button_show_only_when_custom():
+    assert cb.custom_state(DEFAULTS["subject"], "2026-11-09", "2026-11-15", DEFAULTS) == ("", {"display": "none"})
+    note, style = cb.custom_state("Otro", "2026-11-09", "2026-11-15", DEFAULTS)
+    assert note == "Asunto o período personalizados para este envío." and style == {}
+    assert cb.custom_state(DEFAULTS["subject"], "2026-11-01", "2026-11-15", DEFAULTS)[0] != ""
+    assert cb.custom_state("", None, None, None) == ("", {"display": "none"})  # before the page is filled
+
+
+def test_reset_restores_the_automatic_values():
+    assert cb.reset_custom(1, DEFAULTS) == (DEFAULTS["subject"], "2026-11-09", "2026-11-15")
+    with pytest.raises(PreventUpdate):
+        cb.reset_custom(0, DEFAULTS)
+    with pytest.raises(PreventUpdate):
+        cb.reset_custom(1, None)
+
+
+def test_the_send_passes_the_custom_values_to_the_service_and_nothing_else(flask_app, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cb, "send_manual", lambda client, selected, user_data, **kw: seen.update(kw) or
+                        {"total": 1, "sent": 1, "recipients": [{"email": "a", "status": "sent", "error": None}]})
+    user = as_user(flask_app, ADMIN)
+    cb.send_now("t", "EMIN", user, [], [TECH], [], "emin", "Asunto nuevo", "2026-11-01", "2026-11-07", DEFAULTS)
+    assert seen == {"subject": "Asunto nuevo", "period_start": "2026-11-01", "period_end": "2026-11-07"}
+    seen.clear()
+    cb.send_now("t", "EMIN", user, [], [TECH], [], "emin", DEFAULTS["subject"], "2026-11-09", "2026-11-15", DEFAULTS)
+    assert seen == {}  # untouched: the service computes the automatic values itself
+
+
+def test_the_preview_uses_the_same_custom_values(flask_app, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cb, "build_preview", lambda client, user_data, **kw: seen.update(kw) or {"html": "<p>x</p>", "subject": "s"})
+    cb.open_preview(1, "EMIN", as_user(flask_app, ADMIN), "Asunto nuevo", "2026-11-01", "2026-11-07", DEFAULTS)
+    assert seen == {"subject": "Asunto nuevo", "period_start": "2026-11-01", "period_end": "2026-11-07"}
+
+
+def test_a_rejected_custom_value_is_explained_on_the_page(flask_app, builder, sent):
+    user = as_user(flask_app, ADMIN)
+    result = cb.send_now("t", "EMIN", user, [], [TECH], [], "emin", "Asunto", "2026-11-09", "2026-11-01", DEFAULTS)
+    assert result["kind"] == "error" and "no puede ser posterior" in result["detail"] and sent["calls"] == []
+    preview = cb.open_preview(1, "EMIN", user, "Asunto", "2026-11-09", "2026-11-01", DEFAULTS)
+    assert preview[0] is False and "no puede ser posterior" in preview[3]["detail"]
+
+
+# --------------------------------------------------------------------------- what the page says when a send fails
+
+
+def test_a_delivery_failure_shows_the_safe_reason_not_just_the_generic_message(flask_app, builder, sent):
+    sent["result"] = delivery.DeliveryResult(False, "El servicio de correo no respondió a tiempo.")
+    result = send(flask_app, [])
+    assert result["message"] == "No se pudo enviar el resumen. Intente nuevamente."
+    assert result["detail"] == "El servicio de correo no respondió a tiempo."
+
+
+def test_an_unexpected_error_shows_a_reference_that_is_also_in_the_log(flask_app, builder, monkeypatch, caplog):
+    import logging
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("secret internals https://abc.lambda-url.us-east-2.on.aws/")
+
+    monkeypatch.setattr(cb, "send_manual", boom)
+    with caplog.at_level(logging.ERROR):
+        result = send(flask_app, [])
+    ref = result["detail"].split("Referencia: ")[1]
+    assert len(ref) == 8 and any(f"ref={ref}" in r.getMessage() for r in caplog.records)
+    assert "secret" not in str(result) and "lambda-url" not in str(result)
 
 
 # --------------------------------------------------------------------------- confirmation
@@ -546,7 +679,7 @@ def send(app, selected_client, selected_tech=(TECH,), selected_mgmt=(), client="
 
 
 def test_send_to_the_selection_reports_success(flask_app, builder, sent, production):
-    result = send(flask_app, EMIN_CLIENT[:1], selected_mgmt=GERENCIA)
+    result = send(flask_app, EMIN_CLIENT[:1], selected_tech=TECHS, selected_mgmt=GERENCIA)
     expected = [EMIN_CLIENT[0], *TECHS, *GERENCIA]
     assert result["kind"] == "success" and result["message"] == f"Resumen enviado a {len(expected)} destinatarios."
     assert sorted(sent["calls"][0]["emails"]) == sorted(expected)
@@ -559,7 +692,7 @@ def test_singular_success_message(flask_app, builder, sent, monkeypatch):
 
 def test_a_test_send_is_just_the_technical_contact(flask_app, builder, sent, production):
     send(flask_app, [], selected_mgmt=[])
-    assert sent["calls"][0]["emails"] == TECHS
+    assert sent["calls"][0]["emails"] == LOCKED_TECHS  # Warren unchecked: only the always-included contact
 
 
 def test_lambda_failure_shows_the_generic_failure_without_internals(flask_app, builder, sent):
@@ -572,7 +705,7 @@ def test_lambda_failure_shows_the_generic_failure_without_internals(flask_app, b
 def test_outside_production_a_client_contact_can_be_sent_to(flask_app, builder, sent):
     result = send(flask_app, EMIN_CLIENT[:1])
     assert result["kind"] == "success"
-    assert sent["calls"][0]["emails"] == [EMIN_CLIENT[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_CLIENT[0], *LOCKED_TECHS]
 
 
 def test_backend_rejection_is_shown_as_a_failure(flask_app, builder, sent):

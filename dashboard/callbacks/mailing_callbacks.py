@@ -16,6 +16,7 @@ from typing import Iterable, List, Optional
 
 import itertools
 import time
+import uuid
 
 import dash
 from dash import Input, Output, State, ctx, html, no_update
@@ -43,6 +44,17 @@ GROUP_KEYS = {
 }
 
 HIDDEN = {"display": "none"}
+UNSET = (None, "")
+
+
+def _reference() -> str:
+    """A short id shown on the page AND logged with an unexpected error, so the two can be matched."""
+    return uuid.uuid4().hex[:8]
+
+
+def _iso(value) -> Optional[str]:
+    """`2026-11-09` from a picker value (which may carry a time part); None when empty."""
+    return str(value)[:10] if value not in UNSET else None
 
 
 def _stamp() -> str:
@@ -64,7 +76,10 @@ def _option(recipient: dict) -> dict:
     if group == mailing_config.GROUP_CLIENT and not recipient["send_email"]:
         tags.append(_tag(t("mailing.tag.no_auto"), "muted"))
     if group == mailing_config.GROUP_TECHNICAL:
-        tags.append(_tag(t("mailing.tag.always"), "technical"))
+        if recipient["locked"]:
+            tags.append(_tag(t("mailing.tag.always"), "technical"))
+        else:  # an optional Técnico contact (Warren): selected by default, can be unchecked
+            tags.append(_tag(t("mailing.tag.optional"), "muted"))
     label = html.Span(
         [
             html.Span(
@@ -120,7 +135,8 @@ def _unavailable(message: str, client_label: Optional[str] = None):
         html.Span(t("mailing.chip.client", client=client_label), className="mailing-chip mailing-chip--client")
     ]
     return (chips, message, HIDDEN, "", "", "", "", "", "", "", "",
-            *[create_checklist(g, [], []) for g in GROUP_IDS], None)
+            *[create_checklist(g, [], []) for g in GROUP_IDS], None,
+            "", None, None, None, None)
 
 
 def render_context(client, user_data, _page_load):
@@ -162,7 +178,55 @@ def render_context(client, user_data, _page_load):
         *titles,
         *checklists,
         mailing_config.normalize_client(client),
+        context["subject"],  # placeholder: an empty subject field means "automatic"
+        context["period"]["start"],
+        context["period"]["end"],
+        context["limits"]["max_date"],
+        {"subject": context["subject"], "start": context["period"]["start"], "end": context["period"]["end"]},
     )
+
+
+# --------------------------------------------------------------------------- custom subject and period
+
+
+def is_custom(subject, start, end, defaults) -> bool:
+    """Do the subject or the period on screen differ from the automatic ones?"""
+    defaults = defaults or {}
+    text = (subject or "").strip()
+    return bool(
+        (text and text != defaults.get("subject"))
+        or (_iso(start), _iso(end)) != (defaults.get("start"), defaults.get("end"))
+    )
+
+
+def overrides(subject, start, end, defaults) -> dict:
+    """The keyword arguments for the service: only what differs from the automatic values.
+
+    An untouched screen sends nothing, so the service computes the subject and period itself (a
+    page left open past midnight must not send yesterday's dates). The server validates the rest.
+    """
+    defaults = defaults or {}
+    result = {}
+    text = (subject or "").strip()
+    if text and text != defaults.get("subject"):
+        result["subject"] = text
+    if (_iso(start), _iso(end)) != (defaults.get("start"), defaults.get("end")):
+        result["period_start"], result["period_end"] = _iso(start), _iso(end)
+    return result
+
+
+def custom_state(subject, start, end, defaults):
+    """`(note, reset button style)`: a text note and a reset button while the values are custom."""
+    if is_custom(subject, start, end, defaults):
+        return t("mailing.custom.note"), {}
+    return "", HIDDEN
+
+
+def reset_custom(n_clicks, defaults):
+    """Back to the automatic subject and period."""
+    if not n_clicks or not defaults:
+        raise PreventUpdate
+    return defaults["subject"], defaults["start"], defaults["end"]
 
 
 # --------------------------------------------------------------------------- counters and group buttons
@@ -184,7 +248,7 @@ def group_button_state(options, value, group_title: str):
 
 
 def update_counters(client_options, client_value, tech_options, tech_value, mgmt_options, mgmt_value,
-                    client_title=None, mgmt_title=None):
+                    client_title=None, tech_title=None, mgmt_title=None):
     """Live counters (heading, group headers, summary breakdown, sentence) and group buttons."""
     groups = [(client_options, client_value), (tech_options, tech_value), (mgmt_options, mgmt_value)]
     group_counts = [t("mailing.count", selected=len(value or []), total=len(options or [])) for options, value in groups]
@@ -196,6 +260,7 @@ def update_counters(client_options, client_value, tech_options, tech_value, mgmt
         _plural(selected, "mailing.action.summary_one", "mailing.action.summary_many"),
         *[str(len(value or [])) for _, value in groups],
         *group_button_state(client_options, client_value, client_title),
+        *group_button_state(tech_options, tech_value, tech_title),
         *group_button_state(mgmt_options, mgmt_value, mgmt_title),
     )
 
@@ -219,17 +284,18 @@ def toggle_group(n_clicks, options, value):
 # --------------------------------------------------------------------------- preview
 
 
-def open_preview(n_clicks, client, user_data):
-    """Open the email as it would be sent. Sends nothing."""
+def open_preview(n_clicks, client, user_data, subject=None, start=None, end=None, defaults=None):
+    """Open the email as it would be sent (with the custom subject and period, if any). Sends nothing."""
     if not n_clicks:
         raise PreventUpdate
     try:
-        preview = build_preview(client, user_data)
+        preview = build_preview(client, user_data, **overrides(subject, start, end, defaults))
     except MailingError as exc:
         return False, "", "", _feedback_data("error", t("mailing.preview_error"), detail=exc.user_message)
     except Exception:  # noqa: BLE001 - the page must never show internals
-        logger.exception("mailing page: preview failed")
-        return False, "", "", _feedback_data("error", t("mailing.preview_error"))
+        ref = _reference()
+        logger.exception("mailing page: preview failed (ref=%s)", ref)
+        return False, "", "", _feedback_data("error", t("mailing.preview_error"), detail=t("mailing.send.reference", ref=ref))
     return True, preview["html"], preview["subject"], None
 
 
@@ -307,7 +373,8 @@ def request_send(send_clicks, cancel_clicks, confirm_clicks, client, client_valu
     return no_update, no_update, no_update, _stamp()
 
 
-def send_now(trigger, client, user_data, client_value, tech_value, mgmt_value, rendered_for):
+def send_now(trigger, client, user_data, client_value, tech_value, mgmt_value, rendered_for,
+             subject=None, start=None, end=None, defaults=None):
     """Send to the selected recipients. The backend validates the selection.
 
     Only a real request for the client on screen sends. An empty request, or a selection that was
@@ -317,12 +384,13 @@ def send_now(trigger, client, user_data, client_value, tech_value, mgmt_value, r
         raise PreventUpdate
     selected = _selected(client_value, tech_value, mgmt_value)
     try:
-        result = send_manual(client, selected, user_data)
+        result = send_manual(client, selected, user_data, **overrides(subject, start, end, defaults))
     except MailingError as exc:
         return _feedback_data("error", t("mailing.send.failure"), detail=exc.user_message)
     except Exception:  # noqa: BLE001 - never show a stack trace or a URL
-        logger.exception("mailing page: unexpected send error")
-        return _feedback_data("error", t("mailing.send.failure"))
+        ref = _reference()
+        logger.exception("mailing page: unexpected send error (ref=%s)", ref)
+        return _feedback_data("error", t("mailing.send.failure"), detail=t("mailing.send.reference", ref=ref))
 
     total = result["total"]
     ok = result["sent"]
@@ -331,7 +399,9 @@ def send_now(trigger, client, user_data, client_value, tech_value, mgmt_value, r
         return _feedback_data("success", _plural(total, "mailing.send.success_one", "mailing.send.success_many"))
     if ok:
         return _feedback_data("warning", t("mailing.send.partial", ok=ok, n=total), failed=failed)
-    return _feedback_data("error", t("mailing.send.failure"))
+    # The delivery reason is short and safe to show ("no respondió a tiempo", "rechazó el envío", ...).
+    reason = next((row.get("error") for row in result["recipients"] if row.get("error")), None)
+    return _feedback_data("error", t("mailing.send.failure"), detail=reason)
 
 
 # --------------------------------------------------------------------------- registration
@@ -395,12 +465,17 @@ def register_mailing_callbacks(app: dash.Dash) -> None:
         Output("mailing-main", "style"),
         Output("mailing-report-title", "children"),
         Output("mailing-report-subtitle", "children"),
-        Output("mailing-subject", "children"),
+        Output("mailing-subject-input", "value"),
         Output("mailing-period", "children"),
         Output("mailing-help", "children"),
         *[Output(group_ids(g)["title"], "children") for g in GROUP_IDS],
         *[Output(group_ids(g)["slot"], "children") for g in GROUP_IDS],
         Output("mailing-rendered-for", "data"),
+        Output("mailing-subject-input", "placeholder"),
+        Output("mailing-period-picker", "start_date"),
+        Output("mailing-period-picker", "end_date"),
+        Output("mailing-period-picker", "max_date_allowed"),
+        Output("mailing-defaults", "data"),
     ]
     app.callback(
         render_outputs,
@@ -420,8 +495,28 @@ def register_mailing_callbacks(app: dash.Dash) -> None:
         *[Output(group_ids(g)["button"], prop) for g in BUTTON_GROUPS for prop in ("children", "aria-label", "style")],
         *checklist_inputs,
         State(group_ids("client")["title"], "children"),
+        State(group_ids("technical")["title"], "children"),
         State(group_ids("management")["title"], "children"),
     )(update_counters)
+
+    app.callback(
+        Output("mailing-custom-note", "children"),
+        Output("mailing-reset-btn", "style"),
+        Input("mailing-subject-input", "value"),
+        Input("mailing-period-picker", "start_date"),
+        Input("mailing-period-picker", "end_date"),
+        Input("mailing-defaults", "data"),
+    )(custom_state)
+
+    # Both write what the render callback also writes: legal because they only run on a click.
+    app.callback(
+        Output("mailing-subject-input", "value", allow_duplicate=True),
+        Output("mailing-period-picker", "start_date", allow_duplicate=True),
+        Output("mailing-period-picker", "end_date", allow_duplicate=True),
+        Input("mailing-reset-btn", "n_clicks"),
+        State("mailing-defaults", "data"),
+        prevent_initial_call=True,
+    )(reset_custom)
 
     # One select-all callback per group that has a button; each touches only its own checklist.
     for g in BUTTON_GROUPS:
@@ -441,6 +536,10 @@ def register_mailing_callbacks(app: dash.Dash) -> None:
         Input("mailing-preview-btn", "n_clicks"),
         State("client-selector", "value"),
         State("user-info-store", "data"),
+        State("mailing-subject-input", "value"),
+        State("mailing-period-picker", "start_date"),
+        State("mailing-period-picker", "end_date"),
+        State("mailing-defaults", "data"),
         prevent_initial_call=True,
     )(open_preview)
 
@@ -478,6 +577,10 @@ def register_mailing_callbacks(app: dash.Dash) -> None:
         State(group_ids("technical")["checklist"], "value"),
         State(group_ids("management")["checklist"], "value"),
         State("mailing-rendered-for", "data"),
+        State("mailing-subject-input", "value"),
+        State("mailing-period-picker", "start_date"),
+        State("mailing-period-picker", "end_date"),
+        State("mailing-defaults", "data"),
         prevent_initial_call=True,
         # While the request runs: both buttons and every checkbox are disabled and the primary
         # button says "Enviando…". This is what stops a double click.

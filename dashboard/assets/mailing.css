@@ -44,9 +44,25 @@
 .mailing-card-title { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin: 0 0 4px; }
 .mailing-card-subtitle { color: #475569; margin: 0 0 16px; }
 .mailing-details { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: 16px; }
-.mailing-detail { min-width: 0; }
+.mailing-field { min-width: 0; }
 .mailing-detail-label { font-size: 0.8rem; font-weight: 600; color: #475569; }
-.mailing-detail-value { color: #0f172a; font-weight: 600; overflow-wrap: anywhere; }
+.mailing-input {
+    width: 100%; min-height: 40px; padding: 6px 10px; border: 1px solid #94a3b8; border-radius: 6px;
+    color: #0f172a; background: #fff; font-weight: 600;
+}
+.mailing-input:focus-visible { outline: 3px solid #93c5fd; outline-offset: 1px; border-color: #1d4ed8; }
+.mailing-input::placeholder { color: #64748b; font-weight: 400; }
+.mailing-picker { display: block; max-width: 100%; }
+.mailing-defaults-note { margin: 4px 0 0; font-size: 0.8rem; color: #475569; overflow-wrap: anywhere; }
+.mailing-note-label { font-weight: 700; margin-right: 4px; }
+.mailing-custom-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 0; }
+.mailing-custom-note { font-size: 0.85rem; font-weight: 700; color: #92400e; background: #fef3c7; border-radius: 999px; padding: 0 10px; }
+.mailing-custom-note:empty { display: none; }
+.mailing-link-btn {
+    background: none; border: 0; padding: 4px 2px; min-height: 36px; color: #1d4ed8; font-weight: 700;
+    font-size: 0.85rem; text-decoration: underline; cursor: pointer;
+}
+.mailing-link-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; border-radius: 4px; }
 
 /* Summary: sentence, Cliente / Técnico / Gerencia breakdown, buttons, note */
 .mailing-send-summary { color: #0f172a; font-weight: 700; margin-bottom: 8px; }

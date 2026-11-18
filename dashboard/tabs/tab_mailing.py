@@ -16,8 +16,9 @@ from src.i18n import t
 
 # Recipient groups in display order; the id suffix is shared with the callbacks.
 GROUP_IDS = ("client", "technical", "management")
-# Groups with a "select all" button. Coddi Técnico has none: all its rows are locked.
-BUTTON_GROUPS = ("client", "management")
+# Groups with a "select all" button. It is hidden while a group has nothing selectable (every row
+# locked); Coddi Técnico has one now that an optional contact (Warren) can be unchecked.
+BUTTON_GROUPS = ("client", "technical", "management")
 
 
 def group_ids(group: str) -> dict:
@@ -32,13 +33,58 @@ def group_ids(group: str) -> dict:
     }
 
 
-def _detail(label_key: str, value_id: str) -> html.Div:
+def _custom_fields() -> html.Div:
+    """Subject and period of THIS send: prefilled with the automatic values, editable.
+
+    The automatic subject is also the placeholder (an empty field means "automatic"); the automatic
+    period is shown as text under the picker. The server validates whatever is sent.
+    """
     return html.Div(
         [
-            html.Div(t(label_key), className="mailing-detail-label"),
-            html.Div("", id=value_id, className="mailing-detail-value"),
+            html.Div(
+                [
+                    html.Label(t("mailing.detail.subject"), htmlFor="mailing-subject-input",
+                               className="mailing-detail-label"),
+                    dcc.Input(
+                        id="mailing-subject-input", type="text", value="", placeholder="", maxLength=200,
+                        autoComplete="off", spellCheck=False, debounce=False, className="mailing-input",
+                    ),
+                ],
+                className="mailing-field",
+            ),
+            html.Div(
+                [
+                    html.Div(t("mailing.detail.period"), id="mailing-period-label", className="mailing-detail-label"),
+                    html.Div(
+                        dcc.DatePickerRange(
+                            id="mailing-period-picker", display_format="DD/MM/YYYY", minimum_nights=0,
+                            clearable=False, first_day_of_week=1, number_of_months_shown=1,
+                            start_date_placeholder_text=t("mailing.period.start"),
+                            end_date_placeholder_text=t("mailing.period.end"),
+                            className="mailing-picker",
+                        ),
+                        role="group",
+                        **{"aria-labelledby": "mailing-period-label"},
+                    ),
+                    html.P(
+                        [html.Span(t("mailing.custom.auto"), className="mailing-note-label"),
+                         html.Span("", id="mailing-period")],
+                        className="mailing-defaults-note",
+                    ),
+                ],
+                className="mailing-field",
+            ),
+            html.Div(
+                [
+                    # Text, not only a button: says that the values differ from the automatic ones.
+                    html.Span("", id="mailing-custom-note", className="mailing-custom-note", **{"aria-live": "polite"}),
+                    html.Button(t("mailing.custom.reset"), id="mailing-reset-btn", type="button", n_clicks=0,
+                                className="mailing-link-btn", style={"display": "none"}),
+                ],
+                className="mailing-custom-row",
+            ),
         ],
-        className="mailing-detail",
+        className="mailing-details",
     )
 
 
@@ -119,11 +165,7 @@ def _summary_card() -> html.Aside:
         [
             html.H5("", id="mailing-report-title", className="mailing-card-title"),
             html.P("", id="mailing-report-subtitle", className="mailing-card-subtitle"),
-            html.Div(
-                [_detail("mailing.detail.subject", "mailing-subject"),
-                 _detail("mailing.detail.period", "mailing-period")],
-                className="mailing-details",
-            ),
+            _custom_fields(),
             html.Div("", id="mailing-send-summary", className="mailing-send-summary"),
             html.Div([_summary_box(group) for group in GROUP_IDS], className="mailing-breakdown"),
             html.Div(
@@ -231,6 +273,8 @@ def create_layout() -> html.Div:
             dcc.Store(id="mailing-rendered-for"),
             dcc.Store(id="mailing-preview-result"),
             dcc.Store(id="mailing-focus-dummy"),
+            # The automatic subject and period of the client on screen (what "custom" is compared with).
+            dcc.Store(id="mailing-defaults"),
             html.Div(
                 [
                     html.Div(
