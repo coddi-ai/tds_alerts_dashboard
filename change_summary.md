@@ -498,7 +498,7 @@ with such rows (repair upstream, show them, discard them) — stays with the tea
   the 2,240 + 286 boundary rows); a re-run rewrites **0** files.
 - **S3:** the sync, the separate marker and the sequencing guard, the failed-upload/retry path, stale-key isolation
   between the two datasets and `--verify-s3` are tested with the in-memory S3 double used for the alerts
-  (59 new tests in `tests/test_telemetry_partitions.py`). **Not run against the real bucket** — see open point 2.
+  (59 new tests in `tests/test_telemetry_partitions.py`). **Then run for real (2026-11-18):** `--backfill --sync-s3 --dataset telemetry` uploaded 25 objects for capstone and 55 for CDA (82 with the markers), and `--verify-s3` reports S3 identical to local for telemetry and alerts, all three clients.
 - **Suite:** 2,398 passed. The 31 failures and 2 setup errors that remain are the same set that fails on a pristine
   checkout of `HEAD` (checked in a throwaway worktree): `informe_falla*`, `mantenciones_productive`, `report_health`
   and two in `campbell_ai_resources`. One regression I introduced (a reworded S3 message an alerts test matched) was
@@ -516,7 +516,7 @@ with such rows (repair upstream, show them, discard them) — stays with the tea
 | Every row in its alert's week, boundary alerts included | Done (validation; 2,526 boundary rows) |
 | Re-run rewrites 0 files, no duplicates | Done |
 | Backfill local, S3 off by default | Done |
-| `--verify-s3` identical to local after a sync | Implemented and tested with the double; **not run on the real bucket** |
+| `--verify-s3` identical to local after a sync | Done: run on the real bucket, S3 identical to local |
 | Weekly telemetry sync refuses before the telemetry backfill is synced | Done (own marker; tested) |
 | Failed upload reported, local intact, retried | Done (tested) |
 | Nothing outside the script names the file; old loaders removed | Done (test) |
@@ -531,23 +531,21 @@ with such rows (repair upstream, show them, discard them) — stays with the tea
 1. **EMIN publishes no telemetry file**, so the criterion "partitions for capstone, cda and emin" cannot be met as
    written. The script skips it cleanly. If EMIN starts publishing one, the next weekly run builds it locally, and
    `--backfill --sync-s3 --dataset telemetry` must run for it before the weekly sync will upload (the guard).
-2. **The S3 backfill was not synced**: it is optional and off by default, and pushing to the real bucket is outward
-   facing. The order matters for a deployment: **(1)** `--backfill --dataset telemetry` (done locally),
-   **(2)** `--backfill --sync-s3 --dataset telemetry` (uploads the 82 objects and writes the markers),
-   **(3)** `--verify-s3`, **(4)** only then deploy this code and restart the dashboards. A dashboard running this
-   code without the partitions on its disk shows "no hay datos de telemetría" for every alert (no errors) until they
-   arrive. I can run steps 2–3 on your word.
+2. **S3 backfill: done (2026-11-18).** Backfill synced and verified (see §7). Deploy order still matters for any
+   environment that does not yet have the partitions: a dashboard running this code without them on its disk shows
+   "no hay datos de telemetría" for every alert (no errors); the startup mirror brings them (82 objects, 60.5 MB).
 3. **Not done, needs approval — stop downloading the source CSVs in the dashboards.** The dashboards' startup mirror
    still downloads the 327 MB of wide telemetry CSVs (capstone 309 MB, CDA 18 MB) that no dashboard code reads any
    more; only the partitioning script (whose volume must keep them) does. Excluding them from the dashboards' mirror
    would cut each cold start by that amount. It is a separate performance change, so it was not made.
-4. **Campbell AI schema declaration.** `alerts_detail` is now a Parquet dataset, so its entry in
-   `src/campbell_ai/schema/dataset_columns.json` was changed from `csv` to `parquet`. The copy **generated** in the
-   data root (`auxiliar/dataset_columns.json`, takes precedence, refreshed weekly by `schema.refresh`) still says
-   `csv` until its next refresh; meanwhile `validate_client` cannot trust the declaration for that dataset and probes
-   it (≈ 27 ms instead of ≈ 3 ms per session opening). Run `python -m src.campbell_ai.schema.build` at deploy, or wait
-   for the weekly refresh. Not done here: it rewrites every dataset's declaration, including unrelated ones that
-   already drifted.
+4. **Campbell AI schema declaration: patched (2026-11-18).** `alerts_detail` is now a Parquet dataset, so its
+   `format` was changed from `csv` to `parquet` in `src/campbell_ai/schema/dataset_columns.json` and, only for those
+   two entries (cda, capstone), in the **published** copy (`MultiTechnique Alerts/auxiliar/dataset_columns.json`, which
+   dashboards mirror) and the local generated copy. The previous published version is kept at
+   `campbellAI/schema/dataset_columns/history/20261118T221836Z-before-alerts_detail-parquet/`. A full
+   `schema.build` from this machine was deliberately **not** published: the local `data/` lacks the predictive CSVs, so
+   it would have dropped `predictive_motor`/`predictive_transmission` from the declaration. The weekly `schema.refresh`
+   regenerates the whole file from the real data anyway.
 5. **Layout A makes Campbell's unit-wide scans slower than layout B would** (227 vs 70 ms for the file reads; whole
    unit queries take ~1.1 s end to end). Accepted for the 7× faster full-history read and 12× fewer objects.
 6. **Pandas reads the telemetry CSV in the partitioner, always** (`low_memory=False`), so every column's dtype is
