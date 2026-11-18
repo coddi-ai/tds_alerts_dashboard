@@ -505,19 +505,33 @@ class DashboardChartRegistry:
                 'alert_context_signals requiere unit_id (por ejemplo unit_id="T_18")'
             )
 
-        frame = self.repository.load("alerts_detail", client)
-        unit_col = self._column(frame, ("Unit", "UnitId", "unit_id"))
-        scoped = self.repository._filter_unit(frame, unit_col, unit_id)
-        if scoped.empty:
+        repository = self.repository
+        names = repository.alerts_detail_columns(client)
+        unit_col = DashboardDataRepository._resolve_name(names, ("Unit", "UnitId", "unit_id"))
+        if not unit_col:
+            raise CampbellDataError(
+                "La fuente no expone la columna requerida por este gráfico"
+            )
+        # The index says whether the unit (and the alert) have telemetry, and in which weeks, so
+        # only those weeks are read and the two messages below keep their meaning.
+        index = repository.alerts_detail_index(client)
+        unit_rows = repository._filter_unit(index, unit_col, unit_id)
+        if unit_rows.empty:
             raise CampbellDataError(f"Sin detalle de alertas para {unit_id}")
 
         alert_id = str(params.get("alert_id") or "").strip()
         if alert_id:
-            scoped = scoped[scoped["AlertID"].astype(str) == alert_id]
-            if scoped.empty:
+            chosen = unit_rows[unit_rows["AlertID"].astype(str) == alert_id]
+            if chosen.empty:
                 raise CampbellDataError(
                     f"La alerta {alert_id} no existe para {unit_id}"
                 )
+        else:
+            chosen = unit_rows
+        frame = repository.alerts_detail_rows(client, lambda _index: chosen)
+        scoped = repository._filter_unit(frame, unit_col, unit_id)
+        if alert_id:
+            scoped = scoped[scoped["AlertID"].astype(str) == alert_id]
         else:
             # Newest alert of the unit, so "¿por qué se alertó este equipo?" resolves without
             # the user having to know an id.

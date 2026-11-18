@@ -42,7 +42,7 @@ def history(monkeypatch):
     frame = make_frame(stamps)
     from src.data import loaders
 
-    monkeypatch.setattr(loaders, "load_alerts_data", lambda client: frame)
+    monkeypatch.setattr(loaders, "load_alerts_for_scope", lambda client, **kwargs: frame)
     return frame
 
 
@@ -113,7 +113,7 @@ def test_the_boundary_days_in_chile_time_are_kept_exactly(monkeypatch):
     ])
     from src.data import loaders
 
-    monkeypatch.setattr(loaders, "load_alerts_data", lambda client: frame)
+    monkeypatch.setattr(loaders, "load_alerts_for_scope", lambda client, **kwargs: frame)
     records = alert_summary.load_period_records("capstone", date(2026, 7, 14), date(2026, 7, 15))
     assert sorted(r.when.strftime("%d %H:%M") for r in records) == ["14 00:30", "15 19:00", "15 22:00"]
 
@@ -124,7 +124,7 @@ def test_timestamps_with_an_offset_are_normalised_before_slicing(monkeypatch):
     frame["Timestamp"] = pd.Series(["2026-07-15T12:00:00-04:00", "2026-07-01T12:00:00-04:00", "2026-07-15T23:30:00-04:00"])
     from src.data import loaders
 
-    monkeypatch.setattr(loaders, "load_alerts_data", lambda client: frame)
+    monkeypatch.setattr(loaders, "load_alerts_for_scope", lambda client, **kwargs: frame)
     sliced = alert_summary.load_period_records("capstone", date(2026, 7, 15), date(2026, 7, 15))
     unsliced(monkeypatch)
     assert sliced == alert_summary.load_period_records("capstone", date(2026, 7, 15), date(2026, 7, 15))

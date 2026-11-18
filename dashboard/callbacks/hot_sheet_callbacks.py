@@ -11,8 +11,14 @@ from dash import callback, Input, Output, html
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from datetime import datetime, timedelta
+from typing import Iterable, Optional
 
-from src.data.loaders import load_alerts_data, load_oil_classified, load_telemetry_alerts_metadata
+from src.data.loaders import (
+    load_alert_units,
+    load_alerts_since,
+    load_oil_classified,
+    load_telemetry_alerts_metadata,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,6 +44,11 @@ ALERT_LEVEL_2_TRIGGERS = [
     'Right Front Brake Oil Temperature',
     'Right Rear Brake Oil Temperature'
 ]
+
+
+# The longest trailing window `calculate_alert_status` looks at (its 7-day and 14-day counts).
+# The callback reads only the weekly partitions that window touches.
+ALERT_STATUS_WINDOW_DAYS = 14
 
 
 def classify_alert_level(trigger: str) -> int:
@@ -113,7 +124,7 @@ def calculate_alert_status(df_alerts: pd.DataFrame, unit_id: str) -> str:
     # Calculate timeframes
     now = datetime.now()
     last_7_days = now - timedelta(days=7)
-    last_14_days = now - timedelta(days=14)
+    last_14_days = now - timedelta(days=ALERT_STATUS_WINDOW_DAYS)
     
     # Ensure Timestamp is datetime
     if 'Timestamp' in unit_alerts.columns:
@@ -198,13 +209,20 @@ def calculate_tribology_status(df_oil: pd.DataFrame, unit_id: str) -> str:
         return 'sin_datos'
 
 
-def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.DataFrame:
+def get_hot_sheet_data(
+    df_alerts: pd.DataFrame,
+    df_oil: pd.DataFrame,
+    alert_units: Optional[Iterable] = None,
+) -> pd.DataFrame:
     """
     Generate hot sheet data with status for all units.
     
     Args:
-        df_alerts: Alerts dataframe
+        df_alerts: Alerts dataframe (only the recent alerts the status rules count are needed)
         df_oil: Oil classified dataframe
+        alert_units: Every unit that has ever had an alert. A unit with no recent alert is still
+            listed (as 'normal'), so the list comes from the whole history; when omitted it is
+            taken from ``df_alerts``.
     
     Returns:
         DataFrame with columns: Unidad, Estado_Telemetria, Estado_Tribologia
@@ -212,7 +230,9 @@ def get_hot_sheet_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame) -> pd.Data
     # Get unique units from both sources
     units = set()
     
-    if not df_alerts.empty:
+    if alert_units is not None:
+        units.update(alert_units)
+    elif not df_alerts.empty:
         equipment_col = 'UnitId' if 'UnitId' in df_alerts.columns else 'Unidad'
         units.update(df_alerts[equipment_col].unique())
     
@@ -259,11 +279,11 @@ def update_hot_sheet_table(client):
         raise PreventUpdate
     
     try:
-        df_alerts = load_alerts_data(client)
+        df_alerts = load_alerts_since(client, datetime.now() - timedelta(days=ALERT_STATUS_WINDOW_DAYS))
         df_oil = load_oil_classified(client)
         
         # Get hot sheet data
-        df_hot = get_hot_sheet_data(df_alerts, df_oil)
+        df_hot = get_hot_sheet_data(df_alerts, df_oil, alert_units=load_alert_units(client))
         
         if df_hot.empty:
             return dbc.Alert(t("hot_sheet_callbacks.no_hay_datos_de_unidades_disponibles"), color="warning")

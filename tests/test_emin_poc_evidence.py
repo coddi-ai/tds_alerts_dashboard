@@ -13,7 +13,7 @@ from src.data.emin_alert_evidence import (
     resolve_emin_maintenance_evidence,
 )
 from src.data.alert_partition_builder import build_client
-from src.data.loaders import load_alerts_data
+from src.data.loaders import load_alerts_for_scope
 
 
 def _case(**changes):
@@ -112,7 +112,7 @@ def test_source_flags_remain_unknown_without_published_references_or_source_type
 @pytest.mark.parametrize("client", ["cda", "capstone"])
 def test_existing_other_client_source_contract_is_preserved(tmp_path, monkeypatch, client):
     _write_case(tmp_path, monkeypatch, client)
-    row = load_alerts_data(client).iloc[0]
+    row = load_alerts_for_scope(client).iloc[0]
     assert row.has_telemetry and row.has_tribology
     assert row.Trigger_type == "Mixto"
 
@@ -124,7 +124,7 @@ def test_full_poc_detail_shows_event_and_maintenance_without_blank_oil_warning(t
     _write_case(tmp_path, monkeypatch)
     monkeypatch.setattr(callbacks, "load_telemetry_alert_detail_for_alert", lambda *args: pd.DataFrame())
     monkeypatch.setattr(callbacks, "load_oil_classified", lambda *args: pytest.fail("Oil was queried without a reference"))
-    row = load_alerts_data("emin").iloc[0]
+    row = load_alerts_for_scope("emin").iloc[0]
     assert row.Trigger_type == "Mixto"
     assert row.has_maintenance and not row.has_tribology
     assert evidence_label(row) == "Telemetría + Mantenimiento"

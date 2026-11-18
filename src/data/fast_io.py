@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import logging
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 import pandas as pd
 
@@ -53,58 +53,6 @@ def read_csv(path: str | Path, *, columns: Iterable[str] | None = None) -> pd.Da
             # engine could not infer one column.
             logger.warning("Polars CSV read failed for %s; falling back to pandas: %s", path, exc)
     return pd.read_csv(path, usecols=list(columns) if columns is not None else None)
-
-
-def read_csv_filtered(
-    path: str | Path,
-    filters: Mapping[str, Iterable[str]],
-    *,
-    columns: Iterable[str] | None = None,
-) -> pd.DataFrame:
-    """Materialize only matching CSV rows when Polars is available.
-
-    This is useful for Alertas Detallada: the source is wide and large, but a
-    user normally asks for one alert and one unit.  The pandas fallback keeps
-    the same result contract and filters after reading the file.
-    """
-
-    path = Path(path)
-    normalized = {
-        key: [str(value).strip() for value in values]
-        for key, values in filters.items()
-    }
-    output_columns = list(columns) if columns is not None else None
-    read_columns = (
-        list(dict.fromkeys([*normalized.keys(), *output_columns]))
-        if output_columns is not None
-        else None
-    )
-    if _polars_enabled():
-        try:
-            import polars as pl
-
-            lazy = pl.scan_csv(str(path), has_header=True, try_parse_dates=False)
-            for key, values in normalized.items():
-                lazy = lazy.filter(
-                    pl.col(key).cast(pl.Utf8).str.strip_chars().is_in(values)
-                )
-            if output_columns is not None:
-                lazy = lazy.select(output_columns)
-            return _to_pandas(lazy.collect())
-        except Exception as exc:
-            logger.warning(
-                "Polars filtered CSV read failed for %s; falling back to pandas: %s",
-                path,
-                exc,
-            )
-
-    frame = pd.read_csv(path, usecols=read_columns)
-    for key, values in normalized.items():
-        if key in frame.columns:
-            frame = frame[frame[key].astype(str).str.strip().isin(values)]
-    if output_columns is not None:
-        frame = frame[output_columns]
-    return frame
 
 
 def read_parquet(path: str | Path, *, columns: Iterable[str] | None = None) -> pd.DataFrame:

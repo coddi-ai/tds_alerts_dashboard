@@ -129,7 +129,11 @@ def calculate_alert_criticality_score(df_alerts: pd.DataFrame, days: int = 30) -
     return equipment_stats.sort_values('criticality_score', ascending=False)
 
 
-def count_alerts_by_window(df_alerts: pd.DataFrame, windows_days: tuple = (7, 28, 56)) -> dict:
+# Trailing windows of the Fleet Overview's alert counts: last week, 4 weeks, 8 weeks.
+ALERT_WINDOW_DAYS = (7, 28, 56)
+
+
+def count_alerts_by_window(df_alerts: pd.DataFrame, windows_days: tuple = ALERT_WINDOW_DAYS) -> dict:
     """Number of alerts per unit in each trailing window (default: last week,
     last 4 weeks, last 8 weeks).
 

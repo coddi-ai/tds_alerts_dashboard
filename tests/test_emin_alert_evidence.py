@@ -14,7 +14,7 @@ from src.data.emin_alert_evidence import (
     resolve_emin_maintenance_evidence,
 )
 from src.data.alert_partition_builder import build_client
-from src.data.loaders import load_alerts_data, load_emin_maintenance_evidence
+from src.data.loaders import load_alerts_for_scope, load_emin_maintenance_evidence
 
 
 def _alert(**changes):
@@ -214,16 +214,16 @@ def _write_dashboard_data(tmp_path, monkeypatch, client="emin"):
 
 def test_loader_refreshes_context_without_changing_published_type(tmp_path, monkeypatch):
     week_path = _write_dashboard_data(tmp_path, monkeypatch)
-    assert load_alerts_data("EMIN").iloc[0].has_maintenance
+    assert load_alerts_for_scope("EMIN").iloc[0].has_maintenance
     pd.DataFrame([_weekly(Tasks_List="{}")]).to_csv(week_path, index=False)
-    assert not load_alerts_data("emin").iloc[0].has_maintenance
+    assert not load_alerts_for_scope("emin").iloc[0].has_maintenance
     pd.DataFrame([_weekly()]).to_csv(week_path, index=False)
-    loaded = load_alerts_data("emin")
+    loaded = load_alerts_for_scope("emin")
     assert loaded.iloc[0].Trigger_type == "Telemetria"
     loaded.loc[0, "has_tribology"] = True
-    assert not load_alerts_data("emin").iloc[0].has_tribology
+    assert not load_alerts_for_scope("emin").iloc[0].has_tribology
     week_path.unlink()
-    assert not load_alerts_data("emin").iloc[0].has_maintenance
+    assert not load_alerts_for_scope("emin").iloc[0].has_maintenance
 
 
 @pytest.mark.parametrize("client", ["cda", "capstone"])
@@ -231,7 +231,7 @@ def test_other_clients_keep_classification_and_detail_contract(tmp_path, monkeyp
     from dashboard.callbacks import alerts_callbacks as callbacks
 
     _write_dashboard_data(tmp_path, monkeypatch, client=client)
-    loaded = load_alerts_data(client)
+    loaded = load_alerts_for_scope(client)
     assert loaded.iloc[0].Trigger_type == "Telemetria"
     assert "has_maintenance" not in loaded
     monkeypatch.setattr(callbacks, "load_emin_maintenance_evidence", lambda row: pytest.fail("EMIN resolver used for another client"))
@@ -258,7 +258,7 @@ def test_table_summary_and_detail_keep_source_type_and_show_matching_context(tmp
     from dashboard.callbacks import alerts_callbacks as callbacks
 
     _write_dashboard_data(tmp_path, monkeypatch)
-    loaded = load_alerts_data("emin")
+    loaded = load_alerts_for_scope("emin")
     table = create_alerts_report_table(loaded)
     assert table.data[0]["Fuente"] == "Telemetría"
     assert table.data[0]["Evidencia"] == "Telemetría + Mantenimiento"
@@ -287,7 +287,7 @@ def test_detail_and_summary_filter_tasks_by_system_across_four_weeks(tmp_path, m
     pd.DataFrame([_weekly(Summary="Resumen inferior", Tasks_List=_task("2026-06-15", activity="Motor límite"))]).to_csv(older, index=False)
     for week, day in (("24-2026", "2026-06-14"), ("29-2026", "2026-07-13")):
         pd.DataFrame([_weekly(Summary="Resumen fuera", Tasks_List=_task(day, activity="Motor fuera"))]).to_csv(week_path.parent / f"{week}.csv", index=False)
-    loaded = load_alerts_data("emin")
+    loaded = load_alerts_for_scope("emin")
     table = create_alerts_report_table(loaded)
     summary = _visible(callbacks.render_selected_alert_summary({"row": 0, "row_id": table.data[0]["id"]}, table.data))
     detail = _visible(callbacks.create_maintenance_evidence_section(loaded.iloc[0], "emin"))
@@ -304,7 +304,7 @@ def test_detail_explains_unattributable_maintenance_without_changing_type(tmp_pa
 
     week_path = _write_dashboard_data(tmp_path, monkeypatch)
     pd.DataFrame([_weekly(Tasks_List="{}")]).to_csv(week_path, index=False)
-    loaded = load_alerts_data("emin")
+    loaded = load_alerts_for_scope("emin")
     rendered = _visible(callbacks.create_maintenance_evidence_section(loaded.iloc[0], "emin"))
     assert "El resumen por sí solo no confirma" in rendered
     assert "Inspección del motor." not in rendered
@@ -344,7 +344,7 @@ def test_detail_sections_follow_published_sources_with_or_without_maintenance(
     header = _visible(detail)
     assert ("Tribología" in header) is (source_type in {"Mixto", "Tribologia"})
     assert "Multitécnica" not in header
-    assert load_alerts_data("emin").iloc[0].Trigger_type == source_type
+    assert load_alerts_for_scope("emin").iloc[0].Trigger_type == source_type
 
 
 @pytest.mark.parametrize("missing_source", [True, False])

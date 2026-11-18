@@ -262,7 +262,7 @@ componente", "qué señal" y "cuánto valió".
 | `inspect_dataset` | catálogo | Esquema de una fuente y **los valores reales que admite cada filtro**. Es la herramienta de recuperación tras un error. |
 | `describe_signals` | catálogo | Nombre oficial de una señal de telemetría; declara que no hay unidad de medida. |
 | `query_alerts` | `consolidated_alerts.csv` | Totales, ventana, distribuciones por equipo, sistema, subsistema, componente, tipo y variable disparadora, desglose mensual. |
-| `query_alert_detail` | `alerts_detail_wide_with_gps.csv` | Por alerta y señal: valor pico, mínimo, promedio, umbral aplicable, muestras fuera de límite y estados de máquina. |
+| `query_alert_detail` | `alerts/golden/{cliente}/{semana}/telemetry.parquet` (particiones semanales; solo se leen las semanas del filtro) | Por alerta y señal: valor pico, mínimo, promedio, umbral aplicable, muestras fuera de límite y estados de máquina. |
 | `query_maintenance` | `query_3_actions_all_equipment.parquet` | Acciones con filtros por equipo, sistema, componente, tipo y ventana. |
 | `query_maintenance_summary` | `Resumen_Semanal_Completo.csv` | Resumen semanal redactado por equipo. |
 | `query_oil_status` | `oil/machine_status.parquet` | Una fila por equipo con su muestra más reciente y distribución por estado. |

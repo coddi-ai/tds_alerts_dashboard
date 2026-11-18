@@ -486,9 +486,7 @@ def page_alerts(monkeypatch, tmp_path):
     from dashboard.callbacks import alerts_callbacks
     from src.data import loaders
 
-    # The email still reads the consolidated CSV (`load_alerts_data`); the page reads the
-    # partitions of that same CSV. Both must show the same numbers.
-    monkeypatch.setattr(loaders, "load_alerts_data", lambda client: frame)
+    # The email and the page read the same weekly partitions. Both must show the same numbers.
     from tests.alert_partition_support import install_alerts
 
     install_alerts(monkeypatch, tmp_path, frame)
@@ -574,7 +572,7 @@ def test_builder_for_an_unconfigured_client_is_refused():
 def test_builder_with_no_alert_file_yields_the_empty_email(monkeypatch):
     from src.data import loaders
 
-    monkeypatch.setattr(loaders, "load_alerts_data", lambda client: pd.DataFrame())
+    monkeypatch.setattr(loaders, "load_alerts_for_scope", lambda client, **kwargs: pd.DataFrame())
     request = report.ReportRequest("emin", "daily", date(2026, 7, 9), date(2026, 7, 9), date(2026, 7, 10))
     assert "Sin alertas registradas en el período." in alert_summary.build_alert_summary(request).html
 

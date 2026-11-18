@@ -9,6 +9,7 @@ aggregate, and the curated shapes that only the named registry can build.
 from __future__ import annotations
 
 import pandas as pd
+from tests.alert_partition_support import partition_csv
 import pytest
 
 from src.campbell_ai.chart_registry import CHART_DEFINITIONS, DashboardChartRegistry
@@ -21,6 +22,7 @@ from src.campbell_ai.visualization import (
     DashboardVisualizationService,
 )
 from src.charts import ALL_CHART_KINDS, CHART_KINDS, REGISTRY_ONLY_KINDS
+from tests.telemetry_partition_support import install_telemetry
 
 
 @pytest.fixture
@@ -204,7 +206,7 @@ def _alert_context_repository(tmp_path) -> DashboardDataRepository:
     """One alert with its trigger and companions, each with the limits it really has."""
     detail = tmp_path / "telemetry" / "golden" / "cda"
     detail.mkdir(parents=True)
-    pd.DataFrame(
+    install_telemetry(tmp_path, "cda", pd.DataFrame(
         [
             {
                 "AlertID": alert, "Alert_Index": 0, "Alert_TimeStart": start,
@@ -222,7 +224,7 @@ def _alert_context_repository(tmp_path) -> DashboardDataRepository:
                 ("7", "2026-07-01", "2026-07-01T10:05:00", 4.0),
             )
         ]
-    ).to_csv(detail / "alerts_detail_wide_with_gps.csv", index=False)
+    ))
     return DashboardDataRepository(tmp_path)
 
 
@@ -316,6 +318,7 @@ def _alert_repository(tmp_path) -> DashboardDataRepository:
             )
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
+    partition_csv(alerts / "consolidated_alerts.csv")
     return DashboardDataRepository(tmp_path)
 
 

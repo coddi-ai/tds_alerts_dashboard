@@ -25,9 +25,9 @@ from src.data.emin_alert_evidence import (
     resolve_emin_maintenance_evidence,
 )
 from src.data import alert_partitions as alert_store
+from src.data import telemetry_partitions as telemetry_store
 from src.data.fast_io import (
     read_csv as fast_read_csv,
-    read_csv_filtered as fast_read_csv_filtered,
     read_parquet as fast_read_parquet,
 )
 
@@ -524,34 +524,6 @@ def _normalize_alerts_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-@lru_cache(maxsize=8)
-def _load_alerts_data_cached(client: str, path: str, mtime_ns: int, size: int) -> pd.DataFrame:
-    """
-    Load consolidated alerts data for a specific client.
-    
-    Args:
-        client: Client identifier (e.g., 'cda', 'emin')
-    
-    Returns:
-        DataFrame with alerts data including derived columns (has_telemetry, has_tribology, Month)
-    """
-    file_path = Path(path)
-    logger.info(f"Loading alerts data from {file_path}")
-    
-    if not file_path.exists():
-        logger.warning(f"Alerts file not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = _normalize_alerts_frame(fast_read_csv(file_path))
-        logger.info(f"Loaded {len(df)} alerts for client {client}")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading alerts data: {e}")
-        return pd.DataFrame()
-
-
 def _enrich_emin_alerts(df: pd.DataFrame) -> pd.DataFrame:
     """EMIN's published-source flags and weekly maintenance evidence for the given alerts."""
     df = prepare_emin_alert_sources(df)
@@ -568,31 +540,13 @@ def _enrich_emin_alerts(df: pd.DataFrame) -> pd.DataFrame:
     return enrich_emin_alert_evidence(df, weekly_data)
 
 
-def load_alerts_data(client: str) -> pd.DataFrame:
-    """Return alerts data cached by the current source generation.
-
-    Reads the whole ``consolidated_alerts.csv``. The two Alertas views do **not** use it: they
-    read week/unit Parquet partitions through the ``load_alert_*`` functions below.
-    """
-    file_path = _data_path("alerts", "golden", (client or '').lower(), "consolidated_alerts.csv")
-    if not file_path.exists():
-        return pd.DataFrame()
-    stat = file_path.stat()
-    df = _load_alerts_data_cached(
-        (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size
-    ).copy(deep=True)
-    if (client or '').lower() == 'emin' and not df.empty:
-        df = _enrich_emin_alerts(df)
-    return df
-
-
 # ----------------------------------------
-# Partitioned alerts (Alertas > Vista General / Vista Detallada)
+# Partitioned alerts: the only way the dashboard (every section) and the e-mail read alerts
 #
 # data/alerts/golden/{client}/{week}/file.parquet, written by
-# scripts/partition_alerts.py. Nothing below touches consolidated_alerts.csv. Layout and the
-# read mechanics live in src/data/alert_partitions.py; this module only turns the rows it
-# returns into the same frame `load_alerts_data` produces.
+# scripts/partition_alerts.py. Nothing in this module touches consolidated_alerts.csv. Layout and
+# the read mechanics live in src/data/alert_partitions.py; this module only turns the rows it
+# returns into the normalized alerts frame.
 # ----------------------------------------
 
 def _alert_client_dir(client: str) -> Path:
@@ -623,7 +577,7 @@ def _utc_bounds(start_date, end_date):
 def load_alerts_for_scope(client: str, *, units=None, start_date=None, end_date=None) -> pd.DataFrame:
     """Alerts of the ``{week}/file.parquet`` partitions a Desde/Hasta range touches.
 
-    Same frame as `load_alerts_data` (normalized timestamps, derived columns, EMIN evidence),
+    The normalized alerts frame (timestamps, derived columns, EMIN evidence),
     restricted to the weeks that overlap ``[start_date, end_date]`` and, when ``units`` is given,
     to those units. A partition holds every unit of its week, so the unit selection is a row
     filter on what was read. The weeks are whole: callers trim to the exact range with their
@@ -646,8 +600,75 @@ def load_alerts_for_scope(client: str, *, units=None, start_date=None, end_date=
     return df
 
 
+def load_alerts_since(client: str, since_utc) -> pd.DataFrame:
+    """Alerts of the weeks that overlap ``[since_utc, +inf)``, for a trailing-window consumer.
+
+    ``since_utc`` is compared with the UTC-naive ``Timestamp`` column exactly as the consumer's
+    own ``Timestamp >= cutoff`` filter does, so every row that filter keeps is in the result. The
+    weeks are whole: the caller still applies its exact cutoff to the rows. Rows with an
+    unparseable timestamp (the ``undated`` partition) are never part of a dated window.
+
+    Same frame as `load_alerts_for_scope` (normalized, EMIN evidence). When the client has
+    partitions but none overlaps the window, the result is an *empty frame with the alert
+    columns*, not a bare ``DataFrame()``: "the window is empty" must stay distinguishable from
+    "the client has no alerts" (`client_has_alert_partitions`) and the caller's column
+    accesses must keep working. A client with no partitions at all gets ``DataFrame()``.
+    """
+    directory = _alert_client_dir(client)
+    weeks = alert_store.select_weeks(directory, lower_utc=pd.Timestamp(since_utc))
+    logger.info("Reading alert partitions for %s since %s: %d week(s)", client, since_utc, len(weeks))
+    df = alert_store.read_scope(directory, weeks)
+    if df.empty:
+        every_week = alert_store.list_weeks(directory)
+        if not every_week:
+            return pd.DataFrame()
+        # One partition is enough to learn the columns; keep none of its rows.
+        dated = [week for week in every_week if week != alert_store.UNDATED_WEEK]
+        schema = alert_store.read_scope(directory, (dated or every_week)[-1:])
+        return _normalize_alerts_frame(schema.iloc[0:0].copy())
+    df = _normalize_alerts_frame(df)
+    if (client or '').lower() == 'emin':
+        df = _enrich_emin_alerts(df)
+    return df
+
+
+def latest_alert_timestamp(client: str):
+    """The newest alert ``Timestamp`` of the whole history (UTC-naive), without reading it.
+
+    Weeks are cut on that same timestamp, so the newest dated week holds the maximum: only
+    that file's ``Timestamp`` column is read. ``None`` when the client has no partitions,
+    ``NaT`` when it has some but no alert has a parseable timestamp (what ``Series.max()`` of
+    the full frame would have returned in each case).
+    """
+    directory = _alert_client_dir(client)
+    weeks = alert_store.list_weeks(directory)
+    if not weeks:
+        return None
+    dated = [week for week in weeks if week != alert_store.UNDATED_WEEK]
+    if not dated:
+        return pd.NaT
+    stamps = alert_store.read_scope(directory, dated[-1:], columns=['Timestamp'])
+    if stamps.empty or 'Timestamp' not in stamps.columns:
+        return pd.NaT
+    return to_utc_naive(stamps['Timestamp']).max()
+
+
+def load_alert_units(client: str, *, dated_only: bool = False) -> list:
+    """Every distinct ``UnitId`` of the whole alert history, sorted, from the alert index.
+
+    ``dated_only`` leaves out units whose every alert has an unparseable timestamp (the
+    ``undated`` week): the units a time-based count can see at all.
+    """
+    index = alert_store.read_alert_index(_alert_client_dir(client))
+    if index.empty or 'UnitId' not in index.columns:
+        return []
+    if dated_only:
+        index = index[index['week'] != alert_store.UNDATED_WEEK]
+    return sorted(index['UnitId'].dropna().unique())
+
+
 def load_alert_by_id(client: str, fusion_id) -> pd.DataFrame:
-    """The one alert with this FusionID (a 0- or 1-row frame like `load_alerts_data` rows),
+    """The one alert with this FusionID (a 0- or 1-row frame of normalized alert rows),
     read from its single week partition, wherever it falls in the history."""
     directory = _alert_client_dir(client)
     week = alert_store.locate_alert(directory, fusion_id)
@@ -859,92 +880,25 @@ def load_feature_names(client: str) -> Dict[str, str]:
         return {}
 
 
-@lru_cache(maxsize=8)
-def _load_telemetry_alerts_detail_golden_cached(
-    client: str, path: str, mtime_ns: int, size: int
-) -> pd.DataFrame:
-    """
-    Load pre-processed telemetry alert details from golden layer.
-    This file contains all signals, limits, and GPS data for alerts in wide format.
-    
-    Args:
-        client: Client identifier (e.g., 'cda')
-    
-    Returns:
-        DataFrame with columns:
-        - AlertID, Unit, TimeStart, Trigger: Alert metadata
-        - GPSLat, GPSLon, GPSElevation: GPS data
-        - State: Operational state
-        - {Feature}_Value: Sensor values
-        - {Feature}_{Kind}_Limit: Limit values (Upper/Lower)
-    """
-    file_path = Path(path)
-    logger.info(f"Loading telemetry alerts detail from golden layer: {file_path}")
-    
-    if not file_path.exists():
-        logger.warning(f"Telemetry alerts detail file not found: {file_path}")
-        return pd.DataFrame()
-    
-    try:
-        df = fast_read_csv(file_path)
-        # W34-06: same UTC-naive normalization point as consolidated_alerts's
-        # Timestamp column, so the alert instant and its telemetry evidence
-        # window compare against the same clock.
-        df['TimeStart'] = to_utc_naive(df['TimeStart'])
-        logger.info(f"Loaded {len(df)} telemetry alert detail records from golden layer")
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error loading telemetry alerts detail: {e}")
-        return pd.DataFrame()
-
-
-def load_telemetry_alerts_detail_golden(client: str, *, copy: bool = True) -> pd.DataFrame:
-    """Return cached golden alert evidence with optional zero-copy access.
-
-    The detail callback only filters and reads the frame.  It can opt out of a
-    75MB defensive copy while callers that may mutate data retain the safe
-    default.
-    """
-    file_path = _data_path(
-        "telemetry", "golden", (client or '').lower(), "alerts_detail_wide_with_gps.csv"
-    )
-    if not file_path.exists():
-        return pd.DataFrame()
-    stat = file_path.stat()
-    frame = _load_telemetry_alerts_detail_golden_cached(
-        (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size
-    )
-    return frame.copy(deep=True) if copy else frame
-
-
 @lru_cache(maxsize=128)
 def _load_telemetry_alert_detail_for_alert_cached(
     client: str,
-    path: str,
-    mtime_ns: int,
-    size: int,
+    signature: tuple[int, int],
     identifiers: tuple[str, ...],
     unit_id: str,
 ) -> pd.DataFrame:
-    """Cache one filtered alert generation for fast back/forward navigation."""
-    file_path = Path(path)
-    try:
-        frame = fast_read_csv_filtered(
-            file_path,
-            {"AlertID": identifiers, "Unit": (unit_id,)},
-        )
-        if "TimeStart" in frame.columns:
-            frame["TimeStart"] = to_utc_naive(frame["TimeStart"])
-        return frame
-    except Exception as exc:
-        logger.warning("Filtered telemetry detail read failed; using cached source: %s", exc)
-        frame = load_telemetry_alerts_detail_golden(client, copy=False)
-        if frame.empty:
-            return frame
-        alert_keys = frame["AlertID"].astype(str).str.strip()
-        unit_keys = frame["Unit"].astype(str).str.strip()
-        return frame.loc[alert_keys.isin(identifiers) & unit_keys.eq(unit_id)]
+    """Cache one alert's telemetry for fast back/forward navigation.
+
+    ``signature`` is the telemetry index's (mtime, size): it changes whenever any telemetry
+    partition is regenerated, so a new weekly run is never answered from the previous one.
+    """
+    frame = telemetry_store.read_alert(_alert_client_dir(client), identifiers, unit_id)
+    if "TimeStart" in frame.columns:
+        # W34-06: same UTC-naive normalization point as consolidated_alerts's Timestamp
+        # column, so the alert instant and its telemetry evidence window compare against the
+        # same clock.
+        frame["TimeStart"] = to_utc_naive(frame["TimeStart"])
+    return frame
 
 
 def load_telemetry_alert_detail_for_alert(
@@ -952,26 +906,28 @@ def load_telemetry_alert_detail_for_alert(
     alert_ids: list[str] | tuple[str, ...],
     unit_id: str,
 ) -> pd.DataFrame:
-    """Read only one alert/unit from the wide telemetry evidence CSV.
+    """The telemetry evidence (signals, limits, GPS) of one alert of one unit.
 
-    Polars can push these predicates into the CSV scan.  With pandas the
-    function falls back to the cached full reader and applies the same filter,
-    preserving behavior on installations that have not installed Polars yet.
+    Reads only the week partition that holds the alert, found through the telemetry index
+    (``data/alerts/golden/{client}/{week}/telemetry.parquet``, written by
+    ``scripts/partition_alerts.py``); no other week is opened and the source CSV is never read.
+    The rows are the source's, in source order, with the columns ``AlertID``, ``Unit``,
+    ``TimeStart``, ``Trigger``, ``GPSLat``/``GPSLon``/``GPSElevation``, ``State``,
+    ``{signal}_Value`` and ``{signal}_{Upper|Lower}_Limit``.
+
+    Telemetry is as fresh as the last weekly partition run. An alert without telemetry, a
+    week not partitioned yet and a client with no telemetry all give an empty frame.
     """
 
     identifiers = tuple(str(value).strip() for value in alert_ids if str(value).strip())
     unit_id = str(unit_id or "").strip()
     if not identifiers or not unit_id:
         return pd.DataFrame()
-    file_path = _data_path(
-        "telemetry", "golden", (client or '').lower(), "alerts_detail_wide_with_gps.csv"
-    )
-    if not file_path.exists():
+    signature = telemetry_store.index_signature(_alert_client_dir(client))
+    if signature is None:
         return pd.DataFrame()
-    stat = file_path.stat()
     return _load_telemetry_alert_detail_for_alert_cached(
-        (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size,
-        identifiers, unit_id,
+        (client or '').lower(), signature, identifiers, unit_id,
     )
 
 

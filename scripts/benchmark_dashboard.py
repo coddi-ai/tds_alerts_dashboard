@@ -29,7 +29,6 @@ def _targets(root: Path, client: str) -> list[Path]:
     candidates = [
         base / "predictive" / "golden" / client.lower() / "motor.csv",
         base / "predictive" / "golden" / client.lower() / "transmision.csv",
-        base / "telemetry" / "golden" / client.lower() / "alerts_detail_wide_with_gps.csv",
     ]
     return [path for path in candidates if path.is_file()]
 

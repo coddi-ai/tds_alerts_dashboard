@@ -382,7 +382,7 @@ def test_every_card_with_technique_data_carries_the_freshness_caption(monkeypatc
     stamp = pd.Timestamp(datetime.now() - pd.Timedelta(days=10))
     monkeypatch.setattr(usc, "_telemetry_data_date", lambda client, unit: stamp)
     monkeypatch.setattr(usc, "_alerts_data_date", lambda client: stamp)
-    monkeypatch.setattr(usc, "load_alerts_data", lambda client: pd.DataFrame())
+    monkeypatch.setattr(usc, "latest_alert_timestamp", lambda client: None)  # no alert feed
     telemetry = _telemetry_card(monkeypatch, ["Normal"])
     alerts = usc._alerts_section("TESTCO", "U1", "Sin Datos")
     rows = [OilComponentRow(r.component, r.status, r.anomaly, r.diagnosis, stamp) for r in _oil_rows(["Normal"])]
@@ -395,7 +395,8 @@ def test_every_card_with_technique_data_carries_the_freshness_caption(monkeypatc
 def test_stale_alertas_keeps_its_chip_notice_and_empty_state(monkeypatch):
     stale = pd.Timestamp(datetime.now() - pd.Timedelta(days=100))
     feed = pd.DataFrame({"UnitId": ["U9"], "Timestamp": [stale]})
-    monkeypatch.setattr(usc, "load_alerts_data", lambda client: feed)
+    monkeypatch.setattr(usc, "latest_alert_timestamp", lambda client: stale)
+    monkeypatch.setattr(usc, "load_alerts_since", lambda client, since: feed)
     card = usc._alerts_section("TESTCO", "U1", "Sin Datos")
     text = _text(card)
     assert _chips(card) == [("Sin Datos", "Sin Datos")]

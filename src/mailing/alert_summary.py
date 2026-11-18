@@ -3,8 +3,9 @@ Alert summary report builder (02_alert_summary_email_template.md).
 
 `build_alert_summary(request)` turns a client's alerts inside a period into the email
 subject + HTML. The alerts are loaded and prepared with the very same functions the Alertas
-page uses (`load_alerts_data`, `prepare_alert_rows`, `filter_prepared_rows`), so counts match
-the page for the same client and range. The email is always in Spanish, whatever language the
+page uses (`load_alerts_for_scope`, `prepare_alert_rows`, `filter_prepared_rows`), so counts match
+the page for the same client and range. The alerts come from the weekly Parquet partitions (the
+weeks the period touches), resolved below the same data root as the dashboard. The email is always in Spanish, whatever language the
 requesting admin's browser uses, so the preview equals the scheduled send.
 """
 
@@ -80,16 +81,17 @@ def slice_to_period(alerts: pd.DataFrame, start: date, end: date) -> pd.DataFram
 def load_period_records(client: str, start: date, end: date) -> List[stats.AlertRecord]:
     """The client's alerts with a Chile date in `[start, end]`, as plain records.
 
-    Same pipeline as the Alertas page: `load_alerts_data` -> `prepare_alert_rows` ->
-    `filter_prepared_rows` (Chile calendar days, both ends inclusive), with the raw alerts sliced to
-    the period first so only those are prepared (see `slice_to_period`).
+    Same pipeline as the Alertas page: `load_alerts_for_scope` -> `prepare_alert_rows` ->
+    `filter_prepared_rows` (Chile calendar days, both ends inclusive). Only the weekly partitions
+    that overlap the period are read, and the raw alerts are sliced to the period before they are
+    prepared (see `slice_to_period`).
     """
     # Imported here: the dashboard components are heavy and only the builder needs them.
     from dashboard.components.alerts_report import filter_prepared_rows, prepare_alert_rows
-    from src.data.loaders import load_alerts_data
+    from src.data.loaders import load_alerts_for_scope
 
     with forced_language("es"):
-        alerts = load_alerts_data(client)
+        alerts = load_alerts_for_scope(client, start_date=start, end_date=end)
         if alerts is None or alerts.empty:
             return []
         alerts = slice_to_period(alerts, start, end)

@@ -12,10 +12,20 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from datetime import datetime, timedelta
 
-from src.data.loaders import load_alerts_data, load_oil_classified
+from src.data.loaders import client_has_alert_partitions, load_alerts_since, load_oil_classified
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _load_window_alerts(client: str, days: int) -> pd.DataFrame:
+    """The alerts of the weekly partitions the trailing ``days`` window touches.
+
+    Every row the callbacks' own ``Timestamp >= now - days`` filter keeps is in the result (the
+    weeks are whole; that filter still decides). The cutoff here is taken a moment before
+    theirs, so it can only select the same weeks or one more.
+    """
+    return load_alerts_since(client, datetime.now() - timedelta(days=days))
 
 
 def get_equipment_status_data(df_alerts: pd.DataFrame, df_oil: pd.DataFrame, days: int = 90) -> pd.DataFrame:
@@ -172,10 +182,10 @@ def update_summary_cards(days, client):
         raise PreventUpdate
         
     try:
-        df_alerts = load_alerts_data(client)
+        df_alerts = _load_window_alerts(client, days)
         df_oil = load_oil_classified(client)
         
-        if df_alerts.empty:
+        if not client_has_alert_partitions(client):
             return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Filter by date range
@@ -254,10 +264,10 @@ def update_equipment_status_table(days, client):
         raise PreventUpdate
         
     try:
-        df_alerts = load_alerts_data(client)
+        df_alerts = _load_window_alerts(client, days)
         df_oil = load_oil_classified(client)
         
-        if df_alerts.empty:
+        if not client_has_alert_partitions(client):
             return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Get equipment status data
@@ -349,10 +359,10 @@ def update_critical_systems_table(days, client):
         raise PreventUpdate
         
     try:
-        df_alerts = load_alerts_data(client)
+        df_alerts = _load_window_alerts(client, days)
         df_oil = load_oil_classified(client)
         
-        if df_alerts.empty:
+        if not client_has_alert_partitions(client):
             return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         
         # Get critical systems data

@@ -19,7 +19,8 @@ from dashboard.components.alerts_report import (
     translate_alert_system,
 )
 from dashboard.components.alerts_tables import parse_ia_message_sections
-from src.data.loaders import _load_alerts_data_cached, load_alerts_data
+from src.data.alert_partition_builder import build_client
+from src.data.loaders import load_alerts_for_scope
 
 
 def test_capstone_canonical_signals_and_structured_ai_are_client_facing():
@@ -83,9 +84,8 @@ def test_capstone_loader_uses_configured_data_root(tmp_path, monkeypatch):
     ).to_csv(alerts_path, index=False)
 
     monkeypatch.setenv("DASHBOARD_DATA_ROOT", str(tmp_path))
-    _load_alerts_data_cached.cache_clear()
-    loaded = load_alerts_data("CAPSTONE")
-    _load_alerts_data_cached.cache_clear()
+    build_client("capstone", tmp_path)  # the loaders read the weekly partitions of this CSV
+    loaded = load_alerts_for_scope("CAPSTONE")
 
     assert len(loaded) == 1
     assert loaded.loc[0, "TribologyID"] == "12"

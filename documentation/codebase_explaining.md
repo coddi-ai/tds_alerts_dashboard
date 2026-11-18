@@ -48,11 +48,21 @@ dashboard/callbacks/*.py  →  dashboard/components/*.py (charts/tables)  →  d
 Browser (Dash/React runtime)
 ```
 
-**Alerts are the one technique that is re-shaped on the way in.** `consolidated_alerts.csv` is no
-longer read by the Alertas views: `scripts/partition_alerts.py` splits it into Parquet partitions
-(`data/alerts/golden/{client}/{week}/file.parquet`), syncs them to S3, and the views read
-only the weeks their filters touch. See §5 ("Partitioned alerts") for the layout, the schedule
-and the sync.
+**Alerts are the one technique that is re-shaped on the way in.** `scripts/partition_alerts.py`
+splits `consolidated_alerts.csv` into Parquet partitions
+(`data/alerts/golden/{client}/{week}/file.parquet`), syncs them to S3, and every dashboard section
+that shows alerts (Alertas Vista General / Vista Detallada, Hot Sheet, Menace Control, Fleet
+overview, Unit summary) reads only the weeks its filters or time window touch. See §5 ("Partitioned
+alerts") for the layout, the schedule and the sync. The CSV is still read by the partitioner and, until
+the open points in `change_summary.md` are decided, by the alert-summary e-mail and by three
+non-section readers (data-source chips, the source catalog probe, the Campbell AI assistant).
+
+**The per-alert telemetry is partitioned the same way.** The wide telemetry CSV of each client
+(`data/telemetry/golden/{client}/`, sensor readings, limits and GPS around every alert) is read **only
+by `scripts/partition_alerts.py`**, which writes `data/alerts/golden/{client}/{week}/telemetry.parquet`
+(+ `_telemetry_index.parquet`) in the same weekly run. The dashboard (*Evidencia de Telemetría*, the
+data-source chip and catalog probe) and the Campbell AI assistant read those partitions and never the
+CSV. See §5, "Partitioned alert telemetry".
 
 If a page shows no data, the first two questions are always: (1) does `data/{technique}/golden/{client}/`
 actually contain the expected file, and (2) does the logged-in user's client list include that client.
@@ -67,7 +77,7 @@ actually contain the expected file, and (2) does the logged-in user's client lis
 | `config/` | Runtime settings (`settings.py`) and user accounts (`users.py`) | Yes, for config/access changes |
 | `src/` | Data access layer: loaders, transformers, schemas, S3 sync, logging | Yes, when data-loading logic needs to change |
 | `data/` | Local copy of Gold/Silver-layer files, organized by technique/layer/client | Usually not — this is synced/mounted data, not source |
-| `scripts/` | Operational scripts. `partition_alerts.py` builds the partitioned alerts (§5) | Yes, when the partitioning/schedule changes |
+| `scripts/` | Operational scripts. `partition_alerts.py` builds the partitioned alerts and the partitioned alert telemetry (§5) | Yes, when the partitioning/schedule changes |
 | `documentation/` | Per-technique data contracts and design docs (source of truth for data shape) | Read frequently, edit when contracts/features change |
 | `ai_docs/` | Dev-authored implementation notes/specs from past feature work | Read for historical context; treat as informal, may be stale |
 | `notebooks/` | Jupyter notebooks used for one-off data exploration | Don't treat as production code; not imported by the app |
@@ -149,15 +159,45 @@ Both views read **only the `{week}/file.parquet` partitions their filters touch*
   loaded scope. A selected alert is read from its single week file, found through the index; an
   alert reached from Vista General that lies outside the loaded weeks is fetched the same way, so it
   stays selectable.
+- **Evidencia de Telemetría** (inside Vista Detallada) reads the selected alert's telemetry from
+  **its week's `telemetry.parquet`**, found through `_telemetry_index.parquet`
+  (`loaders.load_telemetry_alert_detail_for_alert` → `src/data/telemetry_partitions.py`): the index
+  and one week file are opened, never another week, and the original CSV is never read. Telemetry is
+  as fresh as the last weekly partition run; an alert (or week) without telemetry shows the same
+  "no hay datos de telemetría" message as before. See §5, "Partitioned alert telemetry".
 - **Filter options** (Unidad roster, Sistema list, Señal/Trigger list) are offered from the
   *whole history*, as before, but read from `_alert_index.parquet` (one light row per alert)
   instead of a partition scan. The catalog is cached by the index's mtime/size.
 - **Nothing is cached by the new read path.** Every filter change re-reads its week files (a few
   milliseconds for the default window).
-- `load_alerts_data` (the whole-CSV loader) still exists for the *other* consumers of alerts —
-  Hot Sheet, Menace Control, Fleet overview, Unit summary, the alert-summary e-mail. They read the
-  CSV as before; only the two Alertas views moved to partitions. Their data is therefore fresher
-  (CSV) than the views' (last weekly run).
+### Hot Sheet, Menace Control, Fleet overview, Unit summary: the same read path
+
+These four sections also read the partitions, through `src/data/alert_partitions.py` (by way of
+`src/data/loaders.py`), and never open the CSV. Each reads only the weeks its trailing window
+touches; the section's own `Timestamp >= cutoff` filter then trims to the exact range, so a
+window that starts mid-week gives the same rows the whole-history read gave.
+
+| Section | Reads | Loader calls |
+|---|---|---|
+| **Hot Sheet** (`hot_sheet_callbacks.py`) | the last 14 days (the widest window of the status rule: weeks that overlap it); the unit list is every unit of the history, from the index | `load_alerts_since`, `load_alert_units` |
+| **Menace Control** (`menace_control_callbacks.py`) | the trailing `days` chosen in the selector (30 / 60 / 90 / 180 / 365) | `load_alerts_since` |
+| **Fleet overview** (`fleet_overview.py`) | status: last 30 days; window counts: last 56 days, with every unit of the history listed (zeros when it has no recent alert); feed freshness: the newest week's `Timestamp` column only | `load_alerts_since`, `load_alert_units(dated_only=True)`, `latest_alert_timestamp` |
+| **Unit summary** (`unit_summary_content.py`) | the 30 days before the feed's newest alert (or before today, whichever `_reference_time` picks); the data date is the newest week's `Timestamp` column | `latest_alert_timestamp`, `load_alerts_since` |
+
+`load_alerts_since` returns whole weeks of the same normalized frame as the Alertas loaders (EMIN
+evidence included). When the client has partitions but none overlaps the window it returns an
+*empty frame with the alert columns*, so "nothing in the window" (the section's "no alerts in N
+days" message) stays distinct from "the client has no alert data" (`client_has_alert_partitions`).
+
+**Freshness change.** These sections used to show the CSV as it was at that moment; they now show
+the data of the last weekly partition run (Wednesday 04:00, like the Alertas views), because the
+partitions are only regenerated then. This was accepted as a decision (see `change_summary.md`).
+A running dashboard also needs the new partitions on its disk (shared data volume or the next
+startup sync, §2).
+
+`load_alerts_data` (the whole-CSV loader) is no longer used by any dashboard section. It is still
+used by the alert-summary e-mail (`src/mailing/alert_summary.py`), pending the decision recorded in
+`change_summary.md`; it will be removed with it.
 
 ### Alertas → Detalle specifics: the sensor trends chart isn't shared with Telemetría
 
@@ -346,7 +386,7 @@ backward compatibility only — see [documentation/oil/dashboard_documentation.m
 ### Partitioned alerts (`data/alerts/golden/{client}/`)
 
 ```
-consolidated_alerts.csv                     source; only read by the partitioner (and the non-Alertas consumers)
+consolidated_alerts.csv                     source; read by the partitioner (see change_summary.md for the other readers still open)
 {week}/file.parquet                         one file per Monday-week (all units), same columns as the CSV
 _alert_index.parquet                        one light row per alert: FusionID, UnitId, sistema, Trigger_Var, week, row_id
 _backfill_complete.json                     (S3 only) written when the full history was synced; gates the weekly sync
@@ -408,6 +448,73 @@ backtest/, state/, other *.csv              untouched by the partitioner
   running dashboard picks up new partitions when the script shares its data volume, or on its next
   start.
 
+### Partitioned alert telemetry (`data/alerts/golden/{client}/`)
+
+The per-alert telemetry (one row per sample around each alert: `{signal}_Value`,
+`{signal}_Upper_Limit`/`_Lower_Limit`, `State`, `GPSLat`/`GPSLon`/`GPSElevation`, ~120 columns for
+capstone) is published as one wide CSV per client under `data/telemetry/golden/{client}/`. It is
+**read only by `scripts/partition_alerts.py`**, which splits it beside the alerts partitions:
+
+```
+{week}/telemetry.parquet                    one file per Monday-week of the telemetry's ALERT (all units), the CSV's columns/dtypes/values/row order
+undated/telemetry.parquet                   telemetry of alerts whose Timestamp cannot be parsed
+unmatched/telemetry.parquet                 telemetry rows that belong to NO alert (never dropped; counted and logged on every run)
+_telemetry_index.parquet                    one light row per (AlertID, Unit, Trigger, Alert_TimeStart): week, rows, first_row, part_sha
+_telemetry_backfill_complete.json           (S3 only) written when the telemetry history was synced; gates the weekly telemetry sync
+```
+
+- **The week is the alert's, not the row's.** Each telemetry row is placed in the Monday-week of the
+  `Timestamp` of the alert it belongs to (same `week_starts` as the alerts), so an event that crosses
+  a Sunday/Monday boundary stays whole in one file (on capstone 2,240 of 366,749 rows would have
+  landed in another week by their own `TimeStart`).
+- **The key that links telemetry to alerts**: `telemetry.AlertID` = the alert's `TelemetryID` **or**
+  `FusionID` (capstone keys on the FusionID, CDA on the per-unit `TelemetryID`) **and**
+  `telemetry.Unit` = the alert's `UnitId`, compared as stripped text (`AlertID` is only unique within a
+  unit). Resolved against `consolidated_alerts.csv` by `telemetry_partition_builder.assign_weeks`.
+- **Layout: one file per week (not per unit).** Measured on capstone, `{week}` gives 24 files / 53 MB
+  and `{week}/{unit}` 315 files / 72 MB, with the same time to read one alert (5.6–9.9 ms vs
+  5.8–7.4 ms) and a 7× slower full-history read for the unit layout; the numbers are in
+  `change_summary.md`. The layout lives only in `src/data/telemetry_partitions.py`, shared by the
+  script and every reader.
+- **Code**: `src/data/telemetry_partitions.py` (layout + every read; no S3 imports, no source name),
+  `src/data/telemetry_partition_builder.py` (build, validation; the script passes it the source file
+  name), `src/data/alert_partition_s3.py` (`TELEMETRY_DATASET`: same sync/verify code, own marker and
+  keys), `scripts/partition_alerts.py` (one run for both datasets).
+- **Script behaviour** (same run, schedule and time zone as the alerts: Wednesday 04:00
+  `America/Santiago`): per client the alerts half runs first and the telemetry half second, each
+  with its own build, validation, S3 sync and exit-status contribution (a failure of one never stops
+  the other). Only partitions whose bytes changed are rewritten (the in-progress week included),
+  partitions the source no longer yields are removed, files are swapped in with `os.replace`, a
+  per-client lock keeps runs from overlapping. `--dataset alerts|telemetry|all` (default `all`) picks
+  the half; `--backfill` builds the whole telemetry history locally; `--validate` (default for the
+  backfill) compares row totals, columns, dtypes, values and **that every row sits in the week of its
+  alert** with the source; `--verify-s3` also compares the telemetry objects (keys, sizes, hashes,
+  row counts). A client with no telemetry source (**EMIN publishes none**) has no telemetry
+  partitions and is not an error; a source that disappears while partitions exist *is* an error and
+  deletes nothing.
+- **S3**: `s3://{bucket}/MultiTechnique Alerts/alerts/golden/{client}/{week}/telemetry.parquet`
+  (+ `_telemetry_index.parquet`), same bucket/prefix configuration as the alerts. **Sequencing**:
+  the weekly telemetry sync refuses (exit 2) for a client whose `_telemetry_backfill_complete.json`
+  is not in S3 — the alerts marker does not satisfy it. Order: `--backfill --dataset telemetry`
+  → validate → `--backfill --sync-s3 --dataset telemetry` → the weekly run syncs the regenerated
+  telemetry partitions. A failed upload is logged, the run exits 2, local files stay valid, the next
+  run retries. Each dataset deletes only its own stale keys (`telemetry.parquet` vs `file.parquet`).
+- **Read path** (`src/data/telemetry_partitions.py`): `read_alert(directory, alert_ids, unit)` finds the
+  alert's week in the index (no partition scan), opens that one file and returns the source's rows for
+  the alert in source order; `read_weeks(directory, weeks, columns)` serves the full-history readers
+  with column projection. Missing week, alert without telemetry, client without partitions → empty,
+  never an error. The readers: `loaders.load_telemetry_alert_detail_for_alert` (Evidencia de Telemetría;
+  cached per alert and index generation), `catalog.build_client_availability` /
+  `source_freshness.latest_data_date` (the chip reads the index's `Alert_TimeStart`), and the Campbell AI
+  `DashboardDataRepository.alerts_detail_rows` / `alerts_detail_index` (`query_alert_detail`,
+  `alert_signal_series`, `telemetry_signal_limits`, the context chart, vocabularies — the index narrows
+  the weeks, then the original row filters run unchanged).
+- **The original CSV is read only by the partitioning script.** No other code names it, a test
+  scans for that, and another deletes it and runs every reader.
+- **Freshness**: telemetry is as fresh as the last weekly run, like the alerts partitions. The alerts
+  and telemetry partitions are swapped separately; between the two swaps an alert can briefly have no
+  telemetry, which renders as the usual "no telemetry" message.
+
 ---
 
 ## 6. `config/` and `src/`
@@ -428,8 +535,9 @@ backtest/, state/, other *.csv              untouched by the partitioner
   maintenance data (`maintenance_repository.py`), Pydantic schemas mirroring the data contracts
   (`schemas.py`), transformers/validators (used by the upstream pipeline more than the
   dashboard), a view-model layer for oil data (`oil_view_models.py`), the S3
-  downloader/uploader scripts, and the partitioned-alerts modules (`alert_partitions.py`,
-  `alert_partition_builder.py`, `alert_partition_s3.py`; §5).
+  downloader/uploader scripts, and the partitioned-alerts and partitioned-telemetry modules
+  (`alert_partitions.py`, `alert_partition_builder.py`, `alert_partition_s3.py`,
+  `telemetry_partitions.py`, `telemetry_partition_builder.py`; §5).
 - **`src/utils/`** — logging setup, safe file-reading helpers (`file_utils.py`), date helpers,
   and `auth_logger.py` (appends login attempts to a parquet file and re-uploads it to S3 so the
   audit log survives data resyncs).
@@ -503,11 +611,16 @@ plus live-reload mounts for `./dashboard`, `./config`, `./src`).
   logged-in user is `admin` or `client`.
 - **`new_dashboard/dashboard-ers/` is a different app.** It's a submodule, not a folder of this
   app's code.
-- **Alertas views don't read `consolidated_alerts.csv`.** If an Alertas page looks stale after the
-  CSV changed, the partitions haven't been regenerated (`scripts/partition_alerts.py`, Wednesdays
-  04:00); if it shows nothing, check `data/alerts/golden/{client}/{week}/file.parquet` and
-  `_alert_index.parquet`, not the CSV. Tests that feed alerts to the views must build partitions
-  (`tests/alert_partition_support.py::install_alerts`).
+- **No dashboard section reads `consolidated_alerts.csv`.** If an Alertas, Hot Sheet, Menace Control,
+  Fleet overview or Unit summary page looks stale after the CSV changed, the partitions haven't been
+  regenerated (`scripts/partition_alerts.py`, Wednesdays 04:00); if it shows nothing, check
+  `data/alerts/golden/{client}/{week}/file.parquet` and `_alert_index.parquet`, not the CSV. Tests
+  that feed alerts to the sections must build partitions (`tests/alert_partition_support.py`).
+- **No runtime code reads the wide telemetry CSV either.** If *Evidencia de Telemetría* says there is
+  no telemetry for an alert that has some, the telemetry partitions have not been (re)generated or
+  synced yet: check `data/alerts/golden/{client}/{week}/telemetry.parquet` and
+  `_telemetry_index.parquet`, not `data/telemetry/golden/`. Tests that feed telemetry to a reader must
+  build partitions (`tests/telemetry_partition_support.py::install_telemetry`).
 - **Golden layer is king.** If you're adding a dashboard feature, read from `golden/`, not
   `bronze/`/`silver/`, unless there's a specific reason not to.
 - **This repo doesn't process data.** If a bug looks like "the classification/AI output is

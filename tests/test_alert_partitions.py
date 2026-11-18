@@ -1,8 +1,8 @@
 """Partitioned alert storage (one Parquet file per week): layout, partitioner, read path, S3 sync, schedule.
 
 The views must show exactly what they showed when they loaded the whole CSV, so the central
-tests here run the previous General-tab algorithm over `load_alerts_data` (the CSV loader, kept
-for the other consumers) and compare it, output by output, with the partitioned callback.
+tests here run the previous General-tab algorithm over the whole CSV history (`csv_history`, the
+oracle of the removed CSV loader) and compare it, output by output, with the partitioned callback.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
-from botocore.exceptions import ClientError
 from plotly.utils import PlotlyJSONEncoder
 
 from dashboard.callbacks import alerts_callbacks as callbacks
+from tests.alert_partition_support import csv_history
 from dashboard.components.alerts_report import (
     alert_filter_catalog,
     alert_summary,
@@ -33,6 +33,7 @@ from src.data import alert_partition_s3 as s3_sync
 from src.data import alert_partitions as store
 from src.data import loaders
 from src.utils.date_utils import format_local
+from tests.alert_partition_support import FakeS3
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "partition_alerts.py"
 _spec = importlib.util.spec_from_file_location("partition_alerts_script", SCRIPT)
@@ -122,7 +123,7 @@ def test_week_id_is_the_weekly_chart_bar(built):
     from dashboard.components.alerts_charts import create_alerts_per_week_chart
 
     root, _, _ = built
-    frame = prepare_alert_rows(loaders.load_alerts_data("capstone"))
+    frame = prepare_alert_rows(csv_history("capstone"))
     figure = create_alerts_per_week_chart(frame)
     bars = {week[0] for trace in figure.data for week in trace.customdata}
     assert bars == set(store.list_weeks(_client_dir(root)))
@@ -398,7 +399,7 @@ def test_neither_view_needs_the_consolidated_csv_at_runtime(built, monkeypatch):
 
 def _legacy_general(client, start_date, end_date, active_filters):
     """The previous `update_general_tab` body, over the whole CSV."""
-    alerts_df = loaders.load_alerts_data(client)
+    alerts_df = csv_history(client)
     filters = callbacks._normalise_filters(active_filters)
     prepared = prepare_alert_rows(alerts_df)
     in_range = callbacks._filtered_alerts(prepared, start_date, end_date, {})
@@ -471,7 +472,7 @@ def test_general_view_matches_the_previous_implementation(built, name, start, en
 
 
 def test_filter_options_come_from_the_whole_history_like_before(built):
-    full = alert_filter_catalog(loaders.load_alerts_data("capstone"))
+    full = alert_filter_catalog(csv_history("capstone"))
     assert callbacks._alert_catalog("capstone") == full
     assert full["units"] == ["CA-1", "CA-2", "CA-3", "CA-4"]
     # ... even though a 1-week range only loads one week.
@@ -570,7 +571,7 @@ def test_selector_matches_the_previous_implementation_for_the_same_filters(built
         (None, ["frenos"], None, "no"), (["CA-1", "CA-3"], ["motor"], "2026-07-06", "yes"),
     ]:
         legacy = callbacks._alert_dropdown_options(
-            callbacks._filter_alerts(loaders.load_alerts_data("capstone"), "capstone", units, sistemas, start, tribology)
+            callbacks._filter_alerts(csv_history("capstone"), "capstone", units, sistemas, start, tribology)
         )
         assert callbacks.filter_alert_dropdown_by_criteria(units, sistemas, start, tribology, "capstone", None) == legacy
         assert callbacks.initialize_alert_dropdown("capstone", units, sistemas, start, tribology, None) == legacy
@@ -588,7 +589,7 @@ def test_an_alert_outside_the_loaded_weeks_stays_selectable_when_navigated_to(re
 def test_alert_detail_reads_a_single_partition_and_is_unchanged(built, read_log):
     detail = callbacks.update_detail_view("F-006", "capstone", None)
     assert [e for e in read_log if e.endswith("file.parquet")] == ["2026-07-13/file.parquet"]
-    legacy_row = loaders.load_alerts_data("capstone").query("FusionID == 'F-006'").iloc[0]
+    legacy_row = csv_history("capstone").query("FusionID == 'F-006'").iloc[0]
     assert _encode(detail.children[0]) == _encode(callbacks._alert_case_header(legacy_row))
     assert "no encontrada" in str(callbacks.update_detail_view("F-404", "capstone", None))
 
@@ -602,50 +603,6 @@ def test_detail_filter_options_list_the_whole_history(built):
 # ---------------------------------------------------------------------------
 # S3 sync
 # ---------------------------------------------------------------------------
-
-class FakeS3:
-    """In-memory stand-in for the boto3 calls the sync makes."""
-
-    def __init__(self):
-        self.objects: dict[str, dict] = {}
-        self.fail_put: set[str] = set()
-        self.puts: list[str] = []
-        self.deleted: list[str] = []
-
-    def _etag(self, body):
-        return hashlib.md5(body).hexdigest()
-
-    def get_paginator(self, name):
-        assert name == "list_objects_v2"
-        fake = self
-
-        class Paginator:
-            def paginate(self, Bucket, Prefix):
-                items = [
-                    {"Key": k, "Size": len(v["Body"]), "ETag": f'"{fake._etag(v["Body"])}"'}
-                    for k, v in sorted(fake.objects.items()) if k.startswith(Prefix)
-                ]
-                yield {"Contents": items} if items else {}
-
-        return Paginator()
-
-    def head_object(self, Bucket, Key):
-        if Key not in self.objects:
-            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
-        item = self.objects[Key]
-        return {"ContentLength": len(item["Body"]), "Metadata": item["Metadata"]}
-
-    def put_object(self, Bucket, Key, Body, Metadata=None, **kwargs):
-        if Key in self.fail_put:
-            raise ClientError({"Error": {"Code": "503", "Message": "SlowDown"}}, "PutObject")
-        self.puts.append(Key)
-        self.objects[Key] = {"Body": bytes(Body), "Metadata": dict(Metadata or {})}
-
-    def delete_objects(self, Bucket, Delete):
-        for entry in Delete["Objects"]:
-            self.objects.pop(entry["Key"], None)
-            self.deleted.append(entry["Key"])
-
 
 CONFIG = s3_sync.S3Config(bucket="bucket", prefix="MultiTechnique Alerts/alerts/golden")
 
@@ -907,3 +864,53 @@ def test_a_csv_without_an_optional_column_still_loads_and_scopes(data_root):
     scope = loaders.load_alerts_for_scope("capstone")
     assert len(scope) == 10 and "Trigger_Var" not in scope.columns
     assert set(prepare_scope_rows(scope)["signal_key"]) == {NO_SIGNAL_KEY}  # no signal column = no signal
+
+
+def test_daily_clients_run_every_day_and_the_others_only_on_the_weekly_day():
+    zone = ZoneInfo("America/Santiago")
+    wed, thu, sun = (datetime(2026, 11, d, 4, 0, tzinfo=zone) for d in (18, 19, 22))
+    weekday = cli.parse_weekday("wednesday")
+    daily = cli.parse_clients("emin")
+    assert daily == ["emin"] and cli.parse_clients("none") == [] and cli.parse_clients("Emin, cda") == ["emin", "cda"]
+
+    assert cli.clients_for_cycle(wed, weekday, daily, None) is None            # every client on Wednesday
+    assert cli.clients_for_cycle(thu, weekday, daily, None) == ["emin"]        # only the daily one otherwise
+    assert cli.clients_for_cycle(sun, weekday, daily, None) == ["emin"]
+    assert cli.clients_for_cycle(thu, weekday, [], None) == []                 # nothing due: skipped
+    assert cli.clients_for_cycle(thu, weekday, daily, ["capstone"]) == []      # --client limits the daily set too
+    assert cli.clients_for_cycle(thu, weekday, daily, ["emin"]) == ["emin"]
+    assert cli.clients_for_cycle(wed, weekday, daily, ["capstone"]) == ["capstone"]
+
+    run_time = cli.parse_time("04:00")
+    assert cli.next_daily_run(datetime(2026, 11, 18, 3, 0, tzinfo=zone), run_time) == wed
+    assert cli.next_daily_run(wed, run_time) == thu                            # strictly after now
+    assert cli.next_daily_run(datetime(2026, 11, 18, 20, 0, tzinfo=zone), run_time) == thu
+
+
+def test_the_schedule_runs_only_what_is_due_each_day(monkeypatch):
+    """Walk four days of the loop with a fake clock: Wed everyone, Thu/Fri/Sat only emin."""
+    zone = ZoneInfo("America/Santiago")
+    args = cli.parse_args(["--schedule", "--daily-clients", "emin"])
+    clock = [datetime(2026, 11, 17, 20, 0, tzinfo=zone)]
+    calls = []
+
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    def fake_wait(seconds):
+        clock[0] = clock[0] + timedelta(seconds=seconds)
+        return len(calls) >= 4  # stop after the fourth run
+
+    monkeypatch.setattr(cli, "datetime", FakeDatetime)
+    monkeypatch.setattr(cli._STOP, "wait", fake_wait)
+    monkeypatch.setattr(cli, "_run_from_args", lambda a, clients=None: (calls.append((clock[0].date().isoformat(), clients)), 0)[1])
+    monkeypatch.setattr(cli.signal, "signal", lambda *a: None)
+    cli._STOP.clear()
+    try:
+        cli.schedule_forever(args)
+    finally:
+        cli._STOP.clear()
+    assert calls == [("2026-11-18", None), ("2026-11-19", ["emin"]), ("2026-11-20", ["emin"]), ("2026-11-21", ["emin"])]
+

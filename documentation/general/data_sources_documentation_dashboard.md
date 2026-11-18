@@ -119,7 +119,7 @@ Page: `/monitoring/alerts` (`tab_alerts.py`, `alerts_callbacks.py`, `tab_alerts_
 | Source | Origin | Read by | UI sections | Availability | Last update |
 |---|---|---|---|---|---|
 | Alertas Consolidadas | `alerts/golden/<client>/consolidated_alerts.csv` | `load_alerts_data` | Vista General (KPIs, charts, table, filters), Vista Detallada (case header, dropdowns) | file exists | newest `Timestamp` |
-| Detalle de Alertas (Telemetría) | `telemetry/golden/<client>/alerts_detail_wide_with_gps.csv` | `load_telemetry_alert_detail_for_alert` | Vista Detallada › Evidencia de Telemetría | file exists | newest `Alert_TimeStart` |
+| Detalle de Alertas (Telemetría) | `alerts/golden/<client>/_telemetry_index.parquet` (+ `{week}/telemetry.parquet`, written weekly by `scripts/partition_alerts.py`) | `load_telemetry_alert_detail_for_alert` | Vista Detallada › Evidencia de Telemetría | index exists | newest `Alert_TimeStart` (read from the index) |
 | Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `load_oil_classified` (`create_oil_evidence_section`, `update_oil_tendencia_range`) | Vista Detallada › Evidencia de Aceite (report + trend) | file exists | newest `sampleDate` |
 | Límites de Aceite | `oil/golden/<client>/stewart_limits_four.parquet` | `load_stewart_limits_four` (same functions) | Vista Detallada › Evidencia de Aceite (limits, trend bands); the section shows "Límites Stewart no disponibles" without it | file exists | newest `calculation_date` |
 | Mantenciones Semanales | `mantentions/golden/<client>/<WW-YYYY>.csv` (weekly snapshots) | `load_maintenance_week`, `load_emin_maintenance_evidence` | Vista Detallada › Evidencia de Mantención (EMIN reads the four weeks before the alert) | folder holds ≥1 weekly file | none (the weekly files carry no single date column) → `—` |
@@ -160,7 +160,7 @@ Configuration files read next to these (`telemetry/config/<client>/signal_regist
 **Differences:**
 - **D5** Missing from the strip, used by Vista de Flota / Detalle de Unidad: Comentarios de IA,
   Desviación, Tendencias, Eventos, Límites, Telemetría Semanal (six entries).
-- Not a discrepancy: `alerts_detail_wide_with_gps.csv` is *not* used by this page (only by Alertas).
+- Not a discrepancy: the alert telemetry (`telemetry_alert_detail`) is *not* used by this page (only by Alertas and Campbell AI).
 
 **Popover list:** the three existing plus the six above (9).
 
@@ -285,7 +285,7 @@ not a data source, and is not listed.
 | Source | Origin (`data/…`) | `DATASETS` key |
 |---|---|---|
 | Alertas Consolidadas | `alerts/golden/<client>/consolidated_alerts.csv` | `alerts` |
-| Detalle de Alertas (Telemetría) | `telemetry/golden/<client>/alerts_detail_wide_with_gps.csv` | `alerts_detail` |
+| Detalle de Alertas (Telemetría) | `alerts/golden/<client>/{week}/telemetry.parquet` (index: `_telemetry_index.parquet`) | `alerts_detail` |
 | Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `oil_classified` |
 | Estado de Máquina (Aceite) | `oil/golden/<client>/machine_status.parquet` | `oil_machine_status` |
 | Límites de Aceite (Formato Legado) | `oil/golden/<client>/stewart_limits.parquet` | `oil_limits` |

@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 
 import pandas as pd
+from tests.alert_partition_support import partition_csv
 import pytest
 
 from src.campbell_ai.chart_registry import (
@@ -139,6 +140,7 @@ def _registry(tmp_path) -> DashboardChartRegistry:
             {"UnitId": "T_20", "Timestamp": _ago(16, 10), "sistema": "Motor"},
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
+    partition_csv(alerts / "consolidated_alerts.csv")
     return DashboardChartRegistry(DashboardDataRepository(tmp_path))
 
 

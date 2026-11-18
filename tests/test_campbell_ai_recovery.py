@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+from tests.alert_partition_support import partition_csv
 import pytest
 
 from src.campbell_ai.data import (
@@ -55,6 +56,7 @@ def _repository(tmp_path) -> DashboardDataRepository:
             },
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
+    partition_csv(alerts / "consolidated_alerts.csv")
     return DashboardDataRepository(tmp_path)
 
 

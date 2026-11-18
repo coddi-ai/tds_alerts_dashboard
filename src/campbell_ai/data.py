@@ -36,6 +36,8 @@ from src.campbell_ai.oil_entities import (
     sample_scope_payload,
 )
 from src.campbell_ai.signals import state_series
+from src.data import alert_partitions as alert_store
+from src.data import telemetry_partitions as telemetry_store
 from src.data.lab_kpis import compute_lab_kpis, lab_kpis_by_unit
 from src.campbell_ai.identity import normalize_client_id
 from src.campbell_ai.resources import CACHES, MEGABYTE, FrameCache, budget_from_env
@@ -127,7 +129,10 @@ class DatasetSpec:
 DATASETS: tuple[DatasetSpec, ...] = (
     DatasetSpec(
         "alerts",
-        "alerts/golden/{client}/consolidated_alerts.csv",
+        # Weekly partitions written by scripts/partition_alerts.py; this path is their index, which
+        # exists exactly when the client has alert partitions. The whole history is read through
+        # `_read_alert_partitions`, never as a CSV.
+        "alerts/golden/{client}/" + alert_store.INDEX_FILE,
         "Alertas consolidadas",
         (("UnitId", "Unit", "unit_id"), ("Timestamp", "Fecha", "event_ts")),
     ),
@@ -180,7 +185,10 @@ DATASETS: tuple[DatasetSpec, ...] = (
     ),
     DatasetSpec(
         "alerts_detail",
-        "telemetry/golden/{client}/alerts_detail_wide_with_gps.csv",
+        # Weekly partitions written by scripts/partition_alerts.py; this path is their index, which
+        # exists exactly when the client has telemetry partitions. The rows are read through
+        # `alerts_detail_rows`, never as a file (see src/data/telemetry_partitions.py).
+        "alerts/golden/{client}/" + telemetry_store.INDEX_FILE,
         "Detalle de senales por alerta",
         (("AlertID",), ("Unit", "UnitId", "unit_id"), ("Trigger",)),
     ),
@@ -763,6 +771,10 @@ class DashboardDataRepository:
         return path
 
     def _read_frame(self, path: Path) -> pd.DataFrame:
+        if path.name == telemetry_store.INDEX_FILE:
+            raise CampbellDataError(
+                "alerts_detail se lee por particiones semanales (alerts_detail_rows), no como un archivo"
+            )
         if not path.exists():
             # The primary signal that a declared dataset did not arrive, now that validation
             # assumes presence. Worth being specific: this message is what an operator reads
@@ -771,7 +783,10 @@ class DashboardDataRepository:
                 f"Fuente de datos no disponible: {path.name}. Se esperaba en {path.parent}; "
                 "si el dataset deberia existir, la sincronizacion de datos no lo trajo."
             )
-        mtime_ns = path.stat().st_mtime_ns
+        is_alerts = path.name == alert_store.INDEX_FILE
+        # The alerts frame is made of every weekly partition, so its generation is the newest
+        # mtime among them and the index, not the index's alone.
+        mtime_ns = alert_store.generation_ns(path.parent) if is_alerts else path.stat().st_mtime_ns
         cache_key = (str(path), mtime_ns)
         cached = self._frames.get(cache_key)
         if cached is not None:
@@ -783,7 +798,10 @@ class DashboardDataRepository:
         # (`ArrowInvalid: Parquet file size is 0 bytes`), que la API convierte en un 500 sin
         # explicacion. Traducido, es un 503 que nombra el archivo y dice que revisar.
         try:
-            if path.suffix.lower() == ".csv":
+            if is_alerts:
+                directory = path.parent
+                frame = alert_store.read_scope(directory, alert_store.list_weeks(directory))
+            elif path.suffix.lower() == ".csv":
                 frame = pd.read_csv(path, low_memory=False)
             elif path.suffix.lower() == ".parquet":
                 frame = pd.read_parquet(path)
@@ -837,6 +855,12 @@ class DashboardDataRepository:
         generate and to check that declaration - so what is declared and what is verified can
         never be produced by two different readers that disagree.
         """
+        if path.name == telemetry_store.INDEX_FILE:
+            # The telemetry columns, from one partition's footer: the index only locates rows.
+            return telemetry_store.schema_columns(path.parent)
+        if path.name == alert_store.INDEX_FILE:
+            # Same for the alerts: the index has six light columns, the partitions the CSV's.
+            return alert_store.schema_columns(path.parent)
         suffix = path.suffix.lower()
         if suffix == ".parquet":
             import pyarrow.parquet as pq
@@ -872,6 +896,10 @@ class DashboardDataRepository:
         so the expensive read happens when a caller actually wants the number, once per file
         version, instead of on every session opening.
         """
+        if path.name == telemetry_store.INDEX_FILE:
+            return self._probe_telemetry(path)
+        if path.name == alert_store.INDEX_FILE:
+            return self._probe_alerts(path, count_rows=count_rows, dataset_key=dataset_key, client=client)
         stat = path.stat()
         mtime_ns = stat.st_mtime_ns
         cache_key = (str(path), mtime_ns)
@@ -950,6 +978,165 @@ class DashboardDataRepository:
                 probe = {**probe, "rows": previous.get("rows")}
             self._probe_cache[cache_key] = probe
         return probe
+
+    def _probe_alerts(
+        self, path: Path, *, count_rows: bool = False, dataset_key: str = "", client: str = ""
+    ) -> dict[str, Any]:
+        """Shape of the partitioned alerts without reading any rows, with the same rules as any
+        other dataset: declared columns are trusted without opening a file (the row count is then
+        unknown), otherwise the columns come from one partition's footer and the row count from
+        the index's. Cached per generation of the partitions."""
+        directory = path.parent
+        cache_key = (str(path), alert_store.generation_ns(directory))
+        with _PROBE_LOCK:
+            cached = self._probe_cache.get(cache_key)
+            if cached is not None and not (count_rows and cached.get("rows") is None):
+                return cached
+        declared = (
+            declared_columns(client, dataset_key, path.suffix)
+            if not count_rows and dataset_key and client
+            else None
+        )
+        if declared is not None:
+            probe = {
+                "columns": declared,
+                "rows": None,
+                "size_bytes": path.stat().st_size,
+                "columns_from": "declared",
+            }
+        else:
+            probe = {
+                "columns": alert_store.schema_columns(directory),
+                # Counted only on request (it opens the index): validation never asks.
+                "rows": alert_store.total_rows(directory) if count_rows else None,
+                "size_bytes": alert_store.partitions_size(directory),
+                "columns_from": "partitions",
+            }
+        with _PROBE_LOCK:
+            for key in [key for key in self._probe_cache if key[0] == str(path) and key != cache_key]:
+                self._probe_cache.pop(key, None)
+            self._probe_cache[cache_key] = probe
+        return probe
+
+    def _probe_telemetry(self, path: Path) -> dict[str, Any]:
+        """Shape of the partitioned telemetry without reading any rows: the columns come from one
+        partition's footer, the row count from the index. Cached per index generation, which
+        changes whenever any partition does."""
+        directory = path.parent
+        cache_key = (str(path), path.stat().st_mtime_ns)
+        with _PROBE_LOCK:
+            cached = self._probe_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        size = 0
+        for week in telemetry_store.list_weeks(directory):
+            try:
+                size += telemetry_store.partition_path(directory, week).stat().st_size
+            except OSError:
+                pass
+        probe = {
+            "columns": telemetry_store.schema_columns(directory),
+            "rows": telemetry_store.total_rows(directory),
+            "size_bytes": size,
+            "columns_from": "partitions",
+        }
+        with _PROBE_LOCK:
+            for key in [key for key in self._probe_cache if key[0] == str(path) and key != cache_key]:
+                self._probe_cache.pop(key, None)
+            self._probe_cache[cache_key] = probe
+        return probe
+
+    # -- alerts_detail: the weekly telemetry partitions ---------------------------------------
+    #
+    # The wide per-alert telemetry is partitioned by the week of its *alert* (see
+    # src/data/telemetry_partitions.py). A reader never loads "the dataset": it asks the index
+    # which weeks can hold its rows, reads only those, and then applies the very same row filters
+    # it always applied. The index carries the source's own AlertID / Unit / Trigger values, so a
+    # filter run on the index selects a superset of the rows the same filter selects in the data.
+
+    def _telemetry_directory(self, client: str) -> Path:
+        path = self.dataset_path("alerts_detail", client)
+        if not path.exists():
+            raise CampbellDataError(
+                f"Fuente de datos no disponible: {path.name}. Se esperaba en {path.parent}; "
+                "si el dataset deberia existir, la sincronizacion de datos no lo trajo."
+            )
+        return path.parent
+
+    def alerts_detail_index(self, client: str) -> pd.DataFrame:
+        """One row per (AlertID, Unit, Trigger, Alert_TimeStart) of the telemetry, with its
+        ``rows`` count and the ``week`` that holds it. Reads no partition."""
+        return telemetry_store.read_index(self._telemetry_directory(client))
+
+    def alerts_detail_columns(self, client: str) -> list[str]:
+        """Column names of the telemetry (from one partition's footer)."""
+        names = telemetry_store.schema_columns(self._telemetry_directory(client))
+        if not names:
+            raise CampbellDataError(
+                "La fuente alerts_detail existe pero no tiene particiones legibles. "
+                "Puede estar vacia o a medio sincronizar."
+            )
+        return names
+
+    def alerts_detail_rows(
+        self,
+        client: str,
+        narrow: Any = None,
+        columns: list[str] | None = None,
+        *,
+        cache: bool = True,
+    ) -> pd.DataFrame:
+        """Telemetry rows of the weeks that hold the index rows ``narrow(index)`` selects.
+
+        ``narrow`` maps the index to the rows a caller can possibly need (``None``: all of them,
+        for full-history readers). Whole weeks come back, in the source's row order; the caller
+        applies its exact filters. With no selected week the result is an empty frame that still
+        has the telemetry's columns, like a filtered CSV frame. ``columns`` projects the read.
+        """
+        directory = self._telemetry_directory(client)
+        index = telemetry_store.read_index(directory)
+        scoped = narrow(index) if narrow is not None else index
+        weeks = tuple(telemetry_store.weeks_of(scoped))
+        signature = telemetry_store.index_signature(directory)
+        wanted = tuple(columns) if columns else None
+        key = (("alerts_detail", str(directory), weeks, wanted), signature)
+        if cache:
+            cached = self._frames.get(key)
+            if cached is not None:
+                return cached.copy(deep=False)
+        try:
+            frame = telemetry_store.read_weeks(directory, weeks, wanted)
+        except Exception as exc:  # noqa: BLE001 - same translation as `_read_frame`
+            logger.warning("Campbell AI no pudo leer la telemetria en %s", directory, exc_info=True)
+            raise CampbellDataError(
+                "La telemetria de alertas existe pero no se pudo leer "
+                f"({type(exc).__name__}). Puede estar a medio sincronizar."
+            ) from exc
+        if not len(frame.columns):
+            frame = pd.DataFrame(
+                {name: pd.Series(dtype=object) for name in (wanted or telemetry_store.schema_columns(directory))}
+            )
+        if cache:
+            # Retire the previous generation of these partitions before keeping the new one.
+            self._frames.invalidate_where(
+                lambda other: isinstance(other[0], tuple)
+                and other[0][:2] == ("alerts_detail", str(directory))
+                and other[1] != signature
+            )
+            self._frames.put(key, frame)
+            return frame.copy(deep=False)
+        return frame
+
+    def _telemetry_vocabulary_frame(self, client: str) -> pd.DataFrame:
+        """The telemetry's AlertID / Unit / Trigger, one row per telemetry row, built from the
+        index (each group repeated by its row count) so listing the values a filter admits reads
+        no partition at all."""
+        index = self.alerts_detail_index(client)
+        keep = [name for name in ("AlertID", "Unit", "Trigger") if name in index.columns]
+        counts = index["rows"].to_numpy() if "rows" in index.columns else None
+        if counts is None:
+            return index[keep]
+        return index.loc[index.index.repeat(counts), keep].reset_index(drop=True)
 
     @staticmethod
     def _resolve_name(columns: list[str], candidates: tuple[str, ...]) -> str | None:
@@ -2115,7 +2302,11 @@ class DashboardDataRepository:
         indexed = vocabulary_index.lookup(client, key, path)
         if indexed is not None:
             return indexed
-        frame = self.load(key, client)
+        frame = (
+            self._telemetry_vocabulary_frame(client)
+            if key == "alerts_detail"
+            else self.load(key, client)
+        )
         vocabulary: dict[str, Any] = {}
         for spec in specs:
             column = self._resolve_column(frame, spec.columns)
@@ -2888,17 +3079,31 @@ class DashboardDataRepository:
         limit: int = 10,
     ) -> str:
         """Measured value and applicable limit for the signal that raised an alert."""
-        frame = self.load("alerts_detail", client)
-        alert_col = self._resolve_column(frame, ("AlertID", "alert_id"))
-        unit_col = self._resolve_column(frame, ("Unit", "UnitId", "unit_id"))
-        trigger_col = self._resolve_column(frame, ("Trigger", "trigger"))
-        time_col = self._resolve_column(frame, ("TimeStart", "Alert_TimeStart", "Fecha"))
-        state_col = self._resolve_column(frame, ("State",))
+        names = self.alerts_detail_columns(client)
+        alert_col = self._resolve_name(names, ("AlertID", "alert_id"))
+        unit_col = self._resolve_name(names, ("Unit", "UnitId", "unit_id"))
+        trigger_col = self._resolve_name(names, ("Trigger", "trigger"))
+        time_col = self._resolve_name(names, ("TimeStart", "Alert_TimeStart", "Fecha"))
+        state_col = self._resolve_name(names, ("State",))
 
         if not (alert_id or unit_id or trigger):
             raise CampbellDataError(
                 "query_alert_detail requiere alert_id, unit_id o trigger"
             )
+
+        def narrow(index: pd.DataFrame) -> pd.DataFrame:
+            # The same three filters, run on the index: only the weeks that can hold a match
+            # are read. A filter whose column the index lacks is skipped (a wider selection).
+            if unit_id and unit_col in index.columns:
+                index = self._filter_unit(index, unit_col, unit_id)
+            if alert_id and alert_col in index.columns:
+                resolved = self._normalize_alert_id(alert_id)
+                index = index[index[alert_col].astype(str).str.casefold() == resolved.casefold()]
+            if trigger and trigger_col in index.columns:
+                index = self._filter_contains(index, trigger_col, trigger)
+            return index
+
+        frame = self.alerts_detail_rows(client, narrow)
         if unit_id and unit_col:
             frame = self._filter_unit(frame, unit_col, unit_id)
         if alert_id and alert_col:
@@ -2909,7 +3114,7 @@ class DashboardDataRepository:
         if trigger and trigger_col:
             frame = self._filter_contains(frame, trigger_col, trigger)
         if frame.empty:
-            available = self.load("alerts_detail", client)
+            available = self._telemetry_vocabulary_frame(client)
             if unit_id and unit_col:
                 available = self._filter_unit(available, unit_col, unit_id)
             available_triggers = list(self._distribution(available, trigger_col, top=15))
@@ -3069,26 +3274,34 @@ class DashboardDataRepository:
         the caller may name more; `signals_available` lists what actually has values so
         the choice is informed rather than guessed.
         """
-        frame = self.load("alerts_detail", client)
-        alert_col = self._resolve_column(frame, ("AlertID", "alert_id"))
-        unit_col = self._resolve_column(frame, ("Unit", "UnitId", "unit_id"))
-        trigger_col = self._resolve_column(frame, ("Trigger", "trigger"))
-        time_col = self._resolve_column(
-            frame, ("TimeStart", "Alert_TimeStart", "Fecha")
-        )
+        names = self.alerts_detail_columns(client)
+        alert_col = self._resolve_name(names, ("AlertID", "alert_id"))
+        unit_col = self._resolve_name(names, ("Unit", "UnitId", "unit_id"))
+        trigger_col = self._resolve_name(names, ("Trigger", "trigger"))
+        time_col = self._resolve_name(names, ("TimeStart", "Alert_TimeStart", "Fecha"))
         if not (alert_col and time_col):
             raise CampbellDataError(
                 "El detalle de alertas no expone AlertID ni una marca de tiempo"
             )
+        if not (alert_id and alert_col) and not unit_id:
+            raise CampbellDataError(
+                "alert_signal_series requiere alert_id o unit_id"
+            )
+
+        def narrow(index: pd.DataFrame) -> pd.DataFrame:
+            if unit_id and unit_col in index.columns:
+                index = self._filter_unit(index, unit_col, unit_id)
+            if alert_id and alert_col in index.columns:
+                resolved = self._normalize_alert_id(alert_id)
+                index = index[index[alert_col].astype(str).str.casefold() == resolved.casefold()]
+            return index
+
+        frame = self.alerts_detail_rows(client, narrow)
         if unit_id and unit_col:
             frame = self._filter_unit(frame, unit_col, unit_id)
         if alert_id and alert_col:
             resolved = self._normalize_alert_id(alert_id)
             frame = frame[frame[alert_col].astype(str).str.casefold() == resolved.casefold()]
-        elif not unit_id:
-            raise CampbellDataError(
-                "alert_signal_series requiere alert_id o unit_id"
-            )
         if frame.empty:
             raise CampbellDataError(
                 "Sin filas de detalle para esa alerta o equipo"
@@ -3346,13 +3559,23 @@ class DashboardDataRepository:
             return cached
 
         try:
-            evidence = self.load("alerts_detail", normalized)
+            names = self.alerts_detail_columns(normalized)
         except CampbellDataError:
             return {}
 
-        unit_col = self._resolve_column(evidence, ("Unit", "UnitId", "unit_id"))
-        state_col = self._resolve_column(evidence, ("SubState", "State"))
+        unit_col = self._resolve_name(names, ("Unit", "UnitId", "unit_id"))
+        state_col = self._resolve_name(names, ("SubState", "State"))
         if not unit_col or not state_col:
+            return {}
+
+        # Every unit and week, but only the columns the table is made of: the unit, the
+        # sub-state and the limits. The projection is what makes the whole history cheap to read.
+        limit_columns = [name for name in names if name.endswith(("_Upper_Limit", "_Lower_Limit"))]
+        try:
+            evidence = self.alerts_detail_rows(
+                normalized, columns=[unit_col, state_col, *limit_columns], cache=False
+            )
+        except CampbellDataError:
             return {}
 
         table: dict[str, Any] = {}

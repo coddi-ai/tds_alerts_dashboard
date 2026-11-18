@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+from tests.alert_partition_support import partition_csv
 import pytest
 
 from src.campbell_ai.chart_registry import DashboardChartRegistry
@@ -527,6 +528,7 @@ def test_h02_a_non_oil_source_keeps_its_sixty_day_default(tmp_path):
             {"UnitId": "T_9", "Timestamp": _days_ago(400), "sistema": "Motor"},
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
+    partition_csv(alerts / "consolidated_alerts.csv")
     repository = DashboardDataRepository(tmp_path)
 
     artifact = DashboardVisualizationService(repository).create_chart(

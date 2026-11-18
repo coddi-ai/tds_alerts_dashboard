@@ -28,8 +28,8 @@ The dashboard was refactored to use pre-processed telemetry data from the **gold
 - **Performance**: Slow initial load, heavy memory usage
 
 #### After (Golden Layer Approach)
-- **Data Load**: ~2MB golden layer file
-- **File Loaded**: `alerts_detail_wide_with_gps.csv`
+- **Data Load**: one weekly Parquet partition (the alert's week), found through `_telemetry_index.parquet`
+- **File Loaded**: `alerts/golden/{client}/{week}/telemetry.parquet`
 - **Processing**: Simple filter by AlertID, drop NaN columns
 - **Code Complexity**: ~50 lines per chart
 - **Performance**: Fast load, minimal memory usage

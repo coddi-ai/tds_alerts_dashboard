@@ -46,7 +46,7 @@ file-existence probe.
 
 import re
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -72,7 +72,10 @@ from dashboard.components.status_chip import STATUS_SOLID_COLORS, canonical_stat
 from src.i18n import t as _t, t_or as _t_or
 from dashboard.services_registry import relative_path, unit_summary_path
 from src.data.loaders import (
-    load_alerts_data,
+    client_has_alert_partitions,
+    latest_alert_timestamp,
+    load_alert_units,
+    load_alerts_since,
     load_machine_status_for_client,
     load_maintenance_equipment_status,
     load_telemetry_unit_health,
@@ -343,15 +346,19 @@ def _alerts_status_map(client: str, days: int = 30) -> tuple[dict, dict, str, st
     (04_..._revision.md, Required Changes #4)."""
     from dashboard.callbacks.overview_general_callbacks import calculate_alert_criticality_score
 
-    df_alerts = load_alerts_data(client)
-    if df_alerts.empty or "UnitId" not in df_alerts.columns:
+    if not client_has_alert_partitions(client):
+        return {}, {}, "Sin Datos", "N/A"
+    # Only the weekly partitions the `days` window touches: the score counts nothing older.
+    df_alerts = load_alerts_since(client, datetime.now() - timedelta(days=days))
+    if "UnitId" not in df_alerts.columns:
         return {}, {}, "Sin Datos", "N/A"
 
     scores = calculate_alert_criticality_score(df_alerts, days)
     status_map = dict(zip(scores["equipo"], scores["status"])) if not scores.empty else {}
     value_map = dict(zip(scores["equipo"], scores["criticality_score"])) if not scores.empty else {}
 
-    max_ts = pd.to_datetime(df_alerts["Timestamp"], errors="coerce").max()
+    # Freshness is the newest alert of the whole feed, read from the newest partition alone.
+    max_ts = latest_alert_timestamp(client)
     freshness_label, elapsed = _freshness_from_naive_timestamp(max_ts, "alerts")
     return status_map, value_map, freshness_label, elapsed
 
@@ -361,9 +368,18 @@ def _alerts_window_counts(client: str) -> dict:
     breaks ties between units with the same Alertas status (see the sort key in
     `_compute_unit_entries`) and what the Alertas tooltip lists. {} when the
     client has no alert feed."""
-    from dashboard.callbacks.overview_general_callbacks import count_alerts_by_window
+    from dashboard.callbacks.overview_general_callbacks import ALERT_WINDOW_DAYS, count_alerts_by_window
 
-    return count_alerts_by_window(load_alerts_data(client))
+    # The counts only look back as far as the widest window, so only those weeks are read. A unit
+    # with no alert in them still appears, with zeros: the unit list is the whole history's.
+    recent = count_alerts_by_window(
+        load_alerts_since(client, datetime.now() - timedelta(days=max(ALERT_WINDOW_DAYS)))
+    )
+    no_recent_alerts = (0,) * len(ALERT_WINDOW_DAYS)
+    return {
+        str(unit): recent.get(str(unit), no_recent_alerts)
+        for unit in load_alert_units(client, dated_only=True)
+    }
 
 
 def _telemetry_status_map(client: str) -> tuple[dict, dict]:

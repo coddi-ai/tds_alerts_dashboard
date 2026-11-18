@@ -154,6 +154,13 @@ def select_weeks(
     return selected
 
 
+def newest_partition(directory: Path) -> Optional[Path]:
+    """``{week}/file.parquet`` of the newest dated week, or None: the file that holds the feed's
+    newest alert (weeks are cut on the alert's own timestamp)."""
+    dated = [week for week in list_weeks(directory) if week != UNDATED_WEEK]
+    return directory / dated[-1] / PARTITION_FILE if dated else None
+
+
 def partition_paths(directory: Path, weeks: Sequence[str]) -> list[Path]:
     """Existing ``{week}/file.parquet`` paths for the weeks; a week without one is skipped."""
     paths = [directory / week / PARTITION_FILE for week in weeks]
@@ -185,18 +192,25 @@ def _read_one(path: Path, columns: Optional[Sequence[str]]) -> pa.Table:
     raise AlertPartitionError(f"Could not read alert partition {path}: {last_error}") from last_error
 
 
-def _with_row_ids(table: pa.Table) -> pa.Table:
+def _with_row_ids(table: pa.Table, row_ids_key: bytes = ROW_IDS_KEY) -> pa.Table:
     metadata = table.schema.metadata or {}
-    raw = metadata.get(ROW_IDS_KEY)
+    raw = metadata.get(row_ids_key)
     row_ids = json.loads(raw) if raw else list(range(table.num_rows))
     return table.replace_schema_metadata(None).append_column("__source_row", pa.array(row_ids, pa.int64()))
 
 
-def read_paths(paths: Sequence[Path], columns: Optional[Sequence[str]] = None) -> pd.DataFrame:
+def read_paths(
+    paths: Sequence[Path],
+    columns: Optional[Sequence[str]] = None,
+    *,
+    row_ids_key: bytes = ROW_IDS_KEY,
+) -> pd.DataFrame:
     """Concatenate partition files into one frame, in the source CSV's row order.
 
     No normalization happens here: the values are the CSV's (strings stay strings, nulls stay
     null), so the loaders can apply the same post-processing the CSV path always did.
+    ``row_ids_key`` names the footer entry that holds each row's position in the source file
+    (the telemetry partitions, `src.data.telemetry_partitions`, use their own).
     """
     if not paths:
         return pd.DataFrame()
@@ -205,7 +219,7 @@ def read_paths(paths: Sequence[Path], columns: Optional[Sequence[str]] = None) -
             tables = list(pool.map(lambda path: _read_one(path, columns), paths))
     else:
         tables = [_read_one(path, columns) for path in paths]
-    tables = [_with_row_ids(table) for table in tables if table.num_columns]
+    tables = [_with_row_ids(table, row_ids_key) for table in tables if table.num_columns]
     if not tables:
         return pd.DataFrame()
     combined = pa.concat_tables(tables, promote_options="permissive")
@@ -229,6 +243,56 @@ def read_scope(
 
 def index_path(directory: Path) -> Path:
     return directory / INDEX_FILE
+
+
+def schema_columns(directory: Path) -> list[str]:
+    """The alert columns (the source CSV's), from one partition's footer; [] when none exists."""
+    weeks = list_weeks(directory)
+    dated = [week for week in weeks if week != UNDATED_WEEK]
+    for week in (dated[-1:] or weeks[-1:]):
+        try:
+            return [str(name) for name in pq.ParquetFile(directory / week / PARTITION_FILE).schema_arrow.names]
+        except OSError:
+            return []
+    return []
+
+
+def total_rows(directory: Path) -> int:
+    """Alerts in the whole history, from the index's footer (no data is read)."""
+    try:
+        return int(pq.ParquetFile(index_path(directory)).metadata.num_rows)
+    except OSError:
+        return 0
+
+
+def partitions_size(directory: Path) -> int:
+    """Bytes the partitions occupy."""
+    size = 0
+    for week in list_weeks(directory):
+        try:
+            size += (directory / week / PARTITION_FILE).stat().st_size
+        except OSError:
+            pass
+    return size
+
+
+def generation_ns(directory: Path) -> int:
+    """Changes whenever the index or any partition is rewritten: the newest mtime among them.
+
+    The index alone is not enough: a partition whose rows changed without any id, unit, system,
+    signal or week changing leaves the index's bytes (and mtime) as they were.
+    """
+    newest = 0
+    try:
+        newest = index_path(directory).stat().st_mtime_ns
+    except OSError:
+        pass
+    for week in list_weeks(directory):
+        try:
+            newest = max(newest, (directory / week / PARTITION_FILE).stat().st_mtime_ns)
+        except OSError:
+            pass
+    return newest
 
 
 def index_signature(directory: Path) -> Optional[tuple[int, int]]:

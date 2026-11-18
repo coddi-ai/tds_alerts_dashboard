@@ -23,6 +23,12 @@ Sequencing guard: the weekly run refuses to sync a client whose full history has
 pushed by a backfill (``--backfill --sync-s3``), which leaves ``_backfill_complete.json``.
 Without it S3 would hold only the recent weeks and a deployment that mirrors the bucket would
 lose history.
+
+The same code syncs and verifies the **telemetry** partitions
+(``{week}/telemetry.parquet`` + ``_telemetry_index.parquet``, see `src.data.telemetry_partitions`)
+through an `S3Dataset`: ``ALERTS_DATASET`` (the default, behaviour unchanged) or
+``TELEMETRY_DATASET``. Each has its own backfill marker (the alerts marker never satisfies the
+telemetry guard) and owns only its own keys, so syncing one can never delete or overwrite the other.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from src.data import alert_partitions as layout
+from src.data import telemetry_partitions as telemetry_layout
 from src.data.alert_partition_builder import BuildResult, LocalFile
 
 logger = logging.getLogger(__name__)
@@ -48,6 +55,39 @@ _SINGLE_PUT_LIMIT = 64 * 1024 * 1024
 # clears any object of it that is still in the bucket.
 _LAYOUT_KEY = re.compile(
     r"^(?:\d{4}-\d{2}-\d{2}|undated)/(?:[^/]+/)?" + re.escape(layout.PARTITION_FILE) + r"$"
+)
+
+
+@dataclass(frozen=True)
+class S3Dataset:
+    """What differs between the datasets stored under a client's prefix.
+
+    The alerts and the telemetry partitions share the bucket, the prefix and every upload /
+    comparison rule; only the file names differ. Each dataset keeps its **own** backfill marker
+    (the sequencing guard of one never satisfies the other) and recognises only its own keys as
+    "layout keys" (the only ones the sync may delete as stale), so syncing one dataset can never
+    delete or overwrite an object of the other.
+    """
+
+    name: str
+    marker_file: str
+    layout_key: "re.Pattern[str]"
+    index_file: str
+    history: str = "history"      # how the sequencing guard names what is missing in its error
+
+
+ALERTS_DATASET = S3Dataset("alerts", layout.BACKFILL_MARKER_FILE, _LAYOUT_KEY, layout.INDEX_FILE)
+
+# ``{week}/telemetry.parquet`` (``undated`` / ``unmatched`` folders included). Its own marker: the
+# alerts backfill marker does not satisfy the telemetry sequencing guard.
+TELEMETRY_DATASET = S3Dataset(
+    "telemetry",
+    telemetry_layout.BACKFILL_MARKER_FILE,
+    re.compile(
+        r"^(?:\d{4}-\d{2}-\d{2}|undated|unmatched)/" + re.escape(telemetry_layout.TELEMETRY_FILE) + r"$"
+    ),
+    telemetry_layout.INDEX_FILE,
+    history="telemetry history",
 )
 
 
@@ -154,12 +194,12 @@ def _upload(s3, bucket: str, key: str, local: LocalFile) -> None:
         s3.upload_file(str(local.path), bucket, key, ExtraArgs={"Metadata": metadata})
 
 
-def _marker_key(config: S3Config, client: str) -> str:
-    return f"{config.client_prefix(client)}/{layout.BACKFILL_MARKER_FILE}"
+def _marker_key(config: S3Config, client: str, dataset: S3Dataset = ALERTS_DATASET) -> str:
+    return f"{config.client_prefix(client)}/{dataset.marker_file}"
 
 
-def backfill_marker_exists(s3, config: S3Config, client: str) -> bool:
-    return _head(s3, config.bucket, _marker_key(config, client)) is not None
+def backfill_marker_exists(s3, config: S3Config, client: str, dataset: S3Dataset = ALERTS_DATASET) -> bool:
+    return _head(s3, config.bucket, _marker_key(config, client, dataset)) is not None
 
 
 def sync_client(
@@ -170,18 +210,20 @@ def sync_client(
     require_backfill_marker: bool,
     write_backfill_marker: bool = False,
     delete_stale: bool = True,
+    dataset: S3Dataset = ALERTS_DATASET,
 ) -> SyncResult:
     """Make the client's S3 prefix equal to the local partitions of ``build``.
 
     ``require_backfill_marker`` is the weekly run's guard; ``write_backfill_marker`` is set by
     the backfill, once everything is uploaded. Raises `S3SyncError` when any upload failed
-    (after attempting all of them) or the guard refuses.
+    (after attempting all of them) or the guard refuses. ``dataset`` selects the marker and the
+    keys this sync owns (alerts by default).
     """
     client = build.client
     result = SyncResult(client=client)
-    if require_backfill_marker and not backfill_marker_exists(s3, config, client):
+    if require_backfill_marker and not backfill_marker_exists(s3, config, client, dataset):
         raise S3SyncError(
-            f"{client}: S3 has no complete history yet ({layout.BACKFILL_MARKER_FILE} missing under "
+            f"{client}: S3 has no complete {dataset.history} yet ({dataset.marker_file} missing under "
             f"s3://{config.bucket}/{config.client_prefix(client)}/). Validate the local backfill and "
             f"run it with --sync-s3 first."
         )
@@ -211,7 +253,7 @@ def sync_client(
         wanted = {f"{prefix}/{rel}" for rel in build.partition_files}
         stale = [
             key for key in remote
-            if key not in wanted and _LAYOUT_KEY.match(key[len(prefix) + 1:])
+            if key not in wanted and dataset.layout_key.match(key[len(prefix) + 1:])
         ]
         for start in range(0, len(stale), _DELETE_BATCH):
             batch = stale[start:start + _DELETE_BATCH]
@@ -228,18 +270,20 @@ def sync_client(
             "source_rows": build.source_rows,
             "partitions": len(build.partition_files),
         }).encode()
-        s3.put_object(Bucket=config.bucket, Key=_marker_key(config, client), Body=body,
+        s3.put_object(Bucket=config.bucket, Key=_marker_key(config, client, dataset), Body=body,
                       ContentType="application/json")
         result.marker_written = True
 
     logger.info(
-        "%s: S3 sync -> %d uploaded, %d already in sync, %d stale deleted",
-        client, len(result.uploaded), result.unchanged, len(result.deleted),
+        "%s: S3 %s sync -> %d uploaded, %d already in sync, %d stale deleted",
+        client, dataset.name, len(result.uploaded), result.unchanged, len(result.deleted),
     )
     return result
 
 
-def verify_client(s3, config: S3Config, build: BuildResult) -> list[str]:
+def verify_client(
+    s3, config: S3Config, build: BuildResult, *, dataset: S3Dataset = ALERTS_DATASET
+) -> list[str]:
     """Differences between the local partitions and S3 (same keys, sizes, hashes, row counts).
 
     An empty list means S3 matches the local output. Read-only.
@@ -259,9 +303,9 @@ def verify_client(s3, config: S3Config, build: BuildResult) -> list[str]:
             problems.append(f"size differs: {key} (S3 {entry['Size']}, local {local.size})")
         elif metadata.get("sha256") != local.sha256 and entry["ETag"] != local.md5:
             problems.append(f"content differs: {key}")
-        elif local.rel != layout.INDEX_FILE and metadata.get("rows") not in (None, str(local.rows)):
+        elif local.rel != dataset.index_file and metadata.get("rows") not in (None, str(local.rows)):
             problems.append(f"row count differs: {key} (S3 {metadata.get('rows')}, local {local.rows})")
     for key in sorted(remote):
-        if key not in expected and _LAYOUT_KEY.match(key[len(prefix) + 1:]):
+        if key not in expected and dataset.layout_key.match(key[len(prefix) + 1:]):
             problems.append(f"extra in S3: {key}")
     return problems

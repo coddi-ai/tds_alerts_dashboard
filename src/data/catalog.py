@@ -17,6 +17,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
+from src.data import alert_partitions as alert_store
+from src.data.telemetry_partitions import INDEX_FILE as TELEMETRY_INDEX_FILE
+
 
 CLIENTS = ("CDA", "EMIN", "ENEX", "CAPSTONE")
 _CATALOG_CACHE_TTL_SECONDS = 15
@@ -248,8 +251,21 @@ def _build_client_availability_uncached(
     file_probe("oil", "oil_limits", "stewart_limits.parquet")
     file_probe("oil", "oil_limits_four", "stewart_limits_four.parquet")
     file_probe("oil", "oil_component_hours", "cleaned_component_hours.parquet")
-    file_probe("alerts", "alerts_consolidated", "consolidated_alerts.csv")
-    file_probe("telemetry", "telemetry_alert_detail", "alerts_detail_wide_with_gps.csv")
+    # The alerts are read from weekly partitions (src/data/alert_partitions.py). The probe is the
+    # newest dated week's file: it exists once the weekly run has partitioned the client, and its
+    # Timestamp column dates the feed (the newest week holds the newest alert).
+    alerts_dir = root_path / "alerts" / "golden" / client_lower
+    result["alerts_consolidated"] = _probe_file(
+        client, "alerts", "alerts_consolidated",
+        (alert_store.newest_partition(alerts_dir) or alert_store.index_path(alerts_dir),),
+    )
+    # The telemetry of each alert is read from weekly partitions beside the alerts ones
+    # (src/data/telemetry_partitions.py); their index is the probe: it exists once the weekly run
+    # has partitioned the client's telemetry, and its Alert_TimeStart column dates the data.
+    result["telemetry_alert_detail"] = _probe_file(
+        client, "telemetry", "telemetry_alert_detail",
+        (root_path / "alerts" / "golden" / client_lower / TELEMETRY_INDEX_FILE,),
+    )
     file_probe("auxiliar", "data_freshness", "Data_Date_Last_Update.csv")
     file_probe("predictive", "predictive_ai", "analisis_inteligente.parquet")
 

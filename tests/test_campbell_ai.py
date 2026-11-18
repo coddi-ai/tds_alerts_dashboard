@@ -8,6 +8,7 @@ import threading
 import time
 
 import pandas as pd
+from tests.alert_partition_support import partition_csv
 import pytest
 
 from src.charts.theme import BRAND_ACCENT, BRAND_TITLE, STATUS_COLORS
@@ -23,6 +24,7 @@ from src.campbell_ai.security import deterministic_guard, requests_unsupported_c
 from src.campbell_ai.service import CampbellAIService
 from src.campbell_ai.temporal import current_temporal_context
 from src.campbell_ai.visualization import DashboardVisualizationService
+from tests.telemetry_partition_support import install_telemetry
 from src.campbell_ai.resources import FrameCache
 
 
@@ -52,6 +54,7 @@ def _write_alerts(data_root, client: str = "cda") -> None:
             }
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
 
 
 def _settings(data_root) -> CampbellSettings:
@@ -126,6 +129,7 @@ def test_dashboard_identity_rejects_unauthorized_company(monkeypatch):
 
 def test_repository_reads_existing_dashboard_data_in_place(tmp_path, alert_reference_date):
     _write_alerts(tmp_path)
+    files_before = sorted(path for path in tmp_path.rglob("*") if path.is_file())
     repository = DashboardDataRepository(tmp_path)
 
     status = repository.validate_client("CDA")
@@ -135,9 +139,8 @@ def test_repository_reads_existing_dashboard_data_in_place(tmp_path, alert_refer
     assert status["datasets"]["alerts"]["valid"] is True
     assert result["total"] == 1
     assert result["records"][0]["UnitId"] == "CAEX-01"
-    assert list(tmp_path.rglob("*.csv")) == [
-        tmp_path / "alerts" / "golden" / "cda" / "consolidated_alerts.csv"
-    ]
+    # Read in place: the partitions written by the partitioner are all there is, nothing was added.
+    assert sorted(path for path in tmp_path.rglob("*") if path.is_file()) == files_before
 
 
 def test_security_guard_blocks_cross_company_and_prompt_injection():
@@ -244,7 +247,7 @@ def test_detail_queries_expose_components_signals_and_measured_values(tmp_path):
             },
         ]
     ).to_parquet(telemetry / "classified.parquet", index=False)
-    pd.DataFrame(
+    install_telemetry(tmp_path, "cda", pd.DataFrame(
         [
             {
                 "AlertID": 63,
@@ -265,7 +268,7 @@ def test_detail_queries_expose_components_signals_and_measured_values(tmp_path):
                 "EngCoolTemp_Upper_Limit": 95.0,
             },
         ]
-    ).to_csv(telemetry / "alerts_detail_wide_with_gps.csv", index=False)
+    ))
     repository = DashboardDataRepository(tmp_path)
 
     components = json.loads(repository.query_telemetry_components("CDA", status="Anormal"))
@@ -293,7 +296,7 @@ def test_alert_detail_resolves_fusion_ids_and_never_merges_units(tmp_path):
     """AlertID repeats across units, and the alerts source exposes FusionID instead."""
     telemetry = tmp_path / "telemetry" / "golden" / "cda"
     telemetry.mkdir(parents=True)
-    pd.DataFrame(
+    install_telemetry(tmp_path, "cda", pd.DataFrame(
         [
             {
                 "AlertID": 63,
@@ -305,7 +308,7 @@ def test_alert_detail_resolves_fusion_ids_and_never_merges_units(tmp_path):
             }
             for unit, value in (("T_18", 100.9), ("T_9", 80.0))
         ]
-    ).to_csv(telemetry / "alerts_detail_wide_with_gps.csv", index=False)
+    ))
     repository = DashboardDataRepository(tmp_path)
 
     scoped = json.loads(
@@ -378,6 +381,7 @@ def test_unit_filter_matches_the_id_formats_used_across_techniques(tmp_path, ale
             {"UnitId": "T_15", "Timestamp": "2026-07-30T13:00:00", "sistema": "Motor"},
         ]
     ).to_csv(target, index=False)
+    partition_csv(target)
     repository = DashboardDataRepository(tmp_path)
 
     for requested in ("T_9", "T-9", "T9", "T_09"):
@@ -405,6 +409,7 @@ def test_text_filters_ignore_accents_and_hint_on_a_near_miss(tmp_path):
             }
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
     repository = DashboardDataRepository(tmp_path)
 
     matched = json.loads(
@@ -464,6 +469,11 @@ def test_validation_reports_shape_without_counting_rows(tmp_path, monkeypatch):
     It used to also report a row count, which for a CSV means reading every byte of it. That
     was the expensive half of a walk performed on every session opening.
     """
+    # Hermetic: the committed declaration, not a generated copy that a synced data folder may carry.
+    from src.campbell_ai import schema as schema_module
+
+    monkeypatch.setenv("CAMPBELL_AI_SCHEMA_DATA_ROOT", str(tmp_path / "sin-datos"))
+    monkeypatch.setattr(schema_module, "_CHECKED_AT", 0.0)
     target = tmp_path / "alerts" / "golden" / "cda"
     target.mkdir(parents=True)
     pd.DataFrame(
@@ -475,6 +485,7 @@ def test_validation_reports_shape_without_counting_rows(tmp_path, monkeypatch):
             }
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
     # An isolated cache, so the assertion below is about what validation did and not
     # about what another test left in the process-wide one.
     frames = FrameCache(budget_bytes=8 * 1024 * 1024, name="test.validate")
@@ -517,6 +528,8 @@ def test_visualization_uses_dashboard_data_without_creating_files(tmp_path, aler
             {"UnitId": "CAEX-01", "Timestamp": "2026-07-31", "sistema": "Frenos"},
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
+    files_before = sorted(path for path in tmp_path.rglob("*") if path.is_file())
     service = DashboardVisualizationService(DashboardDataRepository(tmp_path))
 
     artifact = service.create_chart(
@@ -531,9 +544,7 @@ def test_visualization_uses_dashboard_data_without_creating_files(tmp_path, aler
     assert artifact.summary["records_analyzed"] == 3
     assert artifact.summary["top"]["Motor"] == 2
     assert artifact.figure["data"][0]["type"] == "bar"
-    assert [path for path in tmp_path.rglob("*") if path.is_file()] == [
-        target / "consolidated_alerts.csv"
-    ]
+    assert sorted(path for path in tmp_path.rglob("*") if path.is_file()) == files_before
 
 
 def test_alert_query_accepts_an_explicit_date_window(tmp_path):
@@ -546,6 +557,7 @@ def test_alert_query_accepts_an_explicit_date_window(tmp_path):
             {"UnitId": "CAEX-02", "Timestamp": "2026-07-01T01:00:00", "sistema": "Frenos"},
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
 
     result = json.loads(
         DashboardDataRepository(tmp_path).query_alerts(
@@ -576,6 +588,7 @@ def test_alert_relative_window_uses_today_and_returns_latest_available_fallback(
             },
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
 
     result = json.loads(
         DashboardDataRepository(tmp_path, timezone="America/Santiago").query_alerts(
@@ -602,6 +615,7 @@ def test_pareto_and_heatmap_are_generated_from_alert_dimensions(tmp_path, alert_
             {"UnitId": "CAEX-02", "Timestamp": "2026-07-31", "sistema": "Frenos"},
         ]
     ).to_csv(target / "consolidated_alerts.csv", index=False)
+    partition_csv(target / "consolidated_alerts.csv")
     service = DashboardVisualizationService(DashboardDataRepository(tmp_path))
 
     pareto = service.create_chart(
@@ -641,6 +655,7 @@ def test_charts_use_the_dashboard_palette_and_spanish_labels(tmp_path, alert_ref
             {"UnitId": "T_15", "Timestamp": "2026-07-30", "sistema": "Frenos"},
         ]
     ).to_csv(alerts / "consolidated_alerts.csv", index=False)
+    partition_csv(alerts / "consolidated_alerts.csv")
     telemetry = tmp_path / "telemetry" / "golden" / "cda"
     telemetry.mkdir(parents=True)
     pd.DataFrame(

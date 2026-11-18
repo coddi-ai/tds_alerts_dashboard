@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from tests.alert_partition_support import partition_csv
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -322,6 +323,7 @@ def dataset_root():
             encoding="utf-8",
             newline="",
         )
+        partition_csv(alerts / "consolidated_alerts.csv")  # the repository reads the partitions
         yield root
 
 
@@ -365,9 +367,11 @@ def test_repository_retires_stale_mtime_entries(dataset_root):
     path.write_text(
         "UnitId,Timestamp,note\nU9,2026-02-01,new\n", encoding="utf-8", newline=""
     )
+    partition_csv(path)  # the partitioner regenerates the weekly files from the new CSV
     # Move mtime forward explicitly; a same-second rewrite can otherwise collide.
     future = time.time() + 10
-    os.utime(path, (future, future))
+    for written in path.parent.rglob("*.parquet"):
+        os.utime(written, (future, future))
 
     assert len(repo.load("alerts", "cda")) == 1
     assert repo._frames.stats()["entries"] == 1, "the stale generation must be dropped"
@@ -1492,7 +1496,7 @@ def test_validation_opens_no_files_when_the_schema_is_declared(dataset_root, mon
     monkeypatch.setattr(
         schema_module,
         "_LOADED",
-        {"cda": {"alerts": {"format": "csv", "columns": declared}}},
+        {"cda": {"alerts": {"format": "parquet", "columns": declared}}},  # the alerts are partitions
     )
     # La declaracion se fija a mano, asi que tambien hay que fijar la ventana de
     # frescura: `_load` re-mira los candidatos en disco pasado un minuto y pisaria esto.
@@ -1509,7 +1513,7 @@ def test_validation_opens_no_files_when_the_schema_is_declared(dataset_root, mon
     monkeypatch.setenv("CAMPBELL_AI_FROZEN_SCHEMA", "false")
     repo._probe_cache.clear()
     fallback = repo._probe_frame(path, dataset_key="alerts", client="cda")
-    assert fallback["columns_from"] == "header"
+    assert fallback["columns_from"] == "partitions"  # one partition's footer, for the alerts
     assert fallback["columns"] == declared
     assert opens["n"] > 0
 
@@ -1531,7 +1535,7 @@ def test_a_declared_schema_that_cannot_be_trusted_falls_back(dataset_root, monke
         "cliente no declarado": {"otro": {"alerts": {"format": "csv", "columns": real}}},
         "dataset no declarado": {"cda": {"otro": {"format": "csv", "columns": real}}},
         # El formato cambio: ya no es el mismo archivo que se declaro.
-        "formato distinto": {"cda": {"alerts": {"format": "parquet", "columns": real}}},
+        "formato distinto": {"cda": {"alerts": {"format": "csv", "columns": real}}},
         "columnas vacias": {"cda": {"alerts": {"format": "csv", "columns": []}}},
         "entrada malformada": {"cda": {"alerts": "no soy un dict"}},
     }
@@ -1540,7 +1544,7 @@ def test_a_declared_schema_that_cannot_be_trusted_falls_back(dataset_root, monke
         monkeypatch.setattr(schema_module, "_CHECKED_AT", time.monotonic())
         repo._probe_cache.clear()
         probe = repo._probe_frame(path, dataset_key="alerts", client="cda")
-        assert probe["columns_from"] == "header", etiqueta
+        assert probe["columns_from"] == "partitions", etiqueta  # no trusted declaration: look
         assert probe["columns"] == real, etiqueta
 
     # Y sin ningun candidato legible el arranque no se cae: se vuelve a leer cabeceras.

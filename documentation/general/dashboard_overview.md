@@ -311,7 +311,7 @@ for the full navigation tree):
     - Maintenance evidence (activity summaries)
 - **Data Sources**: 
   - `alerts/golden/{client}/consolidated_alerts.csv`
-  - `telemetry/golden/{client}/alerts_detail_wide_with_gps.csv`
+  - `alerts/golden/{client}/{week}/telemetry.parquet` (weekly partitions of the per-alert telemetry; see `documentation/codebase_explaining.md` §5)
   - `oil/golden/{client}/classified.parquet`
   - `mantentions/golden/{client}/ww-yyyy.csv`
 - **Key Features**:

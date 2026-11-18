@@ -25,6 +25,7 @@ from src.campbell_ai.data import (
 )
 from config.client_services import KNOWN_SERVICE_IDS
 from src.campbell_ai.errors import CampbellDataError
+from tests.telemetry_partition_support import install_telemetry
 
 
 # --------------------------------------------------------------- data coverage
@@ -248,9 +249,7 @@ def _alert_detail_client(tmp_path) -> DashboardDataRepository:
                 "GroundSpd_Value": 10.0 + index,
             }
         )
-    pd.DataFrame(rows).to_csv(
-        telemetry / "alerts_detail_wide_with_gps.csv", index=False
-    )
+    install_telemetry(tmp_path, "cda", pd.DataFrame(rows))
     return DashboardDataRepository(tmp_path)
 
 

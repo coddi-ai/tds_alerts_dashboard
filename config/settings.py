@@ -13,7 +13,7 @@ from src.data.catalog import dashboard_data_root
 
 # Dashboard release version, shown as a footnote on the login page.
 # Bump this manually whenever a new version is deployed.
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.4"
 
 # Ranking fields a Short View axis can be configured with (`fleet_scatter_axes`);
 # the chart maps each name to its column (predictive_charts.SCATTER_AXIS_FIELDS).
@@ -300,11 +300,6 @@ class Settings(BaseSettings):
         """
         return self.get_technique_file('mantentions', 'golden', client, f'{week}.csv')
     
-    # Alerts-specific convenience methods
-    def get_consolidated_alerts_path(self, client: str) -> Path:
-        """Get consolidated alerts path."""
-        return self.get_technique_file('alerts', 'golden', client, 'consolidated_alerts.csv')
-
     # ERP (Conexión ERP) convenience methods
     def get_erp_warning_path(self, client: str, state: str) -> Path:
         """Get Parquet path for one client's warnings in a given lifecycle state.

@@ -3,7 +3,7 @@
  "clients": {
   "cda": {
    "alerts": {
-    "format": "csv",
+    "format": "parquet",
     "columns": [
      "mensaje_ia",
      "TribologyID",
@@ -239,7 +239,7 @@
     ]
    },
    "alerts_detail": {
-    "format": "csv",
+    "format": "parquet",
     "columns": [
      "AlertID",
      "Alert_Index",
@@ -566,7 +566,7 @@
   },
   "capstone": {
    "alerts": {
-    "format": "csv",
+    "format": "parquet",
     "columns": [
      "FusionID",
      "TelemetryID",
@@ -768,7 +768,7 @@
     ]
    },
    "alerts_detail": {
-    "format": "csv",
+    "format": "parquet",
     "columns": [
      "AlertID",
      "Alert_Index",
@@ -1117,7 +1117,7 @@
   },
   "emin": {
    "alerts": {
-    "format": "csv",
+    "format": "parquet",
     "columns": [
      "FusionID",
      "TelemetryID",

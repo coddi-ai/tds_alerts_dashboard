@@ -65,7 +65,8 @@ from dashboard.tabs.tab_predictive_overview import (
     short_view_chart,
 )
 from src.data.loaders import (
-    load_alerts_data,
+    latest_alert_timestamp,
+    load_alerts_since,
     load_machine_status_for_client,
     load_telemetry_system_health,
 )
@@ -338,20 +339,21 @@ def _freshness_caption(data_date: Optional[pd.Timestamp]) -> Optional[str]:
 # ── Alerts ───────────────────────────────────────────────────────────────────
 
 def _alerts_section(client: str, unit: str, status: str = None) -> dbc.Card:
-    df = load_alerts_data(client)
-    timestamps = pd.Series(dtype="datetime64[ns]")
-    if not df.empty and "UnitId" in df.columns:
-        timestamps = pd.to_datetime(df["Timestamp"], errors="coerce")
-
-    reference, is_fallback = _reference_time(timestamps.max() if not timestamps.empty else None)
+    # The window is anchored on the feed's newest alert (see `_reference_time`), which is read
+    # from the newest weekly partition; only the weeks the 30-day window touches are then loaded.
+    latest = latest_alert_timestamp(client)
+    reference, is_fallback = _reference_time(latest)
 
     period_label = _t("unit_summary_content.ultimos_dias", ALERTS_WINDOW_DAYS=ALERTS_WINDOW_DAYS)
     note = _fallback_note(reference) if is_fallback else None
 
     unit_df = pd.DataFrame()
-    if not df.empty and "UnitId" in df.columns:
+    if latest is not None:
         cutoff = reference - pd.Timedelta(days=ALERTS_WINDOW_DAYS)
-        unit_df = df[(df["UnitId"].astype(str) == unit) & (timestamps >= cutoff)]
+        df = load_alerts_since(client, cutoff)
+        if "UnitId" in df.columns:
+            timestamps = pd.to_datetime(df["Timestamp"], errors="coerce")
+            unit_df = df[(df["UnitId"].astype(str) == unit) & (timestamps >= cutoff)]
 
     if unit_df.empty:
         # On a stale feed the window is anchored to `reference`, so the empty
@@ -759,11 +761,8 @@ def last_sample_date(client: str, unit: str) -> Optional[pd.Timestamp]:
 # ── Status tiles ─────────────────────────────────────────────────────────────
 
 def _alerts_data_date(client: str) -> Optional[pd.Timestamp]:
-    df = load_alerts_data(client)
-    if df.empty or "Timestamp" not in df.columns:
-        return None
-    latest = pd.to_datetime(df["Timestamp"], errors="coerce").max()
-    return None if pd.isna(latest) else pd.Timestamp(latest)
+    latest = latest_alert_timestamp(client)
+    return None if latest is None or pd.isna(latest) else pd.Timestamp(latest)
 
 
 def _technique_data_date(client: str, unit: str, technique: str, predictive_components: list) -> Optional[pd.Timestamp]:
