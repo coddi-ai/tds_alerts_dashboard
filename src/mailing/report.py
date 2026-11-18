@@ -24,6 +24,7 @@ class ReportRequest:
     period_start: date
     period_end: date     # inclusive
     send_date: date
+    subject: Optional[str] = None  # custom subject of a manual send; None = the automatic one
 
 
 @dataclass(frozen=True)

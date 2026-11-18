@@ -36,6 +36,8 @@ SECRET_ARN = "arn:aws:lambda:us-east-1:111122223333:function:abc123secret"
 TECH = "tds@coddi.ai"
 SHIPPED_TECHNICAL_ONLY = config.SCHEDULED_TECHNICAL_ONLY_CLIENTS  # what the code ships, before any fixture
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
+LOCKED_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if not r.get("optional")]  # always in a manual send
+OPTIONAL_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if r.get("optional")]  # Warren
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 EMIN_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["emin"] if r["send_email"]]
 EMIN_ALL = [r["email"] for r in config.MAILING_RECIPIENTS["emin"]]
@@ -135,7 +137,7 @@ def test_non_production_allows_the_whole_registry_of_the_client(sent):
     assert not config.is_production()
     assert recipients.allowed_emails("emin") == EMIN_ALL + TECHS + GERENCIA
     for r in recipients.list_recipients("emin"):
-        assert r.locked == (r.group == config.GROUP_TECHNICAL)
+        assert r.locked == (r.email in LOCKED_TECHS)
         assert r.disabled == r.locked  # nothing is disabled because of the environment
 
 
@@ -147,7 +149,7 @@ def test_non_production_only_technical_is_selected_by_default():
 def test_production_defaults_are_client_send_email_technical_and_management(production):
     selected = [r.email for r in recipients.list_recipients("emin") if r.selected_by_default]
     assert selected == EMIN_SEND + TECHS + GERENCIA
-    assert [r.email for r in recipients.list_recipients("emin") if r.locked] == TECHS
+    assert [r.email for r in recipients.list_recipients("emin") if r.locked] == LOCKED_TECHS
 
 
 def test_scheduled_recipients_are_identical_in_production_and_non_production(monkeypatch):
@@ -204,11 +206,32 @@ def test_subject_uses_send_date():
     assert periods.build_subject(date(2026, 11, 11)) == "[CODDI] Monitoreo de Alertas 11/11/2026"
 
 
-def test_capstone_weekly_example_from_the_spec():
+def test_capstone_weekly_period_is_the_previous_monday_to_sunday_week():
+    """Sent on Wednesday 11/11/2026 it covers Mon 02/11 - Sun 08/11 (the data arrives ~60 h late)."""
     period = periods.compute_period("weekly", date(2026, 11, 11))
-    assert (period.start, period.end) == (date(2026, 11, 4), date(2026, 11, 10))
-    assert period.days == 7
-    assert periods.describe_period(period) == "04/11/2026 – 10/11/2026 (últimos 7 días)"
+    assert (period.start, period.end) == (date(2026, 11, 2), date(2026, 11, 8))
+    assert period.days == 7 and period.start.weekday() == 0 and period.end.weekday() == 6
+    assert periods.describe_period(period, "weekly") == "02/11/2026 – 08/11/2026 (semana anterior, lunes a domingo)"
+
+
+@pytest.mark.parametrize("send_day", [date(2026, 11, 16) + timedelta(days=offset) for offset in range(7)])
+def test_weekly_period_is_the_same_whole_week_for_every_day_of_the_week(send_day):
+    """Mon 16/11 .. Sun 22/11 all cover the week that ended on Sunday 15/11 (Mon 09/11 - Sun 15/11);
+    Monday 23/11 moves to the next one."""
+    period = periods.compute_period("weekly", send_day)
+    assert (period.start, period.end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert period.days == 7 and period.start.weekday() == 0 and period.end.weekday() == 6
+    assert period.end < send_day  # never includes the send date nor an incomplete week
+
+
+def test_weekly_period_moves_to_the_next_week_on_monday():
+    assert periods.compute_period("weekly", date(2026, 11, 22)).end == date(2026, 11, 15)
+    assert periods.compute_period("weekly", date(2026, 11, 23)).end == date(2026, 11, 22)
+
+
+def test_the_daily_period_is_unchanged():
+    period = periods.compute_period("daily", date(2026, 11, 18))
+    assert (period.start, period.end) == (date(2026, 11, 17), date(2026, 11, 17))
 
 
 def test_daily_period_is_previous_day():
@@ -221,11 +244,11 @@ def test_period_crossing_chile_daylight_saving_change_keeps_seven_calendar_days(
     # Chile pasa a horario de verano la noche del sab 5 -> dom 6 de septiembre de 2026.
     send = date(2026, 9, 9)
     period = periods.compute_period("weekly", send)
-    assert (period.start, period.end) == (date(2026, 9, 2), date(2026, 9, 8))
+    assert (period.start, period.end) == (date(2026, 8, 31), date(2026, 9, 6))
     assert period.days == 7
     # y al revés: fin del horario de verano, sab 4 -> dom 5 de abril de 2026.
     period = periods.compute_period("weekly", date(2026, 4, 8))
-    assert (period.start, period.end) == (date(2026, 4, 1), date(2026, 4, 7))
+    assert (period.start, period.end) == (date(2026, 3, 30), date(2026, 4, 5))
 
 
 def test_unknown_frequency_is_rejected():
@@ -482,7 +505,7 @@ def test_the_emin_test_setting_does_not_limit_a_manual_send(builder, sent, flask
     admin = as_user(flask_app, ADMIN)
     assert set(recipients.allowed_emails("emin")) == {*EMIN_ALL, *TECHS, *GERENCIA}
     send_manual("emin", [EMIN_ALL[0], GERENCIA[0]], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_ALL[0], GERENCIA[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_ALL[0], GERENCIA[0], *LOCKED_TECHS]
 
 
 # --------------------------------------------------------------------------- data sync before a scheduled send
@@ -592,14 +615,14 @@ def test_manual_send_always_adds_technical(builder, sent, flask_app, production)
     admin = as_user(flask_app, ADMIN)
     result = send_manual("emin", [EMIN_SEND[0]], admin)
     assert result["ok"] and result["status"] == "sent"
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
-    assert [r["status"] for r in result["recipients"]] == ["sent"] * (1 + len(TECHS))
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *LOCKED_TECHS]
+    assert [r["status"] for r in result["recipients"]] == ["sent"] * (1 + len(LOCKED_TECHS))
 
 
 def test_manual_mock_test_is_just_technical_selected(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [TECH], admin)
-    assert sent["calls"][0]["emails"] == TECHS
+    assert sent["calls"][0]["emails"] == LOCKED_TECHS
 
 
 def test_manual_send_rejects_emails_outside_the_allowed_set(builder, sent, flask_app, production):
@@ -622,7 +645,7 @@ def test_manual_send_outside_production_accepts_the_whole_registry(builder, sent
     admin = as_user(flask_app, ADMIN)
     assert not config.is_production()
     send_manual("emin", [EMIN_SEND[0], GERENCIA[0], TECH], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], GERENCIA[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], GERENCIA[0], *LOCKED_TECHS]
 
 
 def test_manual_send_outside_production_still_rejects_emails_outside_the_registry(builder, sent, flask_app):
@@ -636,15 +659,15 @@ def test_manual_send_outside_production_still_rejects_emails_outside_the_registr
 def test_manual_send_outside_production_always_adds_technical(builder, sent, flask_app):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [GERENCIA[0]], admin)
-    assert sent["calls"][0]["emails"] == [GERENCIA[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [GERENCIA[0], *LOCKED_TECHS]
     send_manual("emin", [], admin)
-    assert sent["calls"][1]["emails"] == TECHS
+    assert sent["calls"][1]["emails"] == LOCKED_TECHS
 
 
 def test_manual_send_matches_emails_case_insensitively_without_duplicates(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [EMIN_SEND[0].upper(), EMIN_SEND[0], TECH.upper()], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *LOCKED_TECHS]
 
 
 def test_manual_failure_is_returned_not_retried(builder, sent, flask_app):
@@ -749,7 +772,8 @@ def test_context_for_capstone_in_production(flask_app, production):
     assert ctx["configured"] and ctx["client"] == "capstone"
     assert ctx["report_type"] == "weekly" and ctx["report_title"] == "Resumen Semanal de Alertas"
     assert ctx["subject"] == "[CODDI] Monitoreo de Alertas 11/11/2026"
-    assert ctx["period"]["text"] == "04/11/2026 – 10/11/2026 (últimos 7 días)"
+    assert ctx["period"]["text"] == "02/11/2026 – 08/11/2026 (semana anterior, lunes a domingo)"
+    assert (ctx["period"]["start"], ctx["period"]["end"]) == ("2026-11-02", "2026-11-08")
     assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 12:00 (hora de Chile)"
     assert ctx["environment"] == "production"
     groups = [r["group"] for r in ctx["recipients"]]
@@ -769,8 +793,8 @@ def test_context_outside_production_selects_only_technical_and_disables_nothing_
     for r in ctx["recipients"]:
         is_tech = r["email"] in TECHS
         assert r["selected_by_default"] == is_tech
-        assert r["locked"] == is_tech
-        assert r["disabled"] == is_tech  # only locked rows
+        assert r["locked"] == (r["email"] in LOCKED_TECHS)
+        assert r["disabled"] == r["locked"]  # only locked rows
         if not is_tech:
             assert not r["disabled_reason"]
 
@@ -781,7 +805,7 @@ def test_context_in_production_keeps_the_ticket_01_defaults(flask_app, productio
     assert ctx["environment"] == "production" and ctx["is_production"]
     defaults = [r["email"] for r in ctx["recipients"] if r["selected_by_default"]]
     assert defaults == EMIN_SEND + TECHS + GERENCIA
-    assert [r["email"] for r in ctx["recipients"] if r["locked"]] == TECHS
+    assert [r["email"] for r in ctx["recipients"] if r["locked"]] == LOCKED_TECHS
 
 
 def test_context_for_emin_is_daily(flask_app):
@@ -1006,6 +1030,123 @@ def test_delivery_refuses_an_empty_recipient_list():
 def test_lambda_function_name_tolerates_quotes_and_spaces_in_the_env_value(monkeypatch):
     monkeypatch.setenv("LAMBDA_FUNCTION_NAME", f'  "{SECRET_ARN}"  ')
     assert config.get_lambda_function_name() == SECRET_ARN
+
+
+# --------------------------------------------------------------------------- Warren is optional
+
+
+def test_the_optional_technical_contact_is_not_locked_but_selected_by_default():
+    assert OPTIONAL_TECHS == ["warren@coddi.ai"] and LOCKED_TECHS == ["tds@coddi.ai"]
+    by_email = {r.email: r for r in recipients.list_recipients("capstone")}
+    tds, warren = by_email["tds@coddi.ai"], by_email["warren@coddi.ai"]
+    assert tds.locked and tds.disabled and tds.selected_by_default
+    assert not warren.locked and not warren.disabled and warren.selected_by_default
+    assert warren.disabled_reason is None and tds.disabled_reason == "Siempre incluido"
+
+
+def test_a_manual_send_can_leave_the_optional_technical_contact_out(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [CAPSTONE_SEND[0]], admin)
+    assert sent["calls"][0]["emails"] == [CAPSTONE_SEND[0], "tds@coddi.ai"]  # no Warren
+
+
+def test_a_manual_send_includes_the_optional_technical_contact_when_selected(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [CAPSTONE_SEND[0], "WARREN@coddi.ai"], admin)
+    assert sent["calls"][0]["emails"] == [CAPSTONE_SEND[0], "warren@coddi.ai", "tds@coddi.ai"]
+
+
+def test_the_locked_technical_contact_cannot_be_left_out(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", ["warren@coddi.ai"], admin)
+    assert sent["calls"][0]["emails"] == ["warren@coddi.ai", "tds@coddi.ai"]
+
+
+@pytest.mark.parametrize("client", ["emin", "capstone"])
+def test_the_scheduled_send_always_includes_the_optional_technical_contact(client, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    assert "warren@coddi.ai" in recipients.scheduled_emails(client) and "tds@coddi.ai" in recipients.scheduled_emails(client)
+
+
+# --------------------------------------------------------------------------- custom period and subject (manual send)
+
+
+def test_a_manual_send_can_use_a_custom_period_and_subject(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="  Asunto a medida  ",
+                period_start="2026-11-01", period_end="2026-11-07")
+    request = builder.calls[0]
+    assert (request.period_start, request.period_end) == (date(2026, 11, 1), date(2026, 11, 7))
+    assert request.subject == "Asunto a medida" and sent["calls"][0]["subject"] == "Asunto a medida"
+
+
+def test_without_custom_values_the_automatic_ones_are_used(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="   ", period_start=None, period_end="")
+    request = builder.calls[0]
+    assert (request.period_start, request.period_end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert sent["calls"][0]["subject"] == "[CODDI] Monitoreo de Alertas 18/11/2026"
+
+
+def test_the_preview_uses_the_same_custom_values_and_sends_nothing(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    preview = build_preview("capstone", admin, now=at(date(2026, 11, 18)), subject="Vista previa",
+                            period_start=date(2026, 11, 2), period_end=date(2026, 11, 8))
+    assert preview["subject"] == "Vista previa" and sent["calls"] == []
+    assert (builder.calls[0].period_start, builder.calls[0].period_end) == (date(2026, 11, 2), date(2026, 11, 8))
+
+
+@pytest.mark.parametrize("kwargs,message", [
+    ({"period_start": "2026-11-01"}, "Indique la fecha de inicio y la de término"),
+    ({"period_end": "2026-11-01"}, "Indique la fecha de inicio y la de término"),
+    ({"period_start": "2026-11-09", "period_end": "2026-11-01"}, "no puede ser posterior"),
+    ({"period_start": "2026-11-01", "period_end": "2026-11-19"}, "no puede terminar después de hoy"),
+    ({"period_start": "2025-01-01", "period_end": "2026-11-18"}, "no puede superar 366 días"),
+    ({"period_start": "no-es-fecha", "period_end": "2026-11-18"}, "no es válida"),
+    ({"subject": "Línea 1\nBcc: x@evil.com"}, "saltos de línea"),
+    ({"subject": "x" * 201}, "no puede superar 200 caracteres"),
+])
+def test_invalid_custom_values_are_rejected_before_anything_is_built_or_sent(builder, sent, flask_app, kwargs, message):
+    admin = as_user(flask_app, ADMIN)
+    with pytest.raises(MailingValidationError) as info:
+        send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), **kwargs)
+    assert message in info.value.user_message
+    assert sent["calls"] == [] and builder.calls == []
+    with pytest.raises(MailingValidationError):
+        build_preview("capstone", admin, now=at(date(2026, 11, 18)), **kwargs)
+
+
+def test_the_boundaries_of_a_custom_period_are_accepted(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    today = date(2026, 11, 18)
+    send_manual("capstone", [], admin, now=at(today), period_start="2026-11-18", period_end="2026-11-18")  # today, one day
+    assert builder.calls[0].period_start == builder.calls[0].period_end == today
+    send_manual("capstone", [], admin, now=at(today), subject="x" * 200,
+                period_start=(today - timedelta(days=365)).isoformat(), period_end=today.isoformat())  # 366 days
+    assert len(sent["calls"]) == 2
+
+
+def test_the_scheduled_send_never_uses_custom_values(builder, sent):
+    run_scheduled("capstone", date(2026, 11, 18))
+    request = builder.calls[0]
+    assert request.subject is None
+    assert (request.period_start, request.period_end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert sent["calls"][0]["subject"] == "[CODDI] Monitoreo de Alertas 18/11/2026"
+
+
+def test_the_context_tells_the_screen_the_limits_of_the_custom_values(flask_app):
+    ctx = get_mailing_context("capstone", as_user(flask_app, ADMIN), now=at(date(2026, 11, 18)))
+    assert ctx["limits"] == {"max_date": "2026-11-18", "max_days": 366, "max_subject": 200}
+
+
+def test_a_custom_send_is_marked_in_the_log(builder, flask_app, monkeypatch, caplog):
+    monkeypatch.setattr(delivery, "send_email", lambda subject, html, emails: delivery.DeliveryResult(True))
+    admin = as_user(flask_app, ADMIN)
+    with caplog.at_level(logging.INFO):
+        send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="A medida", period_start="2026-11-01", period_end="2026-11-07")
+        send_manual("emin", [], admin, now=at(date(2026, 11, 18)))
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("mailing send")]
+    assert "custom period=2026-11-01..2026-11-07" in lines[0] and "custom" not in lines[1]
 
 
 # --------------------------------------------------------------------------- logging

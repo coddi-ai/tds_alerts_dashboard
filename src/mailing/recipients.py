@@ -7,8 +7,11 @@ manual send in EVERY environment (01.1). The environment only changes the defaul
 | Group              | Manual: selectable | Default selection                     | Scheduled          |
 |--------------------|--------------------|---------------------------------------|--------------------|
 | Cliente            | yes                | production: `send_email`; else none   | `send_email`       |
-| Coddi · Técnico    | locked, always in  | always                                | always (all)       |
+| Coddi · Técnico    | locked, always in* | always                                | always (all)       |
 | Coddi · Gerencia   | yes                | production: `send_email`; else none   | `send_email`       |
+
+* A Técnico contact flagged `optional` in the registry (Warren) is not locked: the admin can
+uncheck it for a manual send. It is still selected by default and always in the scheduled send.
 
 Scheduled recipients are identical in every environment. A client listed in
 `config.SCHEDULED_TECHNICAL_ONLY_CLIENTS` (Emin, while it is in test) gets only Técnico.
@@ -54,12 +57,13 @@ def _from_registry(entries: Iterable[dict], group: str, production: bool) -> Lis
     for entry in entries:
         send = bool(entry.get("send_email", False))
         if group == config.GROUP_TECHNICAL:
-            # Always included, in every environment, whatever `send_email` says. The only
-            # locked rows, and so the only ones the screen disables.
+            # Selected by default in every environment, whatever `send_email` says. Locked (always
+            # included, disabled on the screen) unless the registry marks the contact `optional`.
+            locked = not bool(entry.get("optional", False))
             result.append(Recipient(
                 name=entry["name"], email=entry["email"], group=group, send_email=True,
-                selected_by_default=True, locked=True, disabled=True,
-                disabled_reason=LOCKED_REASON,
+                selected_by_default=True, locked=locked, disabled=locked,
+                disabled_reason=LOCKED_REASON if locked else None,
             ))
         else:
             # Selectable in every environment; production pre-selects the `send_email` ones.
@@ -86,6 +90,11 @@ def list_recipients(client: str, production: Optional[bool] = None) -> List[Reci
 
 def technical_emails(client: str = "", production: Optional[bool] = None) -> List[str]:
     return [r.email for r in list_recipients(client, production) if r.group == config.GROUP_TECHNICAL]
+
+
+def locked_technical_emails(client: str = "", production: Optional[bool] = None) -> List[str]:
+    """The Técnico contacts a manual send can never leave out."""
+    return [r.email for r in list_recipients(client, production) if r.locked]
 
 
 def allowed_emails(client: str, production: Optional[bool] = None) -> List[str]:
@@ -123,8 +132,8 @@ def dedupe(emails: Iterable[str]) -> List[str]:
 def resolve_manual_selection(client: str, selected: Iterable[str], production: Optional[bool] = None):
     """Validate a manual selection against the registry of the client (server-side).
 
-    Returns `(final_emails, rejected)`. `final_emails` always contains Coddi Técnico (added
-    when missing). `rejected` lists every submitted email outside the allowed set; the
+    Returns `(final_emails, rejected)`. `final_emails` always contains the locked Coddi Técnico
+    contacts (added when missing). `rejected` lists every submitted email outside the allowed set; the
     caller must refuse the whole send when it is not empty.
     """
     allowed = list_recipients(client, production)
@@ -139,5 +148,5 @@ def resolve_manual_selection(client: str, selected: Iterable[str], production: O
             picked.append(canonical[key])
         else:
             rejected.append(str(raw).strip())
-    picked += [r.email for r in allowed if r.group == config.GROUP_TECHNICAL]
+    picked += [r.email for r in allowed if r.locked]  # optional Técnico contacts only when selected
     return dedupe(picked), rejected

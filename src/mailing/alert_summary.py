@@ -124,6 +124,15 @@ def _period_texts(period: periods.Period, frequency: str, schedule: dict):
     return subtitle_period, footer
 
 
+def _period_caption(period: periods.Period, frequency: str) -> str:
+    """The small caption under the total: matches the period, whatever its length."""
+    if period.days == 1:
+        return "último día" if frequency == periods.DAILY else "1 día"
+    if period.days == 7 and period.start.weekday() == 0:
+        return "lunes a domingo"
+    return f"{period.days} días"
+
+
 def render_alert_summary(
     client: str,
     schedule: dict,
@@ -131,10 +140,11 @@ def render_alert_summary(
     send_date: date,
     records: List[stats.AlertRecord],
     button_url: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> ReportContent:
     """Pure rendering: records in, `ReportContent` out (no I/O)."""
     frequency = schedule["frequency"]
-    subject = periods.build_subject(send_date)
+    subject = subject or periods.build_subject(send_date)
     subtitle_period, footer = _period_texts(period, frequency, schedule)
     total = len(records)
     units = len(stats.unit_counts(records))
@@ -166,7 +176,7 @@ def render_alert_summary(
         context.update(
             kpis=[
                 {"label": "Total de Alertas", "value": total, "size": 26,
-                 "caption": "últimos 7 días" if frequency == periods.WEEKLY else "último día",
+                 "caption": _period_caption(period, frequency),
                  "bg": "#fee2e2", "fg": "#b91c1c"},
                 {"label": "Unidades Afectadas", "value": units, "size": 26,
                  "caption": "con al menos 1 alerta", "bg": "#dbeafe", "fg": "#1d4ed8"},
@@ -220,7 +230,7 @@ def build_alert_summary(request: ReportRequest) -> ReportContent:
     url = get_dashboard_alerts_url()
     if not url:
         logger.warning("mailing: DASHBOARD_URL is not set; the email goes without the button")
-    content = render_alert_summary(request.client, schedule, period, request.send_date, records, url)
+    content = render_alert_summary(request.client, schedule, period, request.send_date, records, url, request.subject)
     logger.info("mailing: alert summary built (client=%s meta=%s)", request.client, content.meta)
     return content
 

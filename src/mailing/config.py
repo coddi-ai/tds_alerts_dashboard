@@ -43,7 +43,9 @@ MAILING_RECIPIENTS: Dict[str, List[dict]] = {
 CODDI_RECIPIENTS: Dict[str, List[dict]] = {
     "technical": [
         {"name": "Equipo Técnico", "email": "tds@coddi.ai", "send_email": True},
-        {"name": "Warren", "email": "warren@coddi.ai", "send_email": True},
+        # `optional`: selected by default and always in the scheduled send, but the admin can uncheck
+        # it for a manual send. The contacts without it are locked (always included).
+        {"name": "Warren", "email": "warren@coddi.ai", "send_email": True, "optional": True},
     ],
     "management": [
         {"name": "Eduardo", "email": "eduardo@coddi.ai", "send_email": True},

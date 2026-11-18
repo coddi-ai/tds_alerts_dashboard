@@ -325,20 +325,40 @@ def test_weekly_email_content():
     assert content.subject == "[CODDI] Monitoreo de Alertas 11/11/2026"
     for text in (
         "CODDI · MONITOREO DE ALERTAS", "Resumen Semanal de Alertas",
-        "Flota Capstone · Período 04/11/2026 – 10/11/2026",
-        "62 alertas en 19 unidades", "últimos 7 días", "Total de Alertas", "Unidades Afectadas",
+        "Flota Capstone · Período 02/11/2026 – 08/11/2026",
+        "62 alertas en 19 unidades", "lunes a domingo", "Total de Alertas", "Unidades Afectadas",
         "Sistema Principal", "Alertas por Unidad", "Alertas por Sistema", "Alertas Destacadas del Período",
         "Ver Alertas en el Dashboard", "10 unidades", "1 c/u",
         "c/u = cada una. Las unidades con la misma cantidad de alertas se agrupan en una sola fila.",
         "Mostrando 5 de 62 alertas del período. Se priorizan las alertas multitécnicas y las unidades con más alertas.",
         "Este resumen se genera automáticamente cada miércoles a las 12:00 (hora de Chile) y cubre las alertas "
-        "registradas entre el 04/11/2026 y el 10/11/2026.",
+        "registradas entre el 02/11/2026 y el 08/11/2026.",
         "Coddi · coddi.ai",
     ):
         assert text in html, text
     assert content.meta == {
         "report": "alert_summary", "variant": "weekly", "total_alerts": 62, "affected_units": 19,
     }
+
+
+def test_the_total_caption_follows_the_period_not_a_fixed_seven_days():
+    schedule = config.get_schedule("capstone")
+    records = records_for(WORKED_EXAMPLE)
+    for first, last, caption in (
+        (date(2026, 11, 2), date(2026, 11, 8), "lunes a domingo"),
+        (date(2026, 11, 3), date(2026, 11, 9), "7 días"),
+        (date(2026, 11, 1), date(2026, 11, 30), "30 días"),
+        (date(2026, 11, 4), date(2026, 11, 4), "1 día"),
+    ):
+        content = alert_summary.render_alert_summary("capstone", schedule, periods.Period(first, last), date(2026, 12, 1), records)
+        assert caption in content.html and "últimos 7 días" not in content.html, caption
+
+
+def test_a_custom_subject_is_the_subject_of_the_html_too():
+    schedule = config.get_schedule("capstone")
+    content = alert_summary.render_alert_summary("capstone", schedule, periods.compute_period("weekly", date(2026, 11, 11)),
+                                                 date(2026, 11, 11), records_for(WORKED_EXAMPLE), None, "Asunto a medida")
+    assert content.subject == "Asunto a medida" and "<title>Asunto a medida</title>" in content.html
 
 
 def test_daily_email_variant():

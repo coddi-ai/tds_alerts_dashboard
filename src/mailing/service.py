@@ -76,15 +76,26 @@ def _schedule_or_raise(client: str) -> dict:
     return schedule
 
 
-def _build_report(client: str, schedule: dict, send_date: date) -> report.ReportContent:
-    """Build the email through the registered report builder (shared by every trigger)."""
-    period = periods.compute_period(schedule["frequency"], send_date)
+def _build_report(
+    client: str,
+    schedule: dict,
+    send_date: date,
+    subject: Optional[str] = None,
+    period: Optional[periods.Period] = None,
+) -> report.ReportContent:
+    """Build the email through the registered report builder (shared by every trigger).
+
+    `subject` and `period` are the validated custom values of a manual send; scheduled sends
+    never pass them.
+    """
+    period = period or periods.compute_period(schedule["frequency"], send_date)
     request = report.ReportRequest(
         client=client,
         frequency=schedule["frequency"],
         period_start=period.start,
         period_end=period.end,
         send_date=send_date,
+        subject=subject,
     )
     builder = report.get_report_builder()
     try:
@@ -94,7 +105,7 @@ def _build_report(client: str, schedule: dict, send_date: date) -> report.Report
     except Exception:  # noqa: BLE001 - the UI must not see internals
         logger.exception("mailing: report builder failed (client=%s)", client)
         raise MailingError(GENERIC_BUILD_ERROR, code="build_failed")
-    expected = periods.build_subject(send_date)
+    expected = subject or periods.build_subject(send_date)
     if content.subject != expected:
         # The subject is a contract (and what get_mailing_context shows): the service owns it.
         logger.warning("mailing: builder subject differs from contract; using contract subject")
@@ -135,19 +146,38 @@ def get_mailing_context(client: str, user_data: Optional[dict], now: Optional[da
         "period": {
             "start": period.start.isoformat(),
             "end": period.end.isoformat(),
-            "text": periods.describe_period(period),
+            "text": periods.describe_period(period, schedule["frequency"]),
+        },
+        # What the screen lets the admin change for one send, and its limits (validated again on send).
+        "limits": {
+            "max_date": send_date.isoformat(),
+            "max_days": periods.MAX_CUSTOM_PERIOD_DAYS,
+            "max_subject": periods.MAX_SUBJECT_CHARS,
         },
         "recipients": [r.to_dict() for r in recipients.list_recipients(key, production)],
     }
 
 
-def build_preview(client: str, user_data: Optional[dict], now: Optional[datetime] = None) -> dict:
-    """`{"subject", "html"}` exactly as a real send would produce them. Sends nothing."""
+def build_preview(
+    client: str,
+    user_data: Optional[dict],
+    now: Optional[datetime] = None,
+    *,
+    subject: Optional[str] = None,
+    period_start=None,
+    period_end=None,
+) -> dict:
+    """`{"subject", "html"}` exactly as a real send would produce them. Sends nothing.
+
+    `subject` / `period_start` / `period_end` are the optional custom values of the screen.
+    """
     require_admin(user_data)
     key = config.normalize_client(client)
     schedule = _schedule_or_raise(key)
     send_date = (now or periods.now_local()).astimezone(periods.chile_tz()).date()
-    content = _build_report(key, schedule, send_date)
+    custom_subject = periods.clean_subject(subject)
+    custom_period = periods.resolve_custom_period(period_start, period_end, send_date)
+    content = _build_report(key, schedule, send_date, custom_subject, custom_period)
     return {"subject": content.subject, "html": content.html}
 
 
@@ -189,8 +219,15 @@ def send_manual(
     selected_emails: Sequence[str],
     user_data: Optional[dict],
     now: Optional[datetime] = None,
+    *,
+    subject: Optional[str] = None,
+    period_start=None,
+    period_end=None,
 ) -> dict:
     """Send the summary now to the validated selection. Admin-only, no automatic retry.
+
+    `subject` / `period_start` / `period_end` are the optional custom values of the screen; they
+    are validated here (empty = the automatic value) and only change this one send.
 
     The UI is never the source of truth: any email outside the registry of this client
     rejects the whole send, and Coddi Técnico is added when missing.
@@ -212,6 +249,10 @@ def send_manual(
             rejected=rejected,
         )
 
+    send_date = (now or periods.now_local()).astimezone(periods.chile_tz()).date()
+    custom_subject = periods.clean_subject(subject)
+    custom_period = periods.resolve_custom_period(period_start, period_end, send_date)
+
     lock = _manual_lock(key)
     if not lock.acquire(blocking=False):
         raise MailingBusyError()
@@ -221,10 +262,12 @@ def send_manual(
         if last is not None and time.monotonic() - last < cooldown:
             raise MailingBusyError()
 
-        send_date = (now or periods.now_local()).astimezone(periods.chile_tz()).date()
-        content = _build_report(key, schedule, send_date)
+        content = _build_report(key, schedule, send_date, custom_subject, custom_period)
         outcome = delivery.send_email(content.subject, content.html, final)
-        _log_attempt(key, TRIGGER_MANUAL, requested_by, content.subject, final, outcome, attempt=1)
+        custom = None
+        if custom_subject or custom_period:
+            custom = "custom" + (f" period={custom_period.start}..{custom_period.end}" if custom_period else "")
+        _log_attempt(key, TRIGGER_MANUAL, requested_by, content.subject, final, outcome, attempt=1, custom=custom)
         if outcome.ok:
             _manual_last_success[key] = time.monotonic()
             return _result("sent", content.subject, final, None)
@@ -309,15 +352,17 @@ def _log_attempt(
     emails: Sequence[str],
     outcome: delivery.DeliveryResult,
     attempt: int,
+    custom: Optional[str] = None,
 ) -> None:
     """One line per attempt. Never the HTML body, never the Lambda URL."""
     result = "sent" if outcome.ok else "failed"
     per_recipient: List[str] = [f"{email}={result}" for email in emails]
     logger.info(
         "mailing send | client=%s trigger=%s requested_by=%s environment=%s host=%s attempt=%d "
-        "subject=%r recipients=%s results=[%s]%s",
+        "subject=%r recipients=%s results=[%s]%s%s",
         client, trigger, requested_by or "-", config.environment_name(), config.get_hostname(),
         attempt, subject, list(emails),
         ", ".join(per_recipient),
         "" if outcome.ok else f" reason={outcome.reason!r}",
+        f" {custom}" if custom else "",
     )
