@@ -67,8 +67,8 @@ MAILING_TIMEZONE = "America/Santiago"
 # file. A temporary test schedule must never be committed (manual send is the way to test; a test
 # in tests/test_mailing.py guards these exact values).
 MAILING_SCHEDULES: Dict[str, dict] = {
-    "emin": {"frequency": "daily", "time": "08:00"},
-    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
+    "emin": {"frequency": "daily", "time": "12:00"},
+    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
 }
 
 # >>> TEMPORARY, EMIN IN TEST: the SCHEDULED email of these clients goes ONLY to the Coddi technical

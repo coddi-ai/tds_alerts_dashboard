@@ -77,7 +77,7 @@ def parse_time(value: str) -> time:
 
 
 def describe_schedule(schedule: dict) -> str:
-    """`se envía automáticamente los miércoles a las 08:00 (hora de Chile)`."""
+    """`se envía automáticamente los miércoles a las 12:00 (hora de Chile)`."""
     when = parse_time(schedule["time"]).strftime("%H:%M")
     if schedule["frequency"] == WEEKLY:
         day = WEEKDAY_ES[schedule["weekday"].lower()]
@@ -99,10 +99,10 @@ def is_due_day(schedule: dict, day: date) -> bool:
 
 
 def scheduled_moment(schedule: dict, day: date) -> datetime:
-    """The wall-clock instant (08:00 Chile) the schedule fires on `day`.
+    """The wall-clock instant (12:00 Chile) the schedule fires on `day`.
 
     Built from the local date and time in the zone, never from a fixed UTC hour, so the
-    send stays at 08:00 Chile on both sides of a daylight-saving change.
+    send stays at 12:00 Chile on both sides of a daylight-saving change.
     """
     return datetime.combine(day, parse_time(schedule["time"]), tzinfo=chile_tz())
 

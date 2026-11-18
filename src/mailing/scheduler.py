@@ -3,7 +3,7 @@ In-process scheduler for the automatic summaries.
 
 One daemon thread wakes every `poll_seconds`, asks which clients are due *right now in
 Chilean local time* and runs them. Nothing here decides who sends: the persisted marker in
-`state.claim` does, so several workers (or a restart around 08:00) cannot double-send.
+`state.claim` does, so several workers (or a restart around the scheduled time) cannot double-send.
 
 On by default; `MAILING_SCHEDULER_ENABLED=false` turns it off.
 """

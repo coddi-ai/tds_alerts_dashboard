@@ -251,7 +251,7 @@ def test_render_in_production_prechecks_client_and_management(flask_app, product
     state, _ = render(flask_app)
     assert state["main_style"] == {} and state["unavailable"] == ""
     assert state["title"] == "Resumen Diario de Alertas"
-    assert state["subtitle"] == "Emin · se envía automáticamente todos los días a las 08:00 (hora de Chile)."
+    assert state["subtitle"] == "Emin · se envía automáticamente todos los días a las 12:00 (hora de Chile)."
     assert state["subject"].startswith("[CODDI] Monitoreo de Alertas ")
     assert state["rendered_for"] == "emin"
     assert state["t_client"] == "Cliente · Emin" and state["t_tech"] == "Coddi · Técnico" and state["t_mgmt"] == "Coddi · Gerencia"
@@ -307,7 +307,7 @@ def test_row_tags_carry_text(flask_app, production):
 def test_capstone_is_weekly(flask_app, production):
     state, _ = render(flask_app, "CAPSTONE")
     assert state["title"] == "Resumen Semanal de Alertas"
-    assert "los miércoles a las 08:00" in state["subtitle"]
+    assert "los miércoles a las 12:00" in state["subtitle"]
     assert "últimos 7 días" in state["period"] and len(checklist_state(state["s_client"])[0]) == 10
 
 

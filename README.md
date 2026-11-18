@@ -113,12 +113,12 @@ del mismo proceso del dashboard; no requiere infraestructura nueva ni un job ext
 |---|---|---|
 | `LAMBDA_FUNCTION_NAME` | ARN de la Lambda que envía los correos (cuenta y región distintas a las de la app; la región se toma del ARN). **No se loguea ni se muestra** | — (obligatoria) |
 | `DEPLOY_STATUS` | Entorno. `POC` = producción; cualquier otro valor (o ausente) = no producción. Solo cambia la selección por defecto de la pantalla Mailing (en no producción solo viene marcado Coddi Técnico), el aviso de confirmación y el campo `environment` de los logs. **No** cambia quién puede ser seleccionado ni quién recibe el envío automático | — |
-| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático **en esa máquina** (Emin diario, Capstone miércoles, 08:00 `America/Santiago`). Los horarios están en el código (`MAILING_SCHEDULES`) y no se pueden cambiar por `.env` | `true` en **todos** los entornos |
+| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático **en esa máquina** (Emin diario, Capstone miércoles, 12:00 `America/Santiago`). Los horarios están en el código (`MAILING_SCHEDULES`) y no se pueden cambiar por `.env` | `true` en **todos** los entornos |
 | `SYNC_DATA` | Interruptor general de la sincronización con S3. Con `false` tampoco se sincroniza antes del envío automático | `true` |
 | `MAILING_STATE_DIR` | Marcadores que garantizan un solo envío por (cliente, día); debe sobrevivir reinicios | `logs/mailing` (volumen montado) |
 | `MAILING_RETRY_DELAYS` | Esperas (s) entre reintentos de un envío programado; la cantidad = nº de reintentos | `30,120,300` |
 | `MAILING_MANUAL_COOLDOWN_SECONDS` | Ventana anti doble clic tras un envío manual exitoso | `5` |
-| `MAILING_SCHEDULER_GRACE_MINUTES` | Cuánto después de las 08:00 aún se considera "a tiempo" (no hay envío de recuperación) | `15` |
+| `MAILING_SCHEDULER_GRACE_MINUTES` | Cuánto después de las 12:00 aún se considera "a tiempo" (no hay envío de recuperación) | `15` |
 
 Despliegue: (1) `LAMBDA_FUNCTION_NAME` y `DEPLOY_STATUS=POC` en el `.env` del
 servidor (el envío usa `lambda:Invoke` del AWS SDK con el rol de ejecución; ese rol necesita `lambda:InvokeFunction` sobre el ARN y la política de la Lambda destino debe permitir al rol); (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requirements.txt`);
@@ -130,8 +130,8 @@ Un envío manual no altera el envío automático.
 
 **Datos frescos.** Antes de armar cada correo automático se ejecuta la misma sincronización con S3 que la app corre al arrancar (`src.data.s3_downloader.main`), una vez por fecha y por proceso. Si falla (sin `BUCKET_NAME`, sin red, volumen de datos de solo lectura) se registra una advertencia y el correo se arma con los datos que hay en disco. El envío manual no sincroniza.
 
-**Envío automático desde cualquier máquina.** El scheduler está encendido por defecto en todos los entornos, también en un computador local, y evalúa el horario en hora de Chile sin importar la zona horaria del sistema operativo. Una máquina con el scheduler encendido que esté corriendo a las 08:00 envía los correos reales a los contactos del cliente (los marcados con `send_email`), más Coddi Técnico y Gerencia. Una máquina local necesita `LAMBDA_FUNCTION_NAME` y credenciales AWS con permiso de invocar la Lambda; si faltan, el envío se reintenta, se registra un error y la aplicación sigue funcionando. Para que una máquina **no** envíe, defina `MAILING_SCHEDULER_ENABLED=false` en su `.env`.
-El marcador de "ya enviado" es por máquina: si el servidor y otra máquina corren a las 08:00, el cliente recibe **dos** correos. Apague el scheduler en toda máquina que no deba enviar. Cada intento queda en el log con `environment` y `host`.
+**Envío automático desde cualquier máquina.** El scheduler está encendido por defecto en todos los entornos, también en un computador local, y evalúa el horario en hora de Chile sin importar la zona horaria del sistema operativo. Una máquina con el scheduler encendido que esté corriendo a las 12:00 envía los correos reales a los contactos del cliente (los marcados con `send_email`), más Coddi Técnico y Gerencia. Una máquina local necesita `LAMBDA_FUNCTION_NAME` y credenciales AWS con permiso de invocar la Lambda; si faltan, el envío se reintenta, se registra un error y la aplicación sigue funcionando. Para que una máquina **no** envíe, defina `MAILING_SCHEDULER_ENABLED=false` en su `.env`.
+El marcador de "ya enviado" es por máquina: si el servidor y otra máquina corren a las 12:00, el cliente recibe **dos** correos. Apague el scheduler en toda máquina que no deba enviar. Cada intento queda en el log con `environment` y `host`.
 
 ---
 

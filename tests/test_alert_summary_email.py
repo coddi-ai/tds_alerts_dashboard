@@ -19,7 +19,7 @@ BASE = datetime(2026, 7, 10, 12, 0, tzinfo=SANTIAGO)
 
 @pytest.fixture(autouse=True)
 def production_schedules(monkeypatch):
-    """The email text (cada miércoles, 08:00...) comes from the REAL schedules, not a temporary test one."""
+    """The email text (cada miércoles, 12:00...) comes from the REAL schedules, not a temporary test one."""
 
 
 def rec(unit, minutes=0, system="Motor", source="Telemetría", multi=False, diagnosis="Diagnóstico", component="Turbo"):
@@ -331,7 +331,7 @@ def test_weekly_email_content():
         "Ver Alertas en el Dashboard", "10 unidades", "1 c/u",
         "c/u = cada una. Las unidades con la misma cantidad de alertas se agrupan en una sola fila.",
         "Mostrando 5 de 62 alertas del período. Se priorizan las alertas multitécnicas y las unidades con más alertas.",
-        "Este resumen se genera automáticamente cada miércoles a las 08:00 (hora de Chile) y cubre las alertas "
+        "Este resumen se genera automáticamente cada miércoles a las 12:00 (hora de Chile) y cubre las alertas "
         "registradas entre el 04/11/2026 y el 10/11/2026.",
         "Coddi · coddi.ai",
     ):
@@ -346,7 +346,7 @@ def test_daily_email_variant():
     assert "Resumen Diario de Alertas" in content.html and "Resumen Semanal" not in content.html
     assert "Flota Emin · Período 09/11/2026<" in content.html
     assert "último día" in content.html
-    assert "todos los días a las 08:00 (hora de Chile) y cubre las alertas registradas el 09/11/2026." in content.html
+    assert "todos los días a las 12:00 (hora de Chile) y cubre las alertas registradas el 09/11/2026." in content.html
     assert "2 alertas en 1 unidad" in content.html and "Analice la unidad BULL-1." in content.html
     assert content.meta["variant"] == "daily"
 

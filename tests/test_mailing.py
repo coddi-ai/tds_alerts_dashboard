@@ -124,7 +124,7 @@ def as_user(app, username):
     return {"username": username, "role": USERS[username]["role"], "clients": []}
 
 
-def at(day: date, hour=8, minute=0) -> datetime:
+def at(day: date, hour=12, minute=0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=SANTIAGO)
 
 
@@ -236,7 +236,7 @@ def test_unknown_frequency_is_rejected():
 # --------------------------------------------------------------------------- schedule evaluation
 
 
-def test_emin_is_due_every_day_at_0800_chile():
+def test_emin_is_due_every_day_at_1200_chile():
     schedule = config.MAILING_SCHEDULES["emin"]
     for offset in range(7):
         day = date(2026, 11, 9) + timedelta(days=offset)
@@ -252,56 +252,56 @@ def test_capstone_is_due_only_on_wednesday():
         assert periods.due_scheduled_date(schedule, at(wednesday + timedelta(days=offset))) is None
 
 
-def test_not_due_before_0800_nor_after_the_grace_window():
+def test_not_due_before_1200_nor_after_the_grace_window():
     schedule = config.MAILING_SCHEDULES["emin"]
     day = date(2026, 11, 10)
-    assert periods.due_scheduled_date(schedule, at(day, 7, 59)) is None
-    assert periods.due_scheduled_date(schedule, at(day, 8, 0)) == day
-    assert periods.due_scheduled_date(schedule, at(day, 8, 14)) == day
-    assert periods.due_scheduled_date(schedule, at(day, 8, 15)) is None
+    assert periods.due_scheduled_date(schedule, at(day, 11, 59)) is None
+    assert periods.due_scheduled_date(schedule, at(day, 12, 0)) == day
+    assert periods.due_scheduled_date(schedule, at(day, 12, 14)) == day
+    assert periods.due_scheduled_date(schedule, at(day, 12, 15)) is None
 
 
-def test_schedule_stays_at_0800_chile_across_the_daylight_saving_change():
+def test_schedule_stays_at_1200_chile_across_the_daylight_saving_change():
     schedule = config.MAILING_SCHEDULES["emin"]
     before, after = date(2026, 9, 2), date(2026, 9, 9)  # invierno (UTC-4) y verano (UTC-3)
     m_before, m_after = periods.scheduled_moment(schedule, before), periods.scheduled_moment(schedule, after)
-    assert (m_before.hour, m_after.hour) == (8, 8)
+    assert (m_before.hour, m_after.hour) == (12, 12)
     assert m_before.utcoffset() != m_after.utcoffset()
-    # Una hora UTC fija se correria: 12:00 UTC es las 08:00 antes del cambio y las 09:00 despues.
+    # Una hora UTC fija se correria: 16:00 UTC es las 12:00 antes del cambio (UTC-4) y las 13:00 despues (UTC-3).
     utc = ZoneInfo("UTC")
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 2, 12, 0, tzinfo=utc)) == before
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 12, 0, tzinfo=utc)) is None
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 11, 0, tzinfo=utc)) == after
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 2, 16, 0, tzinfo=utc)) == before
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 16, 0, tzinfo=utc)) is None
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 15, 0, tzinfo=utc)) == after
 
 
 def test_mailing_schedules_hold_exactly_the_intended_values():
     """Guards against a temporary test schedule being committed (01.1)."""
     assert config.MAILING_TIMEZONE == "America/Santiago"
     assert config.MAILING_SCHEDULES == {
-        "emin": {"frequency": "daily", "time": "08:00"},
-        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
+        "emin": {"frequency": "daily", "time": "12:00"},
+        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
     }
 
 
 @pytest.mark.parametrize("zone", ["Asia/Tokyo", "America/New_York", "Europe/Madrid", "UTC", "Pacific/Auckland"])
 def test_schedule_is_evaluated_in_chile_time_whatever_the_machine_zone(zone):
-    """`now` expressed in any machine zone fires at 08:00 Chile, never at 08:00 of that zone."""
+    """`now` expressed in any machine zone fires at 12:00 Chile, never at 12:00 of that zone."""
     schedule = config.MAILING_SCHEDULES["emin"]
     machine = ZoneInfo(zone)
     day = date(2026, 11, 10)
-    chile_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=SANTIAGO)
-    assert periods.due_scheduled_date(schedule, chile_0800.astimezone(machine)) == day
-    local_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=machine)
-    if local_0800.astimezone(SANTIAGO).strftime("%H:%M") != "08:00":
-        assert periods.due_scheduled_date(schedule, local_0800) is None
+    chile_noon = datetime(2026, 11, 10, 12, 0, tzinfo=SANTIAGO)
+    assert periods.due_scheduled_date(schedule, chile_noon.astimezone(machine)) == day
+    local_noon = datetime(2026, 11, 10, 12, 0, tzinfo=machine)
+    if local_noon.astimezone(SANTIAGO).strftime("%H:%M") != "12:00":
+        assert periods.due_scheduled_date(schedule, local_noon) is None
 
 
-def test_chile_0800_is_fixed_in_chile_time_across_a_daylight_saving_change_seen_from_another_zone():
+def test_chile_1200_is_fixed_in_chile_time_across_a_daylight_saving_change_seen_from_another_zone():
     schedule = config.MAILING_SCHEDULES["emin"]
     tokyo = ZoneInfo("Asia/Tokyo")  # no daylight saving: its offset to Chile moves when Chile changes
     for day in (date(2026, 9, 4), date(2026, 9, 7)):  # before and after Chile's spring forward (Sep 6)
         moment = periods.scheduled_moment(schedule, day)
-        assert (moment.hour, moment.minute) == (8, 0)
+        assert (moment.hour, moment.minute) == (12, 0)
         assert periods.due_scheduled_date(schedule, moment.astimezone(tokyo)) == day
         assert periods.due_scheduled_date(schedule, (moment - timedelta(minutes=1)).astimezone(tokyo)) is None
 
@@ -314,7 +314,7 @@ def test_scheduler_tick_runs_each_due_client_once_per_day():
     for w in list(scheduler._workers):
         w.join(2)
     assert sorted(c for c, _ in first) == ["capstone", "emin"]
-    assert scheduler.tick(at(wednesday, 8, 1)) == []  # mismo dia: no se relanza
+    assert scheduler.tick(at(wednesday, 12, 1)) == []  # mismo dia: no se relanza
     next_day = scheduler.tick(at(wednesday + timedelta(days=1)))
     for w in list(scheduler._workers):
         w.join(2)
@@ -698,7 +698,7 @@ def test_context_for_capstone_in_production(flask_app, production):
     assert ctx["report_type"] == "weekly" and ctx["report_title"] == "Resumen Semanal de Alertas"
     assert ctx["subject"] == "[CODDI] Monitoreo de Alertas 11/11/2026"
     assert ctx["period"]["text"] == "04/11/2026 – 10/11/2026 (últimos 7 días)"
-    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 08:00 (hora de Chile)"
+    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 12:00 (hora de Chile)"
     assert ctx["environment"] == "production"
     groups = [r["group"] for r in ctx["recipients"]]
     assert groups == sorted(groups, key=config.GROUP_ORDER.index)
@@ -737,7 +737,7 @@ def test_context_for_emin_is_daily(flask_app):
     ctx = get_mailing_context("emin", admin, now=at(date(2026, 11, 10), 15, 0))
     assert ctx["report_title"] == "Resumen Diario de Alertas"
     assert ctx["period"]["text"] == "09/11/2026 (último día)"
-    assert ctx["schedule_description"] == "se envía automáticamente todos los días a las 08:00 (hora de Chile)"
+    assert ctx["schedule_description"] == "se envía automáticamente todos los días a las 12:00 (hora de Chile)"
 
 
 def test_context_for_unconfigured_client_says_so(flask_app):

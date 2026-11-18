@@ -2,7 +2,7 @@
 
 The app syncs `data/` only once, when it starts (`dashboard/app.py`, via
 `src.data.s3_downloader.main`). A process that has been running for days would otherwise build the
-08:00 summary from stale files. A scheduled send therefore runs the SAME function first.
+scheduled summary from stale files. A scheduled send therefore runs the SAME function first.
 
 Rules:
 - Once per scheduled date per process: Emin and Capstone fire at the same minute and share the
