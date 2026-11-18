@@ -260,8 +260,8 @@ register_report_files(app)
 register_informe_falla_files(app)
 
 # Automatic alert-summary emails (Emin daily, Capstone weekly, 12:00 America/Santiago).
-# On by default (MAILING_SCHEDULER_ENABLED=false turns it off); several workers are safe
-# (persisted marker). Not started when the module is imported by the test suite.
+# Only in production (DEPLOY_STATUS); MAILING_SCHEDULER_ENABLED=false also turns it off there.
+# Several workers are safe (persisted marker). Not started when the module is imported by the test suite.
 if "pytest" not in sys.modules:
     from src.mailing import start_mailing_scheduler
     start_mailing_scheduler()

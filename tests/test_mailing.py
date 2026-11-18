@@ -322,14 +322,66 @@ def test_scheduler_tick_runs_each_due_client_once_per_day():
     assert len(started) == 3
 
 
-def test_scheduler_is_on_by_default_and_can_be_switched_off(monkeypatch):
+def test_scheduler_runs_by_default_in_production_and_can_be_switched_off(production, monkeypatch):
     from src.mailing import scheduler as scheduler_module
 
-    assert config.scheduler_enabled()  # default: yes
+    assert config.scheduler_enabled() and config.scheduler_disabled_reason() is None  # production: on by default
     monkeypatch.setenv("MAILING_SCHEDULER_ENABLED", "false")
-    assert not config.scheduler_enabled()
+    assert not config.scheduler_enabled() and "MAILING_SCHEDULER_ENABLED" in config.scheduler_disabled_reason()
     scheduler_module.stop_mailing_scheduler()
     assert scheduler_module.start_mailing_scheduler() is None
+
+
+@pytest.mark.parametrize("status", ["test", "dev", "development", "local", "staging", "", None])
+def test_the_automatic_send_never_runs_outside_production(monkeypatch, status):
+    from src.mailing import scheduler as scheduler_module
+
+    if status is None:
+        monkeypatch.delenv("DEPLOY_STATUS", raising=False)  # a missing variable is non-production too
+    else:
+        monkeypatch.setenv("DEPLOY_STATUS", status)
+    monkeypatch.setenv("MAILING_SCHEDULER_ENABLED", "true")  # even when explicitly requested
+    assert not config.is_production()
+    assert not config.scheduler_enabled()
+    assert config.scheduler_disabled_reason() == "the environment is not production"
+    scheduler_module.stop_mailing_scheduler()
+    assert scheduler_module.start_mailing_scheduler() is None
+
+
+@pytest.mark.parametrize("status", ["POC", "poc", "production", "Production"])
+def test_the_automatic_send_runs_in_production(monkeypatch, status):
+    monkeypatch.setenv("DEPLOY_STATUS", status)
+    assert config.is_production() and config.scheduler_enabled()
+
+
+def test_a_non_production_start_logs_why_and_creates_no_scheduler(monkeypatch, caplog):
+    import logging
+
+    from src.mailing import scheduler as scheduler_module
+
+    scheduler_module.stop_mailing_scheduler()
+    with caplog.at_level(logging.INFO):
+        assert scheduler_module.start_mailing_scheduler() is None
+    assert any("mailing scheduler not started: the environment is not production" in r.getMessage() for r in caplog.records)
+    assert scheduler_module._SCHEDULER is None
+
+
+def test_a_production_start_creates_the_scheduler_and_stop_removes_it(production, monkeypatch):
+    from src.mailing import scheduler as scheduler_module
+
+    monkeypatch.setattr(scheduler_module.MailingScheduler, "start", lambda self: self)  # no real thread
+    scheduler_module.stop_mailing_scheduler()
+    created = scheduler_module.start_mailing_scheduler()
+    try:
+        assert created is not None and scheduler_module.start_mailing_scheduler() is created  # idempotent
+    finally:
+        scheduler_module.stop_mailing_scheduler()
+
+
+def test_a_manual_send_still_works_outside_production(builder, sent, flask_app):
+    assert not config.is_production()
+    send_manual("emin", [], as_user(flask_app, ADMIN))
+    assert len(sent["calls"]) == 1
 
 
 # --------------------------------------------------------------------------- exactly once / retries

@@ -157,14 +157,24 @@ def environment_name() -> str:
     return "production" if is_production() else "development"
 
 
-def scheduler_enabled() -> bool:
-    """On by default in EVERY environment (a local machine included);
-    `MAILING_SCHEDULER_ENABLED=false` switches it off on that machine.
+def scheduler_disabled_reason() -> Optional[str]:
+    """Why the automatic send does not run on this machine, or None when it does.
 
-    A machine with the scheduler on sends the real scheduled emails to the client contacts
-    whenever it is running at the scheduled time, wherever it is.
+    The automatic send runs ONLY in production (`DEPLOY_STATUS` = POC / production). Anywhere else
+    (a local machine, a development or test server) it never starts, whatever else is configured, so
+    a non-production run can never email real people on schedule. In production,
+    `MAILING_SCHEDULER_ENABLED=false` still switches it off on that machine.
     """
-    return env_flag("MAILING_SCHEDULER_ENABLED", True)
+    if not is_production():
+        return "the environment is not production"
+    if not env_flag("MAILING_SCHEDULER_ENABLED", True):
+        return "MAILING_SCHEDULER_ENABLED=false"
+    return None
+
+
+def scheduler_enabled() -> bool:
+    """True only in production (and not switched off). See `scheduler_disabled_reason`."""
+    return scheduler_disabled_reason() is None
 
 
 def get_hostname() -> str:

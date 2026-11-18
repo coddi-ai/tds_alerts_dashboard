@@ -5,7 +5,7 @@ One daemon thread wakes every `poll_seconds`, asks which clients are due *right 
 Chilean local time* and runs them. Nothing here decides who sends: the persisted marker in
 `state.claim` does, so several workers (or a restart around the scheduled time) cannot double-send.
 
-On by default; `MAILING_SCHEDULER_ENABLED=false` turns it off.
+Runs only in production (`DEPLOY_STATUS`); `MAILING_SCHEDULER_ENABLED=false` also turns it off there.
 """
 
 from __future__ import annotations
@@ -101,8 +101,9 @@ def start_mailing_scheduler() -> Optional[MailingScheduler]:
     with _LOCK:
         if _SCHEDULER is not None:
             return _SCHEDULER
-        if not config.scheduler_enabled():
-            logger.info("mailing scheduler disabled by MAILING_SCHEDULER_ENABLED")
+        reason = config.scheduler_disabled_reason()
+        if reason is not None:
+            logger.info("mailing scheduler not started: %s", reason)
             return None
         _SCHEDULER = MailingScheduler().start()
         return _SCHEDULER
