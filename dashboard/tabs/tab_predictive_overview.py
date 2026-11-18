@@ -28,7 +28,10 @@ from dashboard.components.predictive_charts import (
 from dashboard.components.predictive_state import (
     RISK_LEVEL_STYLE,
     STATE_COLORS,
+    NO_DATA_STATE,
     combine_states,
+    is_no_data_state,
+    published_state,
     normalize_risk_level,
     normalize_state,
 )
@@ -361,20 +364,45 @@ def attach_status(latest: pd.DataFrame, client: str, component: str) -> pd.DataF
         # Title-case the raw value: casing isn't guaranteed across sources
         # ("Normal" vs "normal"), but status/color/sort lookups below key
         # off the exact capitalized labels "Normal"/"Alerta"/"Anormal".
+        # `sin_datos` -> "Sin Datos" (published_state), not "Sin_Datos".
         return {
-            _normalize_unit_id(u): str(e).strip().title()
+            _normalize_unit_id(u): published_state(e) or str(e).strip().title()
             for u, e in zip(df[unit_col], df[estado_col])
         }
 
     estado_map = {}
+    sin_datos_pub = set()
+    status_df = pd.DataFrame()
     if client:
         status_df = predictive_v2.load_unit_status_summary(client, component)
-        estado_map = _estado_map(status_df)
+        # Upstream 1.3: `estado` is the FINAL state and the short view's own is
+        # `estado_actual`. `status` (short view: quadrant scatter) keys off the
+        # component; `final_status` (KPIs, tables) is the published final state.
+        col = "estado_actual" if "estado_actual" in status_df.columns else "estado"
+        estado_map = _estado_map(status_df, estado_col=col)
+        # Published sin_datos (not "unit absent"): it never takes its curve's state.
+        sin_datos_pub = ({_normalize_unit_id(u) for u, e in zip(status_df["Unit"], status_df[col])
+                          if is_no_data_state(e)} if col in status_df.columns else set())
 
     latest["status"] = latest["Unit"].apply(
         lambda u: estado_map.get(_normalize_unit_id(u), "Sin Datos")
     )
     latest["_status_rank"] = latest["status"].map(_STATUS_RANK).fillna(3)
+    latest["_sin_datos_publicado"] = latest["Unit"].map(_normalize_unit_id).isin(sin_datos_pub)
+
+    if not status_df.empty and "Unit" in status_df.columns:
+        por_unidad = status_df.assign(_u=status_df["Unit"].map(_normalize_unit_id)).drop_duplicates("_u", keep="last").set_index("_u")
+        claves = latest["Unit"].map(_normalize_unit_id)
+        if "origen_estado" in status_df.columns:
+            latest["final_status"] = claves.map(por_unidad["estado"].map(published_state))
+            latest["origen_estado"] = claves.map(por_unidad["origen_estado"])
+        # The quadrant scatter places each unit by the means that PRODUCED its state
+        # (`media_7d` / `media_90d`), not by means recomputed here (row-based windows
+        # and another week cut could put a point in a different quadrant).
+        for propia, publicada in (("avg_ranking_7d", "media_7d"), ("ranking_acum_90d", "media_90d")):
+            if publicada in status_df.columns:
+                valor = claves.map(pd.to_numeric(por_unidad[publicada], errors="coerce"))
+                latest[propia] = valor.where(valor.notna(), latest.get(propia))
     return latest
 
 
@@ -388,9 +416,16 @@ def general_states(latest: pd.DataFrame, active) -> pd.Series:
     curve at all the general state is just the short view's. None where neither
     source has the unit.
     """
+    if "final_status" in latest.columns:
+        # Upstream 1.3: the final state is published (D5); combining again is idempotent
+        # except for sin_datos, which must never take its curve's state.
+        return latest["final_status"].astype(object)
     long_by_unit = {_normalize_unit_id(u): e for u, e in predictive_v2.active_cycle_estado(active).items()}
+    sin_datos = (latest["_sin_datos_publicado"] if "_sin_datos_publicado" in latest.columns
+                 else pd.Series(False, index=latest.index))
     return pd.Series(
-        [combine_states(s, long_by_unit.get(_normalize_unit_id(u))) for u, s in zip(latest["Unit"], latest["status"])],
+        [NO_DATA_STATE if sd else combine_states(s, long_by_unit.get(_normalize_unit_id(u)))
+         for u, s, sd in zip(latest["Unit"], latest["status"], sin_datos)],
         index=latest.index, dtype=object,
     )
 
@@ -450,7 +485,14 @@ def load_latest_risk_levels(client: str, component: str):
     the only thing that colours a per-mode cell."""
     if not client:
         return None
-    return predictive_v2.latest_risk_levels(predictive_v2.load_risk_levels(client, component))
+    niveles = predictive_v2.latest_risk_levels(predictive_v2.load_risk_levels(client, component))
+    # A unit without data (`sin_datos`) shows no mode level: its last levels are not
+    # from this week (D3). Its cells render as "Sin datos".
+    sin = predictive_v2.units_without_data(client, component)
+    if sin and not niveles.empty:
+        niveles = niveles.astype(object)
+        niveles.loc[niveles.index.isin(sin), :] = None
+    return niveles
 
 
 # ── Components ────────────────────────────────────────────────────────────────

@@ -454,8 +454,11 @@ def _component_predictive_status_maps(client: str, component: str) -> tuple[dict
     estado_map: dict[str, str] = {}
     ranking_map: dict[str, float] = {}
     if not df_status.empty and "estado" in df_status.columns:
+        # `estado` is upstream's final state since 1.3; `sin_datos` -> "Sin Datos"
+        # (STATUS_PRIORITY 0: never read as a checked-and-healthy unit).
+        from dashboard.components.predictive_state import published_state
         estado_map = {
-            _normalize_unit_id(u): str(e).strip().title()
+            _normalize_unit_id(u): published_state(e) or str(e).strip().title()
             for u, e in zip(df_status["Unit"], df_status["estado"])
         }
         if "ranking" in df_status.columns:
