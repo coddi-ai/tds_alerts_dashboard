@@ -19,13 +19,14 @@ from dashboard.callbacks.alerts_callbacks import (
     filter_alert_dropdown_by_criteria,
     populate_detail_filter_options,
 )
-from src.data.loaders import _load_alerts_data_cached
+from tests.alert_partition_support import build_partitions, install_alerts
 
 
 def _write_alerts_csv(tmp_path: Path, rows: list[dict]) -> None:
     alerts_path = tmp_path / "alerts" / "golden" / "capstone" / "consolidated_alerts.csv"
     alerts_path.parent.mkdir(parents=True)
     pd.DataFrame(rows).to_csv(alerts_path, index=False)
+    build_partitions(tmp_path, "capstone")
 
 
 def _base_row(fusion_id: str, timestamp: str, unit: str = "CA-42") -> dict:
@@ -55,9 +56,7 @@ def three_alerts(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setenv("DASHBOARD_DATA_ROOT", str(tmp_path))
-    _load_alerts_data_cached.cache_clear()
     yield
-    _load_alerts_data_cached.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +94,7 @@ def test_other_clients_keep_the_tribology_filter(client):
     ('all', {'F-multi', 'F-telemetry', 'F-oil'}),
     (None, {'F-multi', 'F-telemetry', 'F-oil'}),
 ])
-def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, choice, expected):
+def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, tmp_path, choice, expected):
     from dashboard.callbacks import alerts_callbacks as callbacks
 
     rows = pd.DataFrame([
@@ -107,7 +106,7 @@ def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, 
          'has_tribology': True, 'has_maintenance': False},
     ])
     rows['Timestamp'] = pd.to_datetime(rows['Timestamp'], utc=True).dt.tz_localize(None)
-    monkeypatch.setattr(callbacks, 'load_alerts_data', lambda client: rows)
+    install_alerts(monkeypatch, tmp_path, rows, client='emin')
     options = callbacks.filter_alert_dropdown_by_criteria(None, None, None, choice, 'emin', None)
     assert {option['value'] for option in options} == expected
 
@@ -117,7 +116,7 @@ def test_emin_filter_uses_published_type_and_clearing_restores_all(monkeypatch, 
     ('no', {'F-multi'}),
     ('all', {'F-oil', 'F-multi'}),
 ])
-def test_other_client_filter_still_uses_oil_presence(monkeypatch, choice, expected):
+def test_other_client_filter_still_uses_oil_presence(choice, expected):
     from dashboard.callbacks import alerts_callbacks as callbacks
 
     rows = pd.DataFrame([
@@ -125,8 +124,11 @@ def test_other_client_filter_still_uses_oil_presence(monkeypatch, choice, expect
         {**_base_row('F-oil', '2026-07-09T16:00:00Z'), 'Trigger_type': 'Tribologia', 'has_tribology': True},
     ])
     rows['Timestamp'] = pd.to_datetime(rows['Timestamp'], utc=True).dt.tz_localize(None)
-    monkeypatch.setattr(callbacks, 'load_alerts_data', lambda client: rows)
-    options = callbacks.filter_alert_dropdown_by_criteria(None, None, None, choice, 'capstone', None)
+    # Straight at the filter: the loader derives has_tribology from the type, so this
+    # flag-over-type distinction can only be set up on an in-memory frame.
+    options = callbacks._alert_dropdown_options(
+        callbacks._filter_alerts(rows, 'capstone', None, None, None, choice)
+    )
     assert {option['value'] for option in options} == expected
 
 
@@ -180,14 +182,10 @@ def test_date_from_boundary_is_exact(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setenv("DASHBOARD_DATA_ROOT", str(tmp_path))
-    _load_alerts_data_cached.cache_clear()
-    try:
-        options = filter_alert_dropdown_by_criteria(
-            units=["CA-42"], sistemas=None, start_date="2026-07-09",
-            has_tribology=None, client="capstone", current_value=None,
-        )
-    finally:
-        _load_alerts_data_cached.cache_clear()
+    options = filter_alert_dropdown_by_criteria(
+        units=["CA-42"], sistemas=None, start_date="2026-07-09",
+        has_tribology=None, client="capstone", current_value=None,
+    )
 
     labels = [opt["value"] for opt in options]
     assert "F-boundary" in labels

@@ -12,6 +12,7 @@ from src.data.emin_alert_evidence import (
     prepare_emin_alert_sources,
     resolve_emin_maintenance_evidence,
 )
+from src.data.alert_partition_builder import build_client
 from src.data.loaders import load_alerts_data
 
 
@@ -57,6 +58,7 @@ def _write_case(tmp_path, monkeypatch, client="emin", **changes):
     alerts = tmp_path / "alerts" / "golden" / client / "consolidated_alerts.csv"
     alerts.parent.mkdir(parents=True)
     pd.DataFrame([_case(**changes)]).to_csv(alerts, index=False)
+    build_client(client, tmp_path)  # the Alertas views read the partitions of this CSV
     weekly = tmp_path / "mantentions" / "golden" / client / "19-2025.csv"
     weekly.parent.mkdir(parents=True)
     pd.DataFrame([_legacy_row()]).to_csv(weekly, index=False)

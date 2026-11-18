@@ -98,6 +98,24 @@ def prepare_alert_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def prepare_scope_rows(alerts_df: pd.DataFrame) -> pd.DataFrame:
+    """`prepare_alert_rows` for a frame that holds only UnitId, Timestamp, sistema and
+    Trigger_Var (every unit's rows, read for the fleet-wide charts).
+
+    Derives exactly the columns the row filters and the Distribución por unidad chart read
+    (``system_display``, ``signal_key``, the normalized ``Timestamp``) with the same
+    expressions `prepare_alert_rows` uses, and skips the per-row text work (IA message,
+    evidence labels, local date) those charts never show.
+    """
+    if alerts_df is None or alerts_df.empty:
+        return pd.DataFrame()
+    frame = alerts_df.copy()
+    frame["Timestamp"] = to_utc_naive(frame["Timestamp"])
+    frame["system_display"] = frame.get("sistema", "").map(translate_alert_system)
+    frame["signal_key"] = frame.get("Trigger_Var", pd.Series(None, index=frame.index, dtype=object)).map(first_signal_key).fillna(NO_SIGNAL_KEY)
+    return frame
+
+
 def filter_alert_rows(
     alerts_df: pd.DataFrame,
     unit: Optional[Iterable[str]] = None,
@@ -169,8 +187,10 @@ def filter_prepared_rows(
     return frame.sort_values("Timestamp", ascending=False, na_position="last")
 
 
-def alert_summary(alerts_df: pd.DataFrame) -> dict:
-    frame = prepare_alert_rows(alerts_df)
+def alert_summary(alerts_df: pd.DataFrame, prepared: bool = False) -> dict:
+    """KPIs of a set of alerts. ``prepared=True`` says the frame already went through
+    `prepare_alert_rows` (the General view's filtered rows do), so it is not prepared again."""
+    frame = alerts_df if prepared and alerts_df is not None else prepare_alert_rows(alerts_df)
     if frame.empty:
         return {"total": 0, "units": 0, "telemetry": 0, "tribology": 0, "mixed": 0, "latest": None}
     return {

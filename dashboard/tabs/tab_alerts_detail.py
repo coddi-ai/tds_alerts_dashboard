@@ -17,6 +17,7 @@ Displays detailed view for a selected alert with:
 from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
+from dashboard.tabs.tab_alerts_general import default_alert_dates
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -99,8 +100,12 @@ def create_layout() -> html.Div:
                     # W34-05: Date-from filter (replaces "Con Telemetría").
                     # Inclusive: an alert exactly at midnight of the chosen
                     # Chile calendar day is included. No date = no lower
-                    # bound. See filter_alert_dropdown_by_criteria for the
+                    # bound ("Sin límite", which loads the whole history).
+                    # See filter_alert_dropdown_by_criteria for the
                     # UTC-naive Timestamp comparison this drives.
+                    # Opens on the start of Vista General's "Últimas 4
+                    # semanas" window (same calculation), so opening the
+                    # view reads four weeks of partitions, not the history.
                     dbc.Col([
                         html.Label([
                             html.I(className="fas fa-calendar-alt me-1"),
@@ -108,6 +113,7 @@ def create_layout() -> html.Div:
                         ], className="fw-bold mb-2"),
                         dcc.DatePickerSingle(
                             id='detail-filter-date-from',
+                            date=default_alert_dates()[0],
                             placeholder=t("tab_alerts_detail.sin_limite"),
                             display_format='DD/MM/YYYY',
                             clearable=True,

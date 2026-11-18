@@ -448,7 +448,7 @@ def _frame(rows):
 
 
 @pytest.fixture
-def page_alerts(monkeypatch):
+def page_alerts(monkeypatch, tmp_path):
     """Alertas con timestamps UTC-naive; las del borde cruzan la medianoche UTC <-> Chile."""
     frame = _frame([
         {"UnitId": "CA-1", "sistema": "motor", "Timestamp": "2026-07-10 16:00"},
@@ -466,8 +466,12 @@ def page_alerts(monkeypatch):
     from dashboard.callbacks import alerts_callbacks
     from src.data import loaders
 
+    # The email still reads the consolidated CSV (`load_alerts_data`); the page reads the
+    # partitions of that same CSV. Both must show the same numbers.
     monkeypatch.setattr(loaders, "load_alerts_data", lambda client: frame)
-    monkeypatch.setattr(alerts_callbacks, "load_alerts_data", lambda client: frame)
+    from tests.alert_partition_support import install_alerts
+
+    install_alerts(monkeypatch, tmp_path, frame)
     return frame
 
 

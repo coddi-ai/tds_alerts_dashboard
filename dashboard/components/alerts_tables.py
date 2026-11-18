@@ -8,6 +8,7 @@ from src.i18n import t
 from src.i18n.data_text import localized_value
 import pandas as pd
 import re
+from functools import lru_cache
 import ast
 import json
 from dash import dash_table, html
@@ -23,17 +24,29 @@ from dashboard.components.labels import translate_component_label, source_style,
 logger = get_logger(__name__)
 
 
+@lru_cache(maxsize=4)
+def _signal_pattern(keys: tuple) -> "re.Pattern":
+    """One regex matching any signal key as a whole token, longest key first."""
+    ordered = sorted(keys, key=len, reverse=True)
+    return re.compile(
+        r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(key) for key in ordered) + r")(?![A-Za-z0-9_])"
+    )
+
+
 def _translate_signal_text(value: object) -> str:
-    """Translate canonical Capstone signal keys in client-facing text."""
+    """Translate canonical Capstone signal keys in client-facing text.
+
+    One pass over the text with a single compiled pattern (it used to run one `re.sub`, with a
+    freshly built pattern, per key and per message: ~1 ms per IA message, three times per General
+    refresh). The pattern is keyed on the current keys, so a label added to
+    ``FEATURE_NAMES_ES`` at runtime is picked up.
+    """
     text = "" if value is None else str(value)
-    for key in sorted(FEATURE_NAMES_ES, key=len, reverse=True):
-        label = FEATURE_NAMES_ES[key]
-        text = re.sub(
-            rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
-            label,
-            text,
-        )
-    return text
+    if not FEATURE_NAMES_ES:
+        return text
+    return _signal_pattern(tuple(FEATURE_NAMES_ES)).sub(
+        lambda match: FEATURE_NAMES_ES[match.group(0)], text
+    )
 
 
 def _clean_text(value: object) -> str:

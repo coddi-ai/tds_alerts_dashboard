@@ -13,6 +13,7 @@ from src.data.emin_alert_evidence import (
     maintenance_window,
     resolve_emin_maintenance_evidence,
 )
+from src.data.alert_partition_builder import build_client
 from src.data.loaders import load_alerts_data, load_emin_maintenance_evidence
 
 
@@ -204,6 +205,7 @@ def _write_dashboard_data(tmp_path, monkeypatch, client="emin"):
     alerts_path = tmp_path / "alerts" / "golden" / client / "consolidated_alerts.csv"
     alerts_path.parent.mkdir(parents=True)
     pd.DataFrame([_alert()]).to_csv(alerts_path, index=False)
+    build_client(client, tmp_path)  # the Alertas views read the partitions of this CSV
     week_path = tmp_path / "mantentions" / "golden" / client / "28-2026.csv"
     week_path.parent.mkdir(parents=True)
     pd.DataFrame([_weekly()]).to_csv(week_path, index=False)
@@ -328,6 +330,7 @@ def test_detail_sections_follow_published_sources_with_or_without_maintenance(
         TelemetryID="" if source_type == "Tribologia" else "T-1",
         TribologyID="O-1" if source_type in {"Mixto", "Tribologia"} else "",
     )]).to_csv(alerts_path, index=False)
+    build_client("emin", tmp_path)
     if not context:
         week_path.unlink()
     called = []

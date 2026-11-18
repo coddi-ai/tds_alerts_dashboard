@@ -18,6 +18,7 @@ from dashboard.components.alerts_charts import (
     create_alerts_per_unit_chart,
     create_system_signal_treemap,
 )
+from tests.alert_partition_support import install_alerts
 from dashboard.components.alerts_report import filter_alert_rows
 from dashboard.components.alerts_tables import alerts_report_table_styles, create_alerts_report_table
 from dashboard.components.labels import SOURCE_STYLE, source_style
@@ -146,6 +147,15 @@ CATALOG = {
         "brake_temp": {"Frenos": 2},
     },
 }
+
+
+_ROOT = {}
+
+
+@pytest.fixture(autouse=True)
+def _data_root(tmp_path):
+    """Where the General view's alerts are written as partitions (see `install_alerts`)."""
+    _ROOT["path"] = tmp_path
 
 
 @pytest.fixture(autouse=True)
@@ -352,8 +362,8 @@ def test_trigger_filter_count_equals_the_treemap_cells_of_that_signal(alerts):
         assert len(filter_alert_rows(alerts, trigger=[key])) == sum(count for k, count in leaves if k == key)
 
 
-def test_summary_caption_reflects_the_date_range_and_the_chart_filters_together(monkeypatch, alerts):
-    monkeypatch.setattr(callbacks, "load_alerts_data", lambda client: alerts)
+def test_summary_caption_reflects_the_date_range_and_the_chart_filters_together(monkeypatch, tmp_path, alerts):
+    install_alerts(monkeypatch, tmp_path, alerts)
 
     def caption(start, end, active):
         return callbacks.update_general_tab("capstone", start, end, active)[5]
@@ -367,8 +377,8 @@ def test_summary_caption_reflects_the_date_range_and_the_chart_filters_together(
     assert "Mostrando 2 alertas de 1 unidades" in caption("2026-07-01", "2026-07-31", {"unit": "CA-2", "trigger": "imp_lb_psi"})
 
 
-def test_open_ended_range_when_a_field_is_cleared(monkeypatch, alerts):
-    monkeypatch.setattr(callbacks, "load_alerts_data", lambda client: alerts)
+def test_open_ended_range_when_a_field_is_cleared(monkeypatch, tmp_path, alerts):
+    install_alerts(monkeypatch, tmp_path, alerts)
     assert "Mostrando 5 alertas" in callbacks.update_general_tab("capstone", None, None, {})[5]
 
 
@@ -682,7 +692,7 @@ def _kpis(stats):
 
 
 def _general(monkeypatch, alerts, active, start="2026-07-01", end="2026-07-31"):
-    monkeypatch.setattr(callbacks, "load_alerts_data", lambda client: alerts)
+    install_alerts(monkeypatch, _ROOT["path"], alerts)
     return callbacks.update_general_tab("capstone", start, end, active)
 
 

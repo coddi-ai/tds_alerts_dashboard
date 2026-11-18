@@ -21,8 +21,13 @@ from src.data.emin_alert_evidence import (
     oil_report_reference,
 )
 
+from src.data.alert_partitions import AlertPartitionError
 from src.data.loaders import (
-    load_alerts_data,
+    alert_index_signature,
+    client_has_alert_partitions,
+    load_alert_by_id,
+    load_alert_index,
+    load_alerts_for_scope,
     load_telemetry_values,
     load_telemetry_states,
     load_telemetry_limits,
@@ -67,6 +72,7 @@ from dashboard.components.alerts_report import (
     prepare_alert_rows,
     translate_alert_component,
     translate_alert_system,
+    prepare_scope_rows,
 )
 from dashboard.components.alert_signal_grid import (
     SIGNALS_COLLAPSE_ID,
@@ -272,20 +278,38 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
         raise PreventUpdate
 
     logger.info(f"Loading alerts general view for client: {client}")
-    # Load alerts data
-    alerts_df = load_alerts_data(client)
+    filters = _normalise_filters(active_filters)
+    selected_units = filters.get('unit')
 
-    if alerts_df.empty:
+    # Only the {week}/file.parquet partitions Desde/Hasta touch are read (one file per week,
+    # every unit in it).
+    try:
+        scope_df = load_alerts_for_scope(client, start_date=start_date, end_date=end_date)
+        # The Distribución por unidad chart and the in-range extent cover every unit even
+        # while some are selected (the selection is only marked); everything else describes
+        # the selected units' rows only, so the row-wise work (IA message, evidence labels) is
+        # done for those alone.
+        alerts_df = (
+            scope_df[scope_df['UnitId'].isin(selected_units)] if selected_units and not scope_df.empty
+            else scope_df
+        )
+    except AlertPartitionError as e:
+        logger.error(f"Error reading alert partitions: {e}")
+        error_fig = {'data': [], 'layout': {'title': t("component_hours_callbacks.error", str_e=str(e))}}
+        error_alert = dbc.Alert(t("alerts_callbacks.error_al_cargar_datos", str_e=str(e)), color="danger")
+        return error_fig, error_fig, error_fig, error_alert, error_alert, t("component_hours_callbacks.error", str_e=str(e))
+
+    if not client_has_alert_partitions(client):
         logger.warning(f"No alerts data available for client: {client}")
         empty_fig = {'data': [], 'layout': {'title': t("alerts_callbacks.no_data_available")}}
         empty_alert = dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         return empty_fig, empty_fig, empty_fig, empty_alert, empty_alert, ""
 
-    filters = _normalise_filters(active_filters)
-
     try:
         prepared = prepare_alert_rows(alerts_df)
-        in_range = _filtered_alerts(prepared, start_date, end_date, {})
+        # Every unit's rows in the range (what Distribución por unidad and the week axis read).
+        prepared_scope = prepared if alerts_df is scope_df else prepare_scope_rows(scope_df)
+        in_range = _filtered_alerts(prepared_scope, start_date, end_date, {})
 
         if in_range.empty:
             logger.warning("No data after applying filters")
@@ -298,7 +322,7 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
 
         # Charts: each skips the dimension(s) it draws itself.
         unit_chart = create_alerts_per_unit_chart(
-            _filtered_alerts(prepared, start_date, end_date, filters, skip=('unit',)),
+            _filtered_alerts(prepared_scope, start_date, end_date, filters, skip=('unit',)),
             target_pct=settings.alert_unit_chart_target_pct, max_bars=settings.alert_unit_chart_max_bars,
             selected_units=filters.get('unit', []),
         )
@@ -312,7 +336,7 @@ def update_general_tab(client: str, start_date: str, end_date: str, active_filte
             selected_system=filters.get('system'), selected_trigger=filters.get('trigger'),
         )
 
-        summary = alert_summary(filtered_df)
+        summary = alert_summary(filtered_df, prepared=True)  # already prepared above
         stats = create_summary_stats_display(summary['total'], summary['units'], mixed_count=summary['mixed'])
 
         if filtered_df.empty:
@@ -369,17 +393,17 @@ def _chart_click_filter(chart_id: str, click_data) -> tuple[str, str] | None:
 
 @lru_cache(maxsize=8)
 def _cached_alert_catalog(client: str, _mtime_ns: int, _size: int) -> dict:
-    return alert_filter_catalog(load_alerts_data(client))
+    return alert_filter_catalog(load_alert_index(client))
 
 
 def _alert_catalog(client: str) -> dict:
-    """`alert_filter_catalog` of the client's alerts, reloaded only when the alerts file
-    changes: every filter change reads it, and the alerts themselves are costly to load."""
-    try:
-        stat = _data_path("alerts", "golden", (client or '').lower(), "consolidated_alerts.csv").stat()
-    except OSError:
+    """`alert_filter_catalog` of the client's whole alert history, from the partition index
+    (one light row per alert, so no partition is read), reloaded only when the partitions are
+    regenerated: every filter change reads it."""
+    signature = alert_index_signature(client)
+    if signature is None:
         return alert_filter_catalog(pd.DataFrame())
-    return _cached_alert_catalog(client, stat.st_mtime_ns, stat.st_size)
+    return _cached_alert_catalog(client, *signature)
 
 
 def _reconcile_filters(filters: dict, changed: str | None, catalog: dict) -> dict:
@@ -671,6 +695,10 @@ def _filter_alerts(alerts_df, client, units=None, sistemas=None, start_date=None
     """
     filtered_df = alerts_df.copy()
 
+    if filtered_df.empty:
+        # Nothing was read for the loaded scope; only a kept alert (below) can still be listed.
+        return _with_kept_alert(filtered_df, client, keep_alert_id)
+
     if units:
         filtered_df = filtered_df[filtered_df['UnitId'].isin(units)]
 
@@ -708,10 +736,23 @@ def _filter_alerts(alerts_df, client, units=None, sistemas=None, start_date=None
             has_source = filtered_df['has_tribology'] == True
         filtered_df = filtered_df[has_source if wants_source else ~has_source]
 
-    if keep_alert_id and keep_alert_id not in set(filtered_df['FusionID']):
-        filtered_df = pd.concat([filtered_df, alerts_df[alerts_df['FusionID'] == keep_alert_id]])
+    return _with_kept_alert(filtered_df, client, keep_alert_id)
 
-    return filtered_df
+
+def _with_kept_alert(filtered_df: pd.DataFrame, client, keep_alert_id) -> pd.DataFrame:
+    """Append the alert that must stay selectable when the filters dropped it.
+
+    It may lie outside the loaded weeks/units (the General tab can list any week, the Detalle
+    default only the last four), so it is read from its own partition, found by id.
+    """
+    if not keep_alert_id:
+        return filtered_df
+    if not filtered_df.empty and keep_alert_id in set(filtered_df['FusionID']):
+        return filtered_df
+    kept = load_alert_by_id(client, keep_alert_id)
+    if kept.empty:
+        return filtered_df
+    return kept if filtered_df.empty else pd.concat([filtered_df, kept])
 
 
 def _alert_dropdown_options(alerts_df) -> list:
@@ -719,6 +760,8 @@ def _alert_dropdown_options(alerts_df) -> list:
     # Critical-review follow-up: assign the formatted column once,
     # directly on the frame, instead of a separate Series indexed by
     # `.loc[idx]` inside the loop.
+    if alerts_df.empty:
+        return []
     sorted_df = alerts_df.sort_values('Timestamp', ascending=False).copy()
     sorted_df['_fecha_local'] = format_local(sorted_df['Timestamp'], fmt='%Y-%m-%d %H:%M')
     options = []
@@ -763,12 +806,10 @@ def initialize_alert_dropdown(client: str, units=None, sistemas=None, start_date
 
     logger.info(f"Initializing alert dropdown for client: {client}")
 
-    alerts_df = load_alerts_data(client)
-
-    if alerts_df.empty:
-        return []
-
     try:
+        # Only the weeks from "Fecha desde" on (every week when it is cleared) and the
+        # selected units are read.
+        alerts_df = load_alerts_for_scope(client, units=units, start_date=start_date)
         keep_alert_id = (nav_data or {}).get('alert_id')
         options = _alert_dropdown_options(
             _filter_alerts(alerts_df, client, units, sistemas, start_date, source_filter, keep_alert_id)
@@ -927,7 +968,8 @@ def populate_detail_filter_options(client: str):
     if not client:
         raise PreventUpdate
     
-    alerts_df = load_alerts_data(client)
+    # Options come from the whole history's light index, not from the loaded weeks.
+    alerts_df = load_alert_index(client)
     
     if alerts_df.empty:
         return [], []
@@ -988,12 +1030,8 @@ def filter_alert_dropdown_by_criteria(units, sistemas, start_date, has_tribology
     if not client:
         raise PreventUpdate
 
-    alerts_df = load_alerts_data(client)
-
-    if alerts_df.empty:
-        return []
-
     try:
+        alerts_df = load_alerts_for_scope(client, units=units, start_date=start_date)
         options = _alert_dropdown_options(
             _filter_alerts(alerts_df, client, units, sistemas, start_date, has_tribology)
         )
@@ -1097,16 +1135,16 @@ def update_detail_view(dropdown_value, client, nav_data):
     
     logger.info(f"Loading detail view for alert: {selected_fusion_id}")
     
-    # Load alerts data
-    alerts_df = load_alerts_data(client)
-    
-    if alerts_df.empty:
-        return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
-    
-    # Find selected alert
-    alert_row = alerts_df[alerts_df['FusionID'] == selected_fusion_id]
-    
+    # Read only the partition that holds the selected alert (located through the index).
+    try:
+        alert_row = load_alert_by_id(client, selected_fusion_id)
+    except AlertPartitionError as e:
+        logger.error(f"Error reading alert partition: {e}")
+        return dbc.Alert(t("alerts_callbacks.error_al_cargar_detalles", str_e=str(e)), color="danger")
+
     if alert_row.empty:
+        if not client_has_alert_partitions(client):
+            return dbc.Alert(t("menace_control_callbacks.no_hay_datos_de_alertas_disponibles"), color="warning")
         return dbc.Alert(t("alerts_callbacks.alerta_no_encontrada", selected_fusion_id=selected_fusion_id), color="danger")
     
     alert_row = alert_row.iloc[0]

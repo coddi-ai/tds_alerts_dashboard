@@ -24,6 +24,7 @@ from src.data.emin_alert_evidence import (
     prepare_emin_alert_sources,
     resolve_emin_maintenance_evidence,
 )
+from src.data import alert_partitions as alert_store
 from src.data.fast_io import (
     read_csv as fast_read_csv,
     read_csv_filtered as fast_read_csv_filtered,
@@ -489,6 +490,40 @@ def load_silver_data(file_path: str | Path) -> pd.DataFrame:
 # ALERTS DASHBOARD LOADERS (CDA ONLY)
 # ========================================
 
+def _normalize_alerts_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """The one post-read normalization of consolidated alerts, shared by every alert reader
+    (the full-CSV loader and the partitioned loaders) so both produce the same frame.
+
+    Adds the derived columns (has_telemetry, has_tribology, Month).
+    """
+    # Normalize event timestamps to timezone-naive UTC (W34-06: the single
+    # normalization point — every comparison, window and filter downstream
+    # stays in this UTC-naive form; conversion to local time happens only
+    # at display time, via to_local_naive()/format_local()). Capstone
+    # emits ISO timestamps with offsets while the Dash date picker emits
+    # naive calendar dates; one representation avoids aware/naive
+    # comparisons.
+    df['Timestamp'] = to_utc_naive(df['Timestamp'])
+
+    # Fill sistema, subsistema and componente missing values
+    df['sistema'] = df['sistema'].fillna('Desconocido')
+    df['subsistema'] = df['subsistema'].fillna('Desconocido')
+    df['componente'] = df['componente'].fillna('Desconocido')
+    if 'TribologyID' in df.columns:
+        df['TribologyID'] = (
+            df['TribologyID']
+            .fillna('')
+            .astype(str)
+            .str.replace(r'\.0$', '', regex=True)
+        )
+
+    # Derive additional columns
+    df['has_telemetry'] = df['Trigger_type'].isin(['Telemetria', 'Mixto'])
+    df['has_tribology'] = df['Trigger_type'].isin(['Tribologia', 'Mixto'])
+    df['Month'] = df['Timestamp'].dt.to_period('M')
+    return df
+
+
 @lru_cache(maxsize=8)
 def _load_alerts_data_cached(client: str, path: str, mtime_ns: int, size: int) -> pd.DataFrame:
     """
@@ -508,34 +543,7 @@ def _load_alerts_data_cached(client: str, path: str, mtime_ns: int, size: int) -
         return pd.DataFrame()
     
     try:
-        df = fast_read_csv(file_path)
-        
-        # Normalize event timestamps to timezone-naive UTC (W34-06: the single
-        # normalization point — every comparison, window and filter downstream
-        # stays in this UTC-naive form; conversion to local time happens only
-        # at display time, via to_local_naive()/format_local()). Capstone
-        # emits ISO timestamps with offsets while the Dash date picker emits
-        # naive calendar dates; one representation avoids aware/naive
-        # comparisons.
-        df['Timestamp'] = to_utc_naive(df['Timestamp'])
-        
-        # Fill sistema, subsistema and componente missing values
-        df['sistema'] = df['sistema'].fillna('Desconocido')
-        df['subsistema'] = df['subsistema'].fillna('Desconocido')
-        df['componente'] = df['componente'].fillna('Desconocido')
-        if 'TribologyID' in df.columns:
-            df['TribologyID'] = (
-                df['TribologyID']
-                .fillna('')
-                .astype(str)
-                .str.replace(r'\.0$', '', regex=True)
-            )
-        
-        # Derive additional columns
-        df['has_telemetry'] = df['Trigger_type'].isin(['Telemetria', 'Mixto'])
-        df['has_tribology'] = df['Trigger_type'].isin(['Tribologia', 'Mixto'])
-        df['Month'] = df['Timestamp'].dt.to_period('M')
-        
+        df = _normalize_alerts_frame(fast_read_csv(file_path))
         logger.info(f"Loaded {len(df)} alerts for client {client}")
         return df
     
@@ -544,8 +552,28 @@ def _load_alerts_data_cached(client: str, path: str, mtime_ns: int, size: int) -
         return pd.DataFrame()
 
 
+def _enrich_emin_alerts(df: pd.DataFrame) -> pd.DataFrame:
+    """EMIN's published-source flags and weekly maintenance evidence for the given alerts."""
+    df = prepare_emin_alert_sources(df)
+    weeks = {
+        week for timestamp in df['Timestamp'].unique()
+        for week in maintenance_files_for_alert(pd.Timestamp(timestamp))
+    }
+    # Evidence is resolved outside the alerts cache so updated or deleted
+    # weekly files change the displayed context without a restart.
+    weekly_data = {
+        week: load_maintenance_week('emin', week)
+        for week in sorted(weeks)
+    }
+    return enrich_emin_alert_evidence(df, weekly_data)
+
+
 def load_alerts_data(client: str) -> pd.DataFrame:
-    """Return alerts data cached by the current source generation."""
+    """Return alerts data cached by the current source generation.
+
+    Reads the whole ``consolidated_alerts.csv``. The two Alertas views do **not** use it: they
+    read week/unit Parquet partitions through the ``load_alert_*`` functions below.
+    """
     file_path = _data_path("alerts", "golden", (client or '').lower(), "consolidated_alerts.csv")
     if not file_path.exists():
         return pd.DataFrame()
@@ -554,19 +582,105 @@ def load_alerts_data(client: str) -> pd.DataFrame:
         (client or '').lower(), str(file_path), stat.st_mtime_ns, stat.st_size
     ).copy(deep=True)
     if (client or '').lower() == 'emin' and not df.empty:
-        df = prepare_emin_alert_sources(df)
-        weeks = {
-            week for timestamp in df['Timestamp'].unique()
-            for week in maintenance_files_for_alert(pd.Timestamp(timestamp))
-        }
-        # Evidence is resolved outside the alerts cache so updated or deleted
-        # weekly files change the displayed context without a restart.
-        weekly_data = {
-            week: load_maintenance_week('emin', week)
-            for week in sorted(weeks)
-        }
-        df = enrich_emin_alert_evidence(df, weekly_data)
+        df = _enrich_emin_alerts(df)
     return df
+
+
+# ----------------------------------------
+# Partitioned alerts (Alertas > Vista General / Vista Detallada)
+#
+# data/alerts/golden/{client}/{week}/file.parquet, written by
+# scripts/partition_alerts.py. Nothing below touches consolidated_alerts.csv. Layout and the
+# read mechanics live in src/data/alert_partitions.py; this module only turns the rows it
+# returns into the same frame `load_alerts_data` produces.
+# ----------------------------------------
+
+def _alert_client_dir(client: str) -> Path:
+    return alert_store.client_dir(client, os.getenv("DASHBOARD_DATA_ROOT", "data"))
+
+
+def _utc_bounds(start_date, end_date):
+    """``(lower, upper_exclusive)`` UTC-naive bounds of a Desde/Hasta pair (Chile calendar
+    days), ``None`` for an open or unusable side.
+
+    This is the arithmetic the exact row filters apply (`filter_prepared_rows`,
+    `_filter_alerts`), used here only to pick which weeks to open; the row filters then trim to
+    the exact range.
+    """
+    def bound(value):
+        if not value:
+            return None
+        try:
+            converted = to_utc_naive(pd.Timestamp(value), source_tz="America/Santiago")
+        except (ValueError, TypeError):
+            return None
+        return None if pd.isna(converted) else converted
+
+    lower, upper = bound(start_date), bound(end_date)
+    return lower, (upper + pd.Timedelta(days=1) if upper is not None else None)
+
+
+def load_alerts_for_scope(client: str, *, units=None, start_date=None, end_date=None) -> pd.DataFrame:
+    """Alerts of the ``{week}/file.parquet`` partitions a Desde/Hasta range touches.
+
+    Same frame as `load_alerts_data` (normalized timestamps, derived columns, EMIN evidence),
+    restricted to the weeks that overlap ``[start_date, end_date]`` and, when ``units`` is given,
+    to those units. A partition holds every unit of its week, so the unit selection is a row
+    filter on what was read. The weeks are whole: callers trim to the exact range with their
+    usual row filters. A week without a partition is simply absent.
+    """
+    directory = _alert_client_dir(client)
+    lower, upper = _utc_bounds(start_date, end_date)
+    weeks = alert_store.select_weeks(directory, lower, upper)
+    logger.info("Reading alert partitions for %s: %d week(s)", client, len(weeks))
+    df = alert_store.read_scope(directory, weeks)
+    if df.empty:
+        return pd.DataFrame()
+    if units:
+        df = df[df['UnitId'].isin(list(units))].reset_index(drop=True)
+        if df.empty:
+            return pd.DataFrame()
+    df = _normalize_alerts_frame(df)
+    if (client or '').lower() == 'emin':
+        df = _enrich_emin_alerts(df)
+    return df
+
+
+def load_alert_by_id(client: str, fusion_id) -> pd.DataFrame:
+    """The one alert with this FusionID (a 0- or 1-row frame like `load_alerts_data` rows),
+    read from its single week partition, wherever it falls in the history."""
+    directory = _alert_client_dir(client)
+    week = alert_store.locate_alert(directory, fusion_id)
+    if week is None:
+        return pd.DataFrame()
+    df = alert_store.read_scope(directory, [week])
+    if df.empty:
+        return pd.DataFrame()
+    df = df[df['FusionID'] == fusion_id].head(1)
+    if df.empty:
+        return pd.DataFrame()
+    df = _normalize_alerts_frame(df.reset_index(drop=True))
+    if (client or '').lower() == 'emin':
+        df = _enrich_emin_alerts(df)
+    return df
+
+
+def load_alert_index(client: str) -> pd.DataFrame:
+    """One light row per alert of the whole history (UnitId, sistema, Trigger_Var, ...), the
+    source of the filter options. ``sistema`` is filled like `_normalize_alerts_frame`."""
+    index = alert_store.read_alert_index(_alert_client_dir(client))
+    if not index.empty:
+        index['sistema'] = index['sistema'].fillna('Desconocido')
+    return index
+
+
+def alert_index_signature(client: str):
+    """Changes whenever the partitions are regenerated; None when none exist."""
+    return alert_store.index_signature(_alert_client_dir(client))
+
+
+def client_has_alert_partitions(client: str) -> bool:
+    return alert_store.has_partitions(_alert_client_dir(client))
 
 
 def load_emin_maintenance_evidence(alert_row):

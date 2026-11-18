@@ -48,6 +48,12 @@ dashboard/callbacks/*.py  →  dashboard/components/*.py (charts/tables)  →  d
 Browser (Dash/React runtime)
 ```
 
+**Alerts are the one technique that is re-shaped on the way in.** `consolidated_alerts.csv` is no
+longer read by the Alertas views: `scripts/partition_alerts.py` splits it into Parquet partitions
+(`data/alerts/golden/{client}/{week}/file.parquet`), syncs them to S3, and the views read
+only the weeks their filters touch. See §5 ("Partitioned alerts") for the layout, the schedule
+and the sync.
+
 If a page shows no data, the first two questions are always: (1) does `data/{technique}/golden/{client}/`
 actually contain the expected file, and (2) does the logged-in user's client list include that client.
 
@@ -61,6 +67,7 @@ actually contain the expected file, and (2) does the logged-in user's client lis
 | `config/` | Runtime settings (`settings.py`) and user accounts (`users.py`) | Yes, for config/access changes |
 | `src/` | Data access layer: loaders, transformers, schemas, S3 sync, logging | Yes, when data-loading logic needs to change |
 | `data/` | Local copy of Gold/Silver-layer files, organized by technique/layer/client | Usually not — this is synced/mounted data, not source |
+| `scripts/` | Operational scripts. `partition_alerts.py` builds the partitioned alerts (§5) | Yes, when the partitioning/schedule changes |
 | `documentation/` | Per-technique data contracts and design docs (source of truth for data shape) | Read frequently, edit when contracts/features change |
 | `ai_docs/` | Dev-authored implementation notes/specs from past feature work | Read for historical context; treat as informal, may be stale |
 | `notebooks/` | Jupyter notebooks used for one-off data exploration | Don't treat as production code; not imported by the app |
@@ -120,6 +127,37 @@ convention — header color, cell padding/font-size, status color palette, toolt
 tabs read as one system. If you touch one, check whether the other should be mirrored too. See
 [documentation/telemetry/dashboard_proposal.md](telemetry/dashboard_proposal.md) for the as-built
 notes on this.
+
+### Alertas → Vista General / Vista Detallada: the partitioned read path
+
+Both views read **only the `{week}/file.parquet` partitions their filters touch** and never open
+`consolidated_alerts.csv` (see §5, "Partitioned alerts"). The callbacks are in
+`dashboard/callbacks/alerts_callbacks.py`; the readers are `load_alerts_for_scope`,
+`load_alert_by_id` and `load_alert_index` in `src/data/loaders.py`.
+
+- **Vista General** — `Desde`/`Hasta` choose the weeks (every week that overlaps the range; the
+  row filters then trim to the exact range). A week file holds every unit, so `Unidad`, Sistema,
+  Señal-Trigger and the week click are all row filters on what was read. **Distribución por unidad**
+  and the Evolución temporal axis cover every unit even while some are selected (the selection is
+  only marked), so they are drawn from all the loaded rows (`prepare_scope_rows`, the light
+  preparation) while the KPIs, table, treemap and week chart use only the selected units' rows
+  (`prepare_alert_rows`, the per-row IA/evidence work).
+- **Vista Detallada** — opens with `Fecha desde` = the start of Vista General's "Últimas 4
+  semanas" window (`default_alert_dates()[0]`, same calculation), so opening it reads about five
+  weekly files. Clearing it ("Sin límite") reads the complete history. `Unidad`, `Sistema` and
+  `Con Tribología` are row filters on the loaded weeks; the *Buscar alerta* selector lists only the
+  loaded scope. A selected alert is read from its single week file, found through the index; an
+  alert reached from Vista General that lies outside the loaded weeks is fetched the same way, so it
+  stays selectable.
+- **Filter options** (Unidad roster, Sistema list, Señal/Trigger list) are offered from the
+  *whole history*, as before, but read from `_alert_index.parquet` (one light row per alert)
+  instead of a partition scan. The catalog is cached by the index's mtime/size.
+- **Nothing is cached by the new read path.** Every filter change re-reads its week files (a few
+  milliseconds for the default window).
+- `load_alerts_data` (the whole-CSV loader) still exists for the *other* consumers of alerts —
+  Hot Sheet, Menace Control, Fleet overview, Unit summary, the alert-summary e-mail. They read the
+  CSV as before; only the two Alertas views moved to partitions. Their data is therefore fresher
+  (CSV) than the views' (last weekly run).
 
 ### Alertas → Detalle specifics: the sensor trends chart isn't shared with Telemetría
 
@@ -305,6 +343,71 @@ dashboard logic reads; the older `get_stewart_limits_path`/`get_stewart_limits_i
 (legacy three-limit `threshold_normal`/`threshold_alert`/`threshold_critic` shape) remain for
 backward compatibility only — see [documentation/oil/dashboard_documentation.md](oil/dashboard_documentation.md#-current-classification-behavior-v28).
 
+### Partitioned alerts (`data/alerts/golden/{client}/`)
+
+```
+consolidated_alerts.csv                     source; only read by the partitioner (and the non-Alertas consumers)
+{week}/file.parquet                         one file per Monday-week (all units), same columns as the CSV
+_alert_index.parquet                        one light row per alert: FusionID, UnitId, sistema, Trigger_Var, week, row_id
+_backfill_complete.json                     (S3 only) written when the full history was synced; gates the weekly sync
+backtest/, state/, other *.csv              untouched by the partitioner
+```
+
+- **`{week}`** is the ISO date of the **Monday** that starts the alert's week, computed on the
+  UTC-naive `Timestamp` with the `W-SUN` period the *Evolución temporal* chart uses
+  (`alert_partitions.week_starts`), e.g. `2026-10-19`, `2026-10-26`. A partition is exactly one bar
+  of that chart. Alerts with an unparseable timestamp go to `undated/`, read only when no date
+  bound is set.
+- **No unit level.** A week file holds every unit: a week is small (~90 alerts for capstone), so unit
+  folders only multiplied files and S3 requests (1,227 files / 17 MB vs 69 files / 1.75 MB) without
+  saving reads. `Unidad` is a row filter. If a client ever reaches tens of thousands of alerts a week,
+  the layout is confined to `alert_partitions.py` and the builder.
+- **Parquet content**: the CSV's columns, in order, with the dtypes the dashboard's own CSV reader
+  infers (`fast_io.read_csv`, so Polars in production); `Timestamp` stays the CSV's text and is
+  normalized by the same `to_utc_naive` as before. The source row numbers travel in the file's
+  key-value metadata (`alerts.source_row_ids`), so the reader restores the CSV's row order — and
+  with it the order of alerts that share a timestamp — without an extra column.
+- **Code**: `src/data/alert_partitions.py` (layout + read; no S3 imports),
+  `src/data/alert_partition_builder.py` (build, validation), `src/data/alert_partition_s3.py`
+  (sync), `scripts/partition_alerts.py` (CLI + scheduler).
+
+**The script — `python scripts/partition_alerts.py`**
+
+| Mode | What it does |
+|---|---|
+| *(default)* weekly run | For every client under `data/alerts/golden/` regenerates each partition whose content changed (including the in-progress week), removes partitions the CSV no longer yields, then **syncs to S3**. Exit 0 ok · 1 build/validation error · 2 S3 error. |
+| `--backfill` | The first execution, over all history. **Local only**; S3 sync is **off unless `--sync-s3`** is passed. `--validate` runs by default: row totals, column names, dtypes, values and week/unit placement are compared with the CSV before anything is pushed. |
+| `--backfill --sync-s3` | After validating locally: pushes the full history and writes `_backfill_complete.json`. |
+| `--verify-s3` | Read-only: compares S3 with the local partitions (keys, sizes, hashes, row counts). |
+| `--schedule` | Foreground loop that runs the weekly mode **every Wednesday 04:00** in `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). |
+
+- **Where it runs**: `docker-compose.yml` has an `alerts-partitioner` service (`--schedule`, the
+  only one that mounts `data/` read-write). In ECS use an EventBridge Scheduler rule
+  `cron(0 4 ? * WED *)` with timezone `America/Santiago` that runs the same image with the command
+  `python scripts/partition_alerts.py`, and give the task write access to the dashboard's data
+  volume and S3 `List/Get/Put/DeleteObject` on the prefix.
+- **Idempotent and atomic**: a partition is rewritten only if its new bytes differ; it is written to
+  a temp name and swapped in with `os.replace`, and the reader opens exactly
+  `{week}/file.parquet` (never a glob), so a dashboard sees a whole old file or a whole new
+  one, never a half-written one. A per-client lock file keeps two runs from overlapping.
+- **S3 layout and config**: `s3://{bucket}/{prefix}/{client}/{week}/file.parquet` with
+  `prefix` = `MultiTechnique Alerts/alerts/golden` (the medallion path the S3 downloader already
+  maps to `data/alerts/golden/`). Bucket: `ALERT_PARTITIONS_S3_BUCKET` (falls back to
+  `BUCKET_NAME`); prefix: `ALERT_PARTITIONS_S3_PREFIX`; credentials as the other S3 scripts
+  (`ACCESS_KEY`/`SECRET_KEY` or the task role). Backfill and weekly run share this configuration.
+- **The sync is stateless and re-runnable**: it lists the client's keys once and compares each local
+  file by size + ETag (or the `sha256` object metadata), uploads only what is missing or different
+  with one `PutObject` under its final key (overwrite, never a duplicate), then deletes layout keys
+  (or that belong to the previous `{week}/{unit}/` layout) that are no longer produced locally. A failed upload is logged, the run exits 2, local partitions
+  stay valid, and the next run finds the same partition still different and retries it.
+- **Sequencing**: the weekly sync **refuses** (error, exit 2) for a client whose
+  `_backfill_complete.json` is not in S3. Order of operations: backfill locally → validate → backfill
+  with `--sync-s3` → the schedule can go live.
+- **Freshness**: the views change only when the script runs. An alert added to the CSV appears after
+  the next run (Wednesday). And the dashboard mirrors S3 into `data/` only at startup (§2), so a
+  running dashboard picks up new partitions when the script shares its data volume, or on its next
+  start.
+
 ---
 
 ## 6. `config/` and `src/`
@@ -324,8 +427,9 @@ backward compatibility only — see [documentation/oil/dashboard_documentation.m
 - **`src/data/`** — loaders (`loaders.py`, `maintenance_loaders.py`), a repository layer for
   maintenance data (`maintenance_repository.py`), Pydantic schemas mirroring the data contracts
   (`schemas.py`), transformers/validators (used by the upstream pipeline more than the
-  dashboard), a view-model layer for oil data (`oil_view_models.py`), and the S3
-  downloader/uploader scripts.
+  dashboard), a view-model layer for oil data (`oil_view_models.py`), the S3
+  downloader/uploader scripts, and the partitioned-alerts modules (`alert_partitions.py`,
+  `alert_partition_builder.py`, `alert_partition_s3.py`; §5).
 - **`src/utils/`** — logging setup, safe file-reading helpers (`file_utils.py`), date helpers,
   and `auth_logger.py` (appends login attempts to a parquet file and re-uploads it to S3 so the
   audit log survives data resyncs).
@@ -399,6 +503,11 @@ plus live-reload mounts for `./dashboard`, `./config`, `./src`).
   logged-in user is `admin` or `client`.
 - **`new_dashboard/dashboard-ers/` is a different app.** It's a submodule, not a folder of this
   app's code.
+- **Alertas views don't read `consolidated_alerts.csv`.** If an Alertas page looks stale after the
+  CSV changed, the partitions haven't been regenerated (`scripts/partition_alerts.py`, Wednesdays
+  04:00); if it shows nothing, check `data/alerts/golden/{client}/{week}/file.parquet` and
+  `_alert_index.parquet`, not the CSV. Tests that feed alerts to the views must build partitions
+  (`tests/alert_partition_support.py::install_alerts`).
 - **Golden layer is king.** If you're adding a dashboard feature, read from `golden/`, not
   `bronze/`/`silver/`, unless there's a specific reason not to.
 - **This repo doesn't process data.** If a bug looks like "the classification/AI output is

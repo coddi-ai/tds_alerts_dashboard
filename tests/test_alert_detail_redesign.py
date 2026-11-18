@@ -22,6 +22,7 @@ from dashboard.components.alerts_tables import parse_ia_message_sections
 from dashboard.components.oil_charts import build_oil_radar_view, build_oil_time_series_grid
 from dashboard.tabs.tab_alerts_detail import SOURCE_FILTER_DEFAULT, create_layout
 from src.i18n import load_catalog
+from tests.alert_partition_support import install_alerts
 
 
 def _walk(component, found=None):
@@ -76,8 +77,8 @@ def _alerts():
 
 
 @pytest.fixture
-def alerts(monkeypatch):
-    monkeypatch.setattr(callbacks, "load_alerts_data", lambda client: _alerts())
+def alerts(monkeypatch, tmp_path):
+    install_alerts(monkeypatch, tmp_path, _alerts())
 
 
 def _ids(options):
