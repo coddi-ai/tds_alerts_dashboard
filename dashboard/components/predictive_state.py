@@ -1,10 +1,12 @@
 """
 Estado vocabulary shared by every Predictivo chart and the Resumen KPI cards.
 
-Two independent classifications exist for a unit (Data Contract §6): the short
-view's `unit_status_summary.estado` (lowercase) and the long view's
-`cumulative_risk_curve.estado` (Title Case). Each chart styles its points with
-its own `estado`; only the KPI aggregate uses `combine_states`.
+Two classifications exist for a unit (Data Contract §6): the short view (quadrants of
+the ranking's 7-day vs 90-day mean) and the long view (`cumulative_risk_curve.estado`).
+Since upstream 1.3, `unit_status_summary` publishes both components and the final
+state: `estado_actual` (short view), `estado_ciclo_vida` (long view) and `estado`
+(the worse of the two, or `sin_datos`), with `origen_estado`. Each chart styles its
+points with its own component; the KPI aggregate and the tables use the final state.
 """
 
 import unicodedata
@@ -98,6 +100,28 @@ def normalize_state(value) -> Optional[str]:
     return title if title in STATE_SEVERITY else None
 
 
+# Unit with `estado = sin_datos` (upstream 1.1+): it has no state this week. Shown as
+# "Sin Datos" - the same label the dashboard already uses for a unit with no row - and
+# NEVER replaced by its curve's state (it stopped reporting; its curve stopped too).
+NO_DATA_STATE = "Sin Datos"
+
+
+def is_no_data_state(value) -> bool:
+    """True only for the PUBLISHED `sin_datos` (any casing, with underscore).
+
+    Not for "Sin Datos" with a space: the dashboard already uses that label for a unit
+    with no row in the table, which is a different case (its curve may still count)."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return False
+    return _fold(value) == "sin_datos"
+
+
+def published_state(value) -> Optional[str]:
+    """A published `unit_status_summary` state for display: Normal / Alerta / Anormal,
+    `NO_DATA_STATE` for `sin_datos`, None when missing or unknown."""
+    return NO_DATA_STATE if is_no_data_state(value) else normalize_state(value)
+
+
 def state_marker_size(state, base: float) -> float:
     """`base` scaled by the state's factor (Anormal 1.5x, Alerta 1.2x, Normal 1x);
     a missing/unknown state keeps the baseline."""
@@ -110,6 +134,13 @@ def combine_states(short_state, long_state) -> Optional[str]:
     A side that is missing (unit absent from that table) contributes nothing, so
     it is never read as Normal; None when both are missing. Only for the KPI
     aggregate - it must not replace either source `estado` anywhere else.
+
+    A published `sin_datos` short state wins over the curve (`NO_DATA_STATE`). Since
+    upstream 1.3 the short `estado` already is the final state (worse of current
+    condition and life cycle); combining it again changes nothing, but callers with
+    1.3 data should read it directly (see tab_predictive_overview.general_states).
     """
+    if is_no_data_state(short_state):
+        return NO_DATA_STATE
     states = [s for s in (normalize_state(short_state), normalize_state(long_state)) if s]
     return max(states, key=STATE_SEVERITY.__getitem__) if states else None

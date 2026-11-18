@@ -326,8 +326,8 @@ def risk_scores_generation(client: str, component: str) -> tuple:
 
 
 def risk_scores_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
-    """Pivot long-format `risk_scores` (Unit, Fecha, failure_mode, risk_value)
-    into one column per mode plus `ranking`, indexed by (Unit, Fecha) - the
+    """Pivot long-format `risk_scores` (Unit, Fecha, failure_mode, value) into one
+    column per mode plus `ranking`, indexed by (Unit, Fecha) - the
     same wide shape the legacy CSV loader's rolling-window computation
     expects, so that computation can be reused unchanged (Change 2).
 
@@ -337,8 +337,17 @@ def risk_scores_to_wide(df_long: pd.DataFrame) -> pd.DataFrame:
     """
     if df_long is None or df_long.empty:
         return pd.DataFrame(columns=["Unit", "Fecha", "ranking"])
+    # The number of a mode is `risk_level_value` (upstream 1.2): the value that produced
+    # its `risk_level` (7-day mean for modes, the day's value for `ranking`), so a mode's
+    # number and its level always agree. Partitions written before 1.2 lack it: there,
+    # and only there, the day's `risk_value` stays.
+    if "risk_level_value" in df_long.columns:
+        df_long = df_long.assign(_valor=df_long["risk_level_value"].where(
+            df_long["risk_level_value"].notna(), df_long["risk_value"]))
+    else:
+        df_long = df_long.assign(_valor=df_long["risk_value"])
     wide = df_long.pivot_table(
-        index=["Unit", "Fecha"], columns="failure_mode", values="risk_value", aggfunc="last",
+        index=["Unit", "Fecha"], columns="failure_mode", values="_valor", aggfunc="last",
     )
     wide.columns = [str(c) for c in wide.columns]
     wide = wide.reset_index()
@@ -375,6 +384,21 @@ def load_risk_levels(client: str, component: str) -> pd.DataFrame:
     read (see `risk_scores_to_wide`), cached on the partitions' generation."""
     mtime_ns, size = risk_scores_generation(client, component)
     return _risk_levels_cached((client or "").lower(), component, mtime_ns, size).copy()
+
+
+def units_without_data(client: str, component: str) -> set:
+    """Units whose published state is `sin_datos` (upstream 1.1+): their last data is not
+    from this week, so no Predictivo surface shows mode levels for them (decision D3).
+    Reads `unit_status_summary.estado` (the final state since 1.3) and, when present,
+    `estado_actual`. Empty set when the table or the value is absent."""
+    df = load_unit_status_summary(client, component)
+    if df.empty or "Unit" not in df.columns:
+        return set()
+    sin = pd.Series(False, index=df.index)
+    for col in ("estado", "estado_actual"):
+        if col in df.columns:
+            sin |= df[col].astype(str).str.strip().str.lower().eq("sin_datos")
+    return set(df.loc[sin, "Unit"])
 
 
 def latest_risk_levels(levels_wide: pd.DataFrame) -> pd.DataFrame:

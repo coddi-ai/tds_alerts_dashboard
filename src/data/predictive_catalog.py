@@ -232,10 +232,12 @@ FAILURE_MODE_CONFIG = {
             # (columnas {Metal}_acum_total por ciclo_motor). Sin variables
             # asociadas a propósito: no hay mapeo modo -> variable que inventar.
             "accumulated_wear_risk": {
-                "label": "Desgaste Acumulado",
+                # Mismo nombre en todos los repos (decision D2): mide un RITMO de
+                # desgaste frente a la flota, no el desgaste de toda la vida.
+                "label": "Desgaste Acelerado",
                 "oil_variables": [],
                 "telemetry_variables": [],
-                "description": "Desgaste metálico acumulado del componente en su vida actual"
+                "description": "Exceso de metales de desgaste frente a la flota en las últimas 2.000 horas de operación"
             },
         },
         },  # end "components"
@@ -524,9 +526,10 @@ FAILURE_MODE_METHODOLOGY = {
                 "refrigerante al circuito de aceite."
             ),
             "accumulated_wear_risk": (
-                "Se evalúa el desgaste metálico acumulado del componente desde su "
-                "último cambio (Hierro, Cobre, Plomo, Cromo, Aluminio y Estaño), "
-                "a partir de los totales acumulados por ciclo de vida del motor."
+                "Se compara el desgaste metálico acumulado en las últimas 2.000 horas "
+                "(Hierro, Cobre, Plomo, Cromo, Aluminio y Estaño) con el de la flota en "
+                "el mismo periodo: un valor alto indica que el motor se está desgastando "
+                "más rápido que el resto, no cuánto se ha desgastado en toda su vida."
             ),
         },
     },
