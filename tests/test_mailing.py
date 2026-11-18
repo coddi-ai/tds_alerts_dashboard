@@ -32,7 +32,7 @@ from src.mailing import (
 from src.mailing.scheduler import MailingScheduler
 
 SANTIAGO = ZoneInfo("America/Santiago")
-SECRET_URL = "https://abc123secret.lambda-url.us-east-2.on.aws/"
+SECRET_ARN = "arn:aws:lambda:us-east-1:111122223333:function:abc123secret"
 TECH = "tds@coddi.ai"
 SHIPPED_TECHNICAL_ONLY = config.SCHEDULED_TECHNICAL_ONLY_CLIENTS  # what the code ships, before any fixture
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
@@ -52,9 +52,7 @@ CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
 def hermetic(monkeypatch, tmp_path):
     """Sin .env real: ni la URL de la Lambda, ni el entorno, ni el estado salen de la maquina."""
     monkeypatch.setattr(config, "_DOTENV_LOADED", True)
-    monkeypatch.setenv("LAMBDA_URL", SECRET_URL)
-    monkeypatch.setenv("LAMBDA_ACCESS_KEY", "AKIAFAKEFAKEFAKEFAKE")
-    monkeypatch.setenv("LAMBDA_SECRET_ACCESS_KEY", "fake-secret-key-for-signing-tests")
+    monkeypatch.setenv("LAMBDA_FUNCTION_NAME", SECRET_ARN)
     monkeypatch.setenv("DEPLOY_STATUS", "test")
     monkeypatch.setenv("MAILING_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("MAILING_RETRY_DELAYS", "1,2,3")
@@ -806,113 +804,136 @@ def test_without_a_session_or_proof_nobody_is_admin(builder, sent, flask_app):
 # --------------------------------------------------------------------------- delivery
 
 
-class FakeResponse:
-    def __init__(self, status=200, body=None, headers=None, json_error=False):
-        self.status_code, self._body, self.headers, self._json_error = status, body, headers or {}, json_error
+class FakeStream:
+    def __init__(self, raw):
+        self._raw = raw
 
-    def json(self):
-        if self._json_error:
-            raise ValueError("no json")
-        return self._body
+    def read(self):
+        return self._raw
 
 
-def test_delivery_posts_the_lambda_contract(monkeypatch):
-    seen = {}
-
-    def fake_post(url, data, headers, timeout):
-        seen.update(url=url, data=data, headers=headers, timeout=timeout)
-        return FakeResponse(200, {"statusCode": 200})
-
-    monkeypatch.setattr(delivery.requests, "post", fake_post)
-    result = delivery.send_email("Asunto", "<p>Hola</p>", ["a@x.cl", "b@x.cl"])
-    assert result.ok
+def fake_response(status=200, body=None, function_error=None, raw=None):
     import json
 
-    body = json.loads(seen["data"])
-    assert body == {
+    if raw is None:
+        raw = b"" if body is None else json.dumps(body).encode()
+    out = {"StatusCode": status, "Payload": FakeStream(raw)}
+    if function_error:
+        out["FunctionError"] = function_error
+    return out
+
+
+class FakeLambdaClient:
+    def __init__(self, response=None, error=None):
+        self.response, self.error, self.calls = response, error, []
+
+    def invoke(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.response
+
+
+@pytest.fixture
+def lambda_client(monkeypatch):
+    box = {"regions": [], "client": FakeLambdaClient(fake_response(200, {"statusCode": 200}))}
+
+    def factory(region):
+        box["regions"].append(region)
+        return box["client"]
+
+    monkeypatch.setattr(delivery, "_client", factory)
+    return box
+
+
+def test_delivery_invokes_the_lambda_contract(lambda_client):
+    import json
+
+    result = delivery.send_email("Asunto", "<p>Hola</p>", ["a@x.cl", "b@x.cl"])
+    assert result.ok
+    (call,) = lambda_client["client"].calls
+    assert call["FunctionName"] == SECRET_ARN
+    assert call["InvocationType"] == "RequestResponse"
+    event = json.loads(call["Payload"])
+    assert json.loads(event["body"]) == {
         "fieldName": "CDA-alert",
         "variables": {"sendCDAAlertEmailInput": {
             "mailTo": ["a@x.cl", "b@x.cl"], "mailSubject": "Asunto", "mailText": "<p>Hola</p>",
         }},
     }
-    assert seen["url"] == SECRET_URL
 
 
-def test_requests_are_signed_with_sigv4_for_the_function_url_region(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        delivery.requests, "post",
-        lambda url, data, headers, timeout: seen.update(headers=headers) or FakeResponse(200, {}),
-    )
+def test_the_client_uses_the_region_of_the_function_arn_not_the_callers(lambda_client, monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
     assert delivery.send_email("s", "h", ["a@x.cl"]).ok
-    auth = seen["headers"]["Authorization"]
-    assert auth.startswith("AWS4-HMAC-SHA256 Credential=AKIAFAKEFAKEFAKEFAKE/")
-    assert "/us-east-2/lambda/aws4_request" in auth
-    assert seen["headers"]["Content-Type"] == "application/json"
-    assert "X-Amz-Date" in seen["headers"]
+    assert lambda_client["regions"] == ["us-east-1"]
 
 
-def test_the_s3_keys_are_never_used_to_sign(monkeypatch):
-    monkeypatch.delenv("LAMBDA_ACCESS_KEY")
-    monkeypatch.delenv("LAMBDA_SECRET_ACCESS_KEY")
-    monkeypatch.setenv("ACCESS_KEY", "AKIAS3S3S3S3S3S3S3S3")
-    monkeypatch.setenv("SECRET_KEY", "s3-secret")
-    import botocore.session
+def test_the_real_client_targets_the_arn_region_and_never_retries(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    delivery._client.cache_clear()
+    client = delivery._client("us-east-1")
+    assert client.meta.region_name == "us-east-1"
+    assert client.meta.config.retries["total_max_attempts"] == 1
+    delivery._client.cache_clear()
 
-    monkeypatch.setattr(botocore.session.Session, "get_credentials", lambda self: None)
-    assert set(delivery._signed_headers(SECRET_URL, "{}")) == {"Content-Type"}
 
-
-def test_without_any_credentials_the_request_goes_out_unsigned(monkeypatch):
-    monkeypatch.delenv("LAMBDA_ACCESS_KEY")
-    monkeypatch.delenv("LAMBDA_SECRET_ACCESS_KEY")
-    monkeypatch.setattr(delivery, "_credentials", lambda: None)
-    seen = {}
-    monkeypatch.setattr(
-        delivery.requests, "post",
-        lambda url, data, headers, timeout: seen.update(headers=headers) or FakeResponse(200, {}),
-    )
-    assert delivery.send_email("s", "h", ["a@x.cl"]).ok
-    assert "Authorization" not in seen["headers"]
+def test_region_from_arn():
+    assert delivery._region_from_arn(SECRET_ARN) == "us-east-1"
+    assert delivery._region_from_arn("emailSender") is None
 
 
 @pytest.mark.parametrize(
     "response",
     [
-        FakeResponse(500, {}),
-        FakeResponse(502, {}),
-        FakeResponse(200, {"statusCode": 500, "body": "x"}),
-        FakeResponse(200, {"errorMessage": "Task timed out", "errorType": "Sandbox.Timedout"}),
-        FakeResponse(200, {}, headers={"X-Amz-Function-Error": "Unhandled"}),
-        FakeResponse(200, {"errors": [{"message": "bad"}]}),
+        fake_response(500, {}),
+        fake_response(200, {"statusCode": 500, "body": "x"}),
+        fake_response(200, {"errorMessage": "Task timed out", "errorType": "Sandbox.Timedout"}),
+        fake_response(200, {}, function_error="Unhandled"),
+        fake_response(200, {"errors": [{"message": "bad"}]}),
     ],
 )
-def test_anything_but_a_confirmed_success_is_a_failure(monkeypatch, response):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: response)
+def test_anything_but_a_confirmed_success_is_a_failure(lambda_client, response):
+    lambda_client["client"] = FakeLambdaClient(response)
     assert not delivery.send_email("s", "h", ["a@x.cl"]).ok
 
 
-@pytest.mark.parametrize("response", [FakeResponse(200, {"statusCode": 200}), FakeResponse(200, json_error=True), FakeResponse(200, {})])
-def test_success_shapes(monkeypatch, response):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: response)
+@pytest.mark.parametrize(
+    "response",
+    [fake_response(200, {"statusCode": 200}), fake_response(200, raw=b"not json"), fake_response(200, {}), fake_response(200)],
+)
+def test_success_shapes(lambda_client, response):
+    lambda_client["client"] = FakeLambdaClient(response)
     assert delivery.send_email("s", "h", ["a@x.cl"]).ok
 
 
-@pytest.mark.parametrize("exc", [delivery.requests.Timeout, delivery.requests.ConnectionError])
-def test_network_errors_never_expose_the_lambda_url(monkeypatch, caplog, exc):
-    def boom(*a, **k):
-        raise exc(f"HTTPSConnectionPool host={SECRET_URL} failed")
+def _client_error(code):
+    from botocore.exceptions import ClientError
 
-    monkeypatch.setattr(delivery.requests, "post", boom)
+    return ClientError({"Error": {"Code": code, "Message": f"not allowed on {SECRET_ARN}"}}, "Invoke")
+
+
+def _read_timeout():
+    from botocore.exceptions import ReadTimeoutError
+
+    return ReadTimeoutError(endpoint_url=SECRET_ARN)
+
+
+@pytest.mark.parametrize("error", [_client_error("AccessDeniedException"), _read_timeout()])
+def test_sdk_errors_never_expose_the_function_arn(lambda_client, caplog, error):
+    lambda_client["client"] = FakeLambdaClient(error=error)
     with caplog.at_level(logging.DEBUG):
         result = delivery.send_email("s", "h", ["a@x.cl"])
     assert not result.ok
-    assert "secret" not in (result.reason or "") and "http" not in (result.reason or "").lower()
+    assert "abc123secret" not in (result.reason or "")
     assert "abc123secret" not in caplog.text
+    assert "AccessDeniedException" in caplog.text or "ReadTimeoutError" in caplog.text
 
 
-def test_scheduled_run_without_lambda_url_logs_an_error_and_does_not_raise(builder, monkeypatch, caplog):
-    monkeypatch.delenv("LAMBDA_URL")
+def test_scheduled_run_without_lambda_function_name_logs_an_error_and_does_not_raise(builder, monkeypatch, caplog):
+    monkeypatch.delenv("LAMBDA_FUNCTION_NAME")
     with caplog.at_level(logging.ERROR):
         outcome = run_scheduled("emin", date(2026, 11, 10), sleep=lambda s: None)
     assert outcome == "failed"
@@ -920,8 +941,8 @@ def test_scheduled_run_without_lambda_url_logs_an_error_and_does_not_raise(build
     assert state.read("emin", date(2026, 11, 10))["status"] == "failed"
 
 
-def test_missing_lambda_url_is_a_failure_not_a_crash(monkeypatch):
-    monkeypatch.delenv("LAMBDA_URL")
+def test_missing_lambda_function_name_is_a_failure_not_a_crash(monkeypatch):
+    monkeypatch.delenv("LAMBDA_FUNCTION_NAME")
     result = delivery.send_email("s", "h", ["a@x.cl"])
     assert not result.ok
 
@@ -930,16 +951,15 @@ def test_delivery_refuses_an_empty_recipient_list():
     assert not delivery.send_email("s", "h", []).ok
 
 
-def test_lambda_url_tolerates_quotes_and_spaces_in_the_env_value(monkeypatch):
-    monkeypatch.setenv("LAMBDA_URL", f'  "{SECRET_URL}"  ')
-    assert config.get_lambda_url() == SECRET_URL
+def test_lambda_function_name_tolerates_quotes_and_spaces_in_the_env_value(monkeypatch):
+    monkeypatch.setenv("LAMBDA_FUNCTION_NAME", f'  "{SECRET_ARN}"  ')
+    assert config.get_lambda_function_name() == SECRET_ARN
 
 
 # --------------------------------------------------------------------------- logging
 
 
-def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkeypatch, caplog, production):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: FakeResponse(200, {"statusCode": 200}))
+def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkeypatch, caplog, production, lambda_client):
     admin = as_user(flask_app, ADMIN)
     with caplog.at_level(logging.DEBUG):
         send_manual("emin", [EMIN_SEND[0]], admin)

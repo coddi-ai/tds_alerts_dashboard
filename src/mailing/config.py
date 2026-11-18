@@ -103,7 +103,7 @@ DEFAULT_RETRY_DELAYS: Tuple[float, ...] = (30.0, 120.0, 300.0)  # 3 retries, gro
 DEFAULT_MANUAL_COOLDOWN_SECONDS = 5.0
 DEFAULT_SCHEDULER_POLL_SECONDS = 30.0
 DEFAULT_SCHEDULER_GRACE_MINUTES = 15
-DEFAULT_LAMBDA_TIMEOUT = (5.0, 60.0)  # (connect, read) seconds
+DEFAULT_LAMBDA_TIMEOUT = (5.0, 60.0)  # (connect, read) seconds; read must stay below the Lambda timeout
 
 
 def _project_root() -> Path:
@@ -144,9 +144,9 @@ def env_flag(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "on", "si", "sí"}
 
 
-def get_lambda_url() -> Optional[str]:
-    """The Lambda endpoint. A secret: never log it, echo it or put it in an error."""
-    return get_env("LAMBDA_URL")
+def get_lambda_function_name() -> Optional[str]:
+    """ARN of the email Lambda (`LAMBDA_FUNCTION_NAME`). Never log it or put it in an error."""
+    return get_env("LAMBDA_FUNCTION_NAME")
 
 
 def is_production() -> bool:

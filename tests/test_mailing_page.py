@@ -29,9 +29,7 @@ GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 @pytest.fixture(autouse=True)
 def hermetic(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "_DOTENV_LOADED", True)
-    monkeypatch.setenv("LAMBDA_URL", "https://abc.lambda-url.us-east-2.on.aws/")
-    monkeypatch.setenv("LAMBDA_ACCESS_KEY", "AKIAFAKEFAKEFAKEFAKE")
-    monkeypatch.setenv("LAMBDA_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.setenv("LAMBDA_FUNCTION_NAME", "arn:aws:lambda:us-east-1:111122223333:function:emailSender")
     monkeypatch.setenv("DEPLOY_STATUS", "test")
     monkeypatch.setenv("MAILING_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("MAILING_MANUAL_COOLDOWN_SECONDS", "0")
