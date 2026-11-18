@@ -52,10 +52,12 @@ Browser (Dash/React runtime)
 splits `consolidated_alerts.csv` into Parquet partitions
 (`data/alerts/golden/{client}/{week}/file.parquet`), syncs them to S3, and every dashboard section
 that shows alerts (Alertas Vista General / Vista Detallada, Hot Sheet, Menace Control, Fleet
-overview, Unit summary) reads only the weeks its filters or time window touch. See §5 ("Partitioned
-alerts") for the layout, the schedule and the sync. The CSV is still read by the partitioner and, until
-the open points in `change_summary.md` are decided, by the alert-summary e-mail and by three
-non-section readers (data-source chips, the source catalog probe, the Campbell AI assistant).
+overview, Unit summary), the alert-summary e-mail, the data-source chips, the source catalog probe and
+the Campbell AI assistant reads the partitions (only the weeks its filters or time window touch, except
+Campbell AI, which loads the whole history from them). See §5 ("Partitioned alerts") for the layout,
+the schedule and the sync. **The CSV is read only by the partitioner** (`scripts/partition_alerts.py`
+with its builders). `scripts/translate_text_fields.py` is a producer of the CSV (it rewrites it upstream),
+not a reader.
 
 **The per-alert telemetry is partitioned the same way.** The wide telemetry CSV of each client
 (`data/telemetry/golden/{client}/`, sensor readings, limits and GPS around every alert) is read **only
@@ -170,9 +172,9 @@ Both views read **only the `{week}/file.parquet` partitions their filters touch*
   instead of a partition scan. The catalog is cached by the index's mtime/size.
 - **Nothing is cached by the new read path.** Every filter change re-reads its week files (a few
   milliseconds for the default window).
-### Hot Sheet, Menace Control, Fleet overview, Unit summary: the same read path
+### Hot Sheet, Menace Control, Fleet overview, Unit summary, e-mail, chips, Campbell AI: the same read path
 
-These four sections also read the partitions, through `src/data/alert_partitions.py` (by way of
+These consumers also read the partitions, through `src/data/alert_partitions.py` (by way of
 `src/data/loaders.py`), and never open the CSV. Each reads only the weeks its trailing window
 touches; the section's own `Timestamp >= cutoff` filter then trims to the exact range, so a
 window that starts mid-week gives the same rows the whole-history read gave.
@@ -183,21 +185,24 @@ window that starts mid-week gives the same rows the whole-history read gave.
 | **Menace Control** (`menace_control_callbacks.py`) | the trailing `days` chosen in the selector (30 / 60 / 90 / 180 / 365) | `load_alerts_since` |
 | **Fleet overview** (`fleet_overview.py`) | status: last 30 days; window counts: last 56 days, with every unit of the history listed (zeros when it has no recent alert); feed freshness: the newest week's `Timestamp` column only | `load_alerts_since`, `load_alert_units(dated_only=True)`, `latest_alert_timestamp` |
 | **Unit summary** (`unit_summary_content.py`) | the 30 days before the feed's newest alert (or before today, whichever `_reference_time` picks); the data date is the newest week's `Timestamp` column | `latest_alert_timestamp`, `load_alerts_since` |
+| **Alert-summary e-mail** (`src/mailing/alert_summary.py`) | the weeks its period touches, then the same slice and exact Chile-day filter as before | `load_alerts_for_scope` |
+| **Data-source chips / catalog probe** (`source_freshness.py`, `catalog.py`) | one column of the newest dated week's file (`alerts_consolidated` source); "missing" until the partitioner has run | `alert_partitions.newest_partition` |
+| **Campbell AI** (`src/campbell_ai/data.py`, dataset `alerts`) | every week (the whole history); the dataset path is `_alert_index.parquet`; cached by the newest mtime among index and partitions | `alert_partitions.read_scope`, `schema_columns`, `generation_ns` |
 
 `load_alerts_since` returns whole weeks of the same normalized frame as the Alertas loaders (EMIN
 evidence included). When the client has partitions but none overlaps the window it returns an
 *empty frame with the alert columns*, so "nothing in the window" (the section's "no alerts in N
 days" message) stays distinct from "the client has no alert data" (`client_has_alert_partitions`).
 
-**Freshness change.** These sections used to show the CSV as it was at that moment; they now show
-the data of the last weekly partition run (Wednesday 04:00, like the Alertas views), because the
-partitions are only regenerated then. This was accepted as a decision (see `change_summary.md`).
-A running dashboard also needs the new partitions on its disk (shared data volume or the next
-startup sync, §2).
+**Freshness change.** These consumers used to show the CSV as it was at that moment; they now show
+the data of the last partition run: Wednesday 04:00 for capstone and cda, **every day 04:00 for EMIN**
+(its data updates daily, and its e-mail goes out daily at 12:00). This was accepted as a decision (see
+`change_summary.md`). A running dashboard also needs the new partitions on its disk (shared data
+volume or the next startup sync, §2); the scheduled e-mail gets them from its pre-send S3 sync.
 
-`load_alerts_data` (the whole-CSV loader) is no longer used by any dashboard section. It is still
-used by the alert-summary e-mail (`src/mailing/alert_summary.py`), pending the decision recorded in
-`change_summary.md`; it will be removed with it.
+The whole-CSV loader (`load_alerts_data`) no longer exists: every reader goes through the partition
+loaders. Tests that need "the history as the CSV had it" use `csv_history` in
+`tests/alert_partition_support.py`.
 
 ### Alertas → Detalle specifics: the sensor trends chart isn't shared with Telemetría
 
@@ -419,13 +424,15 @@ backtest/, state/, other *.csv              untouched by the partitioner
 | `--backfill` | The first execution, over all history. **Local only**; S3 sync is **off unless `--sync-s3`** is passed. `--validate` runs by default: row totals, column names, dtypes, values and week/unit placement are compared with the CSV before anything is pushed. |
 | `--backfill --sync-s3` | After validating locally: pushes the full history and writes `_backfill_complete.json`. |
 | `--verify-s3` | Read-only: compares S3 with the local partitions (keys, sizes, hashes, row counts). |
-| `--schedule` | Foreground loop that runs the weekly mode **every Wednesday 04:00** in `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). |
+| `--schedule` | Foreground loop. **Every client runs every Wednesday 04:00**; the *daily clients* (`ALERT_PARTITIONS_DAILY_CLIENTS`, default **`emin`**, `none` for no one) also run at the same time on every other day. Time zone `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). `--client` limits both. |
 
 - **Where it runs**: `docker-compose.yml` has an `alerts-partitioner` service (`--schedule`, the
   only one that mounts `data/` read-write). In ECS use an EventBridge Scheduler rule
   `cron(0 4 ? * WED *)` with timezone `America/Santiago` that runs the same image with the command
-  `python scripts/partition_alerts.py`, and give the task write access to the dashboard's data
-  volume and S3 `List/Get/Put/DeleteObject` on the prefix.
+  `python scripts/partition_alerts.py`, plus a second rule `cron(0 4 ? * * *)` for the daily clients
+  (`python scripts/partition_alerts.py --client emin`), and give the task write access to the dashboard's
+  data volume and S3 `List/Get/Put/DeleteObject` on the prefix. The partitioner reads the CSV from its own
+  volume: the fresh CSV (EMIN's, daily) must be there before the run.
 - **Idempotent and atomic**: a partition is rewritten only if its new bytes differ; it is written to
   a temp name and swapped in with `os.replace`, and the reader opens exactly
   `{week}/file.parquet` (never a glob), so a dashboard sees a whole old file or a whole new
@@ -444,7 +451,7 @@ backtest/, state/, other *.csv              untouched by the partitioner
   `_backfill_complete.json` is not in S3. Order of operations: backfill locally → validate → backfill
   with `--sync-s3` → the schedule can go live.
 - **Freshness**: the views change only when the script runs. An alert added to the CSV appears after
-  the next run (Wednesday). And the dashboard mirrors S3 into `data/` only at startup (§2), so a
+  the next run (Wednesday, or the next day for EMIN). And the dashboard mirrors S3 into `data/` only at startup (§2), so a
   running dashboard picks up new partitions when the script shares its data volume, or on its next
   start.
 
@@ -611,9 +618,9 @@ plus live-reload mounts for `./dashboard`, `./config`, `./src`).
   logged-in user is `admin` or `client`.
 - **`new_dashboard/dashboard-ers/` is a different app.** It's a submodule, not a folder of this
   app's code.
-- **No dashboard section reads `consolidated_alerts.csv`.** If an Alertas, Hot Sheet, Menace Control,
+- **No dashboard section, e-mail or assistant reads `consolidated_alerts.csv`.** If an Alertas, Hot Sheet, Menace Control,
   Fleet overview or Unit summary page looks stale after the CSV changed, the partitions haven't been
-  regenerated (`scripts/partition_alerts.py`, Wednesdays 04:00); if it shows nothing, check
+  regenerated (`scripts/partition_alerts.py`, Wednesdays 04:00, EMIN every day); if it shows nothing, check
   `data/alerts/golden/{client}/{week}/file.parquet` and `_alert_index.parquet`, not the CSV. Tests
   that feed alerts to the sections must build partitions (`tests/alert_partition_support.py`).
 - **No runtime code reads the wide telemetry CSV either.** If *Evidencia de Telemetría* says there is

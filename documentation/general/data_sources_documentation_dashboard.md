@@ -67,7 +67,7 @@ Page: `/overview/general` (`tab_overview_general.py`, `overview_general_callback
 
 | Row | Underlying origin | Read by | UI sections | Availability | Last update (date column) |
 |---|---|---|---|---|---|
-| Alertas | `data/alerts/golden/<client>/consolidated_alerts.csv` | `load_alerts_data` → `_alerts_status_map`, `_alerts_window_counts` | Alertas column, alert counts tooltip, band/ranking | ≥1 unit with a non-"Sin Datos" Alertas cell | newest `Timestamp` |
+| Alertas | `data/alerts/golden/<client>/{week}/file.parquet` (weekly partitions) | `load_alerts_since` / `load_alert_units` / `latest_alert_timestamp` → `_alerts_status_map`, `_alerts_window_counts` | Alertas column, alert counts tooltip, band/ranking | ≥1 unit with a non-"Sin Datos" Alertas cell | newest `Timestamp` |
 | Telemetría | `data/telemetry/golden/<client>/unit_health/` (partitions) + `data/auxiliar/<client>/Data_Date_Last_Update.csv` (row `Telemetria`) | `load_telemetry_unit_health` → `_telemetry_status_map`; `load_data_freshness` → `_telemetry_tribologia_freshness_map` | Telemetría column | same rule | newest `evaluation_timestamp` of `unit_health` |
 | Aceite | `data/oil/golden/<client>/machine_status.parquet` + `Data_Date_Last_Update.csv` (row `Tribologia`) | `load_machine_status_for_client` → `_oil_status_map`; `_telemetry_tribologia_freshness_map` | Aceite column | same rule | newest `sampleDate` of `oil/.../classified.parquet` |
 | Predictivo | `data/predictive/golden/<client>/<component>/unit_status_summary/` for each enabled component (motor, transmision) | `predictive_v2.load_unit_status_summary` → `_predictive_status_map`; `get_model_run_date` | Predictivo column | same rule | **oldest** model run date (`Fecha` of the latest `unit_status_summary` partition) across enabled components |
@@ -118,7 +118,7 @@ Page: `/monitoring/alerts` (`tab_alerts.py`, `alerts_callbacks.py`, `tab_alerts_
 
 | Source | Origin | Read by | UI sections | Availability | Last update |
 |---|---|---|---|---|---|
-| Alertas Consolidadas | `alerts/golden/<client>/consolidated_alerts.csv` | `load_alerts_data` | Vista General (KPIs, charts, table, filters), Vista Detallada (case header, dropdowns) | file exists | newest `Timestamp` |
+| Alertas Consolidadas | `alerts/golden/<client>/{week}/file.parquet` (weekly partitions; the chip dates the newest week's file) | `load_alerts_for_scope` | Vista General (KPIs, charts, table, filters), Vista Detallada (case header, dropdowns) | file exists | newest `Timestamp` |
 | Detalle de Alertas (Telemetría) | `alerts/golden/<client>/_telemetry_index.parquet` (+ `{week}/telemetry.parquet`, written weekly by `scripts/partition_alerts.py`) | `load_telemetry_alert_detail_for_alert` | Vista Detallada › Evidencia de Telemetría | index exists | newest `Alert_TimeStart` (read from the index) |
 | Clasificación de Aceite | `oil/golden/<client>/classified.parquet` | `load_oil_classified` (`create_oil_evidence_section`, `update_oil_tendencia_range`) | Vista Detallada › Evidencia de Aceite (report + trend) | file exists | newest `sampleDate` |
 | Límites de Aceite | `oil/golden/<client>/stewart_limits_four.parquet` | `load_stewart_limits_four` (same functions) | Vista Detallada › Evidencia de Aceite (limits, trend bands); the section shows "Límites Stewart no disponibles" without it | file exists | newest `calculation_date` |
@@ -378,8 +378,8 @@ Read-only follow-up of the same store: *Avisos del ERP* only (total 1).
   Source: *Eventos de Acceso*, Disponible when a backend is configured (`get_storage()` is not
   `None`); it does not depend on the client; no date. Total 1.
 - **`/admin/mailing`** (Mailing). The summary e-mails are built from the same alert pipeline as the
-  Alertas page (`src/mailing/alert_summary.py` → `load_alerts_data`), so the source is *Alertas
-  Consolidadas* of the selected client (`consolidated_alerts.csv`, newest `Timestamp`). Total 1.
+  Alertas page (`src/mailing/alert_summary.py` → `load_alerts_for_scope`), so the source is *Alertas
+  Consolidadas* of the selected client (its weekly partitions, newest `Timestamp`). Total 1.
   Only the **header** of this page changed (an empty slot for the button); `src/mailing`, the
   mailing callbacks, `mailing.css` and `config.py` are untouched.
 

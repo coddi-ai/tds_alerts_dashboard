@@ -125,7 +125,7 @@ data/
 ```
 
 Paths are resolved via helpers on `config/settings.py::Settings` (e.g. `get_machine_status_path`,
-`get_stewart_limits_path`, `get_consolidated_alerts_path`).
+`get_stewart_limits_path`).
 
 ## Architecture
 

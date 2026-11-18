@@ -105,9 +105,9 @@ Reading the numbers:
 1. **Layout differs from the ticket** (week-only, see above). Needs the ticket's wording and acceptance criterion
    updated, or a decision to go back to unit folders.
 2. **Other consumers still read the CSV** (Hot Sheet, Menace Control, Fleet overview, Unit summary, the
-   alert-summary e-mail). Between runs their numbers can be fresher than the Alertas views'. Migrating them is
-   out of this scope.
-3. **Freshness is weekly.** A running dashboard only sees new partitions if it shares the script's data volume or
+   alert-summary e-mail). *Superseded:* they were migrated afterwards, see "every alert consumer reads the weekly
+   partitions" below.
+3. **Freshness is weekly** (EMIN: daily since the change below). A running dashboard only sees new partitions if it shares the script's data volume or
    restarts (the S3 → `data/` sync happens at startup). Deployed dashboards will download the new objects (~176)
    at their next startup sync.
 4. **Not done, optional:** the table is still one 520 KB payload (about half is the Diagnóstico/Acción text stored
@@ -117,112 +117,130 @@ Reading the numbers:
 
 ---
 
-# Change summary — Hot Sheet, Menace Control, Fleet overview and Unit summary read the partitions
+# Change summary — every alert consumer reads the weekly partitions; EMIN is partitioned daily
 
-**Status: four of the five consumers are migrated. The alert-summary e-mail is held for a decision**
-(its schedule check failed, see below), and with it the removal of the CSV loader.
+Hot Sheet, Menace Control, Fleet overview, Unit summary, the alert-summary e-mail, the data-source chips, the
+source catalog probe and the Campbell AI assistant now read the weekly Parquet partitions through
+`src/data/alert_partitions.py`. The whole-CSV loader (`load_alerts_data`) is gone. EMIN's partitions are
+regenerated **every day** (its data updates daily); capstone and cda stay weekly.
+
+Decisions received for this change:
+
+1. **EMIN is partitioned daily** (the e-mail schedule check failed for it, see below).
+2. Warm-path cost: explained in "Open decisions", still waiting for an answer.
+3. **The other CSV readers are redirected too** (data-source chips, catalog probe, Campbell AI).
 
 ## Consumer audit (`consolidated_alerts.csv`, runtime code)
 
 | Reader | Status |
 |---|---|
-| Hot Sheet (`hot_sheet_callbacks.py`) | **migrated** |
-| Menace Control (`menace_control_callbacks.py`, 3 callbacks) | **migrated** |
-| Fleet overview (`fleet_overview.py`: status map, window counts, feed freshness) | **migrated** |
-| Unit summary (`unit_summary_content.py`: alerts card, data date) | **migrated** |
-| Alert-summary e-mail (`src/mailing/alert_summary.py`) | **not migrated, needs a decision** |
-| `src/data/alert_partition_builder.py` (engine of `scripts/partition_alerts.py`) | allowed: it is the partitioner |
+| Hot Sheet (`hot_sheet_callbacks.py`) | migrated |
+| Menace Control (`menace_control_callbacks.py`, 3 callbacks) | migrated |
+| Fleet overview (`fleet_overview.py`: status map, window counts, feed freshness) | migrated |
+| Unit summary (`unit_summary_content.py`: alerts card, data date) | migrated |
+| Alert-summary e-mail (`src/mailing/alert_summary.py`) | migrated (after the daily-EMIN decision) |
+| Data-source freshness chips (`src/data/source_freshness.py`, source `alerts_consolidated`) | redirected: reads the newest weekly partition's `Timestamp` column |
+| Source availability probe (`src/data/catalog.py`) | redirected: probes the newest dated weekly partition |
+| Campbell AI assistant (`src/campbell_ai/data.py`, dataset `alerts`) | redirected: whole history from the partitions, same frame |
+| `config/settings.py` `get_consolidated_alerts_path` | dead code, removed |
+| `scripts/translate_text_fields.py` / `translation_mapping.json` | **not a reader: a producer of the CSV.** It downloads the CSV, adds `mensaje_ia_eng` and uploads the CSV back, i.e. it sits *upstream* of the partitioner. Not changed; its README now says to run the partitioner after copying a demo over `data/` |
+| `scripts/partition_alerts.py` with `src/data/alert_partition_builder.py` and `telemetry_partition_builder.py` | the partitioner: the only readers of the CSV left |
 
-**Found beyond the expected five. Listed, not migrated, need approval:**
+`grep consolidated_alerts` over runtime code now finds only the partitioner (alerts and telemetry builders and their
+constants/docstrings) and the translate tool's mapping. The criterion "no runtime code outside
+`scripts/partition_alerts.py` references the CSV" is met, with the translate tool as the one named exception.
 
-| Reader | What it does |
-|---|---|
-| Data-source freshness chips: `src/data/source_freshness.py` reads the CSV's `Timestamp` column (`config/service_data_sources.py`, source `alerts_consolidated`) | shown on Alertas, Fleet overview and the mailing admin page |
-| Source availability probe: `src/data/catalog.py:251` (`file_probe("alerts", "alerts_consolidated", "consolidated_alerts.csv")`) | existence, size and mtime only |
-| Campbell AI assistant: `src/campbell_ai/data.py:130`, dataset `alerts` | loads the whole CSV for the agent's tools |
-| `config/settings.py:304` `get_consolidated_alerts_path` | no caller: dead code |
-| `scripts/translate_text_fields.py` / `translation_mapping.json` | offline demo-data tool, not runtime |
-
-So the acceptance criterion "no runtime code outside `scripts/partition_alerts.py` references
-`consolidated_alerts.csv`" is **not met**, and cannot be without migrating the e-mail and the three
-extra readers above. None of those was touched.
-
-## E-mail schedule check — result: weekly freshness is NOT enough for EMIN
+## E-mail schedule check and its resolution
 
 From `src/mailing/config.py` and `periods.py` (times in `America/Santiago`):
 
-| Client | Schedule | Period covered | Newest alert it needs vs. the last partition run (Wed 04:00) |
+| Client | Schedule | Period covered | Newest alert it needs vs. the partitions |
 |---|---|---|---|
-| capstone | weekly, Wednesday 12:00 | previous Monday–Sunday | Sunday 23:59; the Wednesday 04:00 run already holds it. **OK**, provided the run has finished and its partitions reached the mailing process (it syncs `data/` from S3 right before a scheduled send) |
-| emin | **daily, 12:00** | **the previous day** | Thursday's send covers Wednesday, and the sends from Thursday to Tuesday cover days newer than the last run. **Those alerts would be omitted.** |
+| capstone | weekly, Wednesday 12:00 | previous Monday–Sunday | Sunday 23:59; the Wednesday 04:00 run holds it. OK |
+| emin | **daily, 12:00** | **the previous day** | with a weekly run it would omit most days. **Resolved: EMIN is partitioned every day at 04:00**, before the 12:00 send |
 
-EMIN's schedule is live in code (`logs/mailing` shows sends on 2026-11-10 and 11-11), although its scheduled
-audience is currently only the Coddi technical contacts (`SCHEDULED_TECHNICAL_ONLY_CLIENTS`). As the requirement
-says, I stopped there: **the e-mail still reads the CSV, and no other refresh mechanism was built.** Options for the decision:
+The scheduled send already syncs `data/` from S3 right before building (`src/mailing/data_sync.py`), so the partitions
+the 04:00 run uploads are on the mailing process's disk at 12:00. The e-mail resolves them below the same
+`DASHBOARD_DATA_ROOT` as the dashboard (local, or the folder synced from S3). Weekly freshness does not omit anything
+capstone's e-mail needs.
 
-1. Keep the e-mail on the CSV as a recorded exception.
-2. Move EMIN's e-mail to a weekly cadence (changes the e-mail's content and schedule: out of this scope).
-3. Refresh partitions more often (out of scope by definition; separate approval).
-4. Migrate capstone's weekly e-mail only and keep EMIN's on the CSV.
-
-The e-mail's baseline timings are below so a later migration can be compared. If it is migrated, it must also reach
-the partitions in whatever process or container sends it (today the dashboard container mounts `./data:ro`, and the
-pre-send S3 sync downloads them).
+**Dependency to confirm before relying on it:** the partitioner reads the CSV from *its own* `data/` volume; the script
+does not download it. A daily run is only useful if EMIN's fresh CSV is on that volume before 04:00 (a pipeline that
+writes it there, or a sync step). If EMIN's data lands later than 04:00, set `ALERT_PARTITIONS_TIME` (it applies to the
+weekly run too) or tell me when it lands.
 
 ## What changed
 
-New in `src/data/loaders.py`, all on top of `src/data/alert_partitions.py`:
+**Partitioning schedule** (`scripts/partition_alerts.py`, `docker-compose.yml`). `--schedule` now wakes up every day at
+the configured time. On Wednesday every client runs, as before; on the other six days only the *daily clients* run:
+`ALERT_PARTITIONS_DAILY_CLIENTS` (comma-separated, default `emin`, `none` for no one; `--daily-clients`). `--client`
+still limits both. Layout, S3 layout, backfill marker and atomic swap are untouched. For ECS the equivalent is a second
+EventBridge rule, `cron(0 4 ? * * *)` (America/Santiago), running the same image with
+`python scripts/partition_alerts.py --client emin`, next to the existing Wednesday rule.
 
-- `load_alerts_since(client, since_utc)`: whole weeks that overlap `[since, ∞)`, same normalized frame as the Alertas
-  loaders (EMIN evidence included). Empty-with-columns when the window has no alerts but the client does.
-- `latest_alert_timestamp(client)`: the feed's newest `Timestamp`, read from one column of the newest week.
+**Readers** (`src/data/loaders.py`, on `alert_partitions.py`):
+
+- `load_alerts_since(client, since_utc)`: whole weeks that overlap `[since, ∞)`, the normalized frame (EMIN evidence
+  included); empty-with-columns when the window has no alerts but the client does.
+- `load_alerts_for_scope(client, start_date=, end_date=)` (existing): the e-mail uses it for its period.
+- `latest_alert_timestamp(client)`: the feed's newest `Timestamp`, from one column of the newest week.
 - `load_alert_units(client, dated_only=False)`: every unit of the history, from `_alert_index.parquet`.
+- `alert_partitions.py`: `newest_partition`, `schema_columns`, `total_rows`, `partitions_size`, `generation_ns`.
 
-| Section | Reads now | Same output because |
+| Consumer | Reads now | Same output because |
 |---|---|---|
-| Hot Sheet | last 14 days of weeks; the unit list from the index | the status rule only counts 7- and 14-day windows; units without recent alerts still appear as "normal" |
+| Hot Sheet | last 14 days of weeks; unit list from the index | the rule counts 7/14-day windows; units without recent alerts still show "normal" |
 | Menace Control | the selected `days` of weeks | each callback's own `Timestamp >= now - days` still trims the rows |
-| Fleet overview | status: 30 days; counts: 56 days plus the index's units (zeros); freshness: newest week | the counts keep every unit of the history, same keys and order |
+| Fleet overview | status 30 days; counts 56 days + index units (zeros); freshness: newest week | counts keep every unit of the history, same keys and order |
 | Unit summary | 30 days before the reference date; data date from the newest week | `_reference_time` still anchors on the feed's newest alert |
+| E-mail | the weeks its period touches (`load_alerts_for_scope`), then `slice_to_period` and the exact Chile-day filter as before | same pipeline, only the source of the rows changed |
+| Source chips / catalog probe | the newest dated week's file (`Timestamp` column) | the newest week holds the newest alert; the date is "closest to today, not in the future" as before |
+| Campbell AI | all weeks (`read_scope`), cached by the newest mtime among the partitions and the index | frame identical to `pd.read_csv` for capstone, cda and emin (checked on the real data, dtypes included) |
 
-"The client has no alert data" (`client_has_alert_partitions`) and "nothing in the window" are kept apart, so each
-section's two different messages are unchanged. Layout, weekly script, schedule and S3 sync were not touched.
+Campbell AI details: the `alerts` dataset's path is now `_alert_index.parquet` (it exists exactly when the client has
+partitions), as the parallel telemetry change already does for `alerts_detail`; columns come from one partition's footer,
+the row count (only when asked) from the index's. Its declared schema now says `parquet` for the three clients. A
+*generated* copy of the declaration in `data/auxiliar/dataset_columns.json` (it takes precedence and is refreshed weekly)
+still says `csv` until it is regenerated; the service then does not trust it and reads the footer, which is safe and only
+skips the shortcut.
 
-**Freshness change (accepted, documented per section).** These sections used to show the CSV as of the moment of the
-request. They now show the data of the last weekly partition run (**Wednesday 04:00**), like the Alertas views: Hot
-Sheet; Menace Control; Fleet overview (statuses, window counts and the freshness label); Unit summary (the alerts card
-and its data date). A running dashboard also needs the new partitions on its disk (shared volume or next startup sync).
+**Freshness change (accepted, per consumer).** These consumers used to show the CSV as of the moment of the request.
+They now show the data of the last partition run: **Wednesday 04:00 for capstone and cda, every day 04:00 for EMIN**
+(Hot Sheet, Menace Control, Fleet overview statuses/counts/freshness label, Unit summary alerts card and date, the
+e-mail, the data-source chips, the Campbell AI assistant). A running dashboard also needs the new partitions on its
+disk (shared volume or next startup sync); the e-mail gets them from its pre-send sync.
+
+**Removed:** `load_alerts_data`, `_load_alerts_data_cached`, `get_consolidated_alerts_path`. Tests that used them now
+use `csv_history` (an oracle in `tests/alert_partition_support.py` that reads the CSV like the old loader did) or the
+partitioned readers.
 
 ## Verification
 
-- **Snapshots, pre-change vs final: identical.** 150 snapshots (Hot Sheet; Menace Control's three callbacks at 3, 30,
-  90 and 365 days; Fleet overview output, status map and window counts; Unit summary and its alerts card for four units
-  each, one of them unknown; the data date) for capstone, cda and emin at two frozen clocks: 2026-11-18 12:00 and
-  2026-02-11 15:30:17 (which puts every cut-off in the middle of a week and of the history). The same harness run twice
-  on the old code was identical, so the comparison is not noise. The harness is not in the repo.
-- **Tests** (`tests/test_alert_partition_consumers.py`, 23): every section and loader runs with the CSV deleted (any
-  attempt to look for it fails); each section equals the run over the whole normalized history, for several windows;
-  mid-week cut-offs return exactly the alerts in range, and the reader opens only the weeks it needs (14 days = at most
-  3 files; the data date reads one file); no partitions, a window past the last alert, unknown units, an undated-only
-  history and a stale feed raise nothing and keep their messages. In `test_unit_detail.py`, two tests that patched the
-  removed `usc.load_alerts_data` now patch the new calls.
-- **Full suite.** The untouched HEAD fails 31 tests and 2 errors on this machine (`informe_falla*`,
-  `mantenciones_productive`, `report_health`, two in `campbell_ai_resources`: unrelated and pre-existing). With this
-  change the same set fails plus one more, `test_alert_partitions.py::test_the_weekly_sync_refuses_to_run_before_the_backfill_reached_s3`.
-  That one is **not from this change**: the working tree has an uncommitted edit to `src/data/alert_partition_s3.py`
-  (a new `S3Dataset` for another partition set) that changed the error text the test matches ("no complete history"
-  became "no complete alerts history"). I did not touch it.
+- **Dashboard sections, pre-change vs final: identical.** 150 snapshots (Hot Sheet; Menace Control's three callbacks at
+  3/30/90/365 days; Fleet overview output, status map and window counts; Unit summary and its alerts card for four units
+  each, one unknown; the data date) for capstone, cda and emin at two frozen clocks (2026-11-18 12:00 and
+  2026-02-11 15:30:17). Re-run after the last change: still identical.
+- **E-mail, HEAD (CSV) vs final (partitions): identical.** 15 requests on the real data (capstone, emin and cda; days,
+  weeks, mid-week ranges, the whole history, an empty period), 9,530 records in total, and the full HTML and subject
+  for capstone and emin.
+- **Campbell AI:** `repository.load("alerts", …)` equals `pd.read_csv` of the CSV (values, dtypes, order) for all three
+  clients; the declared schema still verifies for the alerts dataset.
+- **Tests:** `tests/test_alert_partition_consumers.py` (29): every section, the e-mail, the chips/probe and Campbell AI run
+  with the CSV deleted (any attempt to look for it fails); each equals the run over the whole history; mid-week cut-offs;
+  only the needed weeks are opened; no partitions, a window past the last alert, unknown units, an undated-only history,
+  a stale feed and a period without partitions raise nothing; a rewritten partition is seen by Campbell AI.
+  `test_alert_partitions.py` adds the daily-client schedule (which clients run on which day, and a walk of four days of
+  the loop with a fake clock). Existing tests that used the CSV loader or wrote a CSV for Campbell AI now partition it.
+- **Full suite:** 2,400 pass; the failing set is *exactly* the 31 tests and 2 errors that already fail on an untouched
+  HEAD on this machine (`informe_falla*`, `mantenciones_productive`, `report_health`, two in `campbell_ai_resources`);
+  none is new.
 
 ## Impact on response time
 
 `capstone`, default filters, callbacks invoked directly, Windows laptop, pandas engine. Cold = first call in a fresh
-process; warm = median of 5 further calls. Two sets:
-
-- **A**: re-measured with the before and after processes *interleaved*, median of 7 fresh processes.
-- **B**: the whole list, median of 3 fresh processes, the before run and the after run one after the other.
-
-Machine load moved the *same unchanged code* by up to ±80 % between runs (the e-mail rows), so read the warm figures
-of the heavy sections in set B as indicative only.
+process; warm = median of 5 further calls. **A** = before and after processes interleaved, median of 7 fresh processes;
+**B** = whole list, median of 3 fresh processes, before then after. Machine load moved the same unchanged code by up to
+±80 % between B runs, so read B's warm figures of heavy scenarios as indicative only.
 
 | Section / scenario | Before cold / warm (ms) | After cold / warm (ms) | Cold | Warm | Set |
 |---|---|---|---|---|---|
@@ -239,43 +257,46 @@ of the heavy sections in set B as indicative only.
 | **Unit summary** capstone busiest unit (default) | 1,073 / 254 | 1,036 / 317 | **−3 %** (noise) | **+25 %** | A |
 | Unit summary capstone, least-recent unit | 723 / 198 | 787 / 1,654 | +9 % | not meaningful | B |
 | Unit summary cda busiest unit (stale feed) | 1,173 / 558 | 1,338 / 624 | **+14 %** | +12 % | A |
-| E-mail capstone weekly (default), **not migrated** | 965 / 20 | 944 / 21 | unchanged code | | B |
-| E-mail capstone 4 weeks, not migrated | 907 / 45 | 927 / 49 | unchanged code | | B |
-| E-mail emin daily, not migrated | 1,368 / 1,800 | 1,532 / 3,288 | unchanged code (shows the noise) | | B |
+| **E-mail** capstone weekly (default) | 1,089 / 24 | 1,032 / 27 | **−5 %** | +3 ms (+12 %) | A |
+| E-mail capstone 4 weeks | 881 / 49 | 796 / 54 | −10 % | +10 % | A |
+| E-mail emin daily | 1,441 / 603 | 863 / 32 | −40 % | −95 % | A |
+
+The data-source chips, the catalog probe and Campbell AI were not timed (the chips and probe read one column of one
+file; Campbell AI loads capstone's whole history in ~60 ms from the partitions).
 
 Reading it:
 
-- **Cold is lower at default filters in all four capstone sections**: clearly for Hot Sheet (−36 %) and Fleet overview
-  (−29 %); only marginally for Menace Control (−6 %) and Unit summary (−3 %, within run-to-run noise). The large wins are
-  EMIN (−65 % to −86 %): the old path re-ran EMIN's maintenance-evidence enrichment over the whole history on every call,
-  and now it runs over the loaded weeks only.
-- **Warm is slower for Menace Control, Fleet overview and Unit summary at default filters** (+59 %, +46 %, +25 %; in
-  absolute terms roughly +10 to +60 ms per interaction). The old path served the whole history from an in-process cache
-  (`lru_cache` plus a deep copy), so a repeated call cost almost nothing. The new path re-reads a few Parquet files each
-  time (about 20 ms for each of Fleet overview's two alert reads, and several alert reads add up on a Unit summary page).
-  Caching is excluded by the requirement. This is "slower than before at default filters" in the sense of the rule, so
-  **it needs approval before merging** (decision 2).
-- Non-default scenarios that got slower on cold: Menace Control 365 d (+14 %: it reads 53 weeks), Unit summary on cda's
-  stale feed (+14 %), Fleet overview cda (+12 %). cda has only 152 alerts in total, where the old cached CSV is tiny, so
-  a small history gains nothing from partitioning and pays a per-file cost.
-- Growth: the old cost grew with the history; the new one grows with the window.
+- **Cold is lower at default filters in every capstone consumer**: clearly for Hot Sheet (−36 %) and Fleet overview
+  (−29 %); marginally for Menace Control (−6 %), Unit summary (−3 %, within noise) and the e-mail (−5 %; its time is
+  dominated by importing the dashboard components, not by reading alerts). The large wins are EMIN (−40 % to −86 %): the
+  old path re-ran EMIN's maintenance-evidence enrichment over the whole history on every call, and now it does so over
+  the loaded weeks only.
+- **Warm is slower for Menace Control, Fleet overview, Unit summary and (by 3 ms) the capstone e-mail** at default
+  filters (+59 %, +46 %, +25 %, +12 %; roughly +3 to +60 ms per repeated interaction). See decision 2.
+- Non-default scenarios slower on cold: Menace Control 365 d (+14 %: 53 weeks), Unit summary on cda's stale feed (+14 %),
+  Fleet overview cda (+12 %). cda has 152 alerts in total, where the old cached CSV was tiny.
 
-## Open decisions (need approval before merging)
+## Open decisions
 
-1. **E-mail** (above): EMIN's daily e-mail needs alerts newer than the weekly run. Until one of the listed options is
-   chosen, the e-mail, `load_alerts_data` and `_load_alerts_data_cached` stay. They are the only runtime use left of the
-   CSV loader (tests that call it aside).
-2. **Warm-path regression** at default filters in Menace Control, Fleet overview and Unit summary (cold is lower).
-   Options: accept it (a few tens of ms per repeated interaction); approve **column projection** on these reads (the
-   sections use about 6 of the 13 columns; not done, since it is a performance change beyond the migration); or approve
-   caching (excluded today). Nothing was added.
-3. **Other CSV readers** (data-source chips, catalog probe, Campbell AI): migrate them, or accept the CSV as a documented
-   exception for them. Until then the CSV stays on disk and readable.
+1. **(Decided) EMIN daily.** Needs the operational dependency above (fresh EMIN CSV on the partitioner's volume before
+   04:00) and, in ECS, the second EventBridge rule.
+2. **Warm-path cost, in plain words.** Before, the dashboard read the whole alert CSV *once* and kept it in memory, so
+   the second time you opened Menace Control (or Fleet overview, or a unit) it cost almost nothing. Now each open reads
+   the few weekly files it needs from disk again. The first open of the day is faster (less data, nothing to parse), but
+   repeating it costs a few tens of milliseconds more than the old in-memory copy (about 0.05 to 0.15 s per click, never
+   a noticeable wait on its own). Your rule says that anything slower at default filters needs approval. Options:
+   **(a) accept it** (my recommendation: the cost is small, bounded by the window, and does not grow with the history,
+   while the old one grew with it); **(b) approve reading only the ~6 of 13 columns these sections use** (a pure
+   performance change beyond this migration, would remove most of the difference); **(c) approve a cache** (excluded
+   today; it would bring back "stale until restart" questions). Nothing was added.
+3. **(Decided) Other readers redirected.** Operational follow-ups: regenerate the Campbell AI declared schema so its
+   generated copy says `parquet` for `alerts` (until then it just reads the footer); the translate tool's full run now
+   needs a partition run to reach the dashboard.
 4. The windows live as constants next to the rules they serve (`ALERT_STATUS_WINDOW_DAYS`, `ALERT_WINDOW_DAYS`,
    `ALERTS_WINDOW_DAYS`), so changing a rule's window changes what is read.
-5. Unrelated, found on the way: the uncommitted `alert_partition_s3.py` edit breaks one existing test (above), and 31
-   other tests already fail on a clean HEAD here.
-
+5. **Relation to the telemetry change (next section).** Both changes touch `scripts/partition_alerts.py`, `catalog.py`,
+   `campbell_ai/data.py` and `loaders.py`. The daily EMIN run applies to every dataset of the run, but EMIN has no telemetry
+   source, so for it a daily run only rebuilds its alert partitions. Telemetry for capstone and cda keeps its weekly cadence.
 
 ---
 
