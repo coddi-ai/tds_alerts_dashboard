@@ -25,6 +25,7 @@ from dashboard.components.predictive_config import (
 from dashboard.components.labels import status_label
 from dashboard.components.predictive_kpis import create_kpi_card, create_kpi_row
 from dashboard.components.predictive_state import (
+    RISK_LEVELS,
     RISK_LEVEL_STYLE,
     RISK_LEVEL_NO_DATA_COLOR,
     normalize_risk_level,
@@ -486,6 +487,44 @@ def _latest_mode_level(unit_levels, mode):
     return normalize_risk_level(series.iloc[-1]) if not series.empty else None
 
 
+def _dominant_mode(fm_keys, fm_scores, unit_levels):
+    """El modo con el PEOR `risk_level` del ultimo dia; a igual nivel, el de mayor numero
+    (`risk_level_value`). Un modo sin nivel queda por debajo de cualquier nivel."""
+    if not fm_keys:
+        return None
+    sev = {lvl: i for i, lvl in enumerate(RISK_LEVELS)}
+    return max(fm_keys, key=lambda k: (sev.get(_latest_mode_level(unit_levels, k), -1),
+                                       fm_scores.get(k, 0.0)))
+
+
+def _aviso_textos_desfasados(client, component, unit, unit_levels):
+    """Aviso si la `criticidad` del analisis inteligente no coincide con el `risk_level`
+    actual de algun modo de la unidad (None si coinciden o no hay con que comparar).
+
+    Pasa cuando upstream reescribe una semana DESPUES de publicado el analisis: sus
+    textos hablan de otros niveles que los que muestran el calendario y el badge. Los
+    niveles siempre salen de `risk_level`; esto solo avisa (volver a correr el analisis).
+    """
+    if not client or unit_levels is None or unit_levels.empty:
+        return None
+    try:
+        mfa = predictive_v2.read_latest_partition(
+            predictive_v2.mode_failure_analisis_base_path(client, component))
+    except Exception:
+        return None
+    if mfa is None or mfa.empty or not {"Unit", "failure_mode", "criticidad"} <= set(mfa.columns):
+        return None
+    distintos = []
+    for modo, crit in zip(*mfa.loc[mfa["Unit"] == unit, ["failure_mode", "criticidad"]].T.values):
+        nivel = _latest_mode_level(unit_levels, modo)
+        crit_n = normalize_risk_level(crit)
+        if nivel and crit_n and nivel != crit_n:
+            distintos.append(str(modo))
+    if not distintos:
+        return None
+    return t("tab_predictive_evidence.aviso_textos_desfasados", n=len(distintos))
+
+
 def _generate_insight_data(unit, df_unit, df_latest, failure_mode, component="motor", client="cda"):
     """Generate complete insight data for a failure mode and unit."""
     oil_labels, telem_labels, oil_limits_four = _resolve_client_dicts(client, component)
@@ -757,11 +796,19 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
         return html.Div(html.P(t("tab_predictive_evidence.no_hay_datos_disponibles"), className="text-muted text-center", style={"padding": "40px"}))
     row = row.iloc[0]
 
-    # Dominant failure mode: the highest cutoff-day value (the unit's latest `risk_value`
-    # per mode), the same figure the PDF reports. Displayed only - the badge is its `risk_level`.
+    # `risk_level` per day and mode (`risk_scores`): the status the badge and the
+    # calendar show, read as delivered.
+    unit_levels = _unit_risk_levels(client, component, unit)
+    # A unit without data shows no current mode level (D3); its calendar keeps the
+    # history, which is real.
+    sin_datos = unit in predictive_v2.units_without_data(client, component) if client else False
+
+    # Dominant failure mode: the worst `risk_level` on the unit's latest day, ties broken
+    # by the mode's number (`risk_level_value`, the value behind that level) - the same
+    # order as the PDF and the mailing. The number is displayed; the badge is its level.
     fm_keys = list(failure_modes.keys())
     fm_scores = {k: float(row[k]) if k in row.index and pd.notna(row[k]) else 0.0 for k in fm_keys}
-    dominant_mode = max(fm_scores, key=fm_scores.get) if fm_scores else fm_keys[0]
+    dominant_mode = _dominant_mode(fm_keys, fm_scores, unit_levels)
     dominant_label = failure_modes[dominant_mode]
 
     # KPIs
@@ -769,9 +816,6 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     ranking_90d_val = float(row.get("ranking_acum_90d", float("nan")))
 
     df_unit = df[df["Unit"] == unit].sort_values("Fecha")
-    # `risk_level` per day and mode (`risk_scores`): the status the badge and the
-    # calendar show, read as delivered.
-    unit_levels = _unit_risk_levels(client, component, unit)
     last_evidence_date = df_unit["Fecha"].max() if not df_unit.empty else None
     last_date_str = last_evidence_date.strftime("%d %b %Y") if last_evidence_date is not None else "—"
 
@@ -782,7 +826,8 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
         _risk_tile(t("tab_predictive_evidence.riesgo_acum_90d"), ranking_90d_val, t("tab_predictive_evidence.indice_historico")),
         _risk_tile(t("tab_predictive_evidence.ranking_7_dias"), ranking_7d_val, t("tab_predictive_evidence.escala_0_100")),
         _risk_trend_card(ranking_7d_val, ranking_90d_val),
-        _dominant_mode_card(dominant_label, fm_scores[dominant_mode], _latest_mode_level(unit_levels, dominant_mode)),
+        _dominant_mode_card(dominant_label, fm_scores[dominant_mode],
+                            None if sin_datos else _latest_mode_level(unit_levels, dominant_mode)),
     ]
 
     # Fleet charts
@@ -795,8 +840,11 @@ def render_initial_content(unit, df, df_latest, component="motor", client=None):
     )
     bar_fig = create_comparative_bars(row, latest, failure_modes)
 
+    aviso = None # _aviso_textos_desfasados(client, component, unit, unit_levels)
     ai_section = html.Div(
-        create_ai_analysis_panel(**_resolve_unit_ai_panel(client, component, unit)),
+        [create_ai_analysis_panel(**_resolve_unit_ai_panel(client, component, unit))]
+        + ([html.P([html.I(className="fas fa-exclamation-triangle me-1"), aviso],
+                   className="text-warning small mt-2 mb-0")] if aviso else []),
         style={"marginBottom": "1.5rem"},
     )
 

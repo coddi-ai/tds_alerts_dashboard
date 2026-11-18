@@ -32,9 +32,12 @@ from src.mailing import (
 from src.mailing.scheduler import MailingScheduler
 
 SANTIAGO = ZoneInfo("America/Santiago")
-SECRET_URL = "https://abc123secret.lambda-url.us-east-2.on.aws/"
+SECRET_ARN = "arn:aws:lambda:us-east-1:111122223333:function:abc123secret"
 TECH = "tds@coddi.ai"
+SHIPPED_TECHNICAL_ONLY = config.SCHEDULED_TECHNICAL_ONLY_CLIENTS  # what the code ships, before any fixture
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
+LOCKED_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if not r.get("optional")]  # always in a manual send
+OPTIONAL_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if r.get("optional")]  # Warren
 GERENCIA = ["eduardo@coddi.ai", "pedro@coddi.ai"]
 EMIN_SEND = [r["email"] for r in config.MAILING_RECIPIENTS["emin"] if r["send_email"]]
 EMIN_ALL = [r["email"] for r in config.MAILING_RECIPIENTS["emin"]]
@@ -51,14 +54,15 @@ CLIENT_USER = next(n for n, u in USERS.items() if u.get("role") != "admin")
 def hermetic(monkeypatch, tmp_path):
     """Sin .env real: ni la URL de la Lambda, ni el entorno, ni el estado salen de la maquina."""
     monkeypatch.setattr(config, "_DOTENV_LOADED", True)
-    monkeypatch.setenv("LAMBDA_URL", SECRET_URL)
-    monkeypatch.setenv("LAMBDA_ACCESS_KEY", "AKIAFAKEFAKEFAKEFAKE")
-    monkeypatch.setenv("LAMBDA_SECRET_ACCESS_KEY", "fake-secret-key-for-signing-tests")
+    monkeypatch.setenv("LAMBDA_FUNCTION_NAME", SECRET_ARN)
     monkeypatch.setenv("DEPLOY_STATUS", "test")
     monkeypatch.setenv("MAILING_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("MAILING_RETRY_DELAYS", "1,2,3")
     monkeypatch.setenv("MAILING_MANUAL_COOLDOWN_SECONDS", "0")
     monkeypatch.delenv("MAILING_SCHEDULER_ENABLED", raising=False)
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", frozenset())  # general rule; see the shipped-value tests
+    monkeypatch.setenv("SYNC_DATA", "false")  # never touch S3 from a test (the sync has its own tests)
+    __import__("src.mailing.data_sync", fromlist=["x"])._DONE.clear()
     service_module = __import__("src.mailing.service", fromlist=["x"])
     service_module._manual_locks.clear()
     service_module._manual_last_success.clear()
@@ -122,7 +126,7 @@ def as_user(app, username):
     return {"username": username, "role": USERS[username]["role"], "clients": []}
 
 
-def at(day: date, hour=8, minute=0) -> datetime:
+def at(day: date, hour=12, minute=0) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=SANTIAGO)
 
 
@@ -133,7 +137,7 @@ def test_non_production_allows_the_whole_registry_of_the_client(sent):
     assert not config.is_production()
     assert recipients.allowed_emails("emin") == EMIN_ALL + TECHS + GERENCIA
     for r in recipients.list_recipients("emin"):
-        assert r.locked == (r.group == config.GROUP_TECHNICAL)
+        assert r.locked == (r.email in LOCKED_TECHS)
         assert r.disabled == r.locked  # nothing is disabled because of the environment
 
 
@@ -145,7 +149,7 @@ def test_non_production_only_technical_is_selected_by_default():
 def test_production_defaults_are_client_send_email_technical_and_management(production):
     selected = [r.email for r in recipients.list_recipients("emin") if r.selected_by_default]
     assert selected == EMIN_SEND + TECHS + GERENCIA
-    assert [r.email for r in recipients.list_recipients("emin") if r.locked] == TECHS
+    assert [r.email for r in recipients.list_recipients("emin") if r.locked] == LOCKED_TECHS
 
 
 def test_scheduled_recipients_are_identical_in_production_and_non_production(monkeypatch):
@@ -202,11 +206,32 @@ def test_subject_uses_send_date():
     assert periods.build_subject(date(2026, 11, 11)) == "[CODDI] Monitoreo de Alertas 11/11/2026"
 
 
-def test_capstone_weekly_example_from_the_spec():
+def test_capstone_weekly_period_is_the_previous_monday_to_sunday_week():
+    """Sent on Wednesday 11/11/2026 it covers Mon 02/11 - Sun 08/11 (the data arrives ~60 h late)."""
     period = periods.compute_period("weekly", date(2026, 11, 11))
-    assert (period.start, period.end) == (date(2026, 11, 4), date(2026, 11, 10))
-    assert period.days == 7
-    assert periods.describe_period(period) == "04/11/2026 – 10/11/2026 (últimos 7 días)"
+    assert (period.start, period.end) == (date(2026, 11, 2), date(2026, 11, 8))
+    assert period.days == 7 and period.start.weekday() == 0 and period.end.weekday() == 6
+    assert periods.describe_period(period, "weekly") == "02/11/2026 – 08/11/2026 (semana anterior, lunes a domingo)"
+
+
+@pytest.mark.parametrize("send_day", [date(2026, 11, 16) + timedelta(days=offset) for offset in range(7)])
+def test_weekly_period_is_the_same_whole_week_for_every_day_of_the_week(send_day):
+    """Mon 16/11 .. Sun 22/11 all cover the week that ended on Sunday 15/11 (Mon 09/11 - Sun 15/11);
+    Monday 23/11 moves to the next one."""
+    period = periods.compute_period("weekly", send_day)
+    assert (period.start, period.end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert period.days == 7 and period.start.weekday() == 0 and period.end.weekday() == 6
+    assert period.end < send_day  # never includes the send date nor an incomplete week
+
+
+def test_weekly_period_moves_to_the_next_week_on_monday():
+    assert periods.compute_period("weekly", date(2026, 11, 22)).end == date(2026, 11, 15)
+    assert periods.compute_period("weekly", date(2026, 11, 23)).end == date(2026, 11, 22)
+
+
+def test_the_daily_period_is_unchanged():
+    period = periods.compute_period("daily", date(2026, 11, 18))
+    assert (period.start, period.end) == (date(2026, 11, 17), date(2026, 11, 17))
 
 
 def test_daily_period_is_previous_day():
@@ -219,11 +244,11 @@ def test_period_crossing_chile_daylight_saving_change_keeps_seven_calendar_days(
     # Chile pasa a horario de verano la noche del sab 5 -> dom 6 de septiembre de 2026.
     send = date(2026, 9, 9)
     period = periods.compute_period("weekly", send)
-    assert (period.start, period.end) == (date(2026, 9, 2), date(2026, 9, 8))
+    assert (period.start, period.end) == (date(2026, 8, 31), date(2026, 9, 6))
     assert period.days == 7
     # y al revés: fin del horario de verano, sab 4 -> dom 5 de abril de 2026.
     period = periods.compute_period("weekly", date(2026, 4, 8))
-    assert (period.start, period.end) == (date(2026, 4, 1), date(2026, 4, 7))
+    assert (period.start, period.end) == (date(2026, 3, 30), date(2026, 4, 5))
 
 
 def test_unknown_frequency_is_rejected():
@@ -234,7 +259,7 @@ def test_unknown_frequency_is_rejected():
 # --------------------------------------------------------------------------- schedule evaluation
 
 
-def test_emin_is_due_every_day_at_0800_chile():
+def test_emin_is_due_every_day_at_1200_chile():
     schedule = config.MAILING_SCHEDULES["emin"]
     for offset in range(7):
         day = date(2026, 11, 9) + timedelta(days=offset)
@@ -250,56 +275,56 @@ def test_capstone_is_due_only_on_wednesday():
         assert periods.due_scheduled_date(schedule, at(wednesday + timedelta(days=offset))) is None
 
 
-def test_not_due_before_0800_nor_after_the_grace_window():
+def test_not_due_before_1200_nor_after_the_grace_window():
     schedule = config.MAILING_SCHEDULES["emin"]
     day = date(2026, 11, 10)
-    assert periods.due_scheduled_date(schedule, at(day, 7, 59)) is None
-    assert periods.due_scheduled_date(schedule, at(day, 8, 0)) == day
-    assert periods.due_scheduled_date(schedule, at(day, 8, 14)) == day
-    assert periods.due_scheduled_date(schedule, at(day, 8, 15)) is None
+    assert periods.due_scheduled_date(schedule, at(day, 11, 59)) is None
+    assert periods.due_scheduled_date(schedule, at(day, 12, 0)) == day
+    assert periods.due_scheduled_date(schedule, at(day, 12, 14)) == day
+    assert periods.due_scheduled_date(schedule, at(day, 12, 15)) is None
 
 
-def test_schedule_stays_at_0800_chile_across_the_daylight_saving_change():
+def test_schedule_stays_at_1200_chile_across_the_daylight_saving_change():
     schedule = config.MAILING_SCHEDULES["emin"]
     before, after = date(2026, 9, 2), date(2026, 9, 9)  # invierno (UTC-4) y verano (UTC-3)
     m_before, m_after = periods.scheduled_moment(schedule, before), periods.scheduled_moment(schedule, after)
-    assert (m_before.hour, m_after.hour) == (8, 8)
+    assert (m_before.hour, m_after.hour) == (12, 12)
     assert m_before.utcoffset() != m_after.utcoffset()
-    # Una hora UTC fija se correria: 12:00 UTC es las 08:00 antes del cambio y las 09:00 despues.
+    # Una hora UTC fija se correria: 16:00 UTC es las 12:00 antes del cambio (UTC-4) y las 13:00 despues (UTC-3).
     utc = ZoneInfo("UTC")
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 2, 12, 0, tzinfo=utc)) == before
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 12, 0, tzinfo=utc)) is None
-    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 11, 0, tzinfo=utc)) == after
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 2, 16, 0, tzinfo=utc)) == before
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 16, 0, tzinfo=utc)) is None
+    assert periods.due_scheduled_date(schedule, datetime(2026, 9, 9, 15, 0, tzinfo=utc)) == after
 
 
 def test_mailing_schedules_hold_exactly_the_intended_values():
     """Guards against a temporary test schedule being committed (01.1)."""
     assert config.MAILING_TIMEZONE == "America/Santiago"
     assert config.MAILING_SCHEDULES == {
-        "emin": {"frequency": "daily", "time": "08:00"},
-        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
+        "emin": {"frequency": "daily", "time": "12:00"},
+        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
     }
 
 
 @pytest.mark.parametrize("zone", ["Asia/Tokyo", "America/New_York", "Europe/Madrid", "UTC", "Pacific/Auckland"])
 def test_schedule_is_evaluated_in_chile_time_whatever_the_machine_zone(zone):
-    """`now` expressed in any machine zone fires at 08:00 Chile, never at 08:00 of that zone."""
+    """`now` expressed in any machine zone fires at 12:00 Chile, never at 12:00 of that zone."""
     schedule = config.MAILING_SCHEDULES["emin"]
     machine = ZoneInfo(zone)
     day = date(2026, 11, 10)
-    chile_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=SANTIAGO)
-    assert periods.due_scheduled_date(schedule, chile_0800.astimezone(machine)) == day
-    local_0800 = datetime(2026, 11, 10, 8, 0, tzinfo=machine)
-    if local_0800.astimezone(SANTIAGO).strftime("%H:%M") != "08:00":
-        assert periods.due_scheduled_date(schedule, local_0800) is None
+    chile_noon = datetime(2026, 11, 10, 12, 0, tzinfo=SANTIAGO)
+    assert periods.due_scheduled_date(schedule, chile_noon.astimezone(machine)) == day
+    local_noon = datetime(2026, 11, 10, 12, 0, tzinfo=machine)
+    if local_noon.astimezone(SANTIAGO).strftime("%H:%M") != "12:00":
+        assert periods.due_scheduled_date(schedule, local_noon) is None
 
 
-def test_chile_0800_is_fixed_in_chile_time_across_a_daylight_saving_change_seen_from_another_zone():
+def test_chile_1200_is_fixed_in_chile_time_across_a_daylight_saving_change_seen_from_another_zone():
     schedule = config.MAILING_SCHEDULES["emin"]
     tokyo = ZoneInfo("Asia/Tokyo")  # no daylight saving: its offset to Chile moves when Chile changes
     for day in (date(2026, 9, 4), date(2026, 9, 7)):  # before and after Chile's spring forward (Sep 6)
         moment = periods.scheduled_moment(schedule, day)
-        assert (moment.hour, moment.minute) == (8, 0)
+        assert (moment.hour, moment.minute) == (12, 0)
         assert periods.due_scheduled_date(schedule, moment.astimezone(tokyo)) == day
         assert periods.due_scheduled_date(schedule, (moment - timedelta(minutes=1)).astimezone(tokyo)) is None
 
@@ -312,7 +337,7 @@ def test_scheduler_tick_runs_each_due_client_once_per_day():
     for w in list(scheduler._workers):
         w.join(2)
     assert sorted(c for c, _ in first) == ["capstone", "emin"]
-    assert scheduler.tick(at(wednesday, 8, 1)) == []  # mismo dia: no se relanza
+    assert scheduler.tick(at(wednesday, 12, 1)) == []  # mismo dia: no se relanza
     next_day = scheduler.tick(at(wednesday + timedelta(days=1)))
     for w in list(scheduler._workers):
         w.join(2)
@@ -320,14 +345,66 @@ def test_scheduler_tick_runs_each_due_client_once_per_day():
     assert len(started) == 3
 
 
-def test_scheduler_is_on_by_default_and_can_be_switched_off(monkeypatch):
+def test_scheduler_runs_by_default_in_production_and_can_be_switched_off(production, monkeypatch):
     from src.mailing import scheduler as scheduler_module
 
-    assert config.scheduler_enabled()  # default: yes
+    assert config.scheduler_enabled() and config.scheduler_disabled_reason() is None  # production: on by default
     monkeypatch.setenv("MAILING_SCHEDULER_ENABLED", "false")
-    assert not config.scheduler_enabled()
+    assert not config.scheduler_enabled() and "MAILING_SCHEDULER_ENABLED" in config.scheduler_disabled_reason()
     scheduler_module.stop_mailing_scheduler()
     assert scheduler_module.start_mailing_scheduler() is None
+
+
+@pytest.mark.parametrize("status", ["test", "dev", "development", "local", "staging", "", None])
+def test_the_automatic_send_never_runs_outside_production(monkeypatch, status):
+    from src.mailing import scheduler as scheduler_module
+
+    if status is None:
+        monkeypatch.delenv("DEPLOY_STATUS", raising=False)  # a missing variable is non-production too
+    else:
+        monkeypatch.setenv("DEPLOY_STATUS", status)
+    monkeypatch.setenv("MAILING_SCHEDULER_ENABLED", "true")  # even when explicitly requested
+    assert not config.is_production()
+    assert not config.scheduler_enabled()
+    assert config.scheduler_disabled_reason() == "the environment is not production"
+    scheduler_module.stop_mailing_scheduler()
+    assert scheduler_module.start_mailing_scheduler() is None
+
+
+@pytest.mark.parametrize("status", ["POC", "poc", "production", "Production"])
+def test_the_automatic_send_runs_in_production(monkeypatch, status):
+    monkeypatch.setenv("DEPLOY_STATUS", status)
+    assert config.is_production() and config.scheduler_enabled()
+
+
+def test_a_non_production_start_logs_why_and_creates_no_scheduler(monkeypatch, caplog):
+    import logging
+
+    from src.mailing import scheduler as scheduler_module
+
+    scheduler_module.stop_mailing_scheduler()
+    with caplog.at_level(logging.INFO):
+        assert scheduler_module.start_mailing_scheduler() is None
+    assert any("mailing scheduler not started: the environment is not production" in r.getMessage() for r in caplog.records)
+    assert scheduler_module._SCHEDULER is None
+
+
+def test_a_production_start_creates_the_scheduler_and_stop_removes_it(production, monkeypatch):
+    from src.mailing import scheduler as scheduler_module
+
+    monkeypatch.setattr(scheduler_module.MailingScheduler, "start", lambda self: self)  # no real thread
+    scheduler_module.stop_mailing_scheduler()
+    created = scheduler_module.start_mailing_scheduler()
+    try:
+        assert created is not None and scheduler_module.start_mailing_scheduler() is created  # idempotent
+    finally:
+        scheduler_module.stop_mailing_scheduler()
+
+
+def test_a_manual_send_still_works_outside_production(builder, sent, flask_app):
+    assert not config.is_production()
+    send_manual("emin", [], as_user(flask_app, ADMIN))
+    assert len(sent["calls"]) == 1
 
 
 # --------------------------------------------------------------------------- exactly once / retries
@@ -397,6 +474,140 @@ def test_scheduled_and_manual_share_builder_and_delivery(builder, sent, flask_ap
     assert len(builder.calls) == 2 and len(sent["calls"]) == 2
 
 
+# --------------------------------------------------------------------------- Emin in test: technical staff only
+
+
+def test_the_shipped_setting_holds_emin_back_and_nobody_else():
+    assert SHIPPED_TECHNICAL_ONLY == frozenset({"emin"})
+
+
+def test_emin_scheduled_goes_only_to_the_technical_staff_and_capstone_keeps_the_real_audience(monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    for env in ("test", "POC"):  # the same in every environment
+        monkeypatch.setenv("DEPLOY_STATUS", env)
+        assert recipients.scheduled_emails("emin") == TECHS == ["tds@coddi.ai", "warren@coddi.ai"]
+        assert recipients.scheduled_emails("EMIN") == TECHS  # the client name is normalised
+        assert recipients.scheduled_emails("capstone") == CAPSTONE_SEND + TECHS + GERENCIA
+
+
+def test_the_scheduled_emin_email_really_reaches_no_client_and_no_gerencia(builder, sent, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    run_scheduled("emin", date(2026, 11, 11))
+    run_scheduled("capstone", date(2026, 11, 11))
+    emin, capstone = sent["calls"][0]["emails"], sent["calls"][1]["emails"]
+    assert emin == TECHS
+    assert not set(emin) & set(EMIN_ALL) and not set(emin) & set(GERENCIA)
+    assert capstone == CAPSTONE_SEND + TECHS + GERENCIA
+
+
+def test_the_emin_test_setting_does_not_limit_a_manual_send(builder, sent, flask_app, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    admin = as_user(flask_app, ADMIN)
+    assert set(recipients.allowed_emails("emin")) == {*EMIN_ALL, *TECHS, *GERENCIA}
+    send_manual("emin", [EMIN_ALL[0], GERENCIA[0]], admin)
+    assert sent["calls"][0]["emails"] == [EMIN_ALL[0], GERENCIA[0], *LOCKED_TECHS]
+
+
+# --------------------------------------------------------------------------- data sync before a scheduled send
+
+
+@pytest.fixture
+def sync(monkeypatch):
+    """Turn the pre-send sync on with a fake S3 function; `box["events"]` records the order of things."""
+    from src.mailing import data_sync
+
+    box = {"events": [], "fail": None}
+
+    def fake_s3_sync():
+        box["events"].append("sync")
+        if box["fail"]:
+            raise box["fail"]
+
+    monkeypatch.setenv("SYNC_DATA", "true")
+    monkeypatch.setattr(data_sync, "_s3_sync", fake_s3_sync)
+    data_sync._DONE.clear()
+    return box
+
+
+def test_scheduled_send_syncs_the_data_before_building_the_email(builder, sent, sync, monkeypatch):
+    events = sync["events"]
+
+    def recording_builder(request):
+        events.append("build")
+        return ReportContent(subject=periods.build_subject(request.send_date), html="<html></html>")
+
+    def recording_send(subject, html, emails):
+        events.append("send")
+        return delivery.DeliveryResult(True)
+
+    register_report_builder(report.ALERT_SUMMARY, recording_builder)  # the `builder` fixture removes it afterwards
+    monkeypatch.setattr(delivery, "send_email", recording_send)
+    run_scheduled("emin", date(2026, 11, 10))
+    assert events == ["sync", "build", "send"]
+
+
+def test_the_sync_runs_once_for_both_clients_of_the_same_date(builder, sent, sync):
+    run_scheduled("emin", date(2026, 11, 11))
+    run_scheduled("capstone", date(2026, 11, 11))
+    assert sync["events"] == ["sync"] and len(sent["calls"]) == 2
+
+
+def test_the_sync_runs_again_for_another_date(builder, sent, sync):
+    run_scheduled("emin", date(2026, 11, 10))
+    run_scheduled("emin", date(2026, 11, 11))
+    assert sync["events"] == ["sync", "sync"]
+
+
+def test_a_failing_sync_never_blocks_the_email(builder, sent, sync, caplog):
+    sync["fail"] = RuntimeError("secret-bucket-name https://abc123secret.example/")
+    with caplog.at_level(logging.WARNING):
+        outcome = run_scheduled("emin", date(2026, 11, 10))
+    assert outcome == "sent" and len(sent["calls"]) == 1
+    assert any("data sync before send failed (RuntimeError)" in r.getMessage() for r in caplog.records)
+    assert "secret-bucket-name" not in caplog.text and "abc123secret" not in caplog.text
+
+
+def test_a_failed_sync_is_not_retried_for_the_other_client_of_the_same_date(builder, sent, sync):
+    sync["fail"] = OSError("read-only file system")
+    run_scheduled("emin", date(2026, 11, 10))
+    run_scheduled("capstone", date(2026, 11, 10))
+    assert sync["events"] == ["sync"] and len(sent["calls"]) == 2
+
+
+def test_the_app_wide_sync_data_switch_turns_it_off(builder, sent, sync, monkeypatch):
+    monkeypatch.setenv("SYNC_DATA", "false")
+    run_scheduled("emin", date(2026, 11, 10))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_the_code_constant_turns_it_off(builder, sent, sync, monkeypatch):
+    monkeypatch.setattr(config, "SYNC_DATA_BEFORE_SCHEDULED_SEND", False)
+    run_scheduled("emin", date(2026, 11, 10))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_a_run_that_is_skipped_does_not_sync(builder, sent, sync):
+    state.claim("emin", date(2026, 11, 10))
+    assert run_scheduled("emin", date(2026, 11, 10)) == "skipped"
+    assert sync["events"] == [] and sent["calls"] == []
+
+
+def test_a_manual_send_does_not_sync(builder, sent, sync, flask_app):
+    send_manual("emin", [], as_user(flask_app, ADMIN))
+    assert sync["events"] == [] and len(sent["calls"]) == 1
+
+
+def test_the_sync_is_the_function_the_app_runs_at_startup(monkeypatch):
+    """The 'proper function': src.data.s3_downloader.main, the one dashboard/app.py calls."""
+    import src.data.s3_downloader as downloader
+    from src.mailing import data_sync
+
+    called = []
+    monkeypatch.setattr(downloader, "main", lambda: called.append("startup-sync"))
+    data_sync._s3_sync()
+    assert called == ["startup-sync"]
+
+
 # --------------------------------------------------------------------------- manual send
 
 
@@ -404,14 +615,14 @@ def test_manual_send_always_adds_technical(builder, sent, flask_app, production)
     admin = as_user(flask_app, ADMIN)
     result = send_manual("emin", [EMIN_SEND[0]], admin)
     assert result["ok"] and result["status"] == "sent"
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
-    assert [r["status"] for r in result["recipients"]] == ["sent"] * (1 + len(TECHS))
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *LOCKED_TECHS]
+    assert [r["status"] for r in result["recipients"]] == ["sent"] * (1 + len(LOCKED_TECHS))
 
 
 def test_manual_mock_test_is_just_technical_selected(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [TECH], admin)
-    assert sent["calls"][0]["emails"] == TECHS
+    assert sent["calls"][0]["emails"] == LOCKED_TECHS
 
 
 def test_manual_send_rejects_emails_outside_the_allowed_set(builder, sent, flask_app, production):
@@ -434,7 +645,7 @@ def test_manual_send_outside_production_accepts_the_whole_registry(builder, sent
     admin = as_user(flask_app, ADMIN)
     assert not config.is_production()
     send_manual("emin", [EMIN_SEND[0], GERENCIA[0], TECH], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], GERENCIA[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], GERENCIA[0], *LOCKED_TECHS]
 
 
 def test_manual_send_outside_production_still_rejects_emails_outside_the_registry(builder, sent, flask_app):
@@ -448,15 +659,15 @@ def test_manual_send_outside_production_still_rejects_emails_outside_the_registr
 def test_manual_send_outside_production_always_adds_technical(builder, sent, flask_app):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [GERENCIA[0]], admin)
-    assert sent["calls"][0]["emails"] == [GERENCIA[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [GERENCIA[0], *LOCKED_TECHS]
     send_manual("emin", [], admin)
-    assert sent["calls"][1]["emails"] == TECHS
+    assert sent["calls"][1]["emails"] == LOCKED_TECHS
 
 
 def test_manual_send_matches_emails_case_insensitively_without_duplicates(builder, sent, flask_app, production):
     admin = as_user(flask_app, ADMIN)
     send_manual("emin", [EMIN_SEND[0].upper(), EMIN_SEND[0], TECH.upper()], admin)
-    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *TECHS]
+    assert sent["calls"][0]["emails"] == [EMIN_SEND[0], *LOCKED_TECHS]
 
 
 def test_manual_failure_is_returned_not_retried(builder, sent, flask_app):
@@ -561,8 +772,9 @@ def test_context_for_capstone_in_production(flask_app, production):
     assert ctx["configured"] and ctx["client"] == "capstone"
     assert ctx["report_type"] == "weekly" and ctx["report_title"] == "Resumen Semanal de Alertas"
     assert ctx["subject"] == "[CODDI] Monitoreo de Alertas 11/11/2026"
-    assert ctx["period"]["text"] == "04/11/2026 – 10/11/2026 (últimos 7 días)"
-    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 08:00 (hora de Chile)"
+    assert ctx["period"]["text"] == "02/11/2026 – 08/11/2026 (semana anterior, lunes a domingo)"
+    assert (ctx["period"]["start"], ctx["period"]["end"]) == ("2026-11-02", "2026-11-08")
+    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 12:00 (hora de Chile)"
     assert ctx["environment"] == "production"
     groups = [r["group"] for r in ctx["recipients"]]
     assert groups == sorted(groups, key=config.GROUP_ORDER.index)
@@ -581,8 +793,8 @@ def test_context_outside_production_selects_only_technical_and_disables_nothing_
     for r in ctx["recipients"]:
         is_tech = r["email"] in TECHS
         assert r["selected_by_default"] == is_tech
-        assert r["locked"] == is_tech
-        assert r["disabled"] == is_tech  # only locked rows
+        assert r["locked"] == (r["email"] in LOCKED_TECHS)
+        assert r["disabled"] == r["locked"]  # only locked rows
         if not is_tech:
             assert not r["disabled_reason"]
 
@@ -593,7 +805,7 @@ def test_context_in_production_keeps_the_ticket_01_defaults(flask_app, productio
     assert ctx["environment"] == "production" and ctx["is_production"]
     defaults = [r["email"] for r in ctx["recipients"] if r["selected_by_default"]]
     assert defaults == EMIN_SEND + TECHS + GERENCIA
-    assert [r["email"] for r in ctx["recipients"] if r["locked"]] == TECHS
+    assert [r["email"] for r in ctx["recipients"] if r["locked"]] == LOCKED_TECHS
 
 
 def test_context_for_emin_is_daily(flask_app):
@@ -601,7 +813,7 @@ def test_context_for_emin_is_daily(flask_app):
     ctx = get_mailing_context("emin", admin, now=at(date(2026, 11, 10), 15, 0))
     assert ctx["report_title"] == "Resumen Diario de Alertas"
     assert ctx["period"]["text"] == "09/11/2026 (último día)"
-    assert ctx["schedule_description"] == "se envía automáticamente todos los días a las 08:00 (hora de Chile)"
+    assert ctx["schedule_description"] == "se envía automáticamente todos los días a las 12:00 (hora de Chile)"
 
 
 def test_context_for_unconfigured_client_says_so(flask_app):
@@ -668,113 +880,136 @@ def test_without_a_session_or_proof_nobody_is_admin(builder, sent, flask_app):
 # --------------------------------------------------------------------------- delivery
 
 
-class FakeResponse:
-    def __init__(self, status=200, body=None, headers=None, json_error=False):
-        self.status_code, self._body, self.headers, self._json_error = status, body, headers or {}, json_error
+class FakeStream:
+    def __init__(self, raw):
+        self._raw = raw
 
-    def json(self):
-        if self._json_error:
-            raise ValueError("no json")
-        return self._body
+    def read(self):
+        return self._raw
 
 
-def test_delivery_posts_the_lambda_contract(monkeypatch):
-    seen = {}
-
-    def fake_post(url, data, headers, timeout):
-        seen.update(url=url, data=data, headers=headers, timeout=timeout)
-        return FakeResponse(200, {"statusCode": 200})
-
-    monkeypatch.setattr(delivery.requests, "post", fake_post)
-    result = delivery.send_email("Asunto", "<p>Hola</p>", ["a@x.cl", "b@x.cl"])
-    assert result.ok
+def fake_response(status=200, body=None, function_error=None, raw=None):
     import json
 
-    body = json.loads(seen["data"])
-    assert body == {
+    if raw is None:
+        raw = b"" if body is None else json.dumps(body).encode()
+    out = {"StatusCode": status, "Payload": FakeStream(raw)}
+    if function_error:
+        out["FunctionError"] = function_error
+    return out
+
+
+class FakeLambdaClient:
+    def __init__(self, response=None, error=None):
+        self.response, self.error, self.calls = response, error, []
+
+    def invoke(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.response
+
+
+@pytest.fixture
+def lambda_client(monkeypatch):
+    box = {"regions": [], "client": FakeLambdaClient(fake_response(200, {"statusCode": 200}))}
+
+    def factory(region):
+        box["regions"].append(region)
+        return box["client"]
+
+    monkeypatch.setattr(delivery, "_client", factory)
+    return box
+
+
+def test_delivery_invokes_the_lambda_contract(lambda_client):
+    import json
+
+    result = delivery.send_email("Asunto", "<p>Hola</p>", ["a@x.cl", "b@x.cl"])
+    assert result.ok
+    (call,) = lambda_client["client"].calls
+    assert call["FunctionName"] == SECRET_ARN
+    assert call["InvocationType"] == "RequestResponse"
+    event = json.loads(call["Payload"])
+    assert json.loads(event["body"]) == {
         "fieldName": "CDA-alert",
         "variables": {"sendCDAAlertEmailInput": {
             "mailTo": ["a@x.cl", "b@x.cl"], "mailSubject": "Asunto", "mailText": "<p>Hola</p>",
         }},
     }
-    assert seen["url"] == SECRET_URL
 
 
-def test_requests_are_signed_with_sigv4_for_the_function_url_region(monkeypatch):
-    seen = {}
-    monkeypatch.setattr(
-        delivery.requests, "post",
-        lambda url, data, headers, timeout: seen.update(headers=headers) or FakeResponse(200, {}),
-    )
+def test_the_client_uses_the_region_of_the_function_arn_not_the_callers(lambda_client, monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
     assert delivery.send_email("s", "h", ["a@x.cl"]).ok
-    auth = seen["headers"]["Authorization"]
-    assert auth.startswith("AWS4-HMAC-SHA256 Credential=AKIAFAKEFAKEFAKEFAKE/")
-    assert "/us-east-2/lambda/aws4_request" in auth
-    assert seen["headers"]["Content-Type"] == "application/json"
-    assert "X-Amz-Date" in seen["headers"]
+    assert lambda_client["regions"] == ["us-east-1"]
 
 
-def test_the_s3_keys_are_never_used_to_sign(monkeypatch):
-    monkeypatch.delenv("LAMBDA_ACCESS_KEY")
-    monkeypatch.delenv("LAMBDA_SECRET_ACCESS_KEY")
-    monkeypatch.setenv("ACCESS_KEY", "AKIAS3S3S3S3S3S3S3S3")
-    monkeypatch.setenv("SECRET_KEY", "s3-secret")
-    import botocore.session
+def test_the_real_client_targets_the_arn_region_and_never_retries(monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    delivery._client.cache_clear()
+    client = delivery._client("us-east-1")
+    assert client.meta.region_name == "us-east-1"
+    assert client.meta.config.retries["total_max_attempts"] == 1
+    delivery._client.cache_clear()
 
-    monkeypatch.setattr(botocore.session.Session, "get_credentials", lambda self: None)
-    assert set(delivery._signed_headers(SECRET_URL, "{}")) == {"Content-Type"}
 
-
-def test_without_any_credentials_the_request_goes_out_unsigned(monkeypatch):
-    monkeypatch.delenv("LAMBDA_ACCESS_KEY")
-    monkeypatch.delenv("LAMBDA_SECRET_ACCESS_KEY")
-    monkeypatch.setattr(delivery, "_credentials", lambda: None)
-    seen = {}
-    monkeypatch.setattr(
-        delivery.requests, "post",
-        lambda url, data, headers, timeout: seen.update(headers=headers) or FakeResponse(200, {}),
-    )
-    assert delivery.send_email("s", "h", ["a@x.cl"]).ok
-    assert "Authorization" not in seen["headers"]
+def test_region_from_arn():
+    assert delivery._region_from_arn(SECRET_ARN) == "us-east-1"
+    assert delivery._region_from_arn("emailSender") is None
 
 
 @pytest.mark.parametrize(
     "response",
     [
-        FakeResponse(500, {}),
-        FakeResponse(502, {}),
-        FakeResponse(200, {"statusCode": 500, "body": "x"}),
-        FakeResponse(200, {"errorMessage": "Task timed out", "errorType": "Sandbox.Timedout"}),
-        FakeResponse(200, {}, headers={"X-Amz-Function-Error": "Unhandled"}),
-        FakeResponse(200, {"errors": [{"message": "bad"}]}),
+        fake_response(500, {}),
+        fake_response(200, {"statusCode": 500, "body": "x"}),
+        fake_response(200, {"errorMessage": "Task timed out", "errorType": "Sandbox.Timedout"}),
+        fake_response(200, {}, function_error="Unhandled"),
+        fake_response(200, {"errors": [{"message": "bad"}]}),
     ],
 )
-def test_anything_but_a_confirmed_success_is_a_failure(monkeypatch, response):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: response)
+def test_anything_but_a_confirmed_success_is_a_failure(lambda_client, response):
+    lambda_client["client"] = FakeLambdaClient(response)
     assert not delivery.send_email("s", "h", ["a@x.cl"]).ok
 
 
-@pytest.mark.parametrize("response", [FakeResponse(200, {"statusCode": 200}), FakeResponse(200, json_error=True), FakeResponse(200, {})])
-def test_success_shapes(monkeypatch, response):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: response)
+@pytest.mark.parametrize(
+    "response",
+    [fake_response(200, {"statusCode": 200}), fake_response(200, raw=b"not json"), fake_response(200, {}), fake_response(200)],
+)
+def test_success_shapes(lambda_client, response):
+    lambda_client["client"] = FakeLambdaClient(response)
     assert delivery.send_email("s", "h", ["a@x.cl"]).ok
 
 
-@pytest.mark.parametrize("exc", [delivery.requests.Timeout, delivery.requests.ConnectionError])
-def test_network_errors_never_expose_the_lambda_url(monkeypatch, caplog, exc):
-    def boom(*a, **k):
-        raise exc(f"HTTPSConnectionPool host={SECRET_URL} failed")
+def _client_error(code):
+    from botocore.exceptions import ClientError
 
-    monkeypatch.setattr(delivery.requests, "post", boom)
+    return ClientError({"Error": {"Code": code, "Message": f"not allowed on {SECRET_ARN}"}}, "Invoke")
+
+
+def _read_timeout():
+    from botocore.exceptions import ReadTimeoutError
+
+    return ReadTimeoutError(endpoint_url=SECRET_ARN)
+
+
+@pytest.mark.parametrize("error", [_client_error("AccessDeniedException"), _read_timeout()])
+def test_sdk_errors_never_expose_the_function_arn(lambda_client, caplog, error):
+    lambda_client["client"] = FakeLambdaClient(error=error)
     with caplog.at_level(logging.DEBUG):
         result = delivery.send_email("s", "h", ["a@x.cl"])
     assert not result.ok
-    assert "secret" not in (result.reason or "") and "http" not in (result.reason or "").lower()
+    assert "abc123secret" not in (result.reason or "")
     assert "abc123secret" not in caplog.text
+    assert "AccessDeniedException" in caplog.text or "ReadTimeoutError" in caplog.text
 
 
-def test_scheduled_run_without_lambda_url_logs_an_error_and_does_not_raise(builder, monkeypatch, caplog):
-    monkeypatch.delenv("LAMBDA_URL")
+def test_scheduled_run_without_lambda_function_name_logs_an_error_and_does_not_raise(builder, monkeypatch, caplog):
+    monkeypatch.delenv("LAMBDA_FUNCTION_NAME")
     with caplog.at_level(logging.ERROR):
         outcome = run_scheduled("emin", date(2026, 11, 10), sleep=lambda s: None)
     assert outcome == "failed"
@@ -782,8 +1017,8 @@ def test_scheduled_run_without_lambda_url_logs_an_error_and_does_not_raise(build
     assert state.read("emin", date(2026, 11, 10))["status"] == "failed"
 
 
-def test_missing_lambda_url_is_a_failure_not_a_crash(monkeypatch):
-    monkeypatch.delenv("LAMBDA_URL")
+def test_missing_lambda_function_name_is_a_failure_not_a_crash(monkeypatch):
+    monkeypatch.delenv("LAMBDA_FUNCTION_NAME")
     result = delivery.send_email("s", "h", ["a@x.cl"])
     assert not result.ok
 
@@ -792,16 +1027,132 @@ def test_delivery_refuses_an_empty_recipient_list():
     assert not delivery.send_email("s", "h", []).ok
 
 
-def test_lambda_url_tolerates_quotes_and_spaces_in_the_env_value(monkeypatch):
-    monkeypatch.setenv("LAMBDA_URL", f'  "{SECRET_URL}"  ')
-    assert config.get_lambda_url() == SECRET_URL
+def test_lambda_function_name_tolerates_quotes_and_spaces_in_the_env_value(monkeypatch):
+    monkeypatch.setenv("LAMBDA_FUNCTION_NAME", f'  "{SECRET_ARN}"  ')
+    assert config.get_lambda_function_name() == SECRET_ARN
+
+
+# --------------------------------------------------------------------------- Warren is optional
+
+
+def test_the_optional_technical_contact_is_not_locked_but_selected_by_default():
+    assert OPTIONAL_TECHS == ["warren@coddi.ai"] and LOCKED_TECHS == ["tds@coddi.ai"]
+    by_email = {r.email: r for r in recipients.list_recipients("capstone")}
+    tds, warren = by_email["tds@coddi.ai"], by_email["warren@coddi.ai"]
+    assert tds.locked and tds.disabled and tds.selected_by_default
+    assert not warren.locked and not warren.disabled and warren.selected_by_default
+    assert warren.disabled_reason is None and tds.disabled_reason == "Siempre incluido"
+
+
+def test_a_manual_send_can_leave_the_optional_technical_contact_out(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [CAPSTONE_SEND[0]], admin)
+    assert sent["calls"][0]["emails"] == [CAPSTONE_SEND[0], "tds@coddi.ai"]  # no Warren
+
+
+def test_a_manual_send_includes_the_optional_technical_contact_when_selected(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [CAPSTONE_SEND[0], "WARREN@coddi.ai"], admin)
+    assert sent["calls"][0]["emails"] == [CAPSTONE_SEND[0], "warren@coddi.ai", "tds@coddi.ai"]
+
+
+def test_the_locked_technical_contact_cannot_be_left_out(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", ["warren@coddi.ai"], admin)
+    assert sent["calls"][0]["emails"] == ["warren@coddi.ai", "tds@coddi.ai"]
+
+
+@pytest.mark.parametrize("client", ["emin", "capstone"])
+def test_the_scheduled_send_always_includes_the_optional_technical_contact(client, monkeypatch):
+    monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", SHIPPED_TECHNICAL_ONLY)
+    assert "warren@coddi.ai" in recipients.scheduled_emails(client) and "tds@coddi.ai" in recipients.scheduled_emails(client)
+
+
+# --------------------------------------------------------------------------- custom period and subject (manual send)
+
+
+def test_a_manual_send_can_use_a_custom_period_and_subject(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="  Asunto a medida  ",
+                period_start="2026-11-01", period_end="2026-11-07")
+    request = builder.calls[0]
+    assert (request.period_start, request.period_end) == (date(2026, 11, 1), date(2026, 11, 7))
+    assert request.subject == "Asunto a medida" and sent["calls"][0]["subject"] == "Asunto a medida"
+
+
+def test_without_custom_values_the_automatic_ones_are_used(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="   ", period_start=None, period_end="")
+    request = builder.calls[0]
+    assert (request.period_start, request.period_end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert sent["calls"][0]["subject"] == "[CODDI] Monitoreo de Alertas 18/11/2026"
+
+
+def test_the_preview_uses_the_same_custom_values_and_sends_nothing(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    preview = build_preview("capstone", admin, now=at(date(2026, 11, 18)), subject="Vista previa",
+                            period_start=date(2026, 11, 2), period_end=date(2026, 11, 8))
+    assert preview["subject"] == "Vista previa" and sent["calls"] == []
+    assert (builder.calls[0].period_start, builder.calls[0].period_end) == (date(2026, 11, 2), date(2026, 11, 8))
+
+
+@pytest.mark.parametrize("kwargs,message", [
+    ({"period_start": "2026-11-01"}, "Indique la fecha de inicio y la de término"),
+    ({"period_end": "2026-11-01"}, "Indique la fecha de inicio y la de término"),
+    ({"period_start": "2026-11-09", "period_end": "2026-11-01"}, "no puede ser posterior"),
+    ({"period_start": "2026-11-01", "period_end": "2026-11-19"}, "no puede terminar después de hoy"),
+    ({"period_start": "2025-01-01", "period_end": "2026-11-18"}, "no puede superar 366 días"),
+    ({"period_start": "no-es-fecha", "period_end": "2026-11-18"}, "no es válida"),
+    ({"subject": "Línea 1\nBcc: x@evil.com"}, "saltos de línea"),
+    ({"subject": "x" * 201}, "no puede superar 200 caracteres"),
+])
+def test_invalid_custom_values_are_rejected_before_anything_is_built_or_sent(builder, sent, flask_app, kwargs, message):
+    admin = as_user(flask_app, ADMIN)
+    with pytest.raises(MailingValidationError) as info:
+        send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), **kwargs)
+    assert message in info.value.user_message
+    assert sent["calls"] == [] and builder.calls == []
+    with pytest.raises(MailingValidationError):
+        build_preview("capstone", admin, now=at(date(2026, 11, 18)), **kwargs)
+
+
+def test_the_boundaries_of_a_custom_period_are_accepted(builder, sent, flask_app):
+    admin = as_user(flask_app, ADMIN)
+    today = date(2026, 11, 18)
+    send_manual("capstone", [], admin, now=at(today), period_start="2026-11-18", period_end="2026-11-18")  # today, one day
+    assert builder.calls[0].period_start == builder.calls[0].period_end == today
+    send_manual("capstone", [], admin, now=at(today), subject="x" * 200,
+                period_start=(today - timedelta(days=365)).isoformat(), period_end=today.isoformat())  # 366 days
+    assert len(sent["calls"]) == 2
+
+
+def test_the_scheduled_send_never_uses_custom_values(builder, sent):
+    run_scheduled("capstone", date(2026, 11, 18))
+    request = builder.calls[0]
+    assert request.subject is None
+    assert (request.period_start, request.period_end) == (date(2026, 11, 9), date(2026, 11, 15))
+    assert sent["calls"][0]["subject"] == "[CODDI] Monitoreo de Alertas 18/11/2026"
+
+
+def test_the_context_tells_the_screen_the_limits_of_the_custom_values(flask_app):
+    ctx = get_mailing_context("capstone", as_user(flask_app, ADMIN), now=at(date(2026, 11, 18)))
+    assert ctx["limits"] == {"max_date": "2026-11-18", "max_days": 366, "max_subject": 200}
+
+
+def test_a_custom_send_is_marked_in_the_log(builder, flask_app, monkeypatch, caplog):
+    monkeypatch.setattr(delivery, "send_email", lambda subject, html, emails: delivery.DeliveryResult(True))
+    admin = as_user(flask_app, ADMIN)
+    with caplog.at_level(logging.INFO):
+        send_manual("capstone", [], admin, now=at(date(2026, 11, 18)), subject="A medida", period_start="2026-11-01", period_end="2026-11-07")
+        send_manual("emin", [], admin, now=at(date(2026, 11, 18)))
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("mailing send")]
+    assert "custom period=2026-11-01..2026-11-07" in lines[0] and "custom" not in lines[1]
 
 
 # --------------------------------------------------------------------------- logging
 
 
-def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkeypatch, caplog, production):
-    monkeypatch.setattr(delivery.requests, "post", lambda *a, **k: FakeResponse(200, {"statusCode": 200}))
+def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkeypatch, caplog, production, lambda_client):
     admin = as_user(flask_app, ADMIN)
     with caplog.at_level(logging.DEBUG):
         send_manual("emin", [EMIN_SEND[0]], admin)

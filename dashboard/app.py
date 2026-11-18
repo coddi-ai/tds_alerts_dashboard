@@ -259,9 +259,9 @@ register_report_files(app)
 # Flask route {PATH_PREFIX}informe-falla/file: re-checks access and serves a generated informe preliminar PDF.
 register_informe_falla_files(app)
 
-# Automatic alert-summary emails (Emin daily, Capstone weekly, 08:00 America/Santiago).
-# On by default (MAILING_SCHEDULER_ENABLED=false turns it off); several workers are safe
-# (persisted marker). Not started when the module is imported by the test suite.
+# Automatic alert-summary emails (Emin daily, Capstone weekly, 12:00 America/Santiago).
+# Only in production (DEPLOY_STATUS); MAILING_SCHEDULER_ENABLED=false also turns it off there.
+# Several workers are safe (persisted marker). Not started when the module is imported by the test suite.
 if "pytest" not in sys.modules:
     from src.mailing import start_mailing_scheduler
     start_mailing_scheduler()

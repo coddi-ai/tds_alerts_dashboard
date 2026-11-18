@@ -95,7 +95,10 @@ def _index_history(df: pd.DataFrame) -> _History:
         return {}
     has_week = {"year", "week"}.issubset(df.columns)
     for row in df.dropna(subset=["Unit", "Fecha", "estado"]).itertuples(index=False):
-        state = normalize_state(row.estado)
+        # A published `sin_datos` is kept (the unit had no data that run): skipping it
+        # would let an older run or the curve stand in for a unit that stopped reporting.
+        crudo = str(row.estado).strip().lower().replace(" ", "_")
+        state = SIN_DATOS.key if crudo == "sin_datos" else normalize_state(row.estado)
         if state is None:
             continue
         week = f"{int(row.year)}-W{int(row.week):02d}" if has_week else None
@@ -157,5 +160,9 @@ def attach_health(records: List[dict], client: str,
         record["health_analysis_week"] = from_analysis[2] if from_analysis else None
         record["health_curve"] = from_curve[1] if from_curve else None
         record["health_curve_date"] = from_curve[0].isoformat() if from_curve else None
-        record["health"] = combine_states(record["health_analysis"], record["health_curve"])
+        # Published sin_datos wins over the curve (upstream 1.3 rule). Otherwise the worse
+        # of the two; with 1.3 data the analysis state already is the final one, so
+        # combining again changes nothing.
+        record["health"] = (SIN_DATOS.key if record["health_analysis"] == SIN_DATOS.key
+                            else combine_states(record["health_analysis"], record["health_curve"]))
     return records

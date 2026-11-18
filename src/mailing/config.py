@@ -43,7 +43,9 @@ MAILING_RECIPIENTS: Dict[str, List[dict]] = {
 CODDI_RECIPIENTS: Dict[str, List[dict]] = {
     "technical": [
         {"name": "Equipo Técnico", "email": "tds@coddi.ai", "send_email": True},
-        {"name": "Warren", "email": "warren@coddi.ai", "send_email": True},
+        # `optional`: selected by default and always in the scheduled send, but the admin can uncheck
+        # it for a manual send. The contacts without it are locked (always included).
+        {"name": "Warren", "email": "warren@coddi.ai", "send_email": True, "optional": True},
     ],
     "management": [
         {"name": "Eduardo", "email": "eduardo@coddi.ai", "send_email": True},
@@ -67,9 +69,20 @@ MAILING_TIMEZONE = "America/Santiago"
 # file. A temporary test schedule must never be committed (manual send is the way to test; a test
 # in tests/test_mailing.py guards these exact values).
 MAILING_SCHEDULES: Dict[str, dict] = {
-    "emin": {"frequency": "daily", "time": "08:00"},
-    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:00"},
+    "emin": {"frequency": "daily", "time": "12:00"},
+    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
 }
+
+# >>> TEMPORARY, EMIN IN TEST: the SCHEDULED email of these clients goes ONLY to the Coddi technical
+# >>> contacts (CODDI_RECIPIENTS["technical"]); no client contact and no Gerencia. Capstone keeps the
+# >>> real audience. To put Emin live, make this `frozenset()`. It never affects the manual send,
+# >>> where the admin picks the recipients (any registry contact, every environment).
+SCHEDULED_TECHNICAL_ONLY_CLIENTS = frozenset({"emin"})
+
+# Refresh `data/` from S3 (the app's own startup sync) right before a scheduled email is built, so a
+# process that has been up for days does not send a summary from stale files. Failure never blocks
+# the email. The app-wide `SYNC_DATA=false` switch also turns it off. See data_sync.py.
+SYNC_DATA_BEFORE_SCHEDULED_SEND = True
 
 WEEKDAYS = (
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -92,7 +105,7 @@ DEFAULT_RETRY_DELAYS: Tuple[float, ...] = (30.0, 120.0, 300.0)  # 3 retries, gro
 DEFAULT_MANUAL_COOLDOWN_SECONDS = 5.0
 DEFAULT_SCHEDULER_POLL_SECONDS = 30.0
 DEFAULT_SCHEDULER_GRACE_MINUTES = 15
-DEFAULT_LAMBDA_TIMEOUT = (5.0, 60.0)  # (connect, read) seconds
+DEFAULT_LAMBDA_TIMEOUT = (5.0, 60.0)  # (connect, read) seconds; read must stay below the Lambda timeout
 
 
 def _project_root() -> Path:
@@ -133,9 +146,9 @@ def env_flag(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "on", "si", "sí"}
 
 
-def get_lambda_url() -> Optional[str]:
-    """The Lambda endpoint. A secret: never log it, echo it or put it in an error."""
-    return get_env("LAMBDA_URL")
+def get_lambda_function_name() -> Optional[str]:
+    """ARN of the email Lambda (`LAMBDA_FUNCTION_NAME`). Never log it or put it in an error."""
+    return get_env("LAMBDA_FUNCTION_NAME")
 
 
 def is_production() -> bool:
@@ -146,14 +159,24 @@ def environment_name() -> str:
     return "production" if is_production() else "development"
 
 
-def scheduler_enabled() -> bool:
-    """On by default in EVERY environment (a local machine included);
-    `MAILING_SCHEDULER_ENABLED=false` switches it off on that machine.
+def scheduler_disabled_reason() -> Optional[str]:
+    """Why the automatic send does not run on this machine, or None when it does.
 
-    A machine with the scheduler on sends the real scheduled emails to the client contacts
-    whenever it is running at the scheduled time, wherever it is.
+    The automatic send runs ONLY in production (`DEPLOY_STATUS` = POC / production). Anywhere else
+    (a local machine, a development or test server) it never starts, whatever else is configured, so
+    a non-production run can never email real people on schedule. In production,
+    `MAILING_SCHEDULER_ENABLED=false` still switches it off on that machine.
     """
-    return env_flag("MAILING_SCHEDULER_ENABLED", True)
+    if not is_production():
+        return "the environment is not production"
+    if not env_flag("MAILING_SCHEDULER_ENABLED", True):
+        return "MAILING_SCHEDULER_ENABLED=false"
+    return None
+
+
+def scheduler_enabled() -> bool:
+    """True only in production (and not switched off). See `scheduler_disabled_reason`."""
+    return scheduler_disabled_reason() is None
 
 
 def get_hostname() -> str:

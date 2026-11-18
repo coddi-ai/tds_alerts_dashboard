@@ -111,23 +111,28 @@ del mismo proceso del dashboard; no requiere infraestructura nueva ni un job ext
 
 | Variable (`.env`) | Para qué | Default |
 |---|---|---|
-| `LAMBDA_URL` | URL de la Lambda que envía los correos. **Secreto**: no se loguea ni se muestra | — (obligatoria) |
+| `LAMBDA_FUNCTION_NAME` | ARN de la Lambda que envía los correos (cuenta y región distintas a las de la app; la región se toma del ARN). **No se loguea ni se muestra** | — (obligatoria) |
 | `DEPLOY_STATUS` | Entorno. `POC` = producción; cualquier otro valor (o ausente) = no producción. Solo cambia la selección por defecto de la pantalla Mailing (en no producción solo viene marcado Coddi Técnico), el aviso de confirmación y el campo `environment` de los logs. **No** cambia quién puede ser seleccionado ni quién recibe el envío automático | — |
-| `LAMBDA_ACCESS_KEY` / `LAMBDA_SECRET_ACCESS_KEY` | Credenciales AWS con que se firma (SigV4) la llamada a la Lambda; necesitan `lambda:InvokeFunctionUrl` y `lambda:InvokeFunction`. No se usan las de S3 | — |
-| `MAILING_SCHEDULER_ENABLED` | `false` apaga el envío automático **en esa máquina** (Emin diario, Capstone miércoles, 08:00 `America/Santiago`). Los horarios están en el código (`MAILING_SCHEDULES`) y no se pueden cambiar por `.env` | `true` en **todos** los entornos |
+| `MAILING_SCHEDULER_ENABLED` | En **producción**, `false` apaga el envío automático en esa máquina (Emin diario, Capstone miércoles, 12:00 `America/Santiago`). Los horarios están en el código (`MAILING_SCHEDULES`) y no se pueden cambiar por `.env`. **Fuera de producción el envío automático nunca corre**, con o sin esta variable | `true` (solo aplica en producción) |
+| `SYNC_DATA` | Interruptor general de la sincronización con S3. Con `false` tampoco se sincroniza antes del envío automático | `true` |
 | `MAILING_STATE_DIR` | Marcadores que garantizan un solo envío por (cliente, día); debe sobrevivir reinicios | `logs/mailing` (volumen montado) |
 | `MAILING_RETRY_DELAYS` | Esperas (s) entre reintentos de un envío programado; la cantidad = nº de reintentos | `30,120,300` |
 | `MAILING_MANUAL_COOLDOWN_SECONDS` | Ventana anti doble clic tras un envío manual exitoso | `5` |
-| `MAILING_SCHEDULER_GRACE_MINUTES` | Cuánto después de las 08:00 aún se considera "a tiempo" (no hay envío de recuperación) | `15` |
+| `MAILING_SCHEDULER_GRACE_MINUTES` | Cuánto después de las 12:00 aún se considera "a tiempo" (no hay envío de recuperación) | `15` |
 
-Despliegue: (1) `LAMBDA_URL`, `LAMBDA_ACCESS_KEY`, `LAMBDA_SECRET_ACCESS_KEY` y `DEPLOY_STATUS=POC` en el `.env` del
-servidor; (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requirements.txt`);
+Despliegue: (1) `LAMBDA_FUNCTION_NAME` y `DEPLOY_STATUS=POC` en el `.env` del
+servidor (el envío usa `lambda:Invoke` del AWS SDK con el rol de ejecución; ese rol necesita `lambda:InvokeFunction` sobre el ARN y la política de la Lambda destino debe permitir al rol); (2) reconstruir la imagen (`requests` y `tzdata` se agregaron a `requirements.txt`);
 (3) `docker-compose up -d`. Destinatarios y horarios se editan en `src/mailing/config.py`.
 Con varios workers no hay duplicados: el primero que crea el marcador envía y los demás lo omiten.
 Un envío manual no altera el envío automático.
 
-**Envío automático desde cualquier máquina.** El scheduler está encendido por defecto en todos los entornos, también en un computador local, y evalúa el horario en hora de Chile sin importar la zona horaria del sistema operativo. Una máquina con el scheduler encendido que esté corriendo a las 08:00 envía los correos reales a los contactos del cliente (los marcados con `send_email`), más Coddi Técnico y Gerencia. Una máquina local necesita `LAMBDA_URL` y las credenciales `LAMBDA_*` en su `.env`; si faltan, el envío se reintenta, se registra un error y la aplicación sigue funcionando. Para que una máquina **no** envíe, defina `MAILING_SCHEDULER_ENABLED=false` en su `.env`.
-El marcador de "ya enviado" es por máquina: si el servidor y otra máquina corren a las 08:00, el cliente recibe **dos** correos. Apague el scheduler en toda máquina que no deba enviar. Cada intento queda en el log con `environment` y `host`.
+**Período del resumen.** Capstone (semanal) cubre la **semana anterior completa, de lunes a domingo**: los datos llegan al servidor con unas 60 horas de retraso, así que enviado un miércoles cubre el lunes y el domingo de la semana previa (no una ventana móvil de 7 días). Emin (diario) cubre el día anterior. En la pantalla Mailing, el **asunto** y el **período** de un envío manual (y de su vista previa) se pueden editar; el valor automático se muestra y se puede restablecer. El servidor valida: fechas completas, inicio ≤ término, término no posterior a hoy, máximo 366 días, asunto de hasta 200 caracteres sin saltos de línea. El envío automático nunca usa valores personalizados. **Coddi Técnico:** `tds@coddi.ai` siempre se incluye; `warren@coddi.ai` viene marcado pero se puede desmarcar (`"optional": True` en `CODDI_RECIPIENTS`); el envío automático siempre lo incluye.
+
+**Emin en prueba.** Mientras `SCHEDULED_TECHNICAL_ONLY_CLIENTS` (en `src/mailing/config.py`) contenga `emin`, el envío automático de Emin llega solo a Coddi Técnico (`tds@` y `warren@coddi.ai`); Capstone envía a su audiencia real. Para poner Emin en producción real basta dejarlo vacío (`frozenset()`). No afecta el envío manual.
+
+**Datos frescos.** Antes de armar cada correo automático se ejecuta la misma sincronización con S3 que la app corre al arrancar (`src.data.s3_downloader.main`), una vez por fecha y por proceso. Si falla (sin `BUCKET_NAME`, sin red, volumen de datos de solo lectura) se registra una advertencia y el correo se arma con los datos que hay en disco. El envío manual no sincroniza.
+
+**El envío automático solo corre en producción.** El scheduler arranca únicamente cuando `DEPLOY_STATUS` es `POC` (o `production`); en un computador local, un servidor de desarrollo o de pruebas **no arranca** y nunca envía correos automáticos, aunque la máquina esté encendida a las 12:00 (el log dice `mailing scheduler not started: the environment is not production`). **Si en producción falta `DEPLOY_STATUS=POC`, el envío automático tampoco corre.** El horario se evalúa en hora de Chile sin importar la zona horaria del sistema operativo. El envío manual desde la pantalla Mailing funciona en todos los entornos. El marcador de "ya enviado" es por máquina; en producción `MAILING_SCHEDULER_ENABLED=false` apaga el envío automático de esa máquina. Cada intento queda en el log con `environment` y `host`.
 
 ---
 
