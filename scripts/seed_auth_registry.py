@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.auth_events import settings  # noqa: E402
-from src.auth_events.registry import parse_registry  # noqa: E402
+from src.auth_events.registry import parse_pages, parse_registry  # noqa: E402
 from src.auth_events.storage import ObjectNotFound, get_storage  # noqa: E402
 
 SEED_DIR = ROOT / "config" / "auth_registry"
@@ -34,8 +34,10 @@ def main(argv=None) -> int:
     files = {
         settings.REGISTRY_CLIENTS_KEY: (SEED_DIR / "clients.json").read_bytes(),
         settings.REGISTRY_USERS_KEY: (SEED_DIR / "users.json").read_bytes(),
+        settings.REGISTRY_PAGES_KEY: (SEED_DIR / "pages.json").read_bytes(),   # TR-6: page registry
     }
     parse_registry(files[settings.REGISTRY_CLIENTS_KEY], files[settings.REGISTRY_USERS_KEY])  # validate first
+    parse_pages(files[settings.REGISTRY_PAGES_KEY])
 
     for key, body in files.items():
         try:

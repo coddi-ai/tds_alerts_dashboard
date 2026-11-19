@@ -1,9 +1,9 @@
-"""Admin-only "Registro de Usuarios": Resumen de Clientes, Detalle de Cliente and the full log.
+"""Admin-only "Actividad de Usuarios": client overview, client detail and the full log.
 
-One route (/admin/registro-usuarios); the query string picks the view:
-    (none)                 Resumen de Clientes
-    ?client=<id>           Detalle de Cliente   (`internal` = Equipo Interno)
-    ?client=<id>&view=log  Registro completo (paginated)
+One route (/admin/actividad-usuarios); the query string picks the view:
+    (none)                 Overview of all clients
+    ?client=<id>           Client detail        (`internal` = Equipo Interno)
+    ?client=<id>&view=log  Full activity log (paginated)
 Período, Ambiente and "Incluir Usuarios Internos" travel in the query string too
 (`period`, `start`, `end`, `env`, `internal`), so links keep them and views can be bookmarked.
 """
@@ -72,10 +72,14 @@ def _unavailable() -> html.Div:
 def overview_layout(q: dict) -> html.Div:
     return _shell([
         dcc.Store(id="ur-ov-url-sync"),
+        dcc.Store(id="ur-ov-metric-state", data="views"),   # the chart toggle always opens on Vistas de Página
         _crumbs((t("user_registry.title"), None, None)),
         html.Div(
             [
-                header_title(t("user_registry.title"), "ur-ov-subtitle", t("user_registry.subtitle.loading")),
+                html.Div([
+                    header_title(t("user_registry.title"), "ur-ov-subtitle", t("user_registry.subtitle.loading")),
+                    html.P("", id="ur-ov-notice", className="ur-notice"),
+                ]),
                 # "Fuentes de Datos" button + popover: the login-event store does not depend on the client.
                 html.Div(render_service_data_sources("", "admin-user-registry"), className="ds-header-slot"),
             ],
@@ -121,11 +125,15 @@ def detail_layout(q: dict) -> html.Div:
     overview = v.page_href(**nav_params(q))
     return _shell([
         dcc.Store(id="ur-cd-url-sync"),
+        dcc.Store(id="ur-cd-metric-state", data="views"),
         dcc.Store(id="ur-current-client", data=client_id),
         dcc.Store(id="ur-carry", data={"internal": q["internal"]}),
         _crumbs((t("user_registry.title"), overview, "ur-crumb-link"), (name, None, None)),
         html.Div([
-            header_title(name, "ur-cd-subtitle", t("user_registry.subtitle.loading")),
+            html.Div([
+                header_title(name, "ur-cd-subtitle", t("user_registry.subtitle.loading")),
+                html.P("", id="ur-cd-notice", className="ur-notice"),
+            ]),
             dcc.Link(t("user_registry.back_to_overview"), href=overview, id="ur-back-link", className="ur-back"),
         ], className="ur-title-row"),
         html.Div([

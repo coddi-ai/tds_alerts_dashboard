@@ -6,11 +6,13 @@ Handles switching between internal tabs (Fleet Overview / Report Detail / Compon
 
 from src.i18n import t
 from dash import callback, Input, Output, State
+from dash.exceptions import PreventUpdate
 from dashboard.tabs.tab_machines import create_machines_tab
 from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_component_hours import create_component_hours_tab
 from dashboard.tabs.tab_lab_compliance import create_lab_compliance_tab
 from config.settings import get_settings
+from src.data.loaders import load_oil_classified
 from dash import html
 from src.utils.logger import get_logger
 from dashboard.components.source_status import render_service_data_sources
@@ -31,6 +33,30 @@ def update_oil_source_status(client):
 # ========================================
 # TAB SWITCHING CALLBACK
 # ========================================
+
+@callback(
+    Output('navigation-state', 'data', allow_duplicate=True),
+    Input('oil-url-seed', 'data'),
+    State('client-selector', 'value'),
+    prevent_initial_call='initial_duplicate',
+)
+def seed_report_from_url(url_seed, client):
+    """`?unit=&component=`: point Report Detail at that unit's component the way a click on the
+    fleet heat-map does - through the navigation store its selectors read (machine type, unit, then
+    component), which also leaves the sample date on the latest one for that unit and component."""
+    unit, component = (url_seed or {}).get('unit'), (url_seed or {}).get('component')
+    if not unit or not component or not client:
+        raise PreventUpdate
+    nav = {'equipo': unit, 'component': component}
+    try:
+        df = load_oil_classified(client)
+        rows = df[(df['unitId'] == unit) & (df['componentName'] == component)]
+        if not rows.empty and rows.iloc[0].get('machineName'):
+            nav['familia'] = rows.iloc[0]['machineName']
+    except Exception:
+        logger.exception("Could not resolve the machine type of %s / %s for %s", unit, component, client)
+    return nav
+
 
 @callback(
     Output('oil-tab-content', 'children'),

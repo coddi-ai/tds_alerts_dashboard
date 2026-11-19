@@ -866,31 +866,32 @@ def test_a_csv_without_an_optional_column_still_loads_and_scopes(data_root):
     assert set(prepare_scope_rows(scope)["signal_key"]) == {NO_SIGNAL_KEY}  # no signal column = no signal
 
 
-def test_daily_clients_run_every_day_and_the_others_only_on_the_weekly_day():
+def test_daily_clients_have_their_own_run_and_the_weekly_run_leaves_them_out():
     zone = ZoneInfo("America/Santiago")
-    wed, thu, sun = (datetime(2026, 11, d, 4, 0, tzinfo=zone) for d in (18, 19, 22))
-    weekday = cli.parse_weekday("wednesday")
     daily = cli.parse_clients("emin")
     assert daily == ["emin"] and cli.parse_clients("none") == [] and cli.parse_clients("Emin, cda") == ["emin", "cda"]
 
-    assert cli.clients_for_cycle(wed, weekday, daily, None) is None            # every client on Wednesday
-    assert cli.clients_for_cycle(thu, weekday, daily, None) == ["emin"]        # only the daily one otherwise
-    assert cli.clients_for_cycle(sun, weekday, daily, None) == ["emin"]
-    assert cli.clients_for_cycle(thu, weekday, [], None) == []                 # nothing due: skipped
-    assert cli.clients_for_cycle(thu, weekday, daily, ["capstone"]) == []      # --client limits the daily set too
-    assert cli.clients_for_cycle(thu, weekday, daily, ["emin"]) == ["emin"]
-    assert cli.clients_for_cycle(wed, weekday, daily, ["capstone"]) == ["capstone"]
+    found = ["capstone", "cda", "emin"]
+    assert cli.weekly_clients(None, daily, found) == ["capstone", "cda"]       # emin has its own run
+    assert cli.weekly_clients(None, [], found) == found
+    assert cli.weekly_clients(["emin", "capstone"], daily, found) == ["capstone"]
+    assert cli.daily_run_clients(None, daily) == ["emin"]
+    assert cli.daily_run_clients(["capstone"], daily) == []                    # --client limits the daily set too
+    assert cli.daily_run_clients(["emin"], daily) == ["emin"]
+    assert cli.daily_run_clients(None, []) == []
 
-    run_time = cli.parse_time("04:00")
-    assert cli.next_daily_run(datetime(2026, 11, 18, 3, 0, tzinfo=zone), run_time) == wed
-    assert cli.next_daily_run(wed, run_time) == thu                            # strictly after now
-    assert cli.next_daily_run(datetime(2026, 11, 18, 20, 0, tzinfo=zone), run_time) == thu
+    # The default daily time is after EMIN's data is complete (10:00) and before its 12:00 e-mail.
+    assert cli.parse_time(cli.DEFAULT_DAILY_TIME) == cli.parse_time("10:30")
+    daily_time = cli.parse_time("10:30")
+    assert cli.next_daily_run(datetime(2026, 11, 18, 10, 0, tzinfo=zone), daily_time) == datetime(2026, 11, 18, 10, 30, tzinfo=zone)
+    assert cli.next_daily_run(datetime(2026, 11, 18, 10, 30, tzinfo=zone), daily_time) == datetime(2026, 11, 19, 10, 30, tzinfo=zone)
 
 
-def test_the_schedule_runs_only_what_is_due_each_day(monkeypatch):
-    """Walk four days of the loop with a fake clock: Wed everyone, Thu/Fri/Sat only emin."""
+def test_the_schedule_runs_weekly_clients_on_their_day_and_emin_every_day_after_ten(monkeypatch):
+    """Walk four runs of the loop with a fake clock."""
     zone = ZoneInfo("America/Santiago")
-    args = cli.parse_args(["--schedule", "--daily-clients", "emin"])
+    args = cli.parse_args(["--schedule"])
+    assert (args.time, args.daily_time, args.daily_clients) == ("04:00", "10:30", "emin")
     clock = [datetime(2026, 11, 17, 20, 0, tzinfo=zone)]
     calls = []
 
@@ -905,12 +906,18 @@ def test_the_schedule_runs_only_what_is_due_each_day(monkeypatch):
 
     monkeypatch.setattr(cli, "datetime", FakeDatetime)
     monkeypatch.setattr(cli._STOP, "wait", fake_wait)
-    monkeypatch.setattr(cli, "_run_from_args", lambda a, clients=None: (calls.append((clock[0].date().isoformat(), clients)), 0)[1])
+    monkeypatch.setattr(cli.builder, "discover_clients", lambda root=None: ["capstone", "cda", "emin"])
+    monkeypatch.setattr(cli, "_run_from_args",
+                        lambda a, clients=None: (calls.append((clock[0].strftime("%Y-%m-%d %H:%M"), clients)), 0)[1])
     monkeypatch.setattr(cli.signal, "signal", lambda *a: None)
     cli._STOP.clear()
     try:
         cli.schedule_forever(args)
     finally:
         cli._STOP.clear()
-    assert calls == [("2026-11-18", None), ("2026-11-19", ["emin"]), ("2026-11-20", ["emin"]), ("2026-11-21", ["emin"])]
-
+    assert calls == [
+        ("2026-11-18 04:00", ["capstone", "cda"]),   # Wednesday, weekly clients only
+        ("2026-11-18 10:30", ["emin"]),              # EMIN's own run, after its 10:00 update
+        ("2026-11-19 10:30", ["emin"]),
+        ("2026-11-20 10:30", ["emin"]),
+    ]

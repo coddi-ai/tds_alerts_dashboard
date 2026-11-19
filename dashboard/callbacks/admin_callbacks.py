@@ -1,4 +1,4 @@
-"""Admin-only callbacks of "Registro de Usuarios" (Resumen de Clientes and Detalle de Cliente).
+"""Admin-only callbacks of "Actividad de Usuarios" (client overview and client detail).
 
 Data comes only from `src.auth_events.data_access`. Every callback re-checks, from the server
 session, that the caller is an admin: a callback can be invoked without ever loading the page.
@@ -17,6 +17,7 @@ from dashboard.components import user_registry_views as v
 from dashboard.tabs.tab_user_registry import ENV_VALUES
 from src.auth_events import metrics as m
 from src.auth_events.data_access import AuthDataUnavailable, display_timezone, get_events, get_registry, last_loaded_at
+from src.auth_events.events import EVENT_TYPE_PAGE_VIEW
 from src.i18n import t
 from src.utils.logger import get_logger
 
@@ -42,20 +43,33 @@ function(period, start, end, env, internal) {
 """
 
 
+_TOGGLE_JS = """
+function(metric, figs) {
+    var keep = window.dash_clientside.no_update;
+    if (!metric || !figs || !figs[metric]) { return [keep, keep, keep]; }
+    return [figs[metric].figure, figs[metric].caption, metric];
+}
+"""
+
+
 def _is_admin(user_data) -> bool:
     username = resolve_authenticated_username(user_data)
     return bool(username and is_admin(username))
 
 
 def _context(period, start, end, env):
-    """Everything a render needs: full history for the chosen Ambiente, registry, 'now'."""
+    """Everything a render needs: full history of both event types for the chosen Ambiente,
+    registry, 'now' and the page-view capture start (which ignores Ambiente)."""
     registry = get_registry()
     env_value = env if env in ENV_VALUES and env != "all" else None
-    events = get_events(environment=env_value)
+    everything = get_events()
+    views = everything[everything["event_type"] == EVENT_TYPE_PAGE_VIEW]
+    capture_start = None if views.empty else views["date"].min()
+    events = everything if env_value is None else everything[everything["environment"] == env_value].reset_index(drop=True)
     now = datetime.now(ZoneInfo(display_timezone()))
     kind = m.normalize_period_kind(period, start, end)
     resolved = m.resolve_period(kind, now.date(), start, end)
-    return registry, events, now, kind, resolved, last_loaded_at()
+    return registry, events, now, kind, resolved, last_loaded_at(), capture_start
 
 
 def _subtitle(key: str, loaded, now) -> str:
@@ -64,7 +78,7 @@ def _subtitle(key: str, loaded, now) -> str:
 
 
 def register_admin_callbacks(app: dash.Dash) -> None:
-    """Register the Registro de Usuarios callbacks."""
+    """Register the Actividad de Usuarios callbacks."""
 
     @app.callback(
         Output("ur-custom-range", "className"),
@@ -87,47 +101,67 @@ def register_admin_callbacks(app: dash.Dash) -> None:
         Input("ur-period", "value"), Input("ur-start", "value"), Input("ur-end", "value"), Input("ur-env", "value"),
     )
 
+    # The metric toggle (Vistas de Página | Inicios de Sesión) swaps a pre-built figure in the browser.
+    # The chosen metric is remembered in a store that lives in the page layout, so it survives a
+    # filter change (which rebuilds the content) and resets when the user moves to another view.
+    for prefix in ("ur-ov", "ur-cd"):
+        app.clientside_callback(
+            _TOGGLE_JS,
+            Output(f"{prefix}-graph", "figure"),
+            Output(f"{prefix}-chart-caption", "children"),
+            Output(f"{prefix}-metric-state", "data"),
+            Input(f"{prefix}-metric", "value"),
+            State(f"{prefix}-figs", "data"),
+        )
+
     @app.callback(
         Output("ur-ov-content", "children"),
         Output("ur-ov-subtitle", "children"),
+        Output("ur-ov-notice", "children"),
         Input("ur-period", "value"), Input("ur-start", "value"), Input("ur-end", "value"),
         Input("ur-env", "value"), Input("ur-internal", "value"),
+        State("ur-ov-metric-state", "data"),
         State("user-info-store", "data"),
     )
-    def render_overview(period, start, end, env, internal, user_data):
+    def render_overview(period, start, end, env, internal, metric, user_data):
         if not _is_admin(user_data):
             raise PreventUpdate
         try:
-            registry, events, now, kind, resolved, loaded = _context(period, start, end, env)
+            registry, events, now, kind, resolved, loaded, capture_start = _context(period, start, end, env)
         except AuthDataUnavailable as exc:
-            logger.error("Registro de Usuarios: data unavailable: %s", exc)
-            return v.error_alert("user_registry.error.unavailable"), t("user_registry.subtitle.unavailable")
-        overview = m.build_overview(events, registry, resolved, bool(internal))
+            logger.error("Actividad de Usuarios: data unavailable: %s", exc)
+            return v.error_alert("user_registry.error.unavailable"), t("user_registry.subtitle.unavailable"), ""
+        overview = m.build_overview(events, registry, resolved, bool(internal), capture_start)
         filters = {"now": now, "nav": {"period": kind, "start": start, "end": end, "env": env, "internal": bool(internal)}}
-        return v.overview_content(overview, filters), _subtitle("user_registry.subtitle.overview", loaded, now)
+        return (v.overview_content(overview, filters, metric),
+                _subtitle("user_registry.subtitle.overview", loaded, now),
+                v.capture_notice_text(overview.notice))
 
     @app.callback(
         Output("ur-cd-content", "children"),
         Output("ur-cd-subtitle", "children"),
+        Output("ur-cd-notice", "children"),
         Output("ur-back-link", "href"),
         Output("ur-crumb-link", "href"),
         Input("ur-period", "value"), Input("ur-start", "value"), Input("ur-end", "value"), Input("ur-env", "value"),
-        State("ur-current-client", "data"), State("ur-carry", "data"), State("user-info-store", "data"),
+        State("ur-current-client", "data"), State("ur-carry", "data"), State("ur-cd-metric-state", "data"),
+        State("user-info-store", "data"),
     )
-    def render_detail(period, start, end, env, client_id, carry, user_data):
+    def render_detail(period, start, end, env, client_id, carry, metric, user_data):
         if not _is_admin(user_data):
             raise PreventUpdate
         internal = bool((carry or {}).get("internal"))
         kind = m.normalize_period_kind(period, start, end)
         back = v.page_href(period=kind, start=start, end=end, env=env, internal=internal)
         try:
-            registry, events, now, kind, resolved, loaded = _context(period, start, end, env)
+            registry, events, now, kind, resolved, loaded, capture_start = _context(period, start, end, env)
         except AuthDataUnavailable as exc:
-            logger.error("Registro de Usuarios: data unavailable: %s", exc)
-            return v.error_alert("user_registry.error.unavailable"), t("user_registry.subtitle.unavailable"), back, back
-        detail = m.build_detail(events, registry, client_id, resolved)
+            logger.error("Actividad de Usuarios: data unavailable: %s", exc)
+            return v.error_alert("user_registry.error.unavailable"), t("user_registry.subtitle.unavailable"), "", back, back
+        detail = m.build_detail(events, registry, client_id, resolved, capture_start)
         filters = {"now": now, "nav": {"period": kind, "start": start, "end": end, "env": env, "internal": internal}}
-        return (v.detail_content(detail, filters), _subtitle("user_registry.subtitle.client", loaded, now), back, back)
+        return (v.detail_content(detail, filters, metric), _subtitle("user_registry.subtitle.client", loaded, now),
+                v.capture_notice_text(detail.notice), back, back)
 
     @app.callback(
         Output("_pages_location", "search"),

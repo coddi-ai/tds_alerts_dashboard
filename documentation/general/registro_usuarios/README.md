@@ -1,6 +1,7 @@
-# Registro de Usuarios — login events (implementation notes)
+# Actividad de Usuarios (formerly Registro de Usuarios) — implementation notes
 
-Implements `registro_usuarios_specs.md` (TR-1, TR-2, TR-3). Code: `src/auth_events/`,
+Implements `registro_usuarios_specs.md` (TR-1, TR-2, TR-3) and the "Actividad de Usuarios" TR-6/TR-7 spec of 18 Nov 2026 (not stored in the repo;
+TR-7 replaced the TR-2/TR-3 views). See section 5 for the page-view extension. Code: `src/auth_events/`,
 `dashboard/tabs/tab_user_registry.py`, `dashboard/components/user_registry_*.py`,
 `dashboard/callbacks/admin_callbacks.py`, `dashboard/assets/user_registry.css`.
 
@@ -82,3 +83,58 @@ GET/LIST on both prefixes; compaction + migration = GET/PUT/DELETE/LIST on `auth
 - Relative-time phrases, "Nuevo" and the weekly tooltip go through the catalogs; dates and numbers
   stay es-CL in both languages.
 - A client with `active = false` opened by URL shows "Cliente no encontrado" (open item 5, as built).
+
+## 5. Page views and the merged views (TR-6, TR-7)
+
+**Capture.** `dashboard/page_view_capture.py` installs one Flask `before_request` hook on
+`/_dash-update-component` (Dash 4.4.1; pages need no edits). A *page opening* is the Dash Pages router
+callback (output `_pages_content.children`) fired with `_pages_location.pathname` among the changed inputs
+(navigation, reload, landing after login); a query-string-only change is not one. A *tab opening* is a
+watched tab strip's `value` among the changed inputs; the path comes from the `Referer`. Tab strips are
+listed in `TAB_COMPONENTS` (alerts, oil, telemetry, predictive component); a page that shows a default tab
+is one view carrying that tab. Stored: `username`, `page_id`, `path` (no query/fragment/deployment prefix),
+`tab`. `/` and the old `/admin/registro-usuarios` are not recorded (they only redirect). A non-admin never
+records an `/admin/*` path (the route guard bounces them).
+
+**Writing.** `src/auth_events/pageviews.py`: the request only appends to an in-memory buffer. A background
+thread resolves user type/client (`users.json`) and `page_id` (`pages.json`) and writes one JSON Lines
+object per UTC date, `auth_events/raw/dt=YYYY-MM-DD/pv_<stamp>_<batch_id>.jsonl`, every **20 minutes** (or at
+100 events), **only between 07:00 and 22:00** display time (views recorded outside wait in the buffer), and
+always at shutdown. Views can therefore appear in the dashboard up to ~20 min late, and a killed process
+loses at most what was buffered since the last flush (overnight: since 22:00). 3 retries then an ERROR with the replayable payload; buffer cap 5,000 (oldest dropped,
+ERROR). De-duplication (2 s) is per process.
+
+| Variable | Default | |
+|---|---|---|
+| `AUTH_EVENTS_PAGE_VIEWS` | off | `1`/`true`/`on` enables capture. **Enable only after compaction is scheduled** |
+| `AUTH_EVENTS_PAGE_VIEW_FLUSH_SECONDS` / `_FLUSH_SIZE` | 1200 / 100 | |
+| `AUTH_EVENTS_PAGE_VIEW_FLUSH_WINDOW` | `07:00-22:00` | display timezone, `HH:MM-HH:MM` (may cross midnight) or `always` |
+| `AUTH_EVENTS_PAGE_VIEW_BUFFER_CAP` / `_DEDUP_SECONDS` | 5000 / 2 | |
+
+**Schema v2.** `page_id`, `path`, `tab` are added (null on logins). Logins are still written as the nine-field
+v1 object; readers fill the missing columns with null. Compaction reads `.json` and `.jsonl`, rejects a
+`page_view` without `page_id`/`path` (logged, object kept), rewrites a v1 day with the new columns, and
+does not re-read settled days' batches every night (only the recompaction window and the pruning step).
+`pages.json` (`auth_registry/pages.json`, seed in `config/auth_registry/`, uploaded by
+`scripts/seed_auth_registry.py`) resolves `(path, tab)` -> `page_id` at write time and `display_name` at
+read time; `<param>` path segments match one segment. A page missing from it is `unregistered` and is shown
+by path.
+
+**Data access.** `get_events(..., event_types=)`, `get_pages()`, `page_view_capture_start()`.
+
+**UI.** Route `/admin/actividad-usuarios`; the old route redirects (the route guard changes only the
+pathname, so the query string survives). The chart toggle swaps a pre-built figure in the browser; the chosen
+metric lives in a store in the page layout (survives filter changes, resets between views). Internal ids
+(`user_registry.*` i18n keys, `ur-*` classes, `admin-user-registry` nav id, module names) were kept.
+
+### Decisions taken where TR-6/TR-7 were open
+- Open item 1: `pages.json` was derived from the real routes (`NAV_PATHS`) and tab values in the code; the two
+  Appendix A names are kept as written (`Overview › General`, `Administración › Mailing`), the rest follow the
+  Spanish menu names. Predictive pages are listed per component (`motor`, `transmision`) and tab.
+- Open items 4-6: flush 20 min inside 07:00-22:00 (was 30 s in the spec), 100 events, cap 5,000, dedup 2 s; admin pages recorded; reload counts).
+- Layer-2 sub-tabs (Short/Long) and the `Vista de Reporte` selectors are not watched; hidden tabs are not either.
+- The Última Actividad / Usuarios Activos / Clientes Activos figures include any event type; "Equipo Interno"
+  active users count internal users only when *Incluir Usuarios Internos* is on.
+- The page-view change chip is `–` unless the whole previous period is on/after the capture start; it uses the
+  earliest page view in storage regardless of Ambiente.
+- English wording: item 5 suggestions used; `Sin accesos` -> `No access`, `Sin inicios de sesión` -> `No logins`.

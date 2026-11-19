@@ -80,8 +80,9 @@ def _tables(result):
 
 
 def _header(table) -> list:
+    """The column names, without the trailing "Ver Detalle" cue column every row ends with."""
     thead = next(c for c in table.children if isinstance(c, html.Thead))
-    return [_text(th) for th in thead.children.children]
+    return [_text(th) for th in thead.children.children][:-1]
 
 
 def _rows(table) -> list:
@@ -90,7 +91,8 @@ def _rows(table) -> list:
 
 
 def _cells(row) -> list:
-    return list(row.children)
+    """The row's data cells, without the trailing "Ver Detalle" cue cell."""
+    return list(row.children)[:-1]
 
 
 def _row_values(table) -> dict:
@@ -790,3 +792,29 @@ def test_load_more_recomputes_when_this_worker_never_built_the_page(monkeypatch)
     rows, remaining = fo.get_band_rows_chunk("TESTCO", "Normal", 1)
     assert [_text(_cells(r)[0]) for r in rows] == names[50:100]
     assert remaining == 20
+
+
+# ---------------------------------------------------------------------------
+# Whole-row click: the unit's link covers the row; a trailing "Ver Detalle" cue
+# ---------------------------------------------------------------------------
+
+def test_every_row_ends_with_a_decorative_ver_detalle_cue_and_the_header_names_it(monkeypatch):
+    _patch_all_sources(
+        monkeypatch, enabled={"monitoring-alerts": True},
+        alerts=({"U1": "Normal", "U2": "Anormal"}, {}, "Ok", "1h"),
+    )
+    for table in _tables(fo.build_fleet_overview("TESTCO")):
+        *_, last_th = next(c for c in table.children if isinstance(c, html.Thead)).children.children
+        assert "visually-hidden" in last_th.children.className and _text(last_th) == "Ver Detalle"
+        for row in _rows(table):
+            cue = row.children[-1]
+            assert _text(cue) == "Ver Detalle" and getattr(cue, "aria-hidden") == "true"  # the link is what is announced
+
+
+def test_the_row_has_one_real_link_whose_click_area_covers_the_row():
+    css = open("dashboard/assets/custom_layout.css", encoding="utf-8").read()
+    assert ".fleet-table-row .fleet-unit-link::after" in css
+    block = css[css.index(".fleet-table-row .fleet-unit-link::after"):].split("}")[0]
+    assert "position: absolute" in block and "inset: 0" in block
+    assert "position: relative" in css[css.index(".fleet-table-row {"):].split("}")[0]  # the row contains it
+    assert ".fleet-table-row:hover td" in css and ".fleet-table-row:focus-within td" in css  # hover and focus state

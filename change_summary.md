@@ -157,25 +157,26 @@ From `src/mailing/config.py` and `periods.py` (times in `America/Santiago`):
 | Client | Schedule | Period covered | Newest alert it needs vs. the partitions |
 |---|---|---|---|
 | capstone | weekly, Wednesday 12:00 | previous Monday–Sunday | Sunday 23:59; the Wednesday 04:00 run holds it. OK |
-| emin | **daily, 12:00** | **the previous day** | with a weekly run it would omit most days. **Resolved: EMIN is partitioned every day at 04:00**, before the 12:00 send |
+| emin | **daily, 12:00** | **the previous day** | with a weekly run it would omit most days. **Resolved: EMIN is partitioned every day at 10:30**, after its data is complete (10:00, confirmed by the data engineer) and before the 12:00 send |
 
 The scheduled send already syncs `data/` from S3 right before building (`src/mailing/data_sync.py`), so the partitions
-the 04:00 run uploads are on the mailing process's disk at 12:00. The e-mail resolves them below the same
+the 10:30 run uploads are on the mailing process's disk at 12:00 (90 minutes of margin for the build and the upload). The e-mail resolves them below the same
 `DASHBOARD_DATA_ROOT` as the dashboard (local, or the folder synced from S3). Weekly freshness does not omit anything
 capstone's e-mail needs.
 
-**Dependency to confirm before relying on it:** the partitioner reads the CSV from *its own* `data/` volume; the script
-does not download it. A daily run is only useful if EMIN's fresh CSV is on that volume before 04:00 (a pipeline that
-writes it there, or a sync step). If EMIN's data lands later than 04:00, set `ALERT_PARTITIONS_TIME` (it applies to the
-weekly run too) or tell me when it lands.
+**Dependency to confirm before relying on it:** EMIN's data is complete at 10:00 (data engineer), but the partitioner
+reads the CSV from *its own* `data/` volume and the script does not download it. The daily run is only useful if the
+fresh EMIN CSV is on that volume by 10:30 (a pipeline that writes it there, or a sync step). Still unconfirmed: where the
+CSV lands and how long it takes to get to the partitioner's volume. The time is `ALERT_PARTITIONS_DAILY_TIME`.
 
 ## What changed
 
-**Partitioning schedule** (`scripts/partition_alerts.py`, `docker-compose.yml`). `--schedule` now wakes up every day at
-the configured time. On Wednesday every client runs, as before; on the other six days only the *daily clients* run:
-`ALERT_PARTITIONS_DAILY_CLIENTS` (comma-separated, default `emin`, `none` for no one; `--daily-clients`). `--client`
-still limits both. Layout, S3 layout, backfill marker and atomic swap are untouched. For ECS the equivalent is a second
-EventBridge rule, `cron(0 4 ? * * *)` (America/Santiago), running the same image with
+**Partitioning schedule** (`scripts/partition_alerts.py`, `docker-compose.yml`). `--schedule` now keeps two schedules.
+The weekly one is unchanged (Wednesday 04:00) but leaves the *daily clients* out. The daily clients
+(`ALERT_PARTITIONS_DAILY_CLIENTS`, comma-separated, default `emin`, `none` for no one) run every day at
+`ALERT_PARTITIONS_DAILY_TIME` (default **10:30**, `--daily-time`: EMIN's data is complete at 10:00 and its e-mail goes
+out at 12:00). `--client` still limits both. Layout, S3 layout, backfill marker and atomic swap are untouched. For ECS the
+equivalent is a second EventBridge rule, `cron(30 10 ? * * *)` (America/Santiago), running the same image with
 `python scripts/partition_alerts.py --client emin`, next to the existing Wednesday rule.
 
 **Readers** (`src/data/loaders.py`, on `alert_partitions.py`):
@@ -205,7 +206,7 @@ still says `csv` until it is regenerated; the service then does not trust it and
 skips the shortcut.
 
 **Freshness change (accepted, per consumer).** These consumers used to show the CSV as of the moment of the request.
-They now show the data of the last partition run: **Wednesday 04:00 for capstone and cda, every day 04:00 for EMIN**
+They now show the data of the last partition run: **Wednesday 04:00 for capstone and cda, every day 10:30 for EMIN**
 (Hot Sheet, Menace Control, Fleet overview statuses/counts/freshness label, Unit summary alerts card and date, the
 e-mail, the data-source chips, the Campbell AI assistant). A running dashboard also needs the new partitions on its
 disk (shared volume or next startup sync); the e-mail gets them from its pre-send sync.
@@ -229,7 +230,7 @@ partitioned readers.
   with the CSV deleted (any attempt to look for it fails); each equals the run over the whole history; mid-week cut-offs;
   only the needed weeks are opened; no partitions, a window past the last alert, unknown units, an undated-only history,
   a stale feed and a period without partitions raise nothing; a rewritten partition is seen by Campbell AI.
-  `test_alert_partitions.py` adds the daily-client schedule (which clients run on which day, and a walk of four days of
+  `test_alert_partitions.py` adds the daily-client schedule (which clients each run takes, and a walk of four runs of
   the loop with a fake clock). Existing tests that used the CSV loader or wrote a CSV for Campbell AI now partition it.
 - **Full suite:** 2,400 pass; the failing set is *exactly* the 31 tests and 2 errors that already fail on an untouched
   HEAD on this machine (`informe_falla*`, `mantenciones_productive`, `report_health`, two in `campbell_ai_resources`);
@@ -279,7 +280,7 @@ Reading it:
 ## Open decisions
 
 1. **(Decided) EMIN daily.** Needs the operational dependency above (fresh EMIN CSV on the partitioner's volume before
-   04:00) and, in ECS, the second EventBridge rule.
+   10:30, when EMIN's update finishes) and, in ECS, the second EventBridge rule.
 2. **Warm-path cost, in plain words.** Before, the dashboard read the whole alert CSV *once* and kept it in memory, so
    the second time you opened Menace Control (or Fleet overview, or a unit) it cost almost nothing. Now each open reads
    the few weekly files it needs from disk again. The first open of the day is faster (less data, nothing to parse), but

@@ -195,7 +195,7 @@ evidence included). When the client has partitions but none overlaps the window 
 days" message) stays distinct from "the client has no alert data" (`client_has_alert_partitions`).
 
 **Freshness change.** These consumers used to show the CSV as it was at that moment; they now show
-the data of the last partition run: Wednesday 04:00 for capstone and cda, **every day 04:00 for EMIN**
+the data of the last partition run: Wednesday 04:00 for capstone and cda, **every day 10:30 for EMIN**
 (its data updates daily, and its e-mail goes out daily at 12:00). This was accepted as a decision (see
 `change_summary.md`). A running dashboard also needs the new partitions on its disk (shared data
 volume or the next startup sync, §2); the scheduled e-mail gets them from its pre-send S3 sync.
@@ -424,15 +424,15 @@ backtest/, state/, other *.csv              untouched by the partitioner
 | `--backfill` | The first execution, over all history. **Local only**; S3 sync is **off unless `--sync-s3`** is passed. `--validate` runs by default: row totals, column names, dtypes, values and week/unit placement are compared with the CSV before anything is pushed. |
 | `--backfill --sync-s3` | After validating locally: pushes the full history and writes `_backfill_complete.json`. |
 | `--verify-s3` | Read-only: compares S3 with the local partitions (keys, sizes, hashes, row counts). |
-| `--schedule` | Foreground loop. **Every client runs every Wednesday 04:00**; the *daily clients* (`ALERT_PARTITIONS_DAILY_CLIENTS`, default **`emin`**, `none` for no one) also run at the same time on every other day. Time zone `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). `--client` limits both. |
+| `--schedule` | Foreground loop. **Every client except the daily ones runs every Wednesday 04:00**; the *daily clients* (`ALERT_PARTITIONS_DAILY_CLIENTS`, default **`emin`**, `none` for no one) run every day at `ALERT_PARTITIONS_DAILY_TIME` (default **10:30**: EMIN's update ends at 10:00, its e-mail goes at 12:00). Time zone `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). `--client` limits both. |
 
 - **Where it runs**: `docker-compose.yml` has an `alerts-partitioner` service (`--schedule`, the
   only one that mounts `data/` read-write). In ECS use an EventBridge Scheduler rule
   `cron(0 4 ? * WED *)` with timezone `America/Santiago` that runs the same image with the command
-  `python scripts/partition_alerts.py`, plus a second rule `cron(0 4 ? * * *)` for the daily clients
+  `python scripts/partition_alerts.py`, plus a second rule `cron(30 10 ? * * *)` for the daily clients
   (`python scripts/partition_alerts.py --client emin`), and give the task write access to the dashboard's
   data volume and S3 `List/Get/Put/DeleteObject` on the prefix. The partitioner reads the CSV from its own
-  volume: the fresh CSV (EMIN's, daily) must be there before the run.
+  volume: the fresh CSV (EMIN's, daily) must be there before the run (EMIN's by 10:30).
 - **Idempotent and atomic**: a partition is rewritten only if its new bytes differ; it is written to
   a temp name and swapped in with `os.replace`, and the reader opens exactly
   `{week}/file.parquet` (never a glob), so a dashboard sees a whole old file or a whole new

@@ -33,10 +33,11 @@ Weekly run (default)
     ``--dataset telemetry`` runs only the telemetry half (the alerts one is unchanged).
 
 ``--schedule``
-    Stay in the foreground. Every client is run every Wednesday 04:00 in the configured time
-    zone (``ALERT_PARTITIONS_TIMEZONE``, default ``America/Santiago``). The *daily clients*
-    (``ALERT_PARTITIONS_DAILY_CLIENTS``, default ``emin``: its data updates every day, the
-    others' weekly) are also run at the same time on every other day of the week.
+    Stay in the foreground, in the configured time zone (``ALERT_PARTITIONS_TIMEZONE``, default
+    ``America/Santiago``). Two schedules: every client *except the daily ones* runs every
+    Wednesday 04:00; the *daily clients* (``ALERT_PARTITIONS_DAILY_CLIENTS``, default ``emin``: its
+    data is published every day, the others' weekly) run every day at ``ALERT_PARTITIONS_DAILY_TIME``
+    (default 10:30, after the data engineer's 10:00 end of EMIN's update and before its 12:00 e-mail).
 
 ``--verify-s3``
     Compare S3 with the local partitions (keys, sizes, hashes, row counts). Writes nothing.
@@ -57,7 +58,7 @@ Environment: ``DASHBOARD_DATA_ROOT`` (data root), ``ALERT_PARTITIONS_S3_BUCKET``
 ``BUCKET_NAME``), ``ALERT_PARTITIONS_S3_PREFIX`` (default ``MultiTechnique Alerts/alerts/golden``),
 ``ALERT_PARTITIONS_WEEKDAY`` (default ``wednesday``), ``ALERT_PARTITIONS_TIME`` (``04:00``),
 ``ALERT_PARTITIONS_TIMEZONE`` (``America/Santiago``), ``ALERT_PARTITIONS_DAILY_CLIENTS``
-(comma-separated, default ``emin``; ``none`` for no daily client), ``ACCESS_KEY``/``SECRET_KEY`` (optional;
+(comma-separated, default ``emin``; ``none`` for no daily client), ``ALERT_PARTITIONS_DAILY_TIME`` (``10:30``), ``ACCESS_KEY``/``SECRET_KEY`` (optional;
 the task role is used otherwise).
 """
 
@@ -94,6 +95,9 @@ DEFAULT_TIMEZONE = "America/Santiago"
 # Clients whose data is published every day: they are partitioned (and synced) on every day of the
 # schedule, not only on the weekly day, so their sections and e-mail do not wait for Wednesday.
 DEFAULT_DAILY_CLIENTS = "emin"
+# EMIN finishes updating its data at 10:00 (confirmed by the data engineer) and its e-mail goes out
+# at 12:00, with a data sync right before: 10:30 leaves a margin on both sides.
+DEFAULT_DAILY_TIME = "10:30"
 EXIT_OK, EXIT_BUILD_ERROR, EXIT_S3_ERROR = 0, 1, 2
 
 _WEEKDAYS = {
@@ -151,19 +155,18 @@ def parse_clients(value: str | None) -> list[str]:
     return [name.strip() for name in text.split(",") if name.strip()]
 
 
-def clients_for_cycle(
-    when: datetime,
-    weekday: int,
-    daily_clients: list[str],
-    requested: list[str] | None,
-) -> list[str] | None:
-    """Which clients a scheduled cycle runs. ``None`` means every client found.
+def weekly_clients(requested: list[str] | None, daily_clients: list[str], found: list[str]) -> list[str]:
+    """Clients of the weekly run: every one found (or requested) that is not a daily client.
 
-    On the weekly day every requested client runs. On any other day only the daily clients do
-    (limited to the requested ones, if ``--client`` was given); the result may be empty.
+    Daily clients have their own, later run every day, so the weekly one leaves them out.
     """
-    if when.weekday() == weekday:
-        return requested
+    names = [name.lower() for name in (requested if requested is not None else found)]
+    daily = {name.lower() for name in daily_clients}
+    return [name for name in names if name not in daily]
+
+
+def daily_run_clients(requested: list[str] | None, daily_clients: list[str]) -> list[str]:
+    """Clients of the daily run: the daily clients (limited to the requested ones, if any)."""
     daily = [name.lower() for name in daily_clients]
     return [name for name in daily if requested is None or name in requested]
 
@@ -327,11 +330,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verify-s3", action="store_true",
                         help="Compare S3 with the local partitions; writes nothing.")
     parser.add_argument("--schedule", action="store_true",
-                        help="Run on schedule, in the foreground: every client weekly, the daily clients every day.")
+                        help="Run on schedule, in the foreground: the weekly clients on their day, the daily clients every day.")
     parser.add_argument("--run-on-start", action="store_true", help="With --schedule: run once immediately.")
     parser.add_argument("--daily-clients", default=_env("ALERT_PARTITIONS_DAILY_CLIENTS", DEFAULT_DAILY_CLIENTS),
-                        help="With --schedule: clients also run on every non-weekly day (comma-separated, "
-                             "'none' for no one).")
+                        help="With --schedule: clients run every day at --daily-time instead of weekly "
+                             "(comma-separated, 'none' for no one).")
+    parser.add_argument("--daily-time", default=_env("ALERT_PARTITIONS_DAILY_TIME", DEFAULT_DAILY_TIME),
+                        help="With --schedule: local time HH:MM of the daily clients' run.")
     parser.add_argument("--weekday", default=_env("ALERT_PARTITIONS_WEEKDAY", DEFAULT_WEEKDAY))
     parser.add_argument("--time", default=_env("ALERT_PARTITIONS_TIME", DEFAULT_TIME),
                         help="Local run time HH:MM.")
@@ -374,28 +379,33 @@ def _run_from_args(args: argparse.Namespace, clients: list[str] | None = None) -
 def schedule_forever(args: argparse.Namespace) -> int:
     zone = ZoneInfo(args.timezone)
     weekday, run_time = parse_weekday(args.weekday), parse_time(args.time)
+    daily_time = parse_time(args.daily_time)
     daily_clients = parse_clients(args.daily_clients)
     requested = [c.lower() for c in args.clients] if args.clients else None
-    logger.info("Scheduled: every client on weekday=%s, daily clients %s every other day, time=%s timezone=%s",
-                args.weekday, daily_clients or "(none)", run_time.isoformat(), args.timezone)
+    logger.info("Scheduled: weekly clients on weekday=%s at %s; daily clients %s every day at %s; timezone=%s",
+                args.weekday, run_time.isoformat(), daily_clients or "(none)", daily_time.isoformat(), args.timezone)
     signal.signal(signal.SIGTERM, lambda *_: _STOP.set())
     signal.signal(signal.SIGINT, lambda *_: _STOP.set())
     if args.run_on_start:
         _log_cycle(_run_from_args(args))
     while not _STOP.is_set():
         now = datetime.now(zone)
-        following = next_daily_run(now, run_time)
-        clients = clients_for_cycle(following, weekday, daily_clients, requested)
-        if clients is not None and not clients:
-            # Nothing is due that day (no daily client): sleep to the next day, do not run.
-            logger.info("Next run: %s (no client due; skipped)", following.isoformat())
-            if _STOP.wait(max(0.0, (following - now).total_seconds())):
-                break
-            continue
-        logger.info("Next run: %s (%s)", following.isoformat(), "every client" if clients is None else ", ".join(clients))
+        due = [(next_run(now, weekday, run_time), "weekly")]
+        if daily_run_clients(requested, daily_clients):
+            due.append((next_daily_run(now, daily_time), "daily"))
+        following, kind = min(due)
+        logger.info("Next run: %s (%s)", following.isoformat(), kind)
         if _STOP.wait(max(0.0, (following - now).total_seconds())):
             break
         try:
+            if kind == "daily":
+                clients = daily_run_clients(requested, daily_clients)
+            else:
+                found = builder.discover_clients(args.data_root)  # looked up now: a new client is picked up
+                clients = weekly_clients(requested, daily_clients, found)
+            if not clients:
+                logger.info("No %s client to run", kind)
+                continue
             _log_cycle(_run_from_args(args, clients))
         except Exception:  # noqa: BLE001 - a failed run must not end the schedule
             logger.exception("Scheduled run crashed; the next one retries")

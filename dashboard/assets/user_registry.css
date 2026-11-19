@@ -1,4 +1,4 @@
-/* Admin > Registro de Usuarios (documentation: registro_usuarios_specs.md).
+/* Admin > Actividad de Usuarios (documentation: registro_usuarios_specs.md, TR-6/TR-7 spec of 18 Nov 2026).
    Neutral blue palette: these are activity counts, never severity. No left-border-accent cards;
    KPI tiles use a tinted icon badge. Color is always paired with text, an arrow or a sign. */
 
@@ -12,6 +12,8 @@
 .ur-title-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .ur-title { font-size: 1.6rem; font-weight: 700; color: #0f172a; margin: 0 0 4px; }
 .ur-subtitle { color: #475569; margin: 0 0 16px; }
+.ur-notice { color: #475569; font-size: 0.85rem; margin: -10px 0 16px; }
+.ur-notice:empty { display: none; }
 .ur-back {
     display: inline-flex; align-items: center; min-height: 36px; padding: 6px 14px; border-radius: 6px;
     border: 1px solid #93c5fd; background: #eff6ff; color: #1e3a8a; font-weight: 600; text-decoration: none;
@@ -51,6 +53,16 @@
 .ur-chip-down { background: #e5e7eb; color: #374151; }
 .ur-chip-flat { background: #f1f5f9; color: #334155; }
 .ur-chip-info { background: #eff6ff; color: #1e40af; }
+/* Event type: blue tint = Página, gray tint = Inicio de Sesión (the text is always present) */
+.ur-chip-page { background: #dbeafe; color: #1e3a8a; }
+.ur-chip-login { background: #e5e7eb; color: #374151; }
+
+/* Metric toggle: a radio group styled as a segmented control; the inputs stay real and keyboard-operable */
+.ur-toggle-wrap { flex: 0 0 auto; }
+.ur-toggle .ur-toggle-btn { border: 1px solid #93c5fd; background: #ffffff; color: #1e3a8a; font-size: 0.8rem; font-weight: 600; padding: 4px 12px; }
+.ur-toggle .ur-toggle-btn:hover { background: #eff6ff; color: #1e3a8a; }
+.ur-toggle .btn-check:checked + .ur-toggle-btn, .ur-toggle .ur-toggle-btn.active { background: #1e3a8a; border-color: #1e3a8a; color: #ffffff; }
+.ur-toggle .btn-check:focus-visible + .ur-toggle-btn { outline: 3px solid #2563eb; outline-offset: 2px; position: relative; z-index: 1; }
 
 /* Cards */
 .ur-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 12px; }
@@ -62,6 +74,15 @@
 .ur-notes { margin-top: 4px; }
 .ur-footnote { font-size: 0.8rem; color: #475569; margin: 0 0 4px; }
 .ur-alert { margin-top: 8px; }
+
+/* Most visited pages */
+.ur-pages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.ur-page-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+.ur-page-name { font-weight: 600; color: #0f172a; overflow-wrap: anywhere; }
+.ur-page-count { font-variant-numeric: tabular-nums; color: #334155; white-space: nowrap; }
+.ur-page-users { margin-top: 4px; }
+.ur-page-other .ur-bar-fill { background: #94a3b8; }
+.ur-chevron { color: #1d4ed8; }
 
 /* Tables */
 .ur-table-wrap { width: 100%; overflow-x: auto; }

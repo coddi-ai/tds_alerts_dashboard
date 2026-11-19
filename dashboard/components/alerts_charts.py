@@ -605,6 +605,7 @@ def create_alerts_per_month_chart(alerts_df: pd.DataFrame) -> go.Figure:
 
 def create_alerts_per_week_chart(
     alerts_df: pd.DataFrame, selected_week: Optional[str] = None, week_range: Optional[tuple] = None,
+    mark_empty_weeks: bool = False,
 ) -> go.Figure:
     """Create a weekly stacked alert evolution chart.
 
@@ -612,6 +613,8 @@ def create_alerts_per_week_chart(
     strength while the other weeks fade back. ``week_range`` is a (first, last) pair of
     timestamps the x axis must cover even where ``alerts_df`` has no alerts, so that
     filtering on another dimension thins the bars without dropping weeks off the axis.
+    ``mark_empty_weeks`` writes a "0" on the axis of every week without alerts, so an empty
+    week reads as a value rather than as a missing bar.
     """
     if alerts_df is None or alerts_df.empty:
         return go.Figure().add_annotation(text=t("alerts_charts.no_hay_alertas_para_el_periodo"), x=0.5, y=0.5, showarrow=False)
@@ -671,6 +674,11 @@ def create_alerts_per_week_chart(
         legend=dict(orientation='h', y=1.08, x=1, xanchor='right', yanchor='bottom', font=dict(size=10)),
         hovermode='x unified',
     )
+    if mark_empty_weeks:
+        totals = grouped.groupby('Semana', sort=False)['Count'].sum()
+        for week_label in totals.index[totals <= 0]:
+            fig.add_annotation(x=week_label, y=0, text='0', showarrow=False, yshift=10,
+                               font=dict(size=10, color='#4b5563'))
     return fig
 
 

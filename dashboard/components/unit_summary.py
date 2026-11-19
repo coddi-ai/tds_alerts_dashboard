@@ -1,26 +1,28 @@
 """
-Unit Detail (Resumen > Unidad): per-unit drill-down.
+Unit Detail (Resumen > Unidad): per-unit drill-down, laid out as a master-detail view.
 
-Implements documentation/general/general_specs/02_unit_summary_navigation_shell.md as
-revised by the Unit Detail requirements of ui_notes_improved.md: entry from a Fleet
-Overview row, a navigation bar (breadcrumb, return to the Fleet Overview, previous / next
-and a labeled unit selector) that sits in the page flow and never covers content, and a
-banner identifying the unit: its Estado, monitored components, horómetro and last sample.
-All navigation goes through Dash Pages' client-side router (dcc.Link for links, the shared
-assets/client_nav.js for the selector), so switching units or returning to the Fleet
-Overview never triggers a full page reload.
+Opening a unit (from a Fleet Overview row, or an item of the list below) shows two panels: the
+list of the fleet's units on the left - searchable, grouped by Estado, each group collapsible -
+and the selected unit's detail on the right, headed by the unit id and its Estado with
+Anterior / n of total / Siguiente / Cerrar Unidad. Under 900 px the list stacks above the detail.
+The detail keeps the banner identifying the unit (its Estado, monitored components, horometro and
+last sample) and the per-technique content built by dashboard/components/unit_summary_content.py.
 
-Content (status tiles, per-technique cards) is built by
-dashboard/components/unit_summary_content.py and assembled into the body below.
+The unit is still the URL's (`/overview/unit/<id>`), so every item, Anterior and Siguiente
+change it through Dash Pages' client-side router (dcc.Link): switching units never reloads the
+page. What is on screen - the search text, which groups are open, and therefore which units
+Anterior / Siguiente move through - is browser-side state kept by assets/unit_master_detail.js,
+which also carries it from one unit to the next (the page is rebuilt on every navigation).
 """
 
+from datetime import datetime
 from typing import Optional
 
 from src.i18n import current_language, t
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from dashboard.components.fleet_overview import get_ordered_units, get_unit_snapshot
+from dashboard.components.fleet_overview import band_css, band_slug, get_ordered_units
 from dashboard.components.labels import status_label
 from dashboard.components.status_chip import canonical_status, status_chip
 from dashboard.components.unit_summary_content import (
@@ -38,71 +40,125 @@ logger = get_logger(__name__)
 NO_VALUE = "—"
 
 
-def _back_link():
-    """Return-to-Fleet-Overview control. Part of the navigation bar, so it is available
-    from anywhere in the Unit Detail (Functional Rules: "available from anywhere ...
-    not only from a specific sub-tab or scroll position")."""
-    return dcc.Link([
-        html.I(className="fas fa-arrow-left me-2"), t("unit_summary.volver_a_fleet_overview"),
-    ], href=relative_path(nav_path("overview-general")),
-        className="unit-summary-back-link btn btn-outline-secondary btn-sm",
-        style={"whiteSpace": "nowrap"})
+# The list's search box (assets/unit_master_detail.js finds it by this id).
+SEARCH_ID = "unit-list-search"
+
+# Groups the list opens with: the ones that need attention, plus the one holding the unit.
+_OPEN_BY_DEFAULT = ("Anormal", "Alerta")
+
+_BAND_ICONS = {
+    "Anormal": "fas fa-exclamation-circle", "Alerta": "fas fa-exclamation-triangle",
+    "Normal": "fas fa-check-circle", "Sin Datos": "fas fa-question-circle",
+}
 
 
-def _nav_control(label: str, icon: str, target_unit, disabled_text: str, icon_after: bool = False):
-    """One prev/next lateral-navigation control (Required Changes #4)."""
-    def content(text):
-        glyph = html.I(className=f"{icon} {'ms-1' if icon_after else 'me-1'}", **{"aria-hidden": "true"})
-        return [text, glyph] if icon_after else [glyph, text]
-
-    if target_unit is None:
-        return html.Span(content(disabled_text), className="text-muted small unit-nav__disabled",
-                         **{"aria-disabled": "true"})
+def _close_link() -> dcc.Link:
+    """"Cerrar Unidad": back to the general view (the Fleet Overview table)."""
     return dcc.Link(
-        content(label),
-        href=relative_path(unit_summary_path(target_unit)),
-        className="btn btn-outline-secondary btn-sm", style={"whiteSpace": "nowrap"},
+        [html.I(className="fas fa-xmark me-1", **{"aria-hidden": "true"}), t("unit_summary.cerrar_unidad")],
+        href=relative_path(nav_path("overview-general")),
+        className="unit-btn unit-btn--close",
     )
 
 
-def _unit_selector(ordered: list, current_unit: str):
-    """"Cambiar unidad": a real `<select>` with its `<label for>`. Each option's value is the
-    unit's URL; picking one navigates through the router (assets/client_nav.js)."""
-    options = [
-        html.Option(
-            f"{entry['unit']} · {status_label(entry['band'])}",
-            value=relative_path(unit_summary_path(entry["unit"])),
-            selected=(entry["unit"] == current_unit),
-        )
-        for entry in ordered
-    ]
+def _bands_in_order(ordered: list) -> list:
+    """`(band, [entries])` in list order: the order `ordered` already has (band, then unit)."""
+    groups: dict = {}
+    for entry in ordered:
+        groups.setdefault(entry["band"], []).append(entry)
+    return list(groups.items())
+
+
+def _open_bands(ordered: list, unit: Optional[str]) -> set:
+    """The groups the list is rendered open in (the browser then applies the user's own choice)."""
+    selected_band = next((e["band"] for e in ordered if e["unit"] == unit), None)
+    return {band for band, _ in _bands_in_order(ordered) if band in _OPEN_BY_DEFAULT or band == selected_band}
+
+
+def _unit_item(entry: dict, selected: bool) -> html.Li:
+    """One unit of the list: a real link (a `dcc.Link`, so it navigates through the router)
+    showing the unit id and its Estado chip."""
+    unit = entry["unit"]
+    return html.Li(
+        dcc.Link(
+            [html.Span(unit, className="unit-item__id"), status_chip(entry["band"])],
+            href=relative_path(unit_summary_path(unit)),
+            # (assets/unit_master_detail.js marks the selected link `aria-current="page"`: dcc.Link
+            # has no such property.)
+            className="unit-item" + (" unit-item--selected" if selected else ""),
+        ),
+        **{"data-unit-item": unit},
+    )
+
+
+def _unit_group(band: str, entries: list, unit: Optional[str], expanded: bool) -> html.Div:
+    """One Estado group: a toggle button (real `<button aria-expanded aria-controls>`) with the
+    group's title and unit count, and the list of its units."""
+    slug = band_slug(band)
+    body_id = f"unit-group-body-{slug}"
     return html.Div([
-        html.Label(t("unit_summary.cambiar_unidad"), htmlFor="unit-switcher", className="unit-nav__label"),
-        html.Select(options, id="unit-switcher", className="form-select form-select-sm unit-nav__select",
-                    **{"data-unit-nav": "true"}),
-    ], className="unit-nav__switcher")
+        html.Button([
+            html.Span(html.I(className=_BAND_ICONS.get(band, "fas fa-circle")),
+                      className=f"icon-badge icon-badge--{band_css(band)}", **{"aria-hidden": "true"}),
+            html.Span(status_label(band), className="unit-group__title"),
+            html.Span(f"({len(entries)})", className="unit-group__count", **{"data-unit-group-count": len(entries)}),
+            html.I(className="fas fa-chevron-down unit-group__chevron", **{"aria-hidden": "true"}),
+        ], type="button", className="unit-group__header", **{
+            "data-unit-group-toggle": "true", "aria-expanded": "true" if expanded else "false", "aria-controls": body_id,
+        }),
+        html.Ul([_unit_item(e, e["unit"] == unit) for e in entries], id=body_id, className="unit-group__items",
+                hidden=not expanded),
+    ], className="unit-group", **{"data-unit-group": band})
 
 
-def _navigation_bar(ordered: list, unit: str, prev_unit: Optional[str], next_unit: Optional[str]) -> html.Div:
-    """Breadcrumb on the left; Volver, Anterior / Primera unidad, Cambiar unidad and
-    Siguiente on the right. It is part of the page flow - not sticky, nothing overlays the
-    sections below it."""
-    breadcrumb = html.Nav(
-        html.Ol([
-            html.Li(dcc.Link(t("unit_summary.fleet_overview"), href=relative_path(nav_path("overview-general")),
-                             className="text-muted text-decoration-none"), className="breadcrumb-item"),
-            html.Li(unit, className="breadcrumb-item active fw-bold", **{"aria-current": "page"}),
-        ], className="breadcrumb mb-0"),
-        **{"aria-label": t("unit_summary.breadcrumb")},
-    )
-    controls = html.Nav([
-        _back_link(),
-        _nav_control(t("unit_summary.anterior"), "fas fa-chevron-left", prev_unit, t("unit_summary.primera_unidad")),
-        _unit_selector(ordered, unit),
-        _nav_control(t("unit_summary.siguiente"), "fas fa-chevron-right", next_unit, t("unit_summary.ultima_unidad"),
-                     icon_after=True),
-    ], className="unit-nav__controls", **{"aria-label": t("unit_summary.navegacion_entre_unidades")})
-    return html.Div([breadcrumb, controls], className="unit-nav")
+def _unit_list(ordered: list, unit: Optional[str]) -> html.Aside:
+    """The master panel: "Buscar Unidad", "Estado al <fecha>" and the units grouped by Estado."""
+    open_bands = _open_bands(ordered, unit)
+    return html.Aside([
+        html.Label(t("unit_summary.buscar_unidad"), htmlFor=SEARCH_ID, className="unit-list__label"),
+        dcc.Input(id=SEARCH_ID, type="search", value="", debounce=False, autoComplete="off",
+                  className="form-control form-control-sm"),
+        html.P(t("unit_summary.estado_al", date=datetime.now().strftime("%d/%m/%Y")), className="unit-list__caption"),
+        html.P(t("unit_summary.sin_coincidencias"), className="unit-list__empty", role="status", hidden=True,
+               **{"data-unit-no-match": "true"}),
+        html.Div([_unit_group(band, entries, unit, band in open_bands) for band, entries in _bands_in_order(ordered)],
+                 className="unit-list__groups"),
+    ], className="unit-list", **{"aria-label": t("unit_summary.unidades"), "data-unit-list": unit or ""})
+
+
+def _nav_button(kind: str, label: str, icon: str, icon_after: bool, enabled: bool) -> html.Button:
+    """Anterior / Siguiente: a real `<button>`; the browser script points it at the neighbouring
+    shown unit and disables it at either end of the shown units (`data-unit-nav`)."""
+    glyph = html.I(className=f"{icon} {'ms-1' if icon_after else 'me-1'}", **{"aria-hidden": "true"})
+    return html.Button([label, glyph] if icon_after else [glyph, label], type="button",
+                       className="unit-btn", disabled=not enabled, **{"data-unit-nav": kind})
+
+
+def _detail_header(ordered: list, unit: str, estado: str) -> html.Div:
+    """Unit id and Estado, then Anterior / "n / total" / Siguiente / Cerrar Unidad. What this is
+    rendered with is what the browser script starts from; it then follows the shown units."""
+    open_bands = _open_bands(ordered, unit)
+    shown = [e["unit"] for e in ordered if e["band"] in open_bands]
+    position = shown.index(unit) if unit in shown else None
+    counter = t("unit_summary.posicion", n=position + 1 if position is not None else "–", total=len(shown))
+    return html.Div([
+        html.Div([
+            html.H2(unit, className="unit-detail__unit"),
+            status_chip(estado),
+        ], className="unit-detail__identity"),
+        html.Div([
+            _nav_button("prev", t("unit_summary.anterior"), "fas fa-chevron-left", False,
+                        position is not None and position > 0),
+            html.Span(counter, className="unit-detail__position", role="status", **{
+                "data-unit-position": "true",
+                # The text the browser script fills in as the shown units change.
+                "data-unit-position-format": t("unit_summary.posicion", n="{n}", total="{total}"),
+            }),
+            _nav_button("next", t("unit_summary.siguiente"), "fas fa-chevron-right", True,
+                        position is not None and position < len(shown) - 1),
+            _close_link(),
+        ], className="unit-detail__controls"),
+    ], className="unit-detail__header")
 
 
 def _format_hours(hours: float) -> str:
@@ -176,8 +232,15 @@ def build_unit_summary(client: str, unit: str) -> html.Div:
 def _empty_state(message: str) -> html.Div:
     return html.Div([
         dbc.Alert([html.I(className="fas fa-info-circle me-2"), message], color="info", className="text-center"),
-        html.Div(_back_link(), className="text-center"),
+        html.Div(_close_link(), className="text-center"),
     ], className="p-4")
+
+
+def _split(ordered: list, unit: Optional[str], detail) -> html.Div:
+    return html.Div([
+        _unit_list(ordered, unit),
+        html.Section(detail, className="unit-detail", **{"aria-label": t("unit_summary.detalle_de_la_unidad")}),
+    ], className="unit-split")
 
 
 def _build_unit_summary(client: str, unit: str) -> html.Div:
@@ -185,21 +248,20 @@ def _build_unit_summary(client: str, unit: str) -> html.Div:
     if not ordered:
         return _empty_state(t("unit_summary.no_hay_unidades_disponibles_para_este"))
 
-    snapshot = get_unit_snapshot(client, unit)
+    snapshot = next((entry for entry in ordered if entry["unit"] == unit), None)
     if snapshot is None:
-        return _empty_state(t("unit_summary.la_unidad_no_se_encuentra_para", unit=unit))
-
-    unit_ids = [entry["unit"] for entry in ordered]
-    idx = unit_ids.index(unit)
-    prev_unit = unit_ids[idx - 1] if idx > 0 else None
-    next_unit = unit_ids[idx + 1] if idx < len(unit_ids) - 1 else None
+        # The list stays usable, so the user can pick another unit.
+        return _split(ordered, None, dbc.Alert(
+            [html.I(className="fas fa-info-circle me-2"), t("unit_summary.la_unidad_no_se_encuentra_para", unit=unit)],
+            color="info", className="text-center m-4",
+        ))
 
     # The banner's Estado is the unit's, the same one the Fleet Overview row shows.
     banner = _banner(client, unit, snapshot["overall_status"])
 
     # Per-technique content, isolated from the header in its own try/except so a content
     # failure degrades to an inline error card instead of blanking the whole shell (the
-    # navigation bar and banner stay usable either way). Every status in it is read from the
+    # list, header and banner stay usable either way). Every status in it is read from the
     # same snapshot as the banner's Estado and the Fleet Overview - never recalculated
     # independently (documentation/general/general_specs/
     # 05_unit_summary_restructure_and_predictive_comparison.md, Functional Rules).
@@ -212,4 +274,4 @@ def _build_unit_summary(client: str, unit: str) -> html.Div:
             t("unit_summary.error_al_generar_el_contenido_de"),
         ], color="danger", className="text-center")
 
-    return html.Div([_navigation_bar(ordered, unit, prev_unit, next_unit), banner, body])
+    return _split(ordered, unit, [_detail_header(ordered, unit, snapshot["overall_status"]), banner, body])

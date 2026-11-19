@@ -36,6 +36,9 @@ class OilComponentRow:
     anomaly: Optional[str]    # None when the sample has no anomaly
     diagnosis: Optional[str]  # AI recommendation; None when there is none
     sample_date: Optional[pd.Timestamp]
+    # The oil data's own component name (`component` is its display form): what a link to the
+    # component's report must carry.
+    raw_component: Optional[str] = None
 
 
 def unit_oil_components(client: str, unit_id: str) -> Optional[list]:
@@ -72,6 +75,7 @@ def unit_oil_components(client: str, unit_id: str) -> Optional[list]:
                 anomaly=str(anomaly) if pd.notna(anomaly) and anomaly != 'Normal' else None,
                 diagnosis=str(diagnosis) if diagnosis is not None and pd.notna(diagnosis) and str(diagnosis).strip() else None,
                 sample_date=None if pd.isna(sample_date) else sample_date,
+                raw_component=str(r['componentName']),
             ))
         return rows
     except Exception as e:

@@ -94,9 +94,12 @@ services:
       - ALERT_PARTITIONS_TIMEZONE=${ALERT_PARTITIONS_TIMEZONE:-America/Santiago}
       - ALERT_PARTITIONS_WEEKDAY=${ALERT_PARTITIONS_WEEKDAY:-wednesday}
       - ALERT_PARTITIONS_TIME=${ALERT_PARTITIONS_TIME:-04:00}
-      # Clientes cuyos datos se publican cada dia (emin): ademas de los miercoles, se particionan
-      # y sincronizan todos los demas dias a la misma hora. 'none' = ninguno.
+      # Clientes cuyos datos se publican cada dia (emin): se particionan y sincronizan todos los dias
+      # (no en la corrida semanal). 'none' = ninguno.
       - ALERT_PARTITIONS_DAILY_CLIENTS=${ALERT_PARTITIONS_DAILY_CLIENTS:-emin}
+      # Hora de la corrida diaria de esos clientes: emin termina su actualizacion a las 10:00 y su
+      # correo sale a las 12:00; los demas clientes siguen en miercoles 04:00.
+      - ALERT_PARTITIONS_DAILY_TIME=${ALERT_PARTITIONS_DAILY_TIME:-10:30}
       # Mismo bucket/prefijo para el backfill y la corrida semanal. Vacio = BUCKET_NAME y el
       # prefijo del medallion (MultiTechnique Alerts/alerts/golden).
       - ALERT_PARTITIONS_S3_BUCKET=${ALERT_PARTITIONS_S3_BUCKET:-}

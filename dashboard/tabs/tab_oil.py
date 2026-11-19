@@ -14,17 +14,23 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def create_layout() -> html.Div:
+def create_layout(unit: str | None = None, component: str | None = None) -> html.Div:
     """
     Create unified oil tab layout with internal tabs.
 
     Tab A — Fleet Overview: machine-level status, priority, component distributions.
     Tab B — Report Detail: sample-level analysis with radar charts and time series.
 
+    Args:
+        unit, component: when both are given the tab opens on Report Detail for that unit's
+            component (on its latest sample), by seeding the navigation store the heat-map's
+            cell click uses (see dashboard/callbacks/oil_callbacks.py::seed_report_from_url).
+
     Returns:
         Dash HTML Div with tabbed interface
     """
     logger.info("Creating unified Oil Tab layout with internal tabs")
+    to_report = bool(unit and component)
 
     layout = html.Div([
         # Header
@@ -46,7 +52,7 @@ def create_layout() -> html.Div:
         # Internal Tabs
         dcc.Tabs(
             id='oil-internal-tabs',
-            value='fleet-overview',
+            value='report-detail' if to_report else 'fleet-overview',
             children=[
                 dcc.Tab(
                     label=t("tab_oil.vision_de_flota"),
@@ -79,6 +85,9 @@ def create_layout() -> html.Div:
 
         # Tab content container
         html.Div(id='oil-tab-content'),
+
+        # What the URL asked this tab to open with; read once by seed_report_from_url.
+        dcc.Store(id='oil-url-seed', storage_type='memory', data={'unit': unit, 'component': component} if to_report else None),
 
     ], className="container-fluid p-4")
 

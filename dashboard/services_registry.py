@@ -12,7 +12,7 @@ client-service-gated, and are kept separate from KNOWN_SERVICE_IDS.
 
 from src.i18n import t
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import dash
 
@@ -88,7 +88,7 @@ NAV_PATHS = {
     "reporting-main": "/reporting",
     "reporting-informe-falla": "/reporting/informe-falla",
     "admin-main": "/admin",
-    "admin-user-registry": "/admin/registro-usuarios",
+    "admin-user-registry": "/admin/actividad-usuarios",   # renamed from /admin/registro-usuarios (redirected)
     "admin-mailing": "/admin/mailing",
 }
 
@@ -129,6 +129,11 @@ SERVICE_EXACT_ROUTES = {
     "reporting": "reporting-main",
     "reporting/informe-falla": "reporting-informe-falla",
 }
+
+
+# The admin "Registro de Usuarios" section was renamed "Actividad de Usuarios" (TR-7): the old
+# route still resolves and redirects here, query string included, so bookmarks keep working.
+LEGACY_USER_ACTIVITY_PATH = "/admin/registro-usuarios"
 
 
 # Unit Summary drill-down (Phase 2, documentation/general/general_specs/
@@ -188,6 +193,37 @@ def unit_summary_path(unit_id: str) -> str:
     quoted since raw unit identifiers (e.g. from Alerts/Telemetry) aren't
     guaranteed to be URL-safe as-is."""
     return f"/overview/unit/{quote(str(unit_id), safe='')}"
+
+
+def _path_with_query(path: str, **params: str) -> str:
+    """`path?a=1&b=2`, every value percent-encoded (unit ids, alert ids and components are
+    not guaranteed to be URL-safe as they are)."""
+    return f"{path}?{urlencode(params, quote_via=quote)}"
+
+
+# Drill-downs from the Unit Detail into a technique's own tab. Each target page reads these query
+# parameters when it is built and opens with them applied (and visible), so the user can change
+# them afterwards; no other filter is set.
+
+def alerts_unit_path(unit_id: str) -> str:
+    """Monitoreo > Alertas > General, filtered to one unit."""
+    return _path_with_query(NAV_PATHS["monitoring-alerts"], unit=str(unit_id))
+
+
+def alert_detail_path(alert_id: str) -> str:
+    """Monitoreo > Alertas > Vista Detallada, with one alert open."""
+    return _path_with_query(NAV_PATHS["monitoring-alerts"], alert=str(alert_id))
+
+
+def oil_evidence_path(unit_id: str, component: str) -> str:
+    """Monitoreo > Aceite > Detalle de Reporte, for one unit and component (`component` is the
+    oil data's own component name). The report opens on its latest sample."""
+    return _path_with_query(NAV_PATHS["monitoring-oil"], unit=str(unit_id), component=str(component))
+
+
+def predictive_detail_path(component: str, unit_id: str) -> str:
+    """Predictivo > <component> > Evidencia, for one unit (the component is the page)."""
+    return _path_with_query(nav_path(f"predictive-{component}"), unit=str(unit_id))
 
 
 def relative_path(path: str) -> str:

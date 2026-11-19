@@ -1,7 +1,7 @@
-"""Calculations behind "Resumen de Clientes" and "Detalle de Cliente" (TR-2, TR-3).
+"""Calculations behind "Actividad de Usuarios": the client overview and the client detail (TR-7).
 
-Pure functions over the normalized events table of `data_access.get_events()` and the registry:
-no I/O, no UI. Dates are display-timezone calendar days.
+Pure functions over the normalized events table of `data_access.get_events()` (logins AND page
+views) and the registry: no I/O, no UI. Dates are display-timezone calendar days.
 """
 
 from dataclasses import dataclass, field
@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+from src.auth_events.events import EVENT_TYPE_LOGIN, EVENT_TYPE_PAGE_VIEW, UNREGISTERED_PAGE_ID
 from src.auth_events.registry import Registry
 from src.i18n import t
 
@@ -17,6 +18,8 @@ PERIOD_CHOICES = ("7", "30", "90", "custom")
 DEFAULT_PERIOD = "30"
 WEEKLY_AFTER_DAYS = 90
 MAX_STACKED_USERS = 5
+TOP_PAGES = 6
+RECENT_ACTIVITY_SIZE = 7
 OTHERS = "Otros"
 HEATMAP_BLOCKS = 12
 HEATMAP_THRESHOLDS = (0.15, 0.35, 0.65)
@@ -113,7 +116,7 @@ def normalize_period_kind(kind: str | None, start=None, end=None) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-# Change vs previous period and "Último Acceso"
+# Change vs previous period and relative times
 
 @dataclass(frozen=True)
 class Change:
@@ -136,10 +139,11 @@ def change_vs_previous(current: int, previous: int) -> Change:
     return Change("up", f"▲ +{text}%") if pct > 0 else Change("down", f"▼ −{text}%")
 
 
-def relative_access(last: datetime | None, now: datetime) -> str:
-    """Time since the last login, in the display timezone (`now` and `last` are tz-aware)."""
+def relative_access(last: datetime | None, now: datetime, never: str | None = None) -> str:
+    """Time since the last event, in the display timezone (`now` and `last` are tz-aware).
+    `never` replaces the text for "no event at all" (default `Sin accesos`)."""
     if last is None:
-        return t("user_registry.relative.never")
+        return never if never is not None else t("user_registry.relative.never")
     delta = now - last
     minutes = int(delta.total_seconds() // 60)
     if minutes < 60:
@@ -228,19 +232,97 @@ def _days_between(first: date, last: date):
 
 
 # ---------------------------------------------------------------------------------------------
-# Resumen de Clientes (TR-2)
+# Page-view helpers shared by both views (TR-7 items 3-4)
+
+def page_views(events: pd.DataFrame) -> pd.DataFrame:
+    return events[events["event_type"] == EVENT_TYPE_PAGE_VIEW]
+
+
+def login_events(events: pd.DataFrame) -> pd.DataFrame:
+    return events[events["event_type"] == EVENT_TYPE_LOGIN]
+
+
+def page_view_change(current: int, previous: int, period: Period, capture_start: date | None) -> Change:
+    """The page-view chip is `–` unless the WHOLE previous period is on or after the capture start
+    (before it no page views exist, so the comparison would be meaningless)."""
+    if capture_start is None or period.previous.start < capture_start:
+        return Change("none", "–")
+    return change_vs_previous(current, previous)
+
+
+def capture_notice(capture_start: date | None, period: Period) -> tuple[str, date | None] | None:
+    """`("none", None)` when no page view exists yet, `("since", date)` when the period starts
+    before the capture start, else None."""
+    if capture_start is None:
+        return ("none", None)
+    if period.start < capture_start:
+        return ("since", capture_start)
+    return None
+
+
+def fmt_activity_chip(moment: datetime, now: datetime) -> str:
+    """`Hoy, HH:mm`, otherwise `Vie 6 Nov, HH:mm`."""
+    if moment.date() == now.date():
+        return t("user_registry.relative.today", time=f"{moment:%H:%M}")
+    return fmt_weekday_datetime(moment)
+
+
+def fmt_log_datetime(moment: datetime, now: datetime) -> str:
+    """`D Mmm, HH:mm`, with the year when it is not the current one."""
+    year = f" {moment.year}" if moment.year != now.year else ""
+    return f"{fmt_day_month(moment)}{year}, {moment:%H:%M}"
+
+
+@dataclass
+class PageRow:
+    key: str
+    name: str
+    views: int
+    share: int            # integer percent of all views in the selection (may not add up to 100)
+    users: int
+    is_other: bool = False
+
+
+def build_pages(selection: pd.DataFrame) -> list[PageRow]:
+    """The 6 most viewed pages plus `Otras Páginas`. An unregistered page is its own entry,
+    named by its path (and tab); registered pages are grouped by `page_id`."""
+    views = page_views(selection)
+    total = len(views)
+    if total == 0:
+        return []
+    keyed = views.assign(_key=[
+        pid if pid and pid != UNREGISTERED_PAGE_ID else f"{UNREGISTERED_PAGE_ID}|{path}|{tab or ''}"
+        for pid, path, tab in zip(views["page_id"], views["path"], views["tab"])])
+    grouped = []
+    for key, rows in keyed.groupby("_key", sort=False):
+        grouped.append((key, rows["display_name"].iloc[0], len(rows), int(rows["username"].nunique())))
+    grouped.sort(key=lambda g: (-g[2], g[1].casefold()))
+
+    out = [PageRow(key, name, count, half_up(count / total * 100), users) for key, name, count, users in grouped[:TOP_PAGES]]
+    rest = grouped[TOP_PAGES:]
+    if rest:
+        rest_keys = {g[0] for g in rest}
+        count = sum(g[2] for g in rest)
+        users = int(keyed[keyed["_key"].isin(rest_keys)]["username"].nunique())
+        out.append(PageRow("other", t("user_registry.pages.other"), count, half_up(count / total * 100), users, is_other=True))
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Resumen de Clientes (TR-7 item 2)
 
 @dataclass
 class ClientRow:
     client_id: str
     name: str
-    logins: int
-    previous: int
+    page_views: int
+    previous_views: int
     change: Change
+    logins: int
     active_users: int
     registered_users: int
-    spark: list[int]
-    last_access: datetime | None
+    spark: list[int]                      # daily page views across the period
+    last_activity: datetime | None
     is_internal: bool = False
 
 
@@ -248,6 +330,10 @@ class ClientRow:
 class Overview:
     period: Period
     include_internal: bool
+    capture_start: date | None = None
+    page_views: int = 0
+    previous_page_views: int = 0
+    views_change: Change = field(default_factory=lambda: Change("none", "–"))
     logins: int = 0
     previous_logins: int = 0
     logins_change: Change = field(default_factory=lambda: Change("none", "–"))
@@ -257,15 +343,24 @@ class Overview:
     registered_users: int = 0
     rows: list[ClientRow] = field(default_factory=list)
     buckets: list[Bucket] = field(default_factory=list)
-    chart_counts: list[int] = field(default_factory=list)
+    chart_views: list[int] = field(default_factory=list)
+    chart_logins: list[int] = field(default_factory=list)
+    pages: list[PageRow] = field(default_factory=list)
     internal_hidden_logins: int = 0
+    internal_hidden_views: int = 0
     unmapped_logins: int = 0
+    unmapped_views: int = 0
     unmapped_usernames: list[str] = field(default_factory=list)
-    orphan_client_logins: int = 0
+    orphan_logins: int = 0
+    orphan_views: int = 0
 
     @property
     def empty(self) -> bool:
-        return sum(self.chart_counts) == 0
+        return self.page_views == 0 and self.logins == 0
+
+    @property
+    def notice(self):
+        return capture_notice(self.capture_start, self.period)
 
 
 def _pct(part: int, whole: int) -> float | None:
@@ -273,62 +368,70 @@ def _pct(part: int, whole: int) -> float | None:
 
 
 def build_overview(all_events: pd.DataFrame, registry: Registry, period: Period,
-                   include_internal: bool) -> Overview:
-    """`all_events`: full history (already filtered by Ambiente)."""
+                   include_internal: bool, capture_start: date | None = None) -> Overview:
+    """`all_events`: full history of BOTH event types (already filtered by Ambiente)."""
     previous = period.previous
     current = in_period(all_events, period)
     prior = in_period(all_events, previous)
 
     client_cur, client_prior = scope_client_events(current, registry), scope_client_events(prior, registry)
-    shown_cur = client_cur
-    shown_prior = client_prior
+    shown_cur, shown_prior = client_cur, client_prior
     if include_internal:
         shown_cur = pd.concat([client_cur, scope_internal_events(current)]).sort_values("timestamp_utc", kind="stable")
         shown_prior = pd.concat([client_prior, scope_internal_events(prior)])
 
     clients = registry.active_clients()
     client_user_names = {u["username"] for c in clients for u in registry.users_of_client(c["client_id"])}
+    registered_users = len(client_user_names) + (len(registry.internal_users()) if include_internal else 0)
 
-    ov = Overview(period=period, include_internal=include_internal)
-    ov.logins, ov.previous_logins = len(shown_cur), len(shown_prior)
+    ov = Overview(period=period, include_internal=include_internal, capture_start=capture_start)
+    cur_views, prior_views = page_views(shown_cur), page_views(shown_prior)
+    cur_logins, prior_logins = login_events(shown_cur), login_events(shown_prior)
+    ov.page_views, ov.previous_page_views = len(cur_views), len(prior_views)
+    ov.views_change = page_view_change(ov.page_views, ov.previous_page_views, period, capture_start)
+    ov.logins, ov.previous_logins = len(cur_logins), len(prior_logins)
     ov.logins_change = change_vs_previous(ov.logins, ov.previous_logins)
     ov.registered_clients = len(clients)
-    ov.active_clients = int(client_cur["client_id"].nunique())
-    ov.registered_users = len(client_user_names)
-    ov.active_users = int(client_cur["username"].nunique())
+    ov.active_clients = int(client_cur["client_id"].nunique())          # any event type
+    ov.registered_users = registered_users
+    ov.active_users = int(shown_cur["username"].nunique())              # any event type
+
+    def row_for(client_id: str, name: str, history: pd.DataFrame, registered: int, is_internal: bool) -> ClientRow:
+        cur, prev = in_period(history, period), in_period(history, previous)
+        views, prev_views = page_views(cur), page_views(prev)
+        return ClientRow(
+            client_id=client_id, name=name, page_views=len(views), previous_views=len(prev_views),
+            change=page_view_change(len(views), len(prev_views), period, capture_start),
+            logins=len(login_events(cur)), active_users=int(cur["username"].nunique()),
+            registered_users=registered, spark=daily_counts(views, period),
+            last_activity=_last_ts(history), is_internal=is_internal,
+        )
 
     for client in clients:
         cid = client["client_id"]
-        cur, prev = scope_for(current, cid), scope_for(prior, cid)
-        ov.rows.append(ClientRow(
-            client_id=cid, name=client["display_name"], logins=len(cur), previous=len(prev),
-            change=change_vs_previous(len(cur), len(prev)),
-            active_users=int(cur["username"].nunique()),
-            registered_users=len(registry.users_of_client(cid)),
-            spark=daily_counts(cur, period),
-            last_access=_last_ts(scope_for(all_events, cid)),
-        ))
+        ov.rows.append(row_for(cid, client["display_name"], scope_for(all_events, cid),
+                               len(registry.users_of_client(cid)), False))
     if include_internal:
-        cur, prev = scope_internal_events(current), scope_internal_events(prior)
-        ov.rows.append(ClientRow(
-            client_id=INTERNAL_ID, name="Equipo Interno", logins=len(cur), previous=len(prev),
-            change=change_vs_previous(len(cur), len(prev)),
-            active_users=int(cur["username"].nunique()),
-            registered_users=len(registry.internal_users()),
-            spark=daily_counts(cur, period),
-            last_access=_last_ts(scope_internal_events(all_events)),
-            is_internal=True,
-        ))
+        ov.rows.append(row_for(INTERNAL_ID, "Equipo Interno", scope_internal_events(all_events),
+                               len(registry.internal_users()), True))
 
     ov.buckets = build_buckets(period)
-    ov.chart_counts = bucket_counts(shown_cur, ov.buckets)
+    ov.chart_views = bucket_counts(cur_views, ov.buckets)
+    ov.chart_logins = bucket_counts(cur_logins, ov.buckets)
+    ov.pages = build_pages(shown_cur)
 
     internal_cur = scope_internal_events(current)
-    ov.internal_hidden_logins = 0 if include_internal else len(internal_cur)
+    if not include_internal:
+        ov.internal_hidden_logins = len(login_events(internal_cur))
+        ov.internal_hidden_views = len(page_views(internal_cur))
     unmapped = current[current["user_type"] == "unmapped"]
-    ov.unmapped_logins = len(unmapped)
+    ov.unmapped_logins, ov.unmapped_views = len(login_events(unmapped)), len(page_views(unmapped))
     ov.unmapped_usernames = sorted(unmapped["username"].unique())
-    ov.orphan_client_logins = len(current) - len(client_cur) - len(internal_cur) - len(unmapped)
+    orphan = len(current) - len(client_cur) - len(internal_cur) - len(unmapped)
+    if orphan:
+        accounted = pd.concat([client_cur, internal_cur, unmapped])
+        orphans = current[~current["event_id"].isin(accounted["event_id"])]
+        ov.orphan_logins, ov.orphan_views = len(login_events(orphans)), len(page_views(orphans))
     return ov
 
 
@@ -338,42 +441,52 @@ def _last_ts(events: pd.DataFrame) -> datetime | None:
 
 
 # ---------------------------------------------------------------------------------------------
-# Detalle de Cliente (TR-3)
+# Detalle de Cliente (TR-7 item 3)
 
 @dataclass
 class UserRow:
     username: str
-    production: int
-    development: int
-    unknown: int
-    total: int
+    page_views: int
+    logins: int
     active_days: int
-    last_access: datetime | None
+    last_activity: datetime | None
+    last_login: datetime | None
 
 
 @dataclass
 class Detail:
     client_id: str
     period: Period
+    capture_start: date | None = None
+    page_views: int = 0
+    previous_page_views: int = 0
+    views_change: Change = field(default_factory=lambda: Change("none", "–"))
     logins: int = 0
     previous_logins: int = 0
     logins_change: Change = field(default_factory=lambda: Change("none", "–"))
     active_users: int = 0
     registered_users: int = 0
     active_days: int = 0
-    last_access: datetime | None = None
-    last_access_user: str | None = None
+    last_activity: datetime | None = None
+    last_activity_user: str | None = None
+    last_activity_type: str | None = None
+    last_activity_detail: str | None = None          # display name of the page, for a page view
     buckets: list[Bucket] = field(default_factory=list)
-    series: list[tuple[str, list[int]]] = field(default_factory=list)   # stacking order, bottom first
+    series_views: list[tuple[str, list[int]]] = field(default_factory=list)   # stacking order, bottom first
+    series_logins: list[tuple[str, list[int]]] = field(default_factory=list)
     users: list[UserRow] = field(default_factory=list)
-    show_unknown: bool = False
-    heatmap: list[list[int]] = field(default_factory=list)              # [weekday][block]
+    heatmap: list[list[int]] = field(default_factory=list)                    # page views [weekday][block]
     heatmap_max: int = 0
-    log: pd.DataFrame = field(default_factory=pd.DataFrame)             # selection, newest first
+    pages: list[PageRow] = field(default_factory=list)
+    log: pd.DataFrame = field(default_factory=pd.DataFrame)                   # selection, newest first
 
     @property
     def empty(self) -> bool:
-        return self.logins == 0
+        return len(self.log) == 0
+
+    @property
+    def notice(self):
+        return capture_notice(self.capture_start, self.period)
 
 
 def heatmap_level(count: int, maximum: int) -> int:
@@ -386,8 +499,21 @@ def heatmap_level(count: int, maximum: int) -> int:
     return len(HEATMAP_THRESHOLDS) + 1
 
 
-def build_detail(all_events: pd.DataFrame, registry: Registry, client_id: str, period: Period) -> Detail:
-    """`all_events`: full history (already filtered by Ambiente)."""
+def _stack(selection: pd.DataFrame, buckets: list[Bucket]) -> list[tuple[str, list[int]]]:
+    """Top users individually (most events at the bottom), the rest as `Otros`."""
+    totals = selection["username"].value_counts()
+    ranked = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
+    top = [name for name, _ in ranked[:MAX_STACKED_USERS]]
+    series = [(name, bucket_counts(selection[selection["username"] == name], buckets)) for name in top]
+    rest = selection[~selection["username"].isin(top)]
+    if not rest.empty:
+        series.append((OTHERS, bucket_counts(rest, buckets)))
+    return series
+
+
+def build_detail(all_events: pd.DataFrame, registry: Registry, client_id: str, period: Period,
+                 capture_start: date | None = None) -> Detail:
+    """`all_events`: full history of BOTH event types (already filtered by Ambiente)."""
     history = scope_for(all_events, client_id)
     selection = in_period(history, period)
     previous = in_period(history, period.previous)
@@ -395,44 +521,41 @@ def build_detail(all_events: pd.DataFrame, registry: Registry, client_id: str, p
     registered = ([u["username"] for u in registry.internal_users()] if client_id == INTERNAL_ID
                   else [u["username"] for u in registry.users_of_client(client_id)])
 
-    d = Detail(client_id=client_id, period=period)
-    d.logins, d.previous_logins = len(selection), len(previous)
+    d = Detail(client_id=client_id, period=period, capture_start=capture_start)
+    views, logins = page_views(selection), login_events(selection)
+    d.page_views, d.previous_page_views = len(views), len(page_views(previous))
+    d.views_change = page_view_change(d.page_views, d.previous_page_views, period, capture_start)
+    d.logins, d.previous_logins = len(logins), len(login_events(previous))
     d.logins_change = change_vs_previous(d.logins, d.previous_logins)
     d.registered_users = len(registered)
-    d.active_users = int(selection["username"].nunique())
+    d.active_users = int(selection["username"].nunique())               # any event type
     d.active_days = int(selection["date"].nunique())
     newest = last_event(history)
     if newest is not None:
-        d.last_access, d.last_access_user = newest["timestamp"].to_pydatetime(), newest["username"]
+        d.last_activity, d.last_activity_user = newest["timestamp"].to_pydatetime(), newest["username"]
+        d.last_activity_type = newest["event_type"]
+        d.last_activity_detail = newest["display_name"] if newest["event_type"] == EVENT_TYPE_PAGE_VIEW else None
 
-    # Stacked chart: top users individually, the rest as "Otros".
-    totals = selection["username"].value_counts()
-    ranked = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
-    top = [name for name, _ in ranked[:MAX_STACKED_USERS]]
     d.buckets = build_buckets(period)
-    for name in top:
-        d.series.append((name, bucket_counts(selection[selection["username"] == name], d.buckets)))
-    rest = selection[~selection["username"].isin(top)]
-    if not rest.empty:
-        d.series.append((OTHERS, bucket_counts(rest, d.buckets)))
+    d.series_views = _stack(views, d.buckets)
+    d.series_logins = _stack(logins, d.buckets)
+    d.pages = build_pages(selection)
 
-    # Users table: every registered user plus anyone who logged in under this client.
-    d.show_unknown = bool((selection["environment"] == "unknown").any())
-    names = list(dict.fromkeys(registered + list(totals.index)))
+    # Users table: every registered user plus anyone with events under this client.
+    names = list(dict.fromkeys(registered + list(selection["username"].unique())))
     for name in names:
         mine, mine_all = selection[selection["username"] == name], history[history["username"] == name]
-        env = mine["environment"].value_counts()
         d.users.append(UserRow(
-            username=name, production=int(env.get("production", 0)), development=int(env.get("development", 0)),
-            unknown=int(env.get("unknown", 0)), total=len(mine), active_days=int(mine["date"].nunique()),
-            last_access=_last_ts(mine_all),
+            username=name, page_views=len(page_views(mine)), logins=len(login_events(mine)),
+            active_days=int(mine["date"].nunique()), last_activity=_last_ts(mine_all),
+            last_login=_last_ts(login_events(mine_all)),
         ))
-    d.users.sort(key=lambda u: (-u.total, u.username))
+    d.users.sort(key=lambda u: (-u.page_views, -u.logins, u.username))
 
-    # Heatmap: weekday x 2-hour block, display timezone.
+    # Heatmap of page views: weekday x 2-hour block, display timezone.
     grid = [[0] * HEATMAP_BLOCKS for _ in range(7)]
-    if not selection.empty:
-        stamps = selection["timestamp"]
+    if not views.empty:
+        stamps = views["timestamp"]
         for weekday, hour in zip(stamps.dt.weekday, stamps.dt.hour):
             grid[int(weekday)][int(hour) // 2] += 1
     d.heatmap = grid
@@ -442,7 +565,7 @@ def build_detail(all_events: pd.DataFrame, registry: Registry, client_id: str, p
     return d
 
 
-def sort_rows_by_logins(rows: list[ClientRow]) -> list[ClientRow]:
-    """Descending by logins (name breaks ties); `Equipo Interno` stays last."""
-    regular = sorted((r for r in rows if not r.is_internal), key=lambda r: (-r.logins, r.name.casefold()))
+def sort_rows_by_views(rows: list[ClientRow]) -> list[ClientRow]:
+    """Descending by page views (logins, then name, break ties); `Equipo Interno` stays last."""
+    regular = sorted((r for r in rows if not r.is_internal), key=lambda r: (-r.page_views, -r.logins, r.name.casefold()))
     return regular + [r for r in rows if r.is_internal]

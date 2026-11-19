@@ -165,9 +165,10 @@ def _select_telemetry_alert_data(
 
 @callback(
     Output('alerts-tab-content', 'children'),
-    [Input('alerts-internal-tabs', 'value')]
+    [Input('alerts-internal-tabs', 'value')],
+    [State('alerts-url-seed', 'data')],
 )
-def render_tab_content(active_tab):
+def render_tab_content(active_tab, url_seed):
     """
     Render content for selected internal tab.
     
@@ -178,7 +179,10 @@ def render_tab_content(active_tab):
         Tab content layout
     """
     if active_tab == 'general':
-        return create_general_layout()
+        # The URL's `?unit=` filters only the General view the page first renders (no trigger yet):
+        # switching tabs later never puts it back, so the user's own changes to the filters stay.
+        unit = (url_seed or {}).get('unit') if callback_context.triggered_id is None else None
+        return create_general_layout(initial_filters={'unit': [unit]} if unit else None)
     elif active_tab == 'detail':
         return create_detail_layout()
     else:
@@ -856,6 +860,20 @@ def navigate_to_detail_from_general(n_clicks, selected_alert_id):
         'target_tab': 'detail',
         'alert_id': selected_alert_id
     }
+
+
+@callback(
+    Output('alerts-navigation-state', 'data', allow_duplicate=True),
+    Input('alerts-url-seed', 'data'),
+    prevent_initial_call='initial_duplicate',
+)
+def open_alert_from_url(url_seed):
+    """`?alert=<id>`: ask for that alert's detail the way the General table's "Ver detalle de la
+    alerta" does, through the navigation store the detail view already listens to."""
+    alert_id = (url_seed or {}).get('alert')
+    if not alert_id:
+        raise PreventUpdate
+    return {'target_tab': 'detail', 'alert_id': alert_id}
 
 
 @callback(

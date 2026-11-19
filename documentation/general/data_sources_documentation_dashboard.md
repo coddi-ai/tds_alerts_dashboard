@@ -12,7 +12,7 @@ reference the "Fuentes de Datos" popover is built from
   was first built for the five pages that had the strip (Resumen General, Alertas, Telemetría,
   Aceite, Predictivo Motor/Transmisión) and is now on **every page with data sources**: Informe de
   Confiabilidad, Campbell AI, Troubleshooting, Reportabilidad, Informe preliminar de falla,
-  Validación y Seguimiento de Avisos and Administración (Registro de Usuarios, Mailing). The
+  Validación y Seguimiento de Avisos and Administración (Actividad de Usuarios, Mailing). The
   `/admin` landing page is a placeholder with no data, so it has none. The tables of sections 6, 8,
   9 and 10 are exactly the lists the popovers show.
 
@@ -372,8 +372,9 @@ Read-only follow-up of the same store: *Avisos del ERP* only (total 1).
 ## 10. Administración
 
 - **`/admin`** is a placeholder ("en construcción"): no data, **no popover**.
-- **`/admin/registro-usuarios`** (Registro de Usuarios, overview view). Reads login events and the
-  registry only through `src/auth_events/data_access.py` (`auth_events/raw|daily/`,
+- **`/admin/actividad-usuarios`** (Actividad de Usuarios, overview view; renamed from
+  `/admin/registro-usuarios`, which redirects). Reads login and page-view events and the
+  registries only through `src/auth_events/data_access.py` (`auth_events/raw|daily/`,
   `auth_registry/*.json` in S3 under `MultiTechnique Alerts/auxiliar/`, or `AUTH_EVENTS_LOCAL_DIR`).
   Source: *Eventos de Acceso*, Disponible when a backend is configured (`get_storage()` is not
   `None`); it does not depend on the client; no date. Total 1.

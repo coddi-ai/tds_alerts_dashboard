@@ -25,10 +25,13 @@ COMPONENT_ICONS = {
 }
 
 
-def layout(client: str, component: str):
+def layout(client: str, component: str, unit: str | None = None):
     """
     Render the unified predictive page for a specific component.
     Contains internal tabs: Resumen (overview) and Evidencia (evidence).
+
+    With `unit` the page opens on Evidencia with that unit selected (the drill-down of
+    Resumen > Unidad); the tab switcher and the unit selector then behave as usual.
     """
     components = _discover_components(client)
     filepath = components.get(component)
@@ -43,11 +46,13 @@ def layout(client: str, component: str):
                    className="text-muted", style={"padding": "40px", "textAlign": "center"})
         ])
 
-    # Load overview data
-    df_ov, df_latest, prev_ranking = _load_overview_data(filepath, component, client)
+    # Load overview data (Evidencia, when asked for, is rendered by the tab callback instead)
+    df_ov, df_latest, prev_ranking = (None, None, None) if unit else _load_overview_data(filepath, component, client)
 
     # Build overview content
-    if df_latest is not None and not df_latest.empty:
+    if unit:
+        overview_content = None
+    elif df_latest is not None and not df_latest.empty:
         overview_content = _render_component_overview(df_latest, prev_ranking, component, client, df=df_ov)
     else:
         overview_content = html.P(t("tab_predictive_component.no_hay_datos_de_resumen_para", component=component),
@@ -119,7 +124,7 @@ def layout(client: str, component: str):
         # Internal tabs: Resumen / Evidencia
         dcc.Tabs(
             id='predictive-component-internal-tabs',
-            value='resumen',
+            value='evidencia' if unit else 'resumen',
             children=[
                 dcc.Tab(label=t("tab_predictive_component.resumen"), value='resumen',
                         className='custom-tab pred-tab', selected_className='custom-tab--selected pred-tab--selected'),
@@ -136,7 +141,7 @@ def layout(client: str, component: str):
         dcc.Store(id="predictive-ev-client-store", data=client),
         # Unit shown in Evidence: set by a click in Resumen's scatter/table and
         # mirrored from Evidence's own unit selector, so it survives tab switches.
-        dcc.Store(id="predictive-selected-unit-store", data=None),
+        dcc.Store(id="predictive-selected-unit-store", data=unit),
         dcc.Store(id="predictive-ev-component-store", data=component),
         # Store the pre-rendered overview so the callback can restore it without re-computing
         dcc.Store(id="predictive-overview-cache", data="cached"),

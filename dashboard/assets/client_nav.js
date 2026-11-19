@@ -1,22 +1,10 @@
 /**
- * Client-side navigation for controls that are not links.
+ * Client-side keyboard and focus handling for tabs (role="tablist").
  *
- * Dash Pages routes without a reload when a dcc.Link changes the URL. A native <select>
- * (the Unit Detail's "Cambiar unidad") cannot be a link, so it does what dcc.Link does:
- * push the new URL and tell Dash's Location component about it. The listener is
- * delegated on document, so it keeps working when the page content is re-rendered.
+ * Dash re-renders a tab's panel through a callback; the handlers are delegated on document, so
+ * they keep working when the page content is re-rendered.
  */
 (function () {
-    document.addEventListener('change', function (e) {
-        var select = e.target.closest ? e.target.closest('select[data-unit-nav]') : null;
-        if (!select || !select.value) {
-            return;
-        }
-        window.history.pushState({}, '', select.value);
-        window.dispatchEvent(new CustomEvent('_dashprivate_pushstate'));
-        window.scrollTo(0, 0);
-    });
-
     // Tabs (role="tablist"): the arrow keys, Home and End move between the tabs and select
     // the one they land on, as the WAI-ARIA tab pattern asks. Enter / Space select natively.
     document.addEventListener('keydown', function (e) {

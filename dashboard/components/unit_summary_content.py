@@ -23,9 +23,13 @@ of a chart (Functional Rules: distinct from an omitted, inapplicable
 technique).
 
 Each technique keeps its own "recent" window rather than a forced shared one
-(§3.5) - Alerts standardizes on 30 days, Telemetry/Oil/Predictivo keep their
+(§3.5) - Alerts looks at the last 12 weeks, Telemetry/Oil/Predictivo keep their
 existing "most recent week/sample/run" convention - and every section labels its
 own reference period on screen.
+
+Alertas, Tribología and Predictivo each carry a button to the full tab of that technique, opened
+on this unit (and, for Tribología and Predictivo, the row's component): a plain link, built by the
+URL helpers in dashboard/services_registry.py, that the target page reads when it opens.
 
 Every status (tile, card chip, section divider) is read from `technique_status`, passed
 in by the caller (unit_summary.py) from `fleet_overview.get_unit_snapshot()` - the same
@@ -48,6 +52,8 @@ from dash import dcc, html
 from config.estado_rules import priority_of, staleness_floor_limits
 from config.settings import get_settings
 from dashboard.components.alerts_charts import create_alerts_per_week_chart
+from dashboard.components.alerts_report import prepare_alert_rows
+from dashboard.components.alerts_tables import create_unit_alerts_table
 from dashboard.components.fleet_overview import (
     applicable_techniques,
     enabled_predictive_components,
@@ -59,6 +65,14 @@ from dashboard.components.labels import display_component_name, display_system_n
 from dashboard.components.oil_machine_detail import OilComponentRow, unit_oil_components
 from dashboard.components.predictive_state import STATE_COLORS
 from dashboard.components.status_chip import canonical_status, status_chip
+from dashboard.services_registry import (
+    alert_detail_path,
+    alerts_unit_path,
+    oil_evidence_path,
+    predictive_detail_path,
+    relative_path,
+)
+from dashboard.tabs.tab_alerts_general import build_source_legend
 from dashboard.tabs.tab_predictive_overview import (
     CHART_ASPECT_CLASS,
     load_status_frame,
@@ -74,7 +88,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-ALERTS_WINDOW_DAYS = 30  # §3.5: Alerts standardized on 30 days.
+ALERTS_WINDOW_WEEKS = 12  # The Alertas section: this many weekly buckets, the last one the current week.
 
 # 09_unit_summary_monitoreo_grid_and_oil_overview.md: with all 4 Monitoreo
 # cards present they form a 2x2 grid. The layout for 1-3 cards is NOT yet
@@ -191,7 +205,8 @@ def _fallback_note(reference: pd.Timestamp) -> html.Span:
 
 def _section_card(title: str, period_label: str, body, note=None, icon: str = None,
                    period_icon: str = "fas fa-calendar-alt", status: str = None,
-                   section_id: str = None, summary: str = None, freshness: str = None) -> dbc.Card:
+                   section_id: str = None, summary: str = None, freshness: str = None,
+                   action=None) -> dbc.Card:
     """Standard card structure (ui_notes.md "Card Components"): CardHeader
     with an H5 + icon on a light background, shadow-sm on the card itself.
     The reference-period label + optional stale-data note sit at the top of
@@ -205,7 +220,9 @@ def _section_card(title: str, period_label: str, body, note=None, icon: str = No
     read differently between them. `summary` is a short line next to it (e.g. "4 en
     Alerta · 6 Normal"); `section_id` is the anchor the technique's status tile links to;
     `freshness` is the "Datos al [fecha] · hace N días" line of a card that shows technique
-    data. A card is as tall as its content: only the status tiles are forced to equal height."""
+    data. `action`, when given, sits at the right end of the header (the "Ver en ..." link to the
+    technique's own tab). A card is as tall as its content: only the status tiles are forced to
+    equal height."""
     icon = icon or _section_icon(title)
     header_children = [
         html.H5([html.I(className=f"{icon} me-2"), title], className="mb-0 d-inline-block me-2"),
@@ -214,6 +231,8 @@ def _section_card(title: str, period_label: str, body, note=None, icon: str = No
         header_children.append(status_badge(status))
     if summary:
         header_children.append(html.Span(summary, className="unit-muted small unit-card-summary"))
+    if action is not None:
+        header_children.append(html.Div(action, className="unit-card-action"))
     period_row = [
         html.I(className=f"{period_icon} me-1"),
         html.Span(period_label, className="unit-muted small"),
@@ -235,6 +254,17 @@ def _section_card(title: str, period_label: str, body, note=None, icon: str = No
             body,
         ]),
     ], className="shadow-sm mb-0 unit-card", **({"id": section_id} if section_id else {}))
+
+
+def _redirect_button(label: str, href: str, context: str = None) -> dcc.Link:
+    """A "Ver en <técnica>" link to a technique's own tab: a real `<a href>` (a `dcc.Link`, so it
+    goes through Dash's client-side router) styled as a small button. `context` (the component,
+    when a card has several such links) is added to the link's name for screen readers only."""
+    return dcc.Link(
+        [label, html.Span(f" ({context})", className="visually-hidden") if context else None,
+         html.I(className="fas fa-arrow-right ms-2", **{"aria-hidden": "true"})],
+        href=relative_path(href), className="unit-btn unit-btn--sm",
+    )
 
 
 def _empty_body(message: str) -> html.Div:
@@ -338,40 +368,101 @@ def _freshness_caption(data_date: Optional[pd.Timestamp]) -> Optional[str]:
 
 # ── Alerts ───────────────────────────────────────────────────────────────────
 
-def _alerts_section(client: str, unit: str, status: str = None) -> dbc.Card:
-    # The window is anchored on the feed's newest alert (see `_reference_time`), which is read
-    # from the newest weekly partition; only the weeks the 30-day window touches are then loaded.
+ALERTS_TABS_ID = "unit-alerts-tabs"
+ALERTS_PANEL_ID = "unit-alerts-panel"
+ALERTS_TAB_SUMMARY = "summary"
+ALERTS_TAB_LIST = "list"
+
+
+def _alerts_window(client: str, unit: str) -> tuple:
+    """`(unit_df, first_week, last_week, reference, is_fallback)`: the unit's alerts of the last
+    `ALERTS_WINDOW_WEEKS` weeks - the weekly buckets of the Alertas chart (Monday-based weeks), the
+    last one being the week of `reference` - and the first and last of those weeks.
+
+    The window is anchored on the feed's newest alert (see `_reference_time`), which is read from the
+    newest weekly partition; only the weeks it touches are then loaded. The chart and the list
+    are both built from this one frame, so the list's count is the chart's total."""
     latest = latest_alert_timestamp(client)
     reference, is_fallback = _reference_time(latest)
-
-    period_label = _t("unit_summary_content.ultimos_dias", ALERTS_WINDOW_DAYS=ALERTS_WINDOW_DAYS)
-    note = _fallback_note(reference) if is_fallback else None
-
+    last_week = reference.to_period("W-SUN").start_time
+    first_week = last_week - pd.Timedelta(weeks=ALERTS_WINDOW_WEEKS - 1)
     unit_df = pd.DataFrame()
     if latest is not None:
-        cutoff = reference - pd.Timedelta(days=ALERTS_WINDOW_DAYS)
-        df = load_alerts_since(client, cutoff)
+        df = load_alerts_since(client, first_week)
         if "UnitId" in df.columns:
             timestamps = pd.to_datetime(df["Timestamp"], errors="coerce")
-            unit_df = df[(df["UnitId"].astype(str) == unit) & (timestamps >= cutoff)]
+            in_window = (timestamps >= first_week) & (timestamps < last_week + pd.Timedelta(weeks=1))
+            unit_df = df[(df["UnitId"].astype(str) == unit) & in_window]
+    return unit_df, first_week, last_week, reference, is_fallback
 
+
+def _alerts_empty_message(reference: pd.Timestamp, is_fallback: bool) -> str:
+    """"Sin alertas registradas para esta unidad en las últimas 12 semanas." On a stale feed the window
+    is anchored to `reference`, so the message names that same date as the banner above it -
+    otherwise it would read as a claim about today that the banner contradicts."""
+    if is_fallback:
+        return _t("unit_summary_content.sin_alertas_unidad_referencia", weeks=ALERTS_WINDOW_WEEKS,
+                  reference_strftime=reference.strftime("%d/%m/%Y"))
+    return _t("unit_summary_content.sin_alertas_unidad", weeks=ALERTS_WINDOW_WEEKS)
+
+
+def _alerts_summary_panel(unit_df: pd.DataFrame, first_week, last_week, reference, is_fallback) -> html.Div:
+    """"Resumen": the weekly chart. Weeks without alerts stay on the axis and read 0."""
     if unit_df.empty:
-        # On a stale feed the window is anchored to `reference`, so the empty
-        # state must name that same date as the banner above it - otherwise
-        # "no alerts in the last 30 days" reads as a claim about today that the
-        # banner contradicts (10_...md Required Changes #3).
-        if is_fallback:
-            message = _t(
-                "unit_summary_content.sin_alertas_registradas_con_referencia",
-                ALERTS_WINDOW_DAYS=ALERTS_WINDOW_DAYS, reference_strftime=reference.strftime('%d/%m/%Y'),
-            )
-        else:
-            message = _t("unit_summary_content.sin_alertas_registradas_en_los_ultimos", ALERTS_WINDOW_DAYS=ALERTS_WINDOW_DAYS)
-        body = _empty_body(message)
-    else:
-        body = dcc.Graph(figure=create_alerts_per_week_chart(unit_df), config={"displayModeBar": False})
-    return _section_card(_t("unit_summary_content.section_alerts"), period_label, body, note=note, status=status,
-                         section_id=SECTION_IDS["alerts"], freshness=_freshness_caption(_alerts_data_date(client)))
+        return _empty_body(_alerts_empty_message(reference, is_fallback))
+    figure = create_alerts_per_week_chart(unit_df, week_range=(first_week, last_week), mark_empty_weeks=True)
+    return html.Div(dcc.Graph(figure=figure, config={"displayModeBar": False}))
+
+
+def _alerts_list_panel(unit_df: pd.DataFrame, reference, is_fallback) -> html.Div:
+    """"Listado de Alertas": the unit's alerts of the window, in the Monitoreo > Alertas format;
+    an explanatory message instead of an empty table when there are none."""
+    if unit_df.empty:
+        return _empty_body(_alerts_empty_message(reference, is_fallback))
+    return html.Div([
+        build_source_legend(),
+        create_unit_alerts_table(prepare_alert_rows(unit_df), lambda alert_id: relative_path(alert_detail_path(alert_id))),
+    ])
+
+
+def alerts_panel(client: str, unit: str, tab: str) -> html.Div:
+    """The content of the Alertas section's sub-tab `tab` (`ALERTS_TAB_SUMMARY` / `ALERTS_TAB_LIST`)."""
+    unit_df, first_week, last_week, reference, is_fallback = _alerts_window(client, unit)
+    if tab == ALERTS_TAB_LIST:
+        return _alerts_list_panel(unit_df, reference, is_fallback)
+    return _alerts_summary_panel(unit_df, first_week, last_week, reference, is_fallback)
+
+
+def _alerts_tabs(count: int) -> dcc.Tabs:
+    """Resumen (the default) and Listado de Alertas with the number of alerts in the window. The
+    indicator sits under its own label (`pred-tab`, ui_notes_improved.md §8)."""
+    def tab(label: str, value: str) -> dcc.Tab:
+        return dcc.Tab(label=label, value=value, className="custom-tab pred-tab",
+                       selected_className="custom-tab--selected pred-tab--selected")
+
+    return dcc.Tabs(
+        id=ALERTS_TABS_ID, value=ALERTS_TAB_SUMMARY, className="mb-3",
+        children=[
+            tab(_t("unit_summary_content.alerts_tab_summary"), ALERTS_TAB_SUMMARY),
+            tab(_t("unit_summary_content.alerts_tab_list", count=count), ALERTS_TAB_LIST),
+        ],
+    )
+
+
+def _alerts_section(client: str, unit: str, status: str = None) -> dbc.Card:
+    unit_df, first_week, last_week, reference, is_fallback = _alerts_window(client, unit)
+    period_label = _t("unit_summary_content.ultimas_semanas", weeks=ALERTS_WINDOW_WEEKS)
+    note = _fallback_note(reference) if is_fallback else None
+    body = html.Div([
+        _alerts_tabs(len(unit_df)),
+        html.Div(_alerts_summary_panel(unit_df, first_week, last_week, reference, is_fallback),
+                 id=ALERTS_PANEL_ID, role="tabpanel"),
+    ])
+    return _section_card(
+        _t("unit_summary_content.section_alerts"), period_label, body, note=note, status=status,
+        section_id=SECTION_IDS["alerts"], freshness=_freshness_caption(_alerts_data_date(client)),
+        action=_redirect_button(_t("unit_summary_content.ver_en_alertas"), alerts_unit_path(unit)),
+    )
 
 
 # ── Telemetry ────────────────────────────────────────────────────────────────
@@ -465,6 +556,16 @@ def _diagnosis_toggle(row: OilComponentRow) -> html.Details:
     )
 
 
+def _oil_link(unit: str, row: OilComponentRow):
+    """The row's "Ver en Tribología": that component's report, on its latest sample."""
+    if not row.raw_component:
+        return None
+    return _redirect_button(
+        _t("unit_summary_content.ver_en_tribologia"), oil_evidence_path(unit, row.raw_component),
+        context=row.component,
+    )
+
+
 def _oil_section(client: str, unit: str, status: str = None) -> dbc.Card:
     components = unit_oil_components(client, unit)
 
@@ -476,15 +577,16 @@ def _oil_section(client: str, unit: str, status: str = None) -> dbc.Card:
         body = _empty_body(_t("unit_summary_content.sin_muestras_de_aceite_registradas_para"))
     else:
         rows = [
-            (c.status, [c.component, status_chip(c.status), c.anomaly or "—", _diagnosis_toggle(c)])
+            (c.status, [c.component, status_chip(c.status), c.anomaly or "—", _diagnosis_toggle(c), _oil_link(unit, c)])
             for c in components
         ]
         body = _rows_by_severity(
             [
                 _t("unit_summary_content.col_component"), _t("fleet_overview.col_status"),
                 _t("oil_machine_detail.anomalia"), _t("unit_summary_content.col_diagnosis"),
+                html.Span(_t("unit_summary_content.col_actions"), className="visually-hidden"),
             ],
-            ["210px", "110px", "190px", "auto"], rows,
+            ["210px", "110px", "190px", "auto", "180px"], rows,
         )
         summary = _count_summary([c.status for c in components])
     return _section_card(_t("unit_summary_content.section_oil"), period_label, body, status=status,
@@ -526,6 +628,14 @@ def _unit_row_in(latest: pd.DataFrame, unit: str) -> Optional[pd.Series]:
     return None if rows.empty else rows.iloc[0]
 
 
+def _predictive_link(component: str, unit: str):
+    """The card header's "Ver en Predictivo": the component's page, on its Evidencia tab for this unit."""
+    return _redirect_button(
+        _t("unit_summary_content.ver_en_predictivo"), predictive_detail_path(component, unit),
+        context=display_component_name(component),
+    )
+
+
 def _predictive_card(client: str, unit: str, component: str) -> dbc.Card:
     """One predictive component's card. The two charts come from the same code and the same
     per-unit frame as the Predictivo tab: the fleet scatter is `short_view_chart` (the Short
@@ -553,10 +663,13 @@ def _predictive_card(client: str, unit: str, component: str) -> dbc.Card:
     if status is None or status == "Sin Datos":
         return _section_card(title, period_label, _empty_body(
             _t("unit_summary_content.sin_datos_de_modelo_para_esta")
-        ), icon=_PREDICTIVE_ICON, status="Sin Datos", freshness=freshness)
+        ), icon=_PREDICTIVE_ICON, status="Sin Datos", freshness=freshness,
+            action=_predictive_link(component, unit))
 
     latest = load_status_frame(client, component)
     row = _unit_row_in(latest, unit) if latest is not None else None
+    # The Predictivo tab knows the unit by its own id (zero-padded ids included).
+    action = _predictive_link(component, row["Unit"] if row is not None else unit)
 
     # "Ranking hoy": the latest daily value of the predictive data, "—" when there is none; the
     # same label for every component. (The status above may be worsened by stale data; the
@@ -584,7 +697,7 @@ def _predictive_card(client: str, unit: str, component: str) -> dbc.Card:
             ]),
         ], className="unit-predictive-charts")
     return _section_card(title, period_label, html.Div([ranking_header, comparison]), icon=_PREDICTIVE_ICON,
-                         status=status, freshness=freshness)
+                         status=status, freshness=freshness, action=action)
 
 
 PREDICTIVE_TAB_TYPE = "unit-predictive-tab"
@@ -887,8 +1000,8 @@ def build_unit_summary_content(client: str, unit: str, technique_status: dict = 
        Predictivo section (fleet-comparison per sub-model, stacked vertically when
        there's more than one), stacked one above the other on a single vertical scroll
        instead of behind tabs (07_...md Required Changes #2/#4). With all 4 Monitoreo
-       cards present they form a 2x2 grid, Telemetría + Alertas on top, Tribología + the
-       Pareto below (09_...md).
+       cards present they were a 2x2 grid (09_...md); in the master-detail layout each card
+       now takes the width of the detail panel.
 
     A technique inapplicable for this client contributes no card at all
     (Required Changes #4 of 03_unit_summary_content.md, unchanged here).
@@ -898,15 +1011,14 @@ def build_unit_summary_content(client: str, unit: str, technique_status: dict = 
     technique_status = technique_status or {}
     applicable = applicable_techniques(client)
 
-    # Telemetría and Alertas have similar content (a few status rows, a short chart), so they
-    # sit side by side; Tribología and the Pareto are wide and each take the full width. No
-    # card is stretched to match a neighbor's height.
-    pair = []
+    # Every Monitoreo card takes the full width of the detail panel, one under the other: Alertas
+    # carries a table of its own now, and the panel is narrower than the page it used to be.
+    # No card is stretched to match a neighbor's height.
+    monitoreo_cards = []
     if applicable.get("telemetry"):
-        pair.append(_telemetry_section(client, unit, technique_status.get("telemetry")))
+        monitoreo_cards.append(_telemetry_section(client, unit, technique_status.get("telemetry")))
     if applicable.get("alerts"):
-        pair.append(_alerts_section(client, unit, technique_status.get("alerts")))
-    monitoreo_cards = [html.Div(pair, className="unit-pair")] if pair else []
+        monitoreo_cards.append(_alerts_section(client, unit, technique_status.get("alerts")))
     if applicable.get("oil"):
         monitoreo_cards.append(_oil_section(client, unit, technique_status.get("oil")))
     if applicable.get("maintenance"):

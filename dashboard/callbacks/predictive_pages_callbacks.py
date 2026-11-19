@@ -33,7 +33,7 @@ def _resolve_client(selected_client, user_data) -> str:
     return settings.clients[0].lower() if settings.clients else 'cda'
 
 
-def _render_component(client: str, component: str):
+def _render_component(client: str, component: str, unit=None):
     if not is_service_enabled(client, f'predictive-{component}'):
         logger.warning(f"Predictive module accessed by client without access: {client}")
         return create_placeholder_content(t("predictive.unavailable_for_client"))
@@ -66,7 +66,7 @@ def _render_component(client: str, component: str):
         ])
 
     from dashboard.tabs.tab_predictive_component import layout as predictive_component_layout
-    return predictive_component_layout(client, component)
+    return predictive_component_layout(client, component, unit=unit)
 
 
 def register_predictive_pages_callbacks(app: dash.Dash) -> None:
@@ -81,8 +81,13 @@ def register_predictive_pages_callbacks(app: dash.Dash) -> None:
         Output({'type': 'predictive-page-content', 'component': ALL}, 'children'),
         [Input('client-selector', 'value'),
          Input('user-info-store', 'data')],
-        [State({'type': 'predictive-page-content', 'component': ALL}, 'id')],
+        [State({'type': 'predictive-page-content', 'component': ALL}, 'id'),
+         State({'type': 'predictive-url-seed', 'component': ALL}, 'data'),
+         State({'type': 'predictive-url-seed', 'component': ALL}, 'id')],
     )
-    def render_predictive_component(selected_client, user_data, container_ids):
+    def render_predictive_component(selected_client, user_data, container_ids, seeds, seed_ids):
         client = _resolve_client(selected_client, user_data)
-        return [_render_component(client, container_id['component']) for container_id in container_ids]
+        # `?unit=` of the URL, per component page (see dashboard/pages/predictive_*.py).
+        units = {seed_id['component']: seed for seed_id, seed in zip(seed_ids or [], seeds or [])}
+        return [_render_component(client, container_id['component'], units.get(container_id['component']))
+                for container_id in container_ids]

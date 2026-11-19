@@ -687,8 +687,50 @@
     text-decoration: underline;
 }
 
-.fleet-table-row:hover td {
+/* The whole row is the link's click target: the link's ::after covers the row (the row is
+   its containing block). Status chips sit above it and keep opening their explanation. */
+.fleet-table-row {
+    position: relative;
+    cursor: pointer;
+}
+
+.fleet-table-row .fleet-unit-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+}
+
+.fleet-table-row .chip-button {
+    position: relative;
+    z-index: 1;
+}
+
+.fleet-table-row:hover td,
+.fleet-table-row:focus-within td {
     background-color: rgba(0, 0, 0, 0.035);
+}
+
+/* The row shows keyboard focus as a ring around itself, not just around the unit id. */
+.fleet-table-row .fleet-unit-link:focus-visible {
+    outline: none;
+}
+
+.fleet-table-row .fleet-unit-link:focus-visible::after {
+    outline: 2px solid var(--blue, #2563eb);
+    outline-offset: -2px;
+}
+
+/* Trailing "Ver Detalle" cue. */
+.fleet-table td.fleet-table-cue {
+    color: var(--text-muted, #6c757d);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: right;
+}
+
+.fleet-table-row:hover td.fleet-table-cue,
+.fleet-table-row:focus-within td.fleet-table-cue {
+    color: var(--blue-text, #1d4ed8);
 }
 
 /* "Mostrar siguientes N unidades" - loads the band's next page of rows. */

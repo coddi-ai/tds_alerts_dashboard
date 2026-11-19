@@ -2,6 +2,10 @@
 
 Both are maintained by hand (edit and upload). The login handler and the dashboard read them
 through a small in-memory cache; a failed reload keeps the last good copy.
+
+`auth_registry/pages.json` (TR-6 item 2) is the third file: the page registry that resolves a
+page view's `(path, tab)` to a stable `page_id` at write time and to a `display_name` at read time.
+It has its own cache, so a missing or broken pages file never affects the client/user registry.
 """
 
 import json
@@ -48,6 +52,88 @@ class Registry:
 
     def internal_users(self) -> list[dict]:
         return [u for u in self.users if u["user_type"] == "internal"]
+
+
+def normalize_path(raw: str | None) -> str:
+    """URL pathname without query string, fragment or trailing slash; always with a leading slash."""
+    path = (raw or "").split("#", 1)[0].split("?", 1)[0].strip()
+    path = "/" + path.strip("/")
+    return path
+
+
+def _segments(path: str) -> list[str]:
+    return [seg for seg in path.split("/") if seg]
+
+
+def template_matches(template: str, path: str) -> bool:
+    """`/predictive/<component>` matches `/predictive/motor`: `<name>` stands for one segment."""
+    want, got = _segments(template), _segments(path)
+    if len(want) != len(got):
+        return False
+    return all((w.startswith("<") and w.endswith(">")) or w == g for w, g in zip(want, got))
+
+
+@dataclass(frozen=True)
+class PagesRegistry:
+    pages: tuple[dict, ...] = ()
+    loaded_at: float = field(default_factory=time.time)
+
+    def match(self, path: str, tab: str | None) -> dict | None:
+        """The entry for `(path, tab)`; an exact path wins over a `<param>` template."""
+        path = normalize_path(path)
+        templates = []
+        for entry in self.pages:
+            if entry["tab"] != tab:
+                continue
+            if entry["path"] == path:
+                return entry
+            if "<" in entry["path"] and template_matches(entry["path"], path):
+                templates.append(entry)
+        return templates[0] if templates else None
+
+    def by_id(self, page_id: str | None) -> dict | None:
+        return next((p for p in self.pages if p["page_id"] == page_id), None)
+
+    def display_name(self, page_id: str | None, path: str | None = None, tab: str | None = None) -> str:
+        """The registry's display name; an unregistered page shows its path (plus ` › <tab>`)."""
+        entry = self.by_id(page_id) if page_id and page_id != "unregistered" else None
+        if entry is not None:
+            return entry["display_name"]
+        return unregistered_label(path, tab)
+
+
+def unregistered_label(path: str | None, tab: str | None) -> str:
+    label = normalize_path(path) if path else "—"
+    return f"{label} › {tab}" if tab else label
+
+
+def parse_pages(raw: bytes) -> PagesRegistry:
+    items = json.loads(raw.decode("utf-8"))
+    if not isinstance(items, list):
+        raise ValueError("pages.json must contain a JSON array")
+    pages, seen = [], set()
+    for item in items:
+        if (not isinstance(item, dict) or not item.get("page_id") or not item.get("path")
+                or not isinstance(item.get("path"), str)):
+            raise ValueError(f"invalid page entry: {item!r}")
+        tab = item.get("tab")
+        if tab is not None and not isinstance(tab, str):
+            raise ValueError(f"invalid page entry (tab must be a string or null): {item!r}")
+        path = normalize_path(item["path"])
+        if (path, tab) in seen:
+            logger.warning("pages.json lists (%s, %s) twice; the first entry wins", path, tab)
+            continue
+        seen.add((path, tab))
+        pages.append({"page_id": item["page_id"], "display_name": item.get("display_name") or item["page_id"],
+                      "path": path, "tab": tab})
+    return PagesRegistry(pages=tuple(pages), loaded_at=time.time())
+
+
+def _load_pages() -> PagesRegistry:
+    storage = get_storage()
+    if storage is None:
+        raise RegistryUnavailable("no storage configured")
+    return parse_pages(storage.get(settings.REGISTRY_PAGES_KEY))
 
 
 def parse_registry(clients_raw: bytes, users_raw: bytes) -> Registry:
@@ -128,14 +214,21 @@ class RegistryCache:
 
 
 _cache = RegistryCache()
+_pages_cache = RegistryCache(loader=_load_pages)
 
 
 def get_registry_or_none() -> Registry | None:
     return _cache.get()
 
 
+def get_pages_or_none() -> PagesRegistry | None:
+    """The cached page registry; None when it has never loaded (callers then treat every page as unregistered)."""
+    return _pages_cache.get()
+
+
 def reset_registry_cache() -> None:
     _cache.clear()
+    _pages_cache.clear()
 
 
 def resolve_user(registry: Registry | None, username: str) -> tuple[str, str | None]:

@@ -149,11 +149,20 @@ def _build_source_legend() -> html.Div:
     )
 
 
-def create_layout() -> html.Div:
+def build_source_legend() -> html.Div:
+    """Public: the Fuente color legend, shared by every alerts table (Monitoreo > Alertas and
+    the unit's own list in Resumen > Unidad)."""
+    return _build_source_legend()
+
+
+def create_layout(initial_filters: dict | None = None) -> html.Div:
+    """The General view. `initial_filters` is the shared filter state it opens with (for example
+    `{"unit": ["CA-83"]}`): the controls and the "Filtros activos" bar show it like any filter the
+    user sets, and it can be changed or cleared the same way."""
     start_date, end_date = default_alert_dates()
     return html.Div([
         dcc.Store(id="alerts-selected-alert-id"),
-        dcc.Store(id="alerts-general-active-filters", data={}),
+        dcc.Store(id="alerts-general-active-filters", data=dict(initial_filters or {})),
         html.Div(id="alerts-summary-stats", className="mb-3"),
         dbc.Card([
             dbc.CardBody([

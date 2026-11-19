@@ -18,8 +18,11 @@ from dash.exceptions import PreventUpdate
 from dashboard.components.fleet_overview import enabled_predictive_components
 from dashboard.components.unit_summary import build_unit_summary
 from dashboard.components.unit_summary_content import (
+    ALERTS_PANEL_ID,
+    ALERTS_TABS_ID,
     PREDICTIVE_PANEL_ID,
     PREDICTIVE_TAB_TYPE,
+    alerts_panel,
     predictive_card,
     predictive_tab_states,
 )
@@ -61,3 +64,16 @@ def register_unit_summary_callbacks(app):
             [state[1] for state in states],
             [state[2] for state in states],
         )
+
+    @callback(
+        Output(ALERTS_PANEL_ID, "children"),
+        Input(ALERTS_TABS_ID, "value"),
+        [State("client-selector", "value"), State("unit-summary-current-unit", "data")],
+        prevent_initial_call=True,
+    )
+    def select_alerts_tab(tab, client, unit_id):
+        """A sub-tab of the Alertas section was chosen (Resumen / Listado de Alertas): show its
+        panel, built from the same unit and window as the other one."""
+        if not tab or not client or not unit_id:
+            raise PreventUpdate
+        return alerts_panel(client, unit_id, tab)

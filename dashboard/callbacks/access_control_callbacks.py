@@ -24,7 +24,9 @@ from dash import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from dashboard.auth import allowed_clients, is_admin
-from dashboard.services_registry import first_enabled_service_path, resolve_service_id_for_pathname
+from dashboard.services_registry import (
+    LEGACY_USER_ACTIVITY_PATH, NAV_PATHS, first_enabled_service_path, resolve_service_id_for_pathname,
+)
 from config.client_services import is_service_dummy, is_service_enabled
 from src.utils.logger import get_logger
 
@@ -66,6 +68,10 @@ def register_access_control_callbacks(app: dash.Dash) -> None:
             if not is_admin(user_data):
                 logger.warning(f"Blocked non-admin access to '{rel_path}' for user {user_data.get('username')}")
                 return _fallback()
+            if rel_path == LEGACY_USER_ACTIVITY_PATH.strip("/"):
+                # Renamed section: only the pathname changes, so the Location keeps its
+                # `search` and bookmarks such as ?client=cda&period=7 survive the redirect.
+                return dash.get_relative_path(NAV_PATHS["admin-user-registry"])
             raise PreventUpdate
 
         service_id = resolve_service_id_for_pathname(rel_path)

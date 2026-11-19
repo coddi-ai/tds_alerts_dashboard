@@ -47,10 +47,11 @@ def write_login_event(username: str, moment: datetime, event_id: str, *,
     event = None
     try:
         user_type, client_id = resolve_user(get_registry_or_none(), username)
-        event = validate_event(build_event(
+        event = build_event(
             username, user_type, client_id, settings.current_environment(),
             moment=moment, event_id=event_id,
-        ))
+        )
+        validate_event(event)  # a login is stored exactly as before: the nine v1 fields
         storage = storage if storage is not None else get_storage()
         if storage is None:
             logger.warning("Login event not stored (no storage configured): %s", json.dumps(event, ensure_ascii=False))

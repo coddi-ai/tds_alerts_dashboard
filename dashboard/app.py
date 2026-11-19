@@ -83,6 +83,9 @@ from dashboard.callbacks.predictive_pages_callbacks import register_predictive_p
 from dashboard.callbacks.admin_callbacks import register_admin_callbacks
 from dashboard.callbacks.mailing_callbacks import register_mailing_callbacks
 
+# Page-view capture (TR-6): Flask hook on the callback endpoint; inert unless AUTH_EVENTS_PAGE_VIEWS is on
+from dashboard.page_view_capture import register_page_view_capture
+
 # Import the centralized route guard (role + client-service route protection)
 from dashboard.callbacks.access_control_callbacks import register_access_control_callbacks
 
@@ -248,6 +251,8 @@ register_campbell_ai_stream(app)
 register_admin_callbacks(app)
 register_mailing_callbacks(app)
 register_access_control_callbacks(app)
+# One page_view event per page/tab opening of a signed-in user, buffered and written in batches.
+register_page_view_capture(app)
 register_sidebar_callbacks(app)
 register_troubleshooting_callbacks(app)
 # Flask route {PATH_PREFIX}handoff/troubleshooting: signs the agent token on click.

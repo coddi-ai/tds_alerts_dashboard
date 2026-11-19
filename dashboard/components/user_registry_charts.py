@@ -1,4 +1,4 @@
-"""Charts of the admin "Registro de Usuarios" views (daily bars, stacked by user).
+"""Charts of the admin "Actividad de Usuarios" views (daily bars, stacked by user).
 
 Neutral blue palette only: these are activity counts, not severity scores.
 """
@@ -73,14 +73,26 @@ def _style(fig: go.Figure, buckets: list[Bucket], maximum: int) -> None:
     )
 
 
-def create_daily_chart(buckets: list[Bucket], counts: list[int]) -> go.Figure:
-    """One bar per day (or per Monday-Sunday week above 90 days), a single series."""
+METRICS = ("views", "logins")
+
+
+def _unit(metric: str) -> str:
+    return t("user_registry.chart.views_unit" if metric == "views" else "user_registry.chart.logins_unit")
+
+
+def _series_name(metric: str) -> str:
+    return t("user_registry.chart.views_series" if metric == "views" else "user_registry.chart.logins_series")
+
+
+def create_daily_chart(buckets: list[Bucket], counts: list[int], metric: str = "views") -> go.Figure:
+    """One bar per day (or per Monday-Sunday week above 90 days), a single series.
+    `metric` is `views` (Vistas de Página) or `logins` (Inicios de Sesión)."""
     if sum(counts) == 0:
-        return _empty_figure(t("user_registry.empty.no_logins"))
+        return _empty_figure(t("user_registry.empty.no_activity"))
     fig = go.Figure(go.Bar(
         x=[b.tooltip for b in buckets], y=counts, marker_color=BAR_COLOR,
-        hovertemplate="%{x} · %{y} " + t("user_registry.chart.logins_unit") + "<extra></extra>",
-        name=t("user_registry.chart.logins_series"),
+        hovertemplate="%{x} · %{y} " + _unit(metric) + "<extra></extra>",
+        name=_series_name(metric),
     ))
     fig.update_layout(showlegend=False)
     _style(fig, buckets, max(counts))
@@ -90,7 +102,7 @@ def create_daily_chart(buckets: list[Bucket], counts: list[int]) -> go.Figure:
 def create_stacked_chart(buckets: list[Bucket], series: list[tuple[str, list[int]]]) -> go.Figure:
     """Bars stacked by user: biggest user at the bottom, at most 5 users plus "Otros"."""
     if not series or sum(sum(counts) for _, counts in series) == 0:
-        return _empty_figure(t("user_registry.empty.no_logins"))
+        return _empty_figure(t("user_registry.empty.no_activity"))
     fig = go.Figure()
     for index, (name, counts) in enumerate(series):
         color = OTHERS_COLOR if name == OTHERS else USER_COLORS[index % len(USER_COLORS)]

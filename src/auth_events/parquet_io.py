@@ -18,6 +18,9 @@ SCHEMA = pa.schema([
     ("client_id", pa.string()),
     ("environment", pa.string()),
     ("source", pa.string()),
+    ("page_id", pa.string()),      # v2 columns: null on logins and on days written under v1
+    ("path", pa.string()),
+    ("tab", pa.string()),
 ])
 
 
@@ -33,7 +36,7 @@ def events_to_parquet_bytes(events: list[dict]) -> bytes:
         if name == "timestamp_utc":
             columns[name] = [parse_timestamp(e[name]).astimezone(timezone.utc) for e in ordered]
         else:
-            columns[name] = [e[name] for e in ordered]
+            columns[name] = [e.get(name) for e in ordered]  # v1 rows have no page columns
     table = pa.table(columns, schema=SCHEMA)
     sink = io.BytesIO()
     pq.write_table(table, sink, compression="snappy", write_statistics=False, use_dictionary=False)
@@ -50,3 +53,9 @@ def parquet_bytes_to_events(data: bytes) -> list[dict]:
         row["timestamp_utc"] = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
         events.append({name: row.get(name) for name in EVENT_COLUMNS})
     return events
+
+
+def parquet_is_current(data: bytes) -> bool:
+    """True when the file already has every column of the current schema (v2)."""
+    names = set(pq.read_schema(io.BytesIO(data)).names)
+    return set(SCHEMA.names) <= names

@@ -1,13 +1,17 @@
-"""The dashboard's single door to login events and the registry (TR-1, item 6).
+"""The dashboard's single door to login and page-view events and the registries (TR-1 item 6, TR-6 item 6).
 
 Nothing else may read `auth_events/` or `auth_registry/`.
 
     events = get_events(start, end, environment)   # dates are display-timezone days, inclusive
-    all_events = get_events()                      # full history (used for "Ultimo Acceso")
+    all_events = get_events()                      # full history (used for "Ultima Actividad")
+    logins = get_events(event_types="login")       # optional filter by event type; default: all
     registry = get_registry()
+    pages = get_pages()                            # the page registry (display names)
+    since = page_view_capture_start()              # date of the first page view ever stored
     when = last_loaded_at()                        # for "Ultima actualizacion"
 
-Compacted days come from the daily parquet, days not yet compacted from the raw JSON objects.
+Compacted days come from the daily parquet, days not yet compacted from the raw objects
+(`.json` logins and `.jsonl` page-view batches).
 For a range, UTC partitions covering the range +-1 day are loaded and the result is then cut
 by the display-timezone range. Every read deduplicates by `event_id`. Results are cached in
 memory (default 60 s); days old enough to be final are cached longer.
@@ -24,10 +28,13 @@ import pandas as pd
 from src.auth_events import settings
 from src.auth_events.compaction import daily_key, group_raw_by_day
 from src.auth_events.events import (
-    EVENT_COLUMNS, InvalidEvent, day_from_key, event_id_from_raw_key, validate_event,
+    EVENT_COLUMNS, EVENT_TYPE_PAGE_VIEW, EVENT_TYPES, InvalidEvent, day_from_key, decode_batch,
+    event_id_from_raw_key, is_batch_key, validate_event,
 )
 from src.auth_events.parquet_io import parquet_bytes_to_events
-from src.auth_events.registry import Registry, RegistryUnavailable, get_registry_or_none
+from src.auth_events.registry import (
+    PagesRegistry, Registry, RegistryUnavailable, get_pages_or_none, get_registry_or_none, unregistered_label,
+)
 from src.auth_events.storage import ObjectNotFound, Storage, get_storage
 from src.utils.logger import get_logger
 
@@ -83,6 +90,12 @@ def get_registry() -> Registry:
     return registry
 
 
+def get_pages() -> PagesRegistry:
+    """The page registry. When `pages.json` cannot be loaded the registry is empty, so every page
+    is displayed by its path instead of failing the view."""
+    return get_pages_or_none() or PagesRegistry()
+
+
 def _known_days(storage: Storage, now: float) -> set[str]:
     """UTC days that have a daily file or raw objects."""
     global _listing
@@ -99,16 +112,32 @@ def _known_days(storage: Storage, now: float) -> set[str]:
     return days
 
 
-def _load_partition(storage: Storage, day: str) -> list[dict]:
+def _load_partition(storage: Storage, day: str, today: date | None = None) -> list[dict]:
     """All events of one UTC day: daily parquet U raw objects not already in it."""
+    today = today or datetime.now(timezone.utc).date()
     events: dict[str, dict] = {}
+    daily_exists = False
     try:
         for event in parquet_bytes_to_events(storage.get(daily_key(day))):
             events[event["event_id"]] = event
+        daily_exists = True
     except ObjectNotFound:
         pass
+    settled = date.fromisoformat(day) < today - timedelta(days=SETTLED_AFTER_DAYS)
 
     for key in storage.list(f"{settings.RAW_PREFIX}dt={day}/"):
+        if is_batch_key(key):
+            if daily_exists and settled:
+                continue  # batches carry no event id in their name; a settled day's daily file has them
+            try:
+                batch, rejected = decode_batch(storage.get(key))
+            except ObjectNotFound:
+                continue  # compacted and pruned between the listing and the read
+            for message in rejected:
+                logger.warning("Skipping malformed event in %s: %s", key, message)
+            for event in batch:
+                events.setdefault(event["event_id"], event)
+            continue
         key_event_id = event_id_from_raw_key(key)
         if key_event_id is None or key_event_id in events:
             continue  # the daily file already has it: skip the read
@@ -163,14 +192,22 @@ def _partitions_for(days: list[str]) -> list[dict]:
         return rows
 
 
-def _frame(rows: list[dict], tz: str) -> pd.DataFrame:
+def _frame(rows: list[dict], tz: str, pages: PagesRegistry | None = None) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=list(EVENT_COLUMNS))
     frame = frame.drop_duplicates(subset="event_id", keep="first")
-    frame["client_id"] = frame["client_id"].astype(object).where(frame["client_id"].notna(), None)
+    for column in ("client_id", "page_id", "path", "tab"):
+        frame[column] = frame[column].astype(object).where(frame[column].notna(), None)
     frame["timestamp_utc"] = pd.to_datetime(frame["timestamp_utc"], utc=True, format="ISO8601")
     frame["timestamp"] = frame["timestamp_utc"].dt.tz_convert(tz)
     frame["date"] = frame["timestamp"].dt.date
     frame = frame.sort_values(["timestamp_utc", "event_id"], kind="stable").reset_index(drop=True)
+
+    # `display_name` is resolved here, at read time: renaming a page in pages.json changes display only.
+    pages = pages if pages is not None else PagesRegistry()
+    frame["display_name"] = [
+        pages.display_name(page_id, path, tab) if event_type == EVENT_TYPE_PAGE_VIEW else None
+        for event_type, page_id, path, tab in zip(frame["event_type"], frame["page_id"], frame["path"], frame["tab"])
+    ]
     return frame
 
 
@@ -179,20 +216,25 @@ def _day_range(first: date, last: date) -> list[str]:
 
 
 def get_events(start: date | None = None, end: date | None = None,
-               environment: str | None = None) -> pd.DataFrame:
-    """Normalized login events, newest data included.
+               environment: str | None = None,
+               event_types: str | tuple[str, ...] | list[str] | None = None) -> pd.DataFrame:
+    """Normalized events (logins and page views), newest data included.
 
     Args:
         start, end: inclusive dates in the display timezone; both None = full history.
         environment: `production` | `development` | `unknown`, or None for all.
+        event_types: `login`, `page_view`, or several; None (the default) returns every event.
 
     Returns:
-        DataFrame with the event columns plus `timestamp` (display timezone), `date` (the
-        display-timezone calendar day). `timestamp_utc` is a UTC datetime. Sorted by time.
+        DataFrame with the event columns (including `page_id`, `path`, `tab`, null on logins) plus
+        `display_name` (the page's name from `pages.json`, or its path for an unregistered page),
+        `timestamp` (display timezone) and `date` (the display-timezone calendar day).
+        `timestamp_utc` is a UTC datetime. Sorted by time.
     """
     tz = settings.display_timezone()
     if (start is None) != (end is None):
         raise ValueError("start and end must both be given or both omitted")
+    wanted_types = _event_types(event_types)
 
     if start is None:
         storage = _storage()
@@ -200,17 +242,36 @@ def get_events(start: date | None = None, end: date | None = None,
             try:
                 days = sorted(_known_days(storage, time.monotonic()))
             except Exception as exc:  # noqa: BLE001
-                raise AuthDataUnavailable(f"cannot list login events: {type(exc).__name__}: {exc}") from exc
+                raise AuthDataUnavailable(f"cannot list events: {type(exc).__name__}: {exc}") from exc
         rows = _partitions_for(days)
-        frame = _frame(rows, tz)
+        frame = _frame(rows, tz, get_pages())
     else:
         rows = _partitions_for(_day_range(start - timedelta(days=1), end + timedelta(days=1)))
-        frame = _frame(rows, tz)
+        frame = _frame(rows, tz, get_pages())
         frame = frame[(frame["date"] >= start) & (frame["date"] <= end)].reset_index(drop=True)
 
     if environment:
         frame = frame[frame["environment"] == environment].reset_index(drop=True)
+    if wanted_types is not None:
+        frame = frame[frame["event_type"].isin(wanted_types)].reset_index(drop=True)
     return frame
+
+
+def _event_types(value) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    wanted = (value,) if isinstance(value, str) else tuple(value)
+    unknown = [v for v in wanted if v not in EVENT_TYPES]
+    if unknown:
+        raise ValueError(f"unknown event type(s): {unknown}; expected {EVENT_TYPES}")
+    return wanted
+
+
+def page_view_capture_start() -> date | None:
+    """Display-timezone date of the earliest page view in storage (all environments), or None
+    when no page view exists yet. Before that date no page views exist and none can be backfilled."""
+    views = get_events(event_types=EVENT_TYPE_PAGE_VIEW)
+    return None if views.empty else views["date"].min()
 
 
 def display_timezone() -> str:
@@ -218,6 +279,7 @@ def display_timezone() -> str:
 
 
 __all__ = [
-    "AuthDataUnavailable", "RegistryUnavailable", "clear_cache", "display_timezone",
-    "get_events", "get_registry", "last_loaded_at", "set_storage_for_tests",
+    "AuthDataUnavailable", "RegistryUnavailable", "clear_cache", "display_timezone", "get_events",
+    "get_pages", "get_registry", "last_loaded_at", "page_view_capture_start", "set_storage_for_tests",
+    "unregistered_label",
 ]

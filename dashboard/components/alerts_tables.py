@@ -325,72 +325,79 @@ def alerts_report_table_styles(selected_id: str | None = None) -> list[dict]:
     return styles
 
 
+def _alert_table_rows(alerts_df: pd.DataFrame) -> list:
+    """One dictionary per alert, newest first: what the alerts tables display and what a row
+    click reads back (`id` / `ID` is the alert's FusionID)."""
+    sorted_alerts_df = alerts_df.sort_values("Timestamp", ascending=False).copy()
+    # Critical-review follow-up: assign the formatted column once,
+    # directly on the frame — same pattern alerts_report.py::
+    # prepare_alert_rows already uses — instead of a separate Series
+    # indexed by `.loc[idx]` inside the loop (extra state to keep
+    # aligned, and slower: `.loc[]` per row adds real overhead on a
+    # table rebuilt on every filter change).
+    sorted_alerts_df["_fecha_local"] = format_local(sorted_alerts_df["Timestamp"])
+    rows = []
+    for _, row in sorted_alerts_df.iterrows():
+        sections = parse_ia_message_sections(localized_value(row, "mensaje_ia", ""))
+        trigger_vars = row.get("Trigger_Var", t("alerts_report.sin_senal_registrada"))
+        # Mixed alerts store Trigger_Var as a serialized list. Preserve
+        # that representation so each telemetry/oil variable is translated.
+        raw_signal_values = trigger_vars
+        if isinstance(raw_signal_values, str):
+            try:
+                raw_signal_values = ast.literal_eval(raw_signal_values)
+            except (ValueError, SyntaxError):
+                raw_signal_values = [raw_signal_values]
+        if not isinstance(raw_signal_values, (list, tuple, set)):
+            raw_signal_values = [raw_signal_values]
+        signal_labels = []
+        for signal in raw_signal_values:
+            signal_key = str(signal).strip()
+            if signal_key and signal_key not in signal_labels:
+                signal_labels.append(FEATURE_NAMES_ES.get(signal_key, signal_key))
+        signal_label = ", ".join(signal_labels) or t("alerts_report.sin_senal_registrada")
+        # W34-04: single source of truth for the label (SOURCE_STYLE in
+        # labels.py), instead of an inline dict duplicating the one in
+        # alerts_report.py's translate_alert_source.
+        source, source_color = source_style(row.get("Trigger_type", ""))
+        evidence = evidence_label(row)
+        rows.append({
+            # "id" is what Dash reports back as active_cell["row_id"], which is how a
+            # click is matched to its alert however the table is sorted or paged.
+            "id": row.get("FusionID", "-"),
+            "ID": row.get("FusionID", "-"),
+            # W34-06: local wall-clock time (Timestamp is already
+            # UTC-naive by the time it reaches here — no re-parse).
+            "Fecha": row["_fecha_local"],
+            "Unidad": row.get("UnitId", "-"),
+            "Sistema": _translate_system(row.get("sistema", "-")),
+            "Componente": _translate_component(row.get("componente", "-")),
+            "Señal / variable": signal_label,
+            "Fuente": source,
+            # The selected-row card paints its Fuente with this same color.
+            "fuente_color": source_color,
+            "Diagnóstico": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
+            "diagnostico_completo": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
+            "causa_completa": sections.get("causa_probable", t("alerts_report.sin_causa_probable_registrada")),
+            "accion_completa": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
+            "Evidencia": evidence,
+            "has_maintenance": bool(row.get("has_maintenance", False)),
+            "maintenance_week": row.get("maintenance_evidence_weeks", row.get("Semana_Resumen_Mantencion", "")),
+            "maintenance_window_start": row.get("maintenance_window_start", ""),
+            "maintenance_window_end": row.get("maintenance_window_end", ""),
+            "maintenance_summary": row.get("maintenance_evidence_summary", ""),
+            "maintenance_tasks": row.get("maintenance_evidence_tasks", ""),
+            "Acción": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
+        })
+    return rows
+
+
 def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     """Create the executive alerts table with client-facing fields only."""
     if alerts_df is None or alerts_df.empty:
         return html.Div([dbc.Alert(t("alerts_callbacks.no_hay_alertas_para_los_filtros"), color="info")])
     try:
-        sorted_alerts_df = alerts_df.sort_values("Timestamp", ascending=False).copy()
-        # Critical-review follow-up: assign the formatted column once,
-        # directly on the frame — same pattern alerts_report.py::
-        # prepare_alert_rows already uses — instead of a separate Series
-        # indexed by `.loc[idx]` inside the loop (extra state to keep
-        # aligned, and slower: `.loc[]` per row adds real overhead on a
-        # table rebuilt on every filter change).
-        sorted_alerts_df["_fecha_local"] = format_local(sorted_alerts_df["Timestamp"])
-        rows = []
-        for _, row in sorted_alerts_df.iterrows():
-            sections = parse_ia_message_sections(localized_value(row, "mensaje_ia", ""))
-            trigger_vars = row.get("Trigger_Var", t("alerts_report.sin_senal_registrada"))
-            # Mixed alerts store Trigger_Var as a serialized list. Preserve
-            # that representation so each telemetry/oil variable is translated.
-            raw_signal_values = trigger_vars
-            if isinstance(raw_signal_values, str):
-                try:
-                    raw_signal_values = ast.literal_eval(raw_signal_values)
-                except (ValueError, SyntaxError):
-                    raw_signal_values = [raw_signal_values]
-            if not isinstance(raw_signal_values, (list, tuple, set)):
-                raw_signal_values = [raw_signal_values]
-            signal_labels = []
-            for signal in raw_signal_values:
-                signal_key = str(signal).strip()
-                if signal_key and signal_key not in signal_labels:
-                    signal_labels.append(FEATURE_NAMES_ES.get(signal_key, signal_key))
-            signal_label = ", ".join(signal_labels) or t("alerts_report.sin_senal_registrada")
-            # W34-04: single source of truth for the label (SOURCE_STYLE in
-            # labels.py), instead of an inline dict duplicating the one in
-            # alerts_report.py's translate_alert_source.
-            source, source_color = source_style(row.get("Trigger_type", ""))
-            evidence = evidence_label(row)
-            rows.append({
-                # "id" is what Dash reports back as active_cell["row_id"], which is how a
-                # click is matched to its alert however the table is sorted or paged.
-                "id": row.get("FusionID", "-"),
-                "ID": row.get("FusionID", "-"),
-                # W34-06: local wall-clock time (Timestamp is already
-                # UTC-naive by the time it reaches here — no re-parse).
-                "Fecha": row["_fecha_local"],
-                "Unidad": row.get("UnitId", "-"),
-                "Sistema": _translate_system(row.get("sistema", "-")),
-                "Componente": _translate_component(row.get("componente", "-")),
-                "Señal / variable": signal_label,
-                "Fuente": source,
-                # The selected-row card paints its Fuente with this same color.
-                "fuente_color": source_color,
-                "Diagnóstico": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
-                "diagnostico_completo": sections.get("diagnostico", t("alerts_report.sin_diagnostico_ia_disponible")),
-                "causa_completa": sections.get("causa_probable", t("alerts_report.sin_causa_probable_registrada")),
-                "accion_completa": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
-                "Evidencia": evidence,
-                "has_maintenance": bool(row.get("has_maintenance", False)),
-                "maintenance_week": row.get("maintenance_evidence_weeks", row.get("Semana_Resumen_Mantencion", "")),
-                "maintenance_window_start": row.get("maintenance_window_start", ""),
-                "maintenance_window_end": row.get("maintenance_window_end", ""),
-                "maintenance_summary": row.get("maintenance_evidence_summary", ""),
-                "maintenance_tasks": row.get("maintenance_evidence_tasks", ""),
-                "Acción": sections.get("acciones", t("alerts_report.sin_accion_recomendada_registrada")),
-            })
+        rows = _alert_table_rows(alerts_df)
         table = dash_table.DataTable(
             id="alerts-datatable",
             # Show the published source explicitly; color alone is ambiguous.
@@ -427,6 +434,68 @@ def create_alerts_report_table(alerts_df: pd.DataFrame) -> dash_table.DataTable:
     except Exception as exc:
         logger.error(f"Error creando tabla ejecutiva de alertas: {exc}")
         return dbc.Alert(t("alerts_tables.error_al_crear_tabla_2", exc=exc), color="danger")
+
+
+UNIT_ALERTS_TABLE_ID = "unit-alerts-datatable"
+
+# Header text of each column of the unit's list, keyed by the row key it reads: the same row
+# the Monitoreo > Alertas table is built from, minus Unidad (the unit is the page's).
+_UNIT_ALERT_COLUMNS = (
+    ("Fecha", "alerts_tables.col_fecha"),
+    ("Fuente", "alerts_tables.col_fuente"),
+    ("Sistema", "alerts_tables.col_sistema"),
+    ("Componente", "alerts_tables.col_componente"),
+    ("Alerta", "unit_summary_content.alerts_col_alert"),
+    ("Resumen", "unit_summary_content.alerts_col_summary"),
+)
+
+
+def create_unit_alerts_table(alerts_df: pd.DataFrame, detail_href) -> html.Div:
+    """A unit's alerts as the Monitoreo > Alertas table shows them - newest first, native sorting
+    and pagination, the Fuente colors and the Multitecnica tint - with the columns Fecha, Fuente,
+    Sistema, Componente, Alerta (the signal that fired) and Resumen (the diagnosis).
+
+    Every row carries a real link to the alert's detail (`detail_href(alert_id)`), shown as a
+    trailing "Ver Detalle" cell, and the whole row opens it: the table's `data-unit-alert-table`
+    wrapper is what assets/unit_master_detail.js follows to turn a click anywhere on a row into
+    that link's navigation."""
+    rows = _alert_table_rows(alerts_df)
+    for row in rows:
+        row["Alerta"] = row["Señal / variable"]
+        row["Resumen"] = row["Diagnóstico"]
+        row["Detalle"] = f"[{t('fleet_overview.view_detail')} ›]({detail_href(row['ID'])})"
+    table = dash_table.DataTable(
+        id=UNIT_ALERTS_TABLE_ID,
+        columns=[
+            *({"name": t(key), "id": name} for name, key in _UNIT_ALERT_COLUMNS),
+            {"name": t("unit_summary_content.alerts_col_detail"), "id": "Detalle", "presentation": "markdown"},
+        ],
+        data=rows,
+        markdown_options={"link_target": "_self"},
+        cell_selectable=False,
+        sort_action="native",
+        sort_mode="multi",
+        page_action="native",
+        page_size=15,
+        tooltip_data=[{"Resumen": {"value": row["Resumen"], "type": "text"}} for row in rows],
+        tooltip_duration=None,
+        style_table={"overflowX": "auto"},
+        style_cell={"textAlign": "left", "padding": "9px", "fontSize": "12px", "fontFamily": "var(--bs-body-font-family, system-ui, sans-serif)", "whiteSpace": "normal", "height": "auto", "minWidth": "90px"},
+        style_header={"backgroundColor": "#23384d", "color": "white", "fontWeight": "bold", "textAlign": "center", "whiteSpace": "normal"},
+        # Narrower than the Monitoreo table: this one sits in the unit's detail panel, and the
+        # trailing "Ver Detalle" must stay in view.
+        style_cell_conditional=[
+            {"if": {"column_id": "Fecha"}, "minWidth": "84px", "width": "84px"},
+            {"if": {"column_id": "Fuente"}, "minWidth": "96px", "width": "96px"},
+            {"if": {"column_id": "Sistema"}, "minWidth": "76px"},
+            {"if": {"column_id": "Componente"}, "minWidth": "96px"},
+            {"if": {"column_id": "Alerta"}, "minWidth": "120px", "maxWidth": "170px"},
+            {"if": {"column_id": "Resumen"}, "minWidth": "180px", "maxWidth": "320px"},
+            {"if": {"column_id": "Detalle"}, "minWidth": "96px", "width": "96px", "textAlign": "right"},
+        ],
+        style_data_conditional=alerts_report_table_styles(),
+    )
+    return html.Div(table, className="unit-alerts-table", **{"data-unit-alert-table": "true"})
 
 
 def create_alert_detail_card(alert_row: pd.Series) -> dbc.Card:

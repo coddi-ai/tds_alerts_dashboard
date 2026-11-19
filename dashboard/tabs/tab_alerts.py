@@ -13,10 +13,14 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def create_layout() -> html.Div:
+def create_layout(unit: str | None = None, alert: str | None = None) -> html.Div:
     """
     Create unified alerts tab layout with internal tabs.
-    
+
+    Args:
+        unit: opens the General view with the Unidad filter already set to this unit.
+        alert: opens the Detail view on this alert (the alert's FusionID).
+
     Returns:
         Dash HTML Div with tabbed interface
     """
@@ -43,7 +47,7 @@ def create_layout() -> html.Div:
         # indicator sits under that label alone (same as Predictivo Resumen / Evidencia).
         dcc.Tabs(
             id='alerts-internal-tabs',
-            value='general',
+            value='detail' if alert else 'general',
             children=[
                 dcc.Tab(
                     label=t("tab_alerts.vista_general"),
@@ -63,6 +67,10 @@ def create_layout() -> html.Div:
         
         # Tab content container
         html.Div(id='alerts-tab-content'),
+
+        # What the URL asked this page to open with (see monitoring_alerts.layout): read once, when
+        # the page is built, by the callbacks that fill in the view.
+        dcc.Store(id='alerts-url-seed', storage_type='memory', data={'unit': unit, 'alert': alert} if (unit or alert) else None),
         
         # Store for filters (used in General tab)
         dcc.Store(id='alerts-filter-store', storage_type='memory', data={}),

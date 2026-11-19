@@ -563,7 +563,10 @@ def status_badge(status: str):
 
 def _unit_link(unit: str):
     """The row's link to the unit's Unit Detail: a real `<a href>` (a `dcc.Link`, so
-    navigating goes through Dash Pages' client-side router)."""
+    navigating goes through Dash Pages' client-side router). Its click area is stretched over
+    the whole row by the stylesheet (`.fleet-unit-link::after`), so clicking anywhere on the
+    row follows this one link; the status chips stay above it, as they open their own
+    explanation."""
     return dcc.Link(unit, href=relative_path(unit_summary_path(unit)), className="fleet-unit-link")
 
 
@@ -607,7 +610,12 @@ def _unit_row(entry: dict):
                 className="fleet-table-cell fleet-table-estado",
             ),
         ]
-        + [_technique_cell(t, cells[t]) for t in entry["techniques"]],
+        + [_technique_cell(t, cells[t]) for t in entry["techniques"]]
+        # Decorative: the link above is what a keyboard or screen reader reaches.
+        + [html.Td(
+            [_t("fleet_overview.view_detail"), html.I(className="fas fa-chevron-right ms-1")],
+            className="fleet-table-cue", **{"aria-hidden": "true"},
+        )],
         className="fleet-table-row",
     )
 
@@ -675,6 +683,7 @@ def _band_table(band: str, entries: list, techniques: list):
             html.Th(_t("fleet_overview.col_status"), scope="col"),
         ]
         + [html.Th(technique_label(tech), scope="col") for tech in techniques]
+        + [html.Th(html.Span(_t("fleet_overview.view_detail"), className="visually-hidden"), scope="col")]
     ))
     table = html.Table(
         [header, html.Tbody(
@@ -926,6 +935,16 @@ def get_unit_snapshot(client: str, unit: str):
 
 def _band_slug(band: str) -> str:
     return band.lower().replace(" ", "-")
+
+
+def band_slug(band: str) -> str:
+    """Public: the band as an id / data attribute fragment ("Sin Datos" -> "sin-datos")."""
+    return _band_slug(band)
+
+
+def band_css(band: str) -> str:
+    """Public: the tint of the band's icon badge (assets/status_chip.css)."""
+    return _BAND_CSS[band]
 
 
 def _band_section(band: str, band_entries: list, matches: list, techniques: list, expanded: bool) -> html.Div:
