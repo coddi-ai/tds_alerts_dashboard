@@ -28,7 +28,7 @@ ACCENT_BORDER = "rgba(52, 152, 219, 0.22)"
 # colors — it defaults to the sidebar's blue-gray (dashboard/layout.py's left_menu).
 USER_BUBBLE_COLOR = "#2290ff"
 
-CAMPBELL_AI_VERSION = "1.3.5"
+CAMPBELL_AI_VERSION = "1.3.6"
 
 # Campbell AI typography. Tune these values to adjust normal UI text without
 # changing titles or section headers.
@@ -149,6 +149,12 @@ SUGGESTED_QUESTIONS: tuple[SuggestedQuestion, ...] = (
         "maintenance-recent",
         "¿Qué acciones de mantenimiento se registraron en los últimos 30 días?",
         ("maintenance",),
+        "mantenimiento",
+    ),
+    SuggestedQuestion(
+        "maintenance-kpis",
+        "¿Cómo estuvo la disponibilidad el último mes y qué equipos estuvieron más detenidos?",
+        ("maintenance_kpis",),
         "mantenimiento",
     ),
     SuggestedQuestion(
@@ -1101,6 +1107,9 @@ def render_chat_history(
             dcc.Markdown(
                 str(message.get("content", "")),
                 link_target="_blank",
+                # Hook for campbell_ai_chat.css: Markdown tables (KPIs, rankings) need borders
+                # and padding to be readable, and nothing else in the page styles a bare table.
+                className="campbell-ai-markdown",
                 style={
                     "fontSize": CHAT_MESSAGE_FONT_SIZE,
                     "lineHeight": CHAT_MESSAGE_LINE_HEIGHT,

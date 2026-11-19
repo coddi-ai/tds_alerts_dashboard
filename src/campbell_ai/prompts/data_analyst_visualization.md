@@ -39,6 +39,13 @@ del dashboard, así que el usuario ve exactamente la misma figura que en su pest
 | Ranking de riesgo predictivo | `predictive_motor_ranking` | `top_n` |
 | Señales de una alerta contra sus límites | `alert_sensor_trend` | `unit_id`, `alert_id`, `signal` |
 | Telemetría continua de un equipo, cualquier señal | `telemetry_signal_trend` | `unit_id`, `signal`, `days`, `start_date`, `end_date` |
+| KPIs de mantenimiento: disponibilidad, horas detenidas, MTBF, MTTR | `maintenance_kpi_summary` | `period` (AAAA-MM), `unit_id` |
+| Equipos con más horas detenidas (Pareto) | `maintenance_downtime_ranking` | `period` (AAAA-MM), `top_n` |
+
+En los dos gráficos de mantenimiento, `period` solo se pasa cuando el usuario nombró un mes
+concreto. “El último mes” o “este mes” van **sin `period`**: el gráfico usa el último mes completo
+con datos, y esa fuente suele llegar con meses de atraso respecto de hoy. No calcules el mes desde
+la fecha actual ni preguntes cuál mes quiere: grafica y declara el mes que quedó en el título.
 
 ### Cómo elegir, y qué decir después
 

@@ -676,6 +676,31 @@ class CampbellAgentRuntime:
             )
 
         @function_tool
+        def query_maintenance_kpis(
+            period: str = "",
+            months: int = 1,
+            unit_id: str = "",
+            top_n: int = 10,
+        ) -> str:
+            """Maintenance KPIs: calendar availability, downtime hours, MTBF, MTTR and failures.
+
+            The same numbers as the KPI cards of Monitoreo > Mantenciones. `period` is a
+            month (AAAA-MM) and defaults to the latest complete month with data; `months`
+            widens the window backwards from it (up to 24). Also returns the previous months
+            as a baseline, a 12-month trend and, without `unit_id`, the units with the most
+            downtime. A value that cannot be computed comes back as null, never as zero.
+            """
+            return safe_data_call(
+                "query_maintenance_kpis",
+                repository.query_maintenance_kpis,
+                client,
+                period=period,
+                months=months,
+                unit_id=unit_id,
+                top_n=top_n,
+            )
+
+        @function_tool
         def query_predictive_risk(
             domain: str = "motor", unit_id: str = "", limit: int = 15
         ) -> str:
@@ -779,6 +804,7 @@ class CampbellAgentRuntime:
             query_alert_signals,
             query_maintenance,
             query_maintenance_summary,
+            query_maintenance_kpis,
             query_oil_status,
             query_oil_components,
             describe_oil_limits,
@@ -813,8 +839,12 @@ class CampbellAgentRuntime:
             start_date: str = "",
             end_date: str = "",
             top_n: int = 0,
+            period: str = "",
         ) -> str:
-            """Render a named dashboard chart, reproducing the dashboard's own visual."""
+            """Render a named dashboard chart, reproducing the dashboard's own visual.
+
+            `period` (AAAA-MM) selects the month of the maintenance charts.
+            """
             parameters = {
                 key: value
                 for key, value in (
@@ -825,6 +855,7 @@ class CampbellAgentRuntime:
                     ("start_date", start_date),
                     ("end_date", end_date),
                     ("top_n", top_n),
+                    ("period", period),
                 )
                 if value
             }

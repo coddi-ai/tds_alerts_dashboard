@@ -27,6 +27,7 @@ import plotly.graph_objects as go
 
 from src.campbell_ai.data import DashboardDataRepository, predictive_band, predictive_module_allows
 from src.campbell_ai.errors import CampbellDataError
+from src.campbell_ai import maintenance_kpis
 from src.campbell_ai.models import VisualizationArtifact
 from src.campbell_ai.oil_entities import (
     SAMPLE_ID_COLUMNS,
@@ -37,6 +38,8 @@ from src.charts.builders import (
     build_gauge,
     build_heatmap,
     build_histogram,
+    build_kpi_tiles,
+    build_pareto,
     build_radar,
     build_stacked_bar,
     build_status_donut,
@@ -73,6 +76,7 @@ ALLOWED_PARAMETERS: dict[str, type] = {
     "days": int,
     "start_date": str,
     "end_date": str,
+    "period": str,
 }
 
 
@@ -591,6 +595,85 @@ class DashboardChartRegistry:
             subtitle=subtitle,
         )
         return figure, {"total": raw.get("total"), "top": dict(items), "window": window}
+
+    def _maintenance_kpi_summary(self, client: str, params: dict[str, Any]):
+        """The four KPI cards of Monitoreo > Mantenciones, against the previous months."""
+        raw = json.loads(
+            self.repository.query_maintenance_kpis(
+                client, period=str(params.get("period") or ""), unit_id=str(params.get("unit_id") or "")
+            )
+        )
+        if raw.get("unit_found") is False:
+            raise CampbellDataError(f"El equipo {params.get('unit_id')} no tiene horas de mantenimiento registradas")
+        current = raw["kpis"]
+        base = raw.get("baseline_previous_months") or {}
+        reference_label = f"vs promedio {base['months']}" if base else ""
+        tiles = [
+            {"label": "Disponibilidad", "value": current["availability_pct"], "suffix": " %",
+             "reference": base.get("availability_pct"), "higher_is_better": True,
+             "reference_label": reference_label},
+            {"label": "Horas detenidas", "value": current["downtime_hours"], "suffix": " h",
+             "reference": base.get("downtime_hours_per_month"), "higher_is_better": False,
+             "reference_label": "vs promedio mensual" if base else ""},
+            {"label": "MTBF", "value": current["mtbf_hours"], "suffix": " h",
+             "reference": base.get("mtbf_hours"), "higher_is_better": True,
+             "reference_label": reference_label},
+            {"label": "MTTR", "value": current["mttr_hours"], "suffix": " h",
+             "reference": base.get("mttr_hours"), "higher_is_better": False,
+             "reference_label": reference_label},
+        ]
+        period = raw["period"]["selected"]
+        unit = raw.get("unit_id")
+        figure = build_kpi_tiles(
+            tiles,
+            title=f"KPIs de mantenimiento · {period}" + (f" · {unit}" if unit else ""),
+        )
+        quality = raw.get("reliability_quality") or {}
+        notes = ["disponibilidad calendario (24 h × días), no operacional"]
+        if quality.get("all_low_confidence"):
+            notes.append("MTBF/MTTR de baja confianza")
+        if raw["period"].get("partial_month"):
+            notes.append("mes parcial")
+        return figure, {
+            "period": f"Mes {period}" + (f" · equipo {unit}" if unit else "") + " · " + ", ".join(notes),
+            "kpis": {key: current.get(key) for key in ("availability_pct", "downtime_hours", "mtbf_hours", "mttr_hours", "failures")},
+            "baseline": {key: base.get(key) for key in ("months", "availability_pct", "downtime_hours_per_month", "mtbf_hours", "mttr_hours")} if base else None,
+            "availability_source": current.get("source"),
+            "low_confidence": bool(quality.get("all_low_confidence")),
+        }
+
+    def _maintenance_downtime_ranking(self, client: str, params: dict[str, Any]):
+        """Pareto of downtime hours per unit: the tab's Pareto de horas, for one month."""
+        inputs = self.repository.maintenance_kpi_inputs(client)
+        period = self.repository.resolve_maintenance_period(inputs, str(params.get("period") or ""))
+        top_n = self._clamp(params.get("top_n"), 15, 3, 30)
+        ranking = maintenance_kpis.unit_ranking(
+            inputs["client"], inputs["hours"], inputs["reliability"], [period], top_n
+        )
+        if not ranking:
+            raise CampbellDataError(f"No hay horas detenidas registradas en {period}")
+        total_units = maintenance_kpis.units_with_downtime(inputs["client"], inputs["hours"], [period])
+        figure = build_pareto(
+            [row["unit_id"] for row in ranking],
+            [float(row["downtime_hours"]) for row in ranking],
+            title=f"Equipos con más horas detenidas · {period}",
+            dimension_label="Equipo",
+            value_label="Horas detenidas",
+        )
+        top = {row["unit_id"]: f"{row['downtime_hours']} h" for row in ranking}
+        # Name how many units each share covers: a bare "cumulative %" was read back as the share
+        # of the first three units when it was the share of every unit drawn.
+        top_three = ranking[: min(3, len(ranking))]
+        return figure, {
+            "period": (
+                f"Mes {period} · {len(ranking)} de {total_units} equipos con detención · "
+                f"los {len(ranking)} mostrados suman {ranking[-1]['cumulative_pct']} % de las horas"
+            ),
+            "top": top,
+            "share_of_units_shown": {"units": len(ranking), "pct": ranking[-1]["cumulative_pct"]},
+            "share_of_top_three": {"units": len(top_three), "pct": top_three[-1]["cumulative_pct"]},
+            "units_with_downtime": total_units,
+        }
 
     def _predictive_ranking(self, client: str, params: dict[str, Any]):
         top_n = self._clamp(params.get("top_n"), 15, 3, 30)
@@ -1129,6 +1212,49 @@ CHART_DEFINITIONS: tuple[ChartDefinition, ...] = (
         ),
         dashboard_route="/monitoring/alerts",
         dashboard_section="Monitoreo > Alertas",
+    ),
+    ChartDefinition(
+        chart_id="maintenance_kpi_summary",
+        caption="KPIs de mantenimiento del mes contra el promedio de los meses anteriores",
+        title="KPIs de mantenimiento",
+        domain="mantenimiento",
+        description=(
+            "Tarjetas de disponibilidad, horas detenidas, MTBF y MTTR de un mes, con su "
+            "variacion contra el promedio de los meses previos. Reproduce las tarjetas de la "
+            "pestaña Mantenciones; sin period usa el ultimo mes completo."
+        ),
+        datasets=("maintenance_hours_monthly",),
+        parameters=("period", "unit_id"),
+        builder=DashboardChartRegistry._maintenance_kpi_summary,
+        chart_type="indicator",
+        tags=("mantenimiento", "kpi", "disponibilidad", "confiabilidad"),
+        use_when=(
+            "El usuario pregunta como estamos en mantenimiento, por la disponibilidad, el MTBF, "
+            "el MTTR o las horas detenidas de un mes, o pide los KPIs de la flota o de un equipo."
+        ),
+        dashboard_route="/monitoring/mantenciones",
+        dashboard_section="Monitoreo > Mantenciones",
+    ),
+    ChartDefinition(
+        chart_id="maintenance_downtime_ranking",
+        caption="Pareto de horas detenidas por equipo en el mes",
+        title="Equipos con más horas detenidas",
+        domain="mantenimiento",
+        description=(
+            "Pareto de equipos por horas detenidas en un mes, con la curva acumulada. "
+            "Reproduce el Pareto de horas de la pestaña Mantenciones."
+        ),
+        datasets=("maintenance_hours_monthly",),
+        parameters=("period", "top_n"),
+        builder=DashboardChartRegistry._maintenance_downtime_ranking,
+        chart_type="pareto",
+        tags=("mantenimiento", "ranking", "detenciones"),
+        use_when=(
+            "El usuario pregunta que equipos estuvieron mas detenidos, donde se concentra la "
+            "detencion, o pide priorizar equipos por horas fuera de servicio."
+        ),
+        dashboard_route="/monitoring/mantenciones",
+        dashboard_section="Monitoreo > Mantenciones",
     ),
     ChartDefinition(
         chart_id="predictive_motor_ranking",

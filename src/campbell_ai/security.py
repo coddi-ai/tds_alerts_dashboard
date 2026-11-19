@@ -31,11 +31,14 @@ _SECURITY_RULES: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+# A table written inside the answer (KPIs by month, a ranking of units) is a supported answer
+# format; only a table as a file to download or export is not. So "tabla" alone no longer
+# trips the guard - "dame una tabla con la disponibilidad por mes" must reach the agents.
 _UNSUPPORTED_CAPABILITY = re.compile(
     r"\b(genera|crear?|crea|haz|dame|prepara|construye|muestra|produce|exporta|descarga|"
     r"generate|create|prepare|build|show|export|download)\b"
-    r".{0,60}\b(reporte|report|pdf|tabla|table|archivo|file|exportacion|exportación|"
-    r"spreadsheet|excel|csv)\b",
+    r".{0,60}\b(reporte|report|pdf|archivo|file|exportacion|exportación|"
+    r"spreadsheet|excel|csv|tablas?\s+(?:descargables?|exportables?)|downloadable\s+tables?)\b",
     re.IGNORECASE | re.DOTALL,
 )
 
