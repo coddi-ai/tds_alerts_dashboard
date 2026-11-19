@@ -40,6 +40,7 @@ from src.data import alert_partitions as alert_store
 from src.data import telemetry_partitions as telemetry_store
 from src.data.lab_kpis import compute_lab_kpis, lab_kpis_by_unit
 from src.campbell_ai.identity import normalize_client_id
+from src.campbell_ai import maintenance_kpis
 from src.campbell_ai.resources import CACHES, MEGABYTE, FrameCache, budget_from_env
 from src.campbell_ai import index as vocabulary_index
 from src.campbell_ai.schema import declared_columns
@@ -183,6 +184,27 @@ DATASETS: tuple[DatasetSpec, ...] = (
         "Resumen semanal de mantenimiento",
         (("UnitId", "machine_code", "machine_id"), ("Summary", "Tasks_List")),
     ),
+    # The three sources behind the KPI cards of Monitoreo > Mantenciones. Query 8 is required
+    # by the KPI analysis; query 5 adds MTBF/MTTR and query 9 the fleet-wide calendar some
+    # clients' availability is divided by, and the analysis degrades without either.
+    DatasetSpec(
+        "maintenance_hours_monthly",
+        "mantentions/golden/{client}/Maintance_Labeler_Views/query_8_intervention_hours_monthly.parquet",
+        "Horas detenidas por equipo y mes",
+        (("machine_code",), ("year_month",), ("intervention_hours",), ("calendar_hours_month",)),
+    ),
+    DatasetSpec(
+        "maintenance_reliability",
+        "mantentions/golden/{client}/Maintance_Labeler_Views/query_5_reliability_monthly.parquet",
+        "Confiabilidad mensual por equipo (fallas, MTBF, MTTR)",
+        (("machine_code",), ("year_month",), ("n_failures",), ("total_downtime_hours",)),
+    ),
+    DatasetSpec(
+        "maintenance_fleet_daily",
+        "mantentions/golden/{client}/Maintance_Labeler_Views/query_9_fleet_intervention_daily.parquet",
+        "Horas detenidas de la flota por dia",
+        (("day",), ("intervention_hours",), ("calendar_hours_fleet",)),
+    ),
     DatasetSpec(
         "alerts_detail",
         # Weekly partitions written by scripts/partition_alerts.py; this path is their index, which
@@ -221,6 +243,9 @@ DATASET_TOOLS: dict[str, str] = {
     "telemetry_classified": "query_telemetry_components",
     "maintenance_actions": "query_maintenance",
     "maintenance_summary": "query_maintenance_summary",
+    "maintenance_hours_monthly": "query_maintenance_kpis",
+    "maintenance_reliability": "query_maintenance_kpis",
+    "maintenance_fleet_daily": "query_maintenance_kpis",
     "predictive_motor": "query_predictive_risk(domain='motor')",
     "predictive_transmission": "query_predictive_risk(domain='transmision')",
 }
@@ -260,6 +285,12 @@ DATASET_FILTERS: dict[str, tuple[FilterSpec, ...]] = {
     "maintenance_summary": (
         FilterSpec("unit_id", ("UnitId", "machine_code", "machine_id"), "unit"),
     ),
+    "maintenance_hours_monthly": (
+        FilterSpec("unit_id", ("machine_code",), "unit"),
+    ),
+    "maintenance_reliability": (
+        FilterSpec("unit_id", ("machine_code",), "unit"),
+    ),
     "oil_machine_status": (
         FilterSpec("unit_id", ("unit_id", "unitId", "UnitId"), "unit"),
     ),
@@ -297,6 +328,7 @@ TOOL_DATASETS: dict[str, str] = {
     "query_alert_signals": "alerts_detail",
     "query_maintenance": "maintenance_actions",
     "query_maintenance_summary": "maintenance_summary",
+    "query_maintenance_kpis": "maintenance_hours_monthly",
     "query_oil_status": "oil_machine_status",
     "query_oil_components": "oil_classified",
     "query_lab_kpis": "oil_classified",
@@ -361,6 +393,19 @@ ANALYSIS_CAPABILITIES: tuple[AnalysisCapability, ...] = (
         "Resumen semanal de mantenimiento",
         ("query_maintenance_summary",),
         ("maintenance_summary",),
+        requires_services=("monitoring-mantenciones",),
+    ),
+    AnalysisCapability(
+        "maintenance_kpis",
+        "KPIs de mantenimiento: disponibilidad, horas detenidas, MTBF, MTTR y equipos más detenidos",
+        (
+            "query_maintenance_kpis",
+            "render_dashboard_chart(maintenance_kpi_summary)",
+            "render_dashboard_chart(maintenance_downtime_ranking)",
+        ),
+        # Only the hours are indispensable: without query 5 the answer still carries
+        # availability and downtime, and reports MTBF/MTTR as unavailable.
+        ("maintenance_hours_monthly",),
         requires_services=("monitoring-mantenciones",),
     ),
     AnalysisCapability(
@@ -3794,6 +3839,179 @@ class DashboardDataRepository:
             ensure_ascii=False,
             default=str,
         )
+
+    def _optional_load(self, key: str, client: str) -> pd.DataFrame:
+        """A source the analysis can do without: absent or unreadable means empty."""
+        try:
+            return self.load(key, client)
+        except CampbellDataError:
+            logger.info("Campbell AI: %s no disponible para %s", key, client)
+            return pd.DataFrame()
+
+    def maintenance_kpi_inputs(self, client: str) -> dict[str, Any]:
+        """Frames and period context shared by the KPI tool and the maintenance charts.
+
+        Query 8 is required (the error names the file); query 5 and query 9 are optional.
+        """
+        hours = self.load("maintenance_hours_monthly", client)
+        reliability = self._optional_load("maintenance_reliability", client)
+        fleet_daily = self._optional_load("maintenance_fleet_daily", client)
+        scoped = maintenance_kpis._for_client(hours, normalize_client_id(client))
+        months = maintenance_kpis.available_months(scoped)
+        if not months:
+            raise CampbellDataError("La fuente de horas de mantenimiento no tiene meses con datos")
+        reference = maintenance_kpis.reference_day(fleet_daily)
+        return {
+            "client": normalize_client_id(client),
+            "hours": hours,
+            "reliability": reliability,
+            "fleet_daily": fleet_daily,
+            "months": months,
+            "reference_day": reference,
+            "default_period": maintenance_kpis.default_period(months, reference),
+        }
+
+    @staticmethod
+    def resolve_maintenance_period(inputs: dict[str, Any], period: str = "") -> str:
+        """Validate a requested YYYY-MM (or any date inside it) against the months present."""
+        if not str(period or "").strip():
+            return inputs["default_period"]
+        try:
+            resolved = str(pd.Period(str(period).strip()[:7], freq="M"))
+        except (ValueError, TypeError) as exc:
+            raise CampbellDataError(
+                f"Periodo no valido: {period}. Usa el formato AAAA-MM, por ejemplo 2026-05"
+            ) from exc
+        months = inputs["months"]
+        if resolved not in months:
+            # The usual cause is a period computed from today's date while the source lags
+            # months behind. Name the month to use, so the retry does not land on the newest
+            # month present - which is often partial (three days of data reading as a month).
+            suggestion = inputs["default_period"]
+            reference = inputs.get("reference_day")
+            lag = (
+                f" El dato llega hasta {reference.date().isoformat()}."
+                if reference is not None else ""
+            )
+            raise CampbellDataError(
+                f"No hay horas de mantenimiento para {resolved}. Meses disponibles: "
+                f"{months[0]} a {months[-1]}.{lag} El ultimo mes completo con datos es "
+                f"{suggestion}: reintenta sin period para usarlo y declara esa fecha al usuario."
+            )
+        return resolved
+
+    def _maintenance_unit(self, inputs: dict[str, Any], unit_id: str) -> str | None:
+        """The source's own code for a user-typed unit ("ca30" -> "CA-30"), or None."""
+        target = self._normalize_unit(unit_id)
+        for code in inputs["hours"]["machine_code"].dropna().astype(str).unique():
+            if self._normalize_unit(code) == target:
+                return code
+        return None
+
+    def query_maintenance_kpis(
+        self,
+        client: str,
+        period: str = "",
+        months: int = 1,
+        unit_id: str = "",
+        top_n: int = 10,
+    ) -> str:
+        """KPI cards of Monitoreo > Mantenciones, with trend, baseline and most-stopped units.
+
+        Formulas live in `src.campbell_ai.maintenance_kpis`, which mirrors the tab, so the
+        chat and the tab report the same availability, downtime, MTBF and MTTR.
+        """
+        inputs = self.maintenance_kpi_inputs(client)
+        name = inputs["client"]
+        selected = self.resolve_maintenance_period(inputs, period)
+        window = maintenance_kpis.month_window(selected, self._clamp(months, 1, maintenance_kpis.MAX_MONTHS))
+
+        resolved_unit = ""
+        if unit_id:
+            resolved_unit = self._maintenance_unit(inputs, unit_id) or ""
+            if not resolved_unit:
+                return json.dumps(
+                    {
+                        "unit_id": unit_id,
+                        "unit_found": False,
+                        "filter_hints": {
+                            "detail": "El equipo no aparece en la fuente de horas de mantenimiento.",
+                            "available_values": {
+                                "unit_id": sorted(inputs["hours"]["machine_code"].dropna().astype(str).unique())[:40]
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+
+        def kpis_for(months_: list[str]) -> dict[str, Any]:
+            time = maintenance_kpis.time_kpis(name, inputs["hours"], inputs["fleet_daily"], months_, resolved_unit)
+            reliability = maintenance_kpis.reliability_kpis(name, inputs["reliability"], months_, resolved_unit)
+            return {**time, **reliability}
+
+        current = kpis_for(window)
+        # Months before the window, so a number can be read as better or worse than usual.
+        previous = [m for m in inputs["months"] if m < window[0]][-11:]
+        baseline = kpis_for(previous) if previous else None
+        if baseline and baseline.get("downtime_hours") is not None:
+            baseline["downtime_hours_per_month"] = round(baseline["downtime_hours"] / len(previous), 1)
+
+        trend_months = maintenance_kpis.month_window(selected, 12)
+        trend = []
+        for month in trend_months:
+            if month not in inputs["months"]:
+                continue
+            values = kpis_for([month])
+            trend.append({
+                "month": month,
+                "availability_pct": values["availability_pct"],
+                "downtime_hours": values["downtime_hours"],
+                "failures": values["failures"],
+                "mtbf_hours": values["mtbf_hours"],
+                "mttr_hours": values["mttr_hours"],
+                "partial_month": maintenance_kpis.is_partial_month(month, inputs["reference_day"]),
+            })
+
+        reference = inputs["reference_day"]
+        payload: dict[str, Any] = {
+            "dashboard_reference": "Monitoreo > Mantenciones",
+            "period": {
+                "selected": selected,
+                "months": window,
+                "partial_month": any(maintenance_kpis.is_partial_month(m, reference) for m in window),
+                "data_until": reference.date().isoformat() if reference is not None else None,
+                "available": f"{inputs['months'][0]} a {inputs['months'][-1]}",
+                "default_rule": "Sin periodo se usa el ultimo mes completo con datos.",
+            },
+            "unit_id": resolved_unit or None,
+            "kpis": current,
+            "baseline_previous_months": (
+                {"months": f"{previous[0]} a {previous[-1]}", **baseline} if baseline else None
+            ),
+            "monthly_trend": trend,
+            "reliability_quality": {
+                "rows": current["rows"],
+                "low_confidence_rows": current["low_confidence_rows"],
+                "all_low_confidence": bool(current["rows"]) and current["low_confidence_rows"] == current["rows"],
+                "reliability_source_present": not inputs["reliability"].empty,
+            },
+            "definitions": {
+                "availability_pct": (
+                    "Disponibilidad CALENDARIO: (horas calendario - horas detenidas) / horas "
+                    "calendario. No es disponibilidad operacional."
+                ),
+                "availability_source": current["source"],
+                "downtime_hours": "Horas-equipo intervenidas, deduplicadas por equipo y dia.",
+                "mtbf_hours": "Promedio ponderado por intervalos entre fallas (query_5).",
+                "mttr_hours": "Horas detenidas por falla / numero de fallas (query_5).",
+            },
+        }
+        if not resolved_unit:
+            payload["units_with_downtime"] = maintenance_kpis.units_with_downtime(name, inputs["hours"], window)
+            payload["top_units_by_downtime"] = maintenance_kpis.unit_ranking(
+                name, inputs["hours"], inputs["reliability"], window, self._clamp(top_n, 1, 30)
+            )
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
     _PREDICTIVE_DATASETS = {
         "motor": "predictive_motor",

@@ -542,6 +542,63 @@ def build_gauge(
     return apply_dashboard_theme(figure, title=title, subtitle=subtitle, height=340)
 
 
+GOOD_DELTA_COLOR = STATUS_COLORS["Normal"]
+BAD_DELTA_COLOR = STATUS_COLORS["Anormal"]
+
+
+def build_kpi_tiles(
+    tiles: list[dict],
+    *,
+    title: str,
+    subtitle: str = "",
+) -> go.Figure:
+    """A row of headline numbers, each optionally compared with a reference value.
+
+    Each tile is ``{"label", "value", "suffix", "reference", "higher_is_better",
+    "reference_label"}``. A ``None`` value is drawn as "sin dato" instead of a zero, and the
+    delta is colored by whether the change is good for that metric, not by its sign.
+    """
+    count = max(1, len(tiles))
+    figure = make_subplots(rows=1, cols=count, specs=[[{"type": "indicator"}] * count])
+    for index, tile in enumerate(tiles, start=1):
+        value = tile.get("value")
+        reference = tile.get("reference")
+        good_up = bool(tile.get("higher_is_better", True))
+        caption = tile.get("reference_label") or ""
+        label = f"{tile.get('label', '')}"
+        if caption:
+            label += f"<br><span style='font-size:11px;color:{BRAND_MUTED}'>{caption}</span>"
+        has_value = value is not None
+        figure.add_trace(
+            go.Indicator(
+                mode="number+delta" if has_value and reference is not None else "number",
+                value=float(value) if has_value else None,
+                number={
+                    "suffix": tile.get("suffix", ""),
+                    "valueformat": ",.1f",
+                    "font": {"size": 30, "color": BRAND_TITLE},
+                },
+                delta=(
+                    {
+                        "reference": float(reference),
+                        "valueformat": ",.1f",
+                        "increasing": {"color": GOOD_DELTA_COLOR if good_up else BAD_DELTA_COLOR},
+                        "decreasing": {"color": BAD_DELTA_COLOR if good_up else GOOD_DELTA_COLOR},
+                    }
+                    if has_value and reference is not None
+                    else None
+                ),
+                title={"text": label if has_value else f"{label}<br>sin dato",
+                       "font": {"size": 13, "color": BRAND_TITLE}},
+            ),
+            row=1,
+            col=index,
+        )
+    apply_dashboard_theme(figure, title=title, subtitle=subtitle, height=250)
+    figure.update_layout(margin={"l": 20, "r": 20, "t": 62, "b": 20})
+    return figure
+
+
 def build_area(
     labels: list[str],
     values: list[float],

@@ -23,6 +23,9 @@ Cada número que escribas debe estar en la salida de una herramienta que ejecuta
   - **Única excepción: las duraciones de laboratorio de `query_lab_kpis`.** Se calculan restando
     fechas que la fuente sí publica, y su unidad viene declarada en `duration_unit`. Ahí escribe
     “días”. Esta excepción no habilita ninguna otra unidad.
+  - **Segunda excepción: los KPIs de `query_maintenance_kpis`.** La unidad viene en el nombre del
+    campo: los terminados en `_hours` se escriben en “horas” y los terminados en `_pct` con “%”.
+    Tampoco esta excepción habilita ninguna otra unidad.
 - **Nunca escribas el código técnico de una señal en tu respuesta al usuario** (`EngCoolTemp`,
   `AirFltr`, `trigger`, `Trigger_Var`, etc.). Varias herramientas (`query_alerts`,
   `query_alert_detail`, `query_alert_signals`, `query_telemetry_components`) ya entregan el nombre
@@ -105,6 +108,38 @@ una intervención haya sido ejecutada.
 Entrega el resumen semanal redactado por equipo. Úsala cuando pidan "qué se hizo", "resumen de
 mantenimiento" o contexto narrativo. Para conteos, tipos de acción o fechas exactas usa
 `query_maintenance`.
+
+### `query_maintenance_kpis`
+
+KPIs de mantenimiento con los mismos números que las tarjetas de **Monitoreo > Mantenciones**:
+disponibilidad, horas detenidas, MTBF, MTTR y fallas. Úsala cuando pregunten por disponibilidad,
+horas detenidas o fuera de servicio, MTBF, MTTR, confiabilidad, o qué equipos estuvieron más
+detenidos. `query_maintenance` cuenta acciones; esta mide tiempo.
+
+- `period` es un mes `AAAA-MM`. Si el usuario no nombró un mes concreto, déjalo vacío: se usa el
+  último mes completo con datos (`period.selected`). **"El último mes", "este mes", "el mes
+  pasado" o "últimos N meses" sin fecha explícita también van con `period` vacío** (y `months=N`
+  si corresponde): nunca calcules el mes desde la fecha de hoy, porque esta fuente suele llegar
+  con meses de atraso. Nunca respondas con un mes que tenga `partial_month` verdadero como si
+  fuera "el último mes". `months` amplía la ventana hacia atrás (máximo 24).
+  **Declara siempre el mes usado y `period.data_until`**: la fuente puede estar desfasada.
+- `kpis.availability_pct` es **disponibilidad calendario** (24 horas por día), no operacional.
+  Dilo siempre que la informes.
+- Un valor `null` es “sin dato”, nunca cero. Si `reliability_quality.all_low_confidence` es
+  verdadero, advierte que MTBF y MTTR son de baja confianza (pocas fallas registradas).
+- `baseline_previous_months` trae el promedio de los meses anteriores: úsalo para decir si el mes
+  está mejor o peor que lo habitual. Para horas detenidas compara contra
+  `downtime_hours_per_month`, no contra el total.
+- `monthly_trend` trae hasta 12 meses y `top_units_by_downtime` los equipos más detenidos con su
+  disponibilidad, fallas, MTBF y MTTR. Cuando entregues tres o más meses o equipos, preséntalos en
+  una **tabla Markdown** con esas columnas; marca los meses con `partial_month` verdadero.
+- Si preguntan por la **evolución mes a mes** ("cómo ha evolucionado", "mes a mes", "tendencia"),
+  entrega **una fila por cada mes** de `monthly_trend` dentro de la ventana pedida, con su valor
+  real o “sin dato” cuando sea `null`. No resumas meses como “valores base” ni “variación”: el
+  agente principal solo ve lo que tú escribes, así que un mes que omites desaparece de la
+  respuesta.
+- Con `unit_id` devuelve los KPIs de ese equipo. Si `unit_found` es falso, `filter_hints` trae los
+  equipos que sí existen.
 
 ### `query_oil_status`
 
@@ -479,6 +514,8 @@ la evidencia al flujo de 5 porqués; no construyas una cadena causal solo con el
    - "qué componente" / "qué ensayo" en aceite → `query_oil_components`.
    - "cuánto valió" / "cuánto superó el límite" → `query_alert_detail`.
    - "qué se hizo" en mantenimiento → `query_maintenance_summary`.
+   - disponibilidad, horas detenidas, MTBF, MTTR o "qué equipos estuvieron más detenidos" →
+     `query_maintenance_kpis`.
    - modelos predictivos, riesgo de falla, ranking → `query_predictive_risk`.
 5. Usa los totales y distribuciones completos; `records` es una muestra limitada para contexto.
 6. Contrasta fuentes solo cuando compartan unidad y contexto compatibles.

@@ -23,6 +23,6 @@ CHART_KINDS: tuple[str, ...] = (
 
 # Kinds only the named-chart registry produces: they need a curated data shape
 # rather than a dataset × dimension combination.
-REGISTRY_ONLY_KINDS: tuple[str, ...] = ("radar", "gauge")
+REGISTRY_ONLY_KINDS: tuple[str, ...] = ("radar", "gauge", "indicator")
 
 ALL_CHART_KINDS: tuple[str, ...] = CHART_KINDS + REGISTRY_ONLY_KINDS

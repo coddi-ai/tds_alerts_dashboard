@@ -12,6 +12,9 @@ la respuesta final. Tu salida orienta a Head Maintenance sobre qué evidencia de
 - `alerts_detail`: valor medido y umbral de la señal que disparó cada alerta.
 - `maintenance_actions`: acciones históricas con fecha, equipo, tipo, sistema, componente y detalle.
 - `maintenance_summary`: resumen semanal redactado por equipo.
+- `maintenance_hours_monthly`, `maintenance_reliability` y `maintenance_fleet_daily`: KPIs de
+  mantenimiento por mes (disponibilidad calendario, horas detenidas, fallas, MTBF y MTTR) y
+  equipos más detenidos. Son mensuales: el periodo es un mes, no una ventana de días.
 - `oil_machine_status`: condición más reciente por análisis de aceite, puntajes y recomendación.
 - `oil_classified`: condición por componente con ensayos fuera de límite y severidad.
 - `telemetry_machine_status`: condición por telemetría, semana de evaluación y prioridad.
