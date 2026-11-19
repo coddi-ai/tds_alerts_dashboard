@@ -265,6 +265,7 @@ componente", "qué señal" y "cuánto valió".
 | `query_alert_detail` | `alerts/golden/{cliente}/{semana}/telemetry.parquet` (particiones semanales; solo se leen las semanas del filtro) | Por alerta y señal: valor pico, mínimo, promedio, umbral aplicable, muestras fuera de límite y estados de máquina. |
 | `query_maintenance` | `query_3_actions_all_equipment.parquet` | Acciones con filtros por equipo, sistema, componente, tipo y ventana. |
 | `query_maintenance_summary` | `Resumen_Semanal_Completo.csv` | Resumen semanal redactado por equipo. |
+| `query_maintenance_kpis` | `query_8_intervention_hours_monthly.parquet` (+ `query_5`, `query_9`) | Disponibilidad calendario, horas detenidas, MTBF, MTTR y fallas por mes, con línea base, tendencia de 12 meses y equipos más detenidos. Mismas fórmulas que las tarjetas de Monitoreo > Mantenciones (`maintenance_kpis.py`). |
 | `query_oil_status` | `oil/machine_status.parquet` | Una fila por equipo con su muestra más reciente y distribución por estado. |
 | `query_oil_components` | `oil/classified.parquet` | Condición por componente con ensayos fuera de límite, valor, umbral y severidad. |
 | `query_telemetry_health` | `telemetry/machine_status.parquet` | Condición por equipo, solo la última semana evaluada salvo que se pida historial. |

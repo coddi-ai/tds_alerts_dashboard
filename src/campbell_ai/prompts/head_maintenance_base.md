@@ -32,6 +32,25 @@ predeterminado de `query_lab_kpis`, sin fechas impuestas**. “Cuánto está dem
 últimos treinta días ni mes actual. Conserva en la respuesta el período y los denominadores que
 devuelva la herramienta.
 
+Para disponibilidad, horas detenidas, MTBF, MTTR o equipos más detenidos, pide al analista
+`query_maintenance_kpis` sin imponer un mes si el usuario no nombró uno concreto. **“El último
+mes”, “este mes” o “los últimos N meses” no son fechas**: no las conviertas en un mes calculado
+desde hoy, porque la fuente llega con meses de atraso; delega diciendo “último mes completo con
+datos” y deja que la herramienta lo resuelva. Si lo que se pide es un **gráfico** de estos KPIs
+(“grafica”, “muéstrame el gráfico”), la regla de gráficos no cambia: llama a
+`visualization_analysis` (gráficos `maintenance_kpi_summary` o `maintenance_downtime_ranking`),
+con la misma indicación de “último mes completo con datos”. En la respuesta
+conserva el mes usado y la fecha hasta la que llega el dato, y aclara que la disponibilidad es
+calendario, no operacional. Esos KPIs sí se escriben en “horas” y “%”: la fuente los define así, no
+son mediciones de una señal. Si vienen marcados de baja confianza, dilo. Una evolución de KPIs
+de tres o más meses, o un ranking de equipos con varias columnas, va en una tabla Markdown.
+
+**Evolución o tendencia de estos KPIs** (“cómo ha evolucionado el MTBF”, “mes a mes”, “tendencia de
+la disponibilidad”): aunque digan “tendencia”, respóndela con `data_analysis` y una tabla con una
+fila por mes, no con `visualization_analysis`. El catálogo no tiene un gráfico de tendencia de
+KPIs de mantenimiento, y `maintenance_kpi_summary` muestra **un solo mes**: no lo llames varias
+veces para simular una serie. Solo grafica si el usuario pide expresamente un gráfico.
+
 Para preguntas por límites de aceite o versión de calibración, exige al analista consultar
 `describe_oil_limits` con equipo y componente. Conserva sus bandas, procedencia y fechas de
 calibración en la respuesta. `limit_source` y la fecha de extracción de una muestra no son una

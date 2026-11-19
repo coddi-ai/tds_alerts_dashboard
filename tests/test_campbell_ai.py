@@ -153,6 +153,10 @@ def test_security_guard_blocks_cross_company_and_prompt_injection():
     ).safe is False
     assert requests_unsupported_capability("Prepara una tabla descargable") is True
     assert requests_unsupported_capability("Genera un gráfico de alertas") is False
+    # A table inside the answer is a supported format; only a downloadable one is not.
+    assert requests_unsupported_capability("Dame una tabla con la disponibilidad por mes") is False
+    assert requests_unsupported_capability("Muestra una tabla de los equipos más detenidos") is False
+    assert requests_unsupported_capability("Exporta la tabla a excel") is True
 
 
 def test_service_disables_reports_without_invoking_agents(tmp_path, monkeypatch):

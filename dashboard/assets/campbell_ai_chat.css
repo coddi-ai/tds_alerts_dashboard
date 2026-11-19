@@ -1,0 +1,32 @@
+/* Campbell AI - Markdown tables inside chat answers.
+   The agent answers comparisons of three or more months or units (KPIs, rankings) with a
+   Markdown table. dcc.Markdown renders a bare <table>, which nothing else on the page styles,
+   so without this it reads as unaligned text. Scoped to the chat's Markdown only. */
+
+.campbell-ai-markdown table {
+    display: block;            /* lets a wide table scroll inside the bubble */
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    margin: 0.4rem 0 1rem;
+    font-size: 0.92em;
+    background: #ffffff;
+}
+
+.campbell-ai-markdown th,
+.campbell-ai-markdown td {
+    padding: 0.35rem 0.7rem;
+    border: 1px solid #dfe4e6;
+    white-space: nowrap;
+    text-align: left;
+}
+
+.campbell-ai-markdown th {
+    background: #ecf0f1;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.campbell-ai-markdown tbody tr:nth-child(even) td {
+    background: #f9fbfc;
+}
