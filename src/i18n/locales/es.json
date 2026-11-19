@@ -724,6 +724,7 @@
  "menace_control_callbacks.no_hay_datos_de_alertas_en": "No hay datos de alertas en los últimos {days} días",
  "menace_control_callbacks.sistemas_afectados": "Sistemas Afectados",
  "menace_control_callbacks.total_alertas": "Total Alertas",
+ "nav.app_version": "Versión de la aplicación",
  "nav.client_label": "Cliente:",
  "nav.client_switch": "Cambiar de cliente",
  "nav.erp_pending_badge_label": "{count} avisos pendientes",

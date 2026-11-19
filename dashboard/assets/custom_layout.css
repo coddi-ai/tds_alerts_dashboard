@@ -465,6 +465,20 @@
 
 /* Collapsed state: the sidebar becomes an icon-only rail (one icon per section). A section's
    links open as a flyout beside its icon - see the rail rules below and sidebar_nav.js. */
+/* Release number at the foot of the sidebar (the menu above it leaves 30px for it). */
+.sidebar-version {
+    height: 30px;
+    line-height: 30px;
+    padding: 0 20px;
+    color: #b8c0c8; /* AA on #2c3e50 */
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+}
+
+#dashboard-shell.sidebar-collapsed .sidebar-version {
+    display: none;
+}
+
 #dashboard-shell.sidebar-collapsed #app-sidebar {
     width: 68px !important;
     min-width: 0;

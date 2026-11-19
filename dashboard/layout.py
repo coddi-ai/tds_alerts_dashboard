@@ -636,8 +636,10 @@ def create_main_dashboard(user_data: dict) -> html.Div:
             id='sidebar-nav-menu',
             children=menu_items,
             className="p-3 sidebar-menu",
-            style={"overflowY": "auto", "height": "calc(100vh - 142px)"}
-        )
+            style={"overflowY": "auto", "height": "calc(100vh - 186px)"}
+        ),
+        # Release number, small and muted, at the foot of the sidebar (hidden in the icon rail).
+        html.Div(f"v{APP_VERSION}", className="sidebar-version", title=t("nav.app_version")),
     ], id='app-sidebar', style={
         "width": "260px",
         "backgroundColor": "#2c3e50",
