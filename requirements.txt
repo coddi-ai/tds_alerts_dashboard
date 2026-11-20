@@ -44,8 +44,10 @@ tzdata>=2024.1
 tqdm>=4.66.0
 
 # Informe preliminar de falla (src/informe_falla): HTML -> PDF y validacion de la respuesta de la IA.
-# WeasyPrint necesita Pango del sistema (ver Dockerfile).
-weasyprint>=62.0
+# WeasyPrint necesita Pango del sistema (ver Dockerfile.app, que es la imagen que genera el PDF).
+# Fijada: WeasyPrint saca versiones mayores seguido y cambia su API (la 68 cambio el url_fetcher,
+# ver src/informe_falla/pdf.py). Subirla a mano y probar el PDF en la imagen Docker.
+weasyprint==70.0
 jsonschema>=4.0
 
 # S3 Interaction (pinned to avoid pip backtracking; must support S3 conditional
