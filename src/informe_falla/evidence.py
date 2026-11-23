@@ -268,8 +268,10 @@ def _semanas_anomalas(vista, metrica):
     v["pct"] = np.where(n > 1, 100 * (rango - 1) / (n - 1).clip(lower=1), np.nan)
 
     base = v[(v["zona"] == "base") & v["en_base"]].groupby("Unit")[metrica].agg(["max", "mean", "std", "count"])
-    b_max, b_media = v["Unit"].map(base["max"]), v["Unit"].map(base["mean"])
-    b_desv, b_n = v["Unit"].map(base["std"]).fillna(0), v["Unit"].map(base["count"]).fillna(0)
+    # astype: con `v` vacio, pandas >= 3.1 deja map() con el tipo de "Unit" (str); ver _dias_anomalos.
+    b_max, b_media = v["Unit"].map(base["max"]).astype("float64"), v["Unit"].map(base["mean"]).astype("float64")
+    b_desv = v["Unit"].map(base["std"]).astype("float64").fillna(0)
+    b_n = v["Unit"].map(base["count"]).astype("float64").fillna(0)
     z = (v[metrica] - b_media) / b_desv.where(b_desv > 0)
     sobre_base = (v[metrica] - b_max >= c.SALTO_MIN) & ((z >= c.Z_MIN) | (b_desv == 0))   # desv 0: basta el salto
     sobre_base |= b_n < c.MIN_SEMANAS_BASE
@@ -426,8 +428,11 @@ def _dias_anomalos(vd, modo):
     base = v[(v["zona"] == "base") & v["en_base"]].groupby("Unit")[modo]
     stats = pd.DataFrame({"p": base.quantile(c.PERCENTIL_BASE_DIARIO / 100), "media": base.mean(),
                           "desv": base.std(), "n": base.count()})
-    p, media = v["Unit"].map(stats["p"]), v["Unit"].map(stats["media"])
-    desv, n_base = v["Unit"].map(stats["desv"]).fillna(0), v["Unit"].map(stats["n"]).fillna(0)
+    # astype: con `v` vacio (modo que el cliente no publica), pandas >= 3.1 deja el resultado de
+    # map() con el tipo de "Unit" (str) y la resta de abajo falla; en 3.0 quedaba float.
+    p, media = v["Unit"].map(stats["p"]).astype("float64"), v["Unit"].map(stats["media"]).astype("float64")
+    desv = v["Unit"].map(stats["desv"]).astype("float64").fillna(0)
+    n_base = v["Unit"].map(stats["n"]).astype("float64").fillna(0)
     z = (v[modo] - media) / desv.where(desv > 0)
     sobre_base = (v[modo] - p >= c.SALTO_MIN) & ((z >= c.Z_MIN) | (desv == 0))
     sobre_base |= n_base < c.MIN_DIAS_BASE
