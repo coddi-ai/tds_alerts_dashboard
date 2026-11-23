@@ -1,9 +1,11 @@
 """
-Unified Oil Tab with Internal Tabs (Fleet Overview and Report Detail).
+Unified Oil Tab with Internal Tabs (Fleet Overview, Report Detail, Lab Compliance, Frequency Panel).
 
 This tab combines the Fleet Overview (former overview > general) and
 Report Detail (former monitoring > oil) views into a single navigation
-entry with internal tabs for switching between views.
+entry with internal tabs for switching between views. The active-tab
+indicator sits under the tab's own label (pred-tab, ui_notes_improved.md §8)
+and assets/oil_tabs_a11y.js makes the tabs reachable with the keyboard.
 """
 
 from src.i18n import t
@@ -57,20 +59,26 @@ def create_layout(unit: str | None = None, component: str | None = None) -> html
                 dcc.Tab(
                     label=t("tab_oil.vision_de_flota"),
                     value='fleet-overview',
-                    className='custom-tab',
-                    selected_className='custom-tab--selected'
+                    className='custom-tab pred-tab oil-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
                 ),
                 dcc.Tab(
                     label=t("tab_oil.detalle_de_reporte"),
                     value='report-detail',
-                    className='custom-tab',
-                    selected_className='custom-tab--selected'
+                    className='custom-tab pred-tab oil-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
                 ),
                 dcc.Tab(
                     label=t("tab_oil.cumplimiento_laboratorio"),
                     value='lab-compliance',
-                    className='custom-tab',
-                    selected_className='custom-tab--selected'
+                    className='custom-tab pred-tab oil-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
+                ),
+                dcc.Tab(
+                    label=t("tab_oil.panel_de_frecuencia"),
+                    value='frequency',
+                    className='custom-tab pred-tab oil-tab',
+                    selected_className='custom-tab--selected pred-tab--selected'
                 ),
                 # dcc.Tab(
                 #     label='Horómetro de Componentes',

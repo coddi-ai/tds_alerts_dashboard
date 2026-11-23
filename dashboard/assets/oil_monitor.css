@@ -1,0 +1,271 @@
+/* Monitor de Aceite: KPI tiles, status banners, the fleet matrix and the frequency panel.
+   Colors that depend on a value come from shared/severity.py (inline styles written by
+   dashboard/components/oil_ui.py); this file only holds the layout and the neutral tones, so the
+   severity palette lives in exactly one place (ui_notes_improved.md §1.1). */
+
+:root {
+    --oil-ink: #0f172a;
+    --oil-muted: #475569;          /* 7.6:1 on white, 7.1:1 on #f8fafc */
+    --oil-line: #e2e8f0;
+    --oil-soft: #f1f5f9;
+    --oil-focus: #2563eb;
+}
+
+/* ---- Tabs: the keyboard can reach and operate them (assets/oil_tabs_a11y.js) ---------------- */
+.oil-tab:focus-visible {
+    outline: 2px solid var(--oil-focus);
+    outline-offset: -2px;
+}
+
+/* ---- Page header ---------------------------------------------------------------------------- */
+.oil-caption {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--oil-muted);
+}
+
+/* ---- KPI tiles (ui_notes_improved.md §3) ---------------------------------------------------- */
+.kpi-label   { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--oil-muted); }
+.kpi-value   { font-size: 30px; font-weight: 700; line-height: 1; margin: 10px 0; color: var(--oil-ink); }
+.kpi-caption { font-size: 12px; color: var(--oil-muted); }
+.kpi-chip    { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.kpi-gauge-track { height: 6px; border-radius: 999px; background: #e5e7eb; overflow: hidden; margin-bottom: 8px; }
+.kpi-gauge-fill  { height: 100%; border-radius: 999px; }
+
+.oil-kpi-valuerow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.oil-kpi-valuerow .kpi-value { margin: 10px 0; }
+.oil-kpi-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+/* A tinted rounded square behind the card's icon: the severity lives in a small, explicit element
+   rather than in a colored edge running the height of the card (§2). */
+.oil-icon-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--oil-soft);
+    color: var(--oil-muted);
+}
+.oil-neutral-chip {
+    background: var(--oil-soft);
+    color: var(--oil-muted);
+    border: 1px solid var(--oil-line);
+}
+
+/* ---- Status banner (§4): one status value drives background, text and badge ------------------ */
+.oil-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    padding: 16px 20px;
+    border-radius: 16px;
+}
+.oil-banner__identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+.oil-banner__icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    font-size: 18px;
+    background: rgba(148, 163, 184, .18);
+}
+.oil-banner__eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    opacity: .9;
+}
+.oil-banner__title {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+.oil-banner__subtitle { font-size: 13px; opacity: .92; }
+.oil-banner__fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 28px;
+}
+.oil-banner__field-label { display: block; font-size: 11px; opacity: .9; }
+.oil-banner__field-value { font-weight: 700; font-size: 14px; }
+
+/* ---- Tables ---------------------------------------------------------------------------------- */
+.oil-table-wrap { overflow-x: auto; }
+.oil-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+}
+.oil-table th,
+.oil-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--oil-line);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.oil-table thead th {
+    position: sticky;
+    top: 0;
+    background: #343a40;
+    color: #fff;
+    font-weight: 700;
+    text-align: center;
+    white-space: normal;
+    z-index: 1;
+}
+.oil-table tbody tr:hover > * { background-color: #f8fafc; }
+.oil-table .oil-col-left { text-align: left; }
+.oil-table .oil-col-center { text-align: center; }
+
+.oil-sort {
+    display: inline-flex;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.oil-sort:hover { background: rgba(255, 255, 255, .14); }
+.oil-sort:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.oil-sort__arrow { font-size: 10px; opacity: .55; }
+.oil-sort[data-active="true"] .oil-sort__arrow { opacity: 1; }
+
+/* The unit and every component cell are real buttons (Tab / Enter). */
+.oil-unit-btn,
+.oil-link-btn {
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--oil-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: rgba(15, 23, 42, .25);
+    text-underline-offset: 3px;
+}
+.oil-unit-btn:hover,
+.oil-link-btn:hover { background: var(--oil-soft); text-decoration-color: currentColor; }
+.oil-unit-btn:focus-visible,
+.oil-link-btn:focus-visible,
+.oil-cell-btn:focus-visible,
+.oil-select:focus-visible,
+.oil-pager button:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: 2px; }
+
+.oil-select {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 2px solid #64748b;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+}
+.oil-select[aria-pressed="true"] {
+    border-color: var(--oil-focus);
+    background: radial-gradient(circle, var(--oil-focus) 0 4px, #fff 5px);
+}
+.oil-row--selected > * { background-color: #eff6ff; }
+
+.oil-cell-btn {
+    display: block;
+    width: 100%;
+    padding: 5px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font: inherit;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+}
+.oil-cell-btn:hover { filter: brightness(.96); }
+.oil-cell-empty { color: var(--oil-muted); font-style: italic; font-weight: 400; }
+
+.oil-estado-cell { text-align: center; }
+.oil-estado-cell .status-chip { font-size: 12px; }
+
+/* ---- Pager ------------------------------------------------------------------------------------ */
+.oil-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--oil-muted);
+}
+.oil-pager__buttons { display: flex; gap: 8px; }
+.oil-pager button {
+    padding: 4px 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--oil-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+.oil-pager button:disabled { opacity: .5; cursor: default; }
+
+/* ---- Panel de Frecuencia ---------------------------------------------------------------------- */
+.oil-group-card {
+    height: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--oil-line);
+    border-radius: 12px;
+    background: #fff;
+}
+.oil-group-card__title { font-size: 15px; font-weight: 700; color: var(--oil-ink); }
+.oil-group-card__stat  { font-size: 13px; color: var(--oil-muted); }
+.oil-group-card__label { margin-top: 10px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--oil-muted); }
+.oil-group-card__value { font-size: 14px; color: var(--oil-ink); }
+
+.oil-bar-cell { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.oil-bar { flex: 1 1 auto; height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+.oil-bar__fill { height: 100%; border-radius: 999px; }
+.oil-bar__pct { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.oil-footnote { margin-top: 12px; font-size: 12px; color: var(--oil-muted); }
+
+/* ---- Filters / AI actions ---------------------------------------------------------------------- */
+.oil-filter-label { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 700; }
+.oil-actions .form-check { margin-bottom: 8px; }
+.oil-actions .form-check-label { line-height: 1.5; white-space: pre-wrap; }
+.oil-ai-box { height: 100%; padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid var(--oil-line); }
+.oil-ai-box h6 { margin-bottom: 8px; color: var(--oil-ink); }
+.oil-ai-box p { margin: 0; line-height: 1.6; white-space: pre-wrap; color: #1e293b; }

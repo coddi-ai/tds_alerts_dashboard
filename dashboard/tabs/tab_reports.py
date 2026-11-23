@@ -28,22 +28,22 @@ def create_reports_tab() -> dbc.Container:
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col([
-                            html.Label(t("tab_reports.familia"), className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
+                            html.Label(t("tab_reports.familia"), htmlFor='reports-familia-selector', className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
                             dcc.Dropdown(id='reports-familia-selector',
                                          placeholder=t("tab_reports.tipo_de_maquina"), className="mb-2")
                         ], width=3),
                         dbc.Col([
-                            html.Label(t("tab_machines.equipo"), className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
+                            html.Label(t("tab_machines.equipo"), htmlFor='reports-equipo-selector', className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
                             dcc.Dropdown(id='reports-equipo-selector',
                                          placeholder=t("tab_machines.equipo_2"), className="mb-2")
                         ], width=3),
                         dbc.Col([
-                            html.Label(t("tab_machines.componente"), className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
+                            html.Label(t("tab_machines.componente"), htmlFor='reports-component-selector', className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
                             dcc.Dropdown(id='reports-component-selector',
                                          placeholder=t("tab_machines.componente_2"), className="mb-2")
                         ], width=3),
                         dbc.Col([
-                            html.Label(t("tab_reports.fecha_muestra"), className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
+                            html.Label(t("tab_reports.fecha_muestra"), htmlFor='reports-date-selector', className="fw-bold mb-1", style={'fontSize': '0.85rem'}),
                             dcc.Dropdown(id='reports-date-selector',
                                          placeholder=t("tab_reports.fecha"), className="mb-2")
                         ], width=3)
@@ -60,7 +60,7 @@ def create_reports_tab() -> dbc.Container:
         # DECISION SUMMARY (includes anomaly type)
         # ========================================
         dbc.Card([
-            dbc.CardHeader(t("tab_reports.resumen_de_decision"), className="fw-bold bg-primary text-white"),
+            dbc.CardHeader(t("tab_reports.resumen_de_decision"), className="fw-bold"),
             dbc.CardBody(
                 html.Div(id='reports-decision-summary')
             )
@@ -70,7 +70,7 @@ def create_reports_tab() -> dbc.Container:
         # AI RECOMMENDATION
         # ========================================
         dbc.Card([
-            dbc.CardHeader(t("tab_reports.analisis_y_recomendacion_de_ia"), className="fw-bold bg-info text-white"),
+            dbc.CardHeader(t("tab_reports.analisis_y_recomendacion_de_ia"), className="fw-bold"),
             dbc.CardBody(
                 html.Div(id='reports-ai-diagnosis')
             )
@@ -97,9 +97,11 @@ def create_reports_tab() -> dbc.Container:
                     value='tendencia',
                     children=[
                         dcc.Tab(label=t("tab_reports.tendencia"), value='tendencia',
-                                className='custom-tab', selected_className='custom-tab--selected'),
+                                className='custom-tab pred-tab oil-tab',
+                                selected_className='custom-tab--selected pred-tab--selected'),
                         dcc.Tab(label=t("tab_reports.ultimo_ensayo"), value='ultimo_ensayo',
-                                className='custom-tab', selected_className='custom-tab--selected'),
+                                className='custom-tab pred-tab oil-tab',
+                                selected_className='custom-tab--selected pred-tab--selected'),
                     ],
                     className='mb-3'
                 ),
@@ -108,7 +110,7 @@ def create_reports_tab() -> dbc.Container:
                     html.Div([
                         dbc.Row([
                             dbc.Col([
-                                html.Label(t("tab_reports.rango_de_fechas"), className="fw-bold small mb-1 d-block"),
+                                html.Label(t("tab_reports.rango_de_fechas"), htmlFor='reports-date-range-picker', className="fw-bold small mb-1 d-block"),
                                 dcc.DatePickerRange(
                                     id='reports-date-range-picker',
                                     display_format=t("tab_lab_compliance.yyyy_mm_dd"),
@@ -178,7 +180,7 @@ def create_reports_tab() -> dbc.Container:
                 ),
                 dbc.Row([
                     dbc.Col([
-                        html.Label(t("tab_reports.variables"), className="fw-bold small"),
+                        html.Label(t("tab_reports.variables"), htmlFor='advanced-analytics-variables', className="fw-bold small"),
                         dcc.Dropdown(
                             id='advanced-analytics-variables',
                             placeholder=t("tab_reports.seleccionar_variables"),
@@ -187,7 +189,7 @@ def create_reports_tab() -> dbc.Container:
                         )
                     ], md=6),
                     dbc.Col([
-                        html.Label(t("tab_reports.opciones"), className="fw-bold small"),
+                        html.Div(t("tab_reports.opciones"), className="fw-bold small"),
                         dbc.Checklist(
                             id='advanced-analytics-show-limits',
                             options=[{'label': t("tab_reports.mostrar_limite_condenatorio"), 'value': 'show'}],
@@ -197,7 +199,7 @@ def create_reports_tab() -> dbc.Container:
                         )
                     ], md=4),
                     dbc.Col([
-                        html.Label("\u00a0", className="small"),
+                        html.Div(className="small", style={'height': '1.5em'}),
                         dbc.Button(t("tab_reports.generar"), id='advanced-analytics-generate',
                                    color="primary", size="sm", className="w-100")
                     ], md=2),

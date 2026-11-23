@@ -15,17 +15,25 @@ from src.i18n import t
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
+from dashboard.components.oil_ui import kpi_tile, page_header
+
 
 def create_lab_compliance_tab() -> dbc.Container:
     """Create the Laboratory Compliance tab layout."""
     return dbc.Container([
-        html.H3(t("tab_lab_compliance.cumplimiento_de_laboratorio"), className="mt-4 mb-3"),
+        # "Total de muestras" is metadata, not a decision value: a caption under the title (§5).
+        page_header(
+            t("tab_lab_compliance.cumplimiento_de_laboratorio"),
+            caption=html.Span([html.Span(id='lab-kpi-total-samples', children="—"), " ",
+                               t("tab_lab_compliance.muestras_en_el_rango_seleccionado")]),
+        ),
         html.Hr(),
 
         # Date Range Filter
         dbc.Row([
             dbc.Col([
-                html.Label(t("tab_lab_compliance.rango_de_fechas_fecha_de_reporte"), className="fw-bold small"),
+                html.Label(t("tab_lab_compliance.rango_de_fechas_fecha_de_reporte"),
+                           htmlFor='lab-compliance-date-range', className="fw-bold small d-block"),
                 dcc.DatePickerRange(
                     id='lab-compliance-date-range',
                     display_format=t("tab_lab_compliance.yyyy_mm_dd"),
@@ -36,40 +44,16 @@ def create_lab_compliance_tab() -> dbc.Container:
             ], md=6),
         ], className="mb-4 p-3 bg-light rounded"),
 
-        # KPI Cards
+        # KPI tiles: neutral, no severity threshold is defined for turnaround times
         dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H6(id='lab-kpi-1-title', children=t("tab_lab_compliance.tiempo_de_transito_prom"),
-                                className="text-muted mb-1"),
-                        html.H3(id='lab-kpi-1-value', children="—",
-                                className="text-primary fw-bold mb-0"),
-                        html.Small(t("tab_lab_compliance.dias_labdate_sampledate"), className="text-muted")
-                    ])
-                ], className="shadow-sm h-100")
-            ], md=4),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H6(id='lab-kpi-2-title', children=t("tab_lab_compliance.tiempo_de_laboratorio_prom"),
-                                className="text-muted mb-1"),
-                        html.H3(id='lab-kpi-2-value', children="—",
-                                className="text-info fw-bold mb-0"),
-                        html.Small(t("tab_lab_compliance.dias_reportdate_labdate"), className="text-muted")
-                    ])
-                ], className="shadow-sm h-100")
-            ], md=4),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H6(t("tab_lab_compliance.total_muestras"), className="text-muted mb-1"),
-                        html.H3(id='lab-kpi-total-samples', children="—",
-                                className="text-secondary fw-bold mb-0"),
-                        html.Small(t("tab_lab_compliance.en_el_rango_seleccionado"), className="text-muted")
-                    ])
-                ], className="shadow-sm h-100")
-            ], md=4),
+            dbc.Col(kpi_tile(
+                t("tab_lab_compliance.tiempo_de_transito_prom"), "—", icon="fa-truck",
+                label_id='lab-kpi-1-title', value_id='lab-kpi-1-value',
+                caption=t("tab_lab_compliance.dias_labdate_sampledate")), md=6),
+            dbc.Col(kpi_tile(
+                t("tab_lab_compliance.tiempo_de_laboratorio_prom"), "—", icon="fa-flask",
+                label_id='lab-kpi-2-title', value_id='lab-kpi-2-value',
+                caption=t("tab_lab_compliance.dias_reportdate_labdate")), md=6),
         ], className="mb-4"),
 
         # Weekly Bar Chart
