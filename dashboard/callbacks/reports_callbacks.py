@@ -28,6 +28,10 @@ from dashboard.components.oil_charts import (
 )
 import dash_bootstrap_components as dbc
 import logging
+from dashboard.components.labels import essay_label
+from dashboard.components.oil_ui import action_checklist, status_banner
+from dashboard.components.status_chip import status_chip
+from shared.severity import SEVERITY_TIERS
 
 logger = logging.getLogger(__name__)
 
@@ -553,7 +557,7 @@ def register_reports_callbacks(app):
                 cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.05,
-                subplot_titles=[vocab(essay) for essay in essays]
+                subplot_titles=[essay_label(vocab(essay)) for essay in essays]
             )
             
             # Get limits for this component (use normalized name for lookup)
@@ -580,7 +584,7 @@ def register_reports_callbacks(app):
                         x=essay_dates,
                         y=essay_values,
                         mode='lines+markers',
-                        name=vocab(essay),
+                        name=essay_label(vocab(essay)),
                         line=dict(color='#1f77b4', width=2),
                         marker=dict(size=6),
                         showlegend=False
@@ -913,7 +917,7 @@ def register_reports_callbacks(app):
                           'Índice PQ', 'Numero Total Basico', 'Oxidación', 'Agua',
                           'Refrigerante', 'Combustible', 'Hollín']
             available = [c for c in essay_cols if c in history.columns and history[c].notna().any()]
-            return [{'label': c, 'value': c} for c in available]
+            return [{'label': essay_label(c), 'value': c} for c in available]
         except:
             return []
 
@@ -990,7 +994,7 @@ def register_reports_callbacks(app):
                 color = colors_cycle[idx % len(colors_cycle)]
 
                 fig.add_trace(go.Scatter(
-                    x=dates, y=vals, mode='lines+markers', name=vocab(var),
+                    x=dates, y=vals, mode='lines+markers', name=essay_label(vocab(var)),
                     line=dict(color=color, width=2), marker=dict(size=5)
                 ))
 
@@ -1228,7 +1232,7 @@ def get_essay_options(df):
                     'breached_essays', 'ai_recommendation', 'ai_generated_at',
                     'unitId_generated', 'componentName_generated', 'sampleDate_generated', 'client_generated'}
     essays = [col for col in df.columns if col not in metadata_cols and not is_eng_column(col)]
-    return [{'label': e, 'value': e} for e in sorted(essays)]
+    return [{'label': essay_label(e), 'value': e} for e in sorted(essays)]
 
 
 # ============================================================================
@@ -1237,20 +1241,15 @@ def get_essay_options(df):
 
 def create_report_identity_display(sample):
     """
-    Create sticky report identity display (OIL-R-01).
-    
-    Shows: client, machine/unit, component, sample date, report status, severity score.
-    Includes component horómetro when available.
+    Create the report header (OIL-R-01) as a status banner (ui_notes_improved.md §4).
+
+    One status value - the report's - drives the banner's background, text and badge: Normal is a
+    quiet white banner with a green badge, Alerta the orange tier, Anormal the deep red one.
+    Shows: client, unit, component, component hour meter, sample date and the report status.
     """
     if sample is None or sample.empty:
         return html.Div()
-    
-    status_color = {
-        'Anormal': 'danger',
-        'Alerta': 'warning',
-        'Normal': 'success'
-    }.get(sample.get('report_status', 'Normal'), 'secondary')
-    
+
     # Build component hours display
     comp_hours_display = 'N/A'
     comp_hours_val = sample.get('componentHours')
@@ -1259,45 +1258,19 @@ def create_report_identity_display(sample):
             comp_hours_display = f"{float(comp_hours_val):,.0f} hrs"
         except (ValueError, TypeError):
             comp_hours_display = 'N/A'
-    
-    return dbc.Row([
-        dbc.Col([
-            html.Div([
-                html.Small(t("reports_callbacks.cliente"), className="text-muted d-block"),
-                html.Strong(str(sample.get('client', 'N/A')).upper())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("tab_mantenciones_general.equipo"), className="text-muted d-block"),
-                html.Strong(str(sample.get('unitId', 'N/A')).upper())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("tab_mantenciones_general.componente"), className="text-muted d-block"),
-                html.Strong(str(sample.get('componentName', 'N/A')).title())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("reports_callbacks.horometro_comp"), className="text-muted d-block"),
-                html.Strong(comp_hours_display, style={'color': '#17a2b8'})
-            ])
-        ], width=1),
-        dbc.Col([
-            html.Div([
-                html.Small(t("component_hours_callbacks.fecha_de_muestra"), className="text-muted d-block"),
-                html.Strong(pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A')
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("fleet_overview.col_status"), className="text-muted d-block"),
-                html.Span(sample.get('report_status', 'N/A'), className=f"badge bg-{status_color}")
-            ])
-        ], width=3)
-    ], className="mt-2")
+
+    sample_date = pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'
+    return html.Div(status_banner(
+        sample.get('report_status', 'Normal'),
+        eyebrow=t("reports_callbacks.reporte_de_aceite"),
+        title=str(sample.get('unitId', 'N/A')).upper(),
+        subtitle=f"{t('tab_mantenciones_general.componente')}: {str(sample.get('componentName', 'N/A')).title()}",
+        fields=[
+            (t("reports_callbacks.cliente"), str(sample.get('client', 'N/A')).upper()),
+            (t("reports_callbacks.horometro_comp"), comp_hours_display),
+            (t("component_hours_callbacks.fecha_de_muestra"), sample_date),
+        ],
+    ), className="mt-2")
 
 
 def create_decision_summary(sample, limits, client, machine, component):
@@ -1308,12 +1281,6 @@ def create_decision_summary(sample, limits, client, machine, component):
     """
     if sample is None or len(sample) == 0:
         return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
-    
-    status_color = {
-        'Anormal': 'danger',
-        'Alerta': 'warning',
-        'Normal': 'success'
-    }.get(sample.get('report_status', 'Normal'), 'secondary')
     
     # Parse stored breached essays
     stored_breached_essays = normalize_breached_essays(sample.get('breached_essays'))
@@ -1366,8 +1333,9 @@ def create_decision_summary(sample, limits, client, machine, component):
                         dbc.Col([
                             html.Div([
                                 html.Small(t("reports_callbacks.estado_del_reporte"), className="text-muted d-block mb-1"),
-                                html.H4(html.Span(sample.get('report_status', 'N/A'), 
-                                       className=f"badge bg-{status_color}"))
+                                # The status is a chip (shape + word). The counts below are neutral: no
+                                # severity threshold is defined for them, so they take no alarm color.
+                                html.Div(status_chip(sample.get('report_status', 'N/A'), solid=True), className="mt-1")
                             ])
                         ], width=3),
                         dbc.Col([
@@ -1383,8 +1351,7 @@ def create_decision_summary(sample, limits, client, machine, component):
                         dbc.Col([
                             html.Div([
                                 html.Small(t("reports_callbacks.ensayos_fuera_de_limite"), className="text-muted d-block mb-1"),
-                                html.H3(f"{essays_broken_count}", 
-                                       className=f"text-{status_color}")
+                                html.H3(f"{essays_broken_count}", className="fw-bold mb-0")
                             ])
                         ], width=3),
                         dbc.Col([
@@ -1518,7 +1485,7 @@ def create_evidence_tables(sample, limits, df):
                 is_breached = essay in breached_essays
 
                 table_data.append({
-                    'essay': essay,
+                    'essay': essay_label(essay),
                     'value': round(value, 2),
                     'lic': _fmt_limit(lic),
                     'lim': _fmt_limit(lim),
@@ -1620,11 +1587,25 @@ def _parse_oil_ai_sections(ai_rec: str) -> dict:
     return sections
 
 
+def _split_actions(text: str) -> list:
+    """The items of an AI "Acción" text: one per line (bullets and numbering removed) or, when it is a
+    single paragraph, one per sentence. An empty or missing text has no items."""
+    if not text or not str(text).strip():
+        return []
+    lines = [re.sub(r'^\s*(?:[-•*·]|\d+[.)])\s*', '', line).strip()
+             for line in re.split(r'[\r\n]+', str(text))]
+    lines = [line for line in lines if line]
+    if len(lines) == 1:
+        sentences = re.split(r'(?<=[.;])\s+(?=[A-ZÁÉÍÓÚÑ¿¡0-9])', lines[0])
+        lines = [sentence.strip() for sentence in sentences if sentence.strip()]
+    return lines
+
+
 def create_ai_diagnosis_and_action(sample):
     """
-    Create AI analysis display, matching the "Análisis Inteligente" styling
-    used in Alertas → Detalle (dashboard/callbacks/alerts_callbacks.py::_alert_case_header):
-    the comment is split into labeled boxes rather than shown as one paragraph.
+    Create AI analysis display: the comment is split into a Diagnóstico box and an Acciones box
+    (the same split "Análisis Inteligente" uses in Alertas -> Detalle). The actions are a real
+    checklist a technician can tick off (ui_notes_improved.md §6); without actions the box says so.
 
     Returns: (full_recommendation_element, empty_element)
     """
@@ -1636,22 +1617,19 @@ def create_ai_diagnosis_and_action(sample):
 
     sections = _parse_oil_ai_sections(ai_rec)
 
-    def _section_box(title, icon, text):
-        return dbc.Col([
-            html.Div([
-                html.H6([html.I(className=f'fas {icon} me-2'), title], className='text-dark mb-2'),
-                html.P(text or t("tab_alerts_detail.no_disponible"), className='mb-0', style={
-                    'whiteSpace': 'pre-wrap',
-                    'fontSize': '1rem',
-                    'lineHeight': '1.6',
-                    'color': '#333'
-                })
-            ], className='p-3 bg-light rounded h-100')
-        ], md=6)
+    def _box(title, icon, content):
+        return dbc.Col(
+            html.Div([html.H6([html.I(className=f'fas {icon} me-2', **{"aria-hidden": "true"}), title]), content],
+                     className='oil-ai-box'),
+            md=6)
+
+    diagnosis = html.P(sections['diagnostico'] or t("tab_alerts_detail.no_disponible"))
+    actions = action_checklist(
+        _split_actions(sections['accion']), 'reports-ai-actions', t("reports_callbacks.acciones_no_disponibles"))
 
     recommendation = dbc.Row([
-        _section_box(t("reports_callbacks.diagnostico"), 'fa-search', sections['diagnostico']),
-        _section_box(t("reports_callbacks.accion"), 'fa-wrench', sections['accion']),
+        _box(t("reports_callbacks.diagnostico"), 'fa-search', diagnosis),
+        _box(t("reports_callbacks.acciones"), 'fa-wrench', actions),
     ], className='g-3')
 
     return recommendation, html.Div()
@@ -1699,11 +1677,6 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
     current_date = pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d')
     previous_date = pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d')
     
-    # Calculate badge colors
-    status_colors = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger'}
-    current_badge_color = status_colors.get(current_status, 'secondary')
-    previous_badge_color = status_colors.get(previous_status, 'secondary')
-    
     # Build summary
     return dbc.Row([
         # Left - Overview
@@ -1715,14 +1688,12 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
                         dbc.Col([
                             html.Small(t("reports_callbacks.reporte_actual"), className="text-muted d-block"),
                             html.Strong(current_date, className="d-block"),
-                            html.Span(current_status, 
-                                     className=f"badge bg-{current_badge_color}")
+                            status_chip(current_status)
                         ], width=6),
                         dbc.Col([
                             html.Small(t("reports_callbacks.reporte_anterior"), className="text-muted d-block"),
                             html.Strong(previous_date, className="d-block"),
-                            html.Span(previous_status,
-                                     className=f"badge bg-{previous_badge_color}")
+                            status_chip(previous_status)
                         ], width=6)
                     ])
                 ])
@@ -1732,7 +1703,7 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6(t("reports_callbacks.empeorando"), className="mb-2 text-danger"),
+                    html.H6(t("reports_callbacks.empeorando"), className="mb-2", style={'color': SEVERITY_TIERS['alto']['text']}),
                     html.P(t("reports_callbacks.nuevos_ensayos_criticos", len_new_breaches=len(new_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
                     html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in new_breaches[:5]]) if new_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])
@@ -1742,7 +1713,7 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6(t("reports_callbacks.mejorando"), className="mb-2 text-success"),
+                    html.H6(t("reports_callbacks.mejorando"), className="mb-2", style={'color': SEVERITY_TIERS['bajo']['text']}),
                     html.P(t("reports_callbacks.ensayos_resueltos", len_resolved_breac=len(resolved_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
                     html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in resolved_breaches[:5]]) if resolved_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])

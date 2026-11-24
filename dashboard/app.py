@@ -34,6 +34,7 @@ from dashboard.callbacks.navigation_callbacks import register_navigation_callbac
 from dashboard.callbacks.limits_callbacks import register_limits_callbacks
 from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
+from dashboard.callbacks.frequency_callbacks import register_frequency_callbacks
 from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 from dashboard.callbacks.overview_general_callbacks import register_overview_general_callbacks
 from dashboard.callbacks.unit_summary_callbacks import register_unit_summary_callbacks
@@ -237,6 +238,7 @@ register_navigation_callbacks(app)
 register_limits_callbacks(app)
 register_machines_callbacks(app)
 register_reports_callbacks(app)
+register_frequency_callbacks(app)
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
 register_unit_summary_callbacks(app)

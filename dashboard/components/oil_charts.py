@@ -16,6 +16,7 @@ contract nulls LIC/LIM for whole essay groups (Desgaste, Aditivo).
 """
 
 from src.i18n import t as _t, vocab
+from dashboard.components.labels import essay_label
 from pathlib import Path
 
 import pandas as pd
@@ -378,7 +379,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
     lower_limit_drawn = False
     for chart_config in charts_to_render:
         essays = chart_config['essays']
-        title = vocab(chart_config['title'])
+        title = essay_label(vocab(chart_config['title']))
         is_full_width = chart_config.get('full_width', False)
         col_width = 12 if is_full_width else 6
 
@@ -408,7 +409,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
                 x=essay_dates,
                 y=essay_values,
                 mode='lines+markers',
-                name=vocab(essay),
+                name=essay_label(vocab(essay)),
                 line=dict(color=colors[idx % len(colors)], width=2),
                 marker=dict(size=4),
             ))
@@ -567,7 +568,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
             color = FOUR_LIMIT_STATUS_HEX_COLORS.get(status, '#28a745')
 
             table_data.append({
-                'essay': essay,
+                'essay': essay_label(essay),
                 'value': round(value, 2),
                 'status': status,
                 'lic': _fmt_limit(lic),
@@ -598,7 +599,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
         for radius, ring_name, ring_color in ring_specs:
             fig.add_trace(go.Scatterpolar(
                 r=[radius] * len(valid_essays),
-                theta=[vocab(e) for e in valid_essays],
+                theta=[essay_label(vocab(e)) for e in valid_essays],
                 name=ring_name,
                 line=dict(color=ring_color, dash='dash', width=2),
                 fill=None,
@@ -614,7 +615,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
 
         fig.add_trace(go.Scatterpolar(
             r=normalized_values,
-            theta=[vocab(e) for e in valid_essays],
+            theta=[essay_label(vocab(e)) for e in valid_essays],
             name=_t("alerts_charts.valores_actuales"),
             line=dict(color=status_color, width=3),
             fill='toself',
@@ -634,7 +635,7 @@ def build_oil_radar_view(oil_report: pd.Series, comp_limits_four: dict, oil_hour
         if flagged:
             fig.add_trace(go.Scatterpolar(
                 r=[norm for _, norm, _ in flagged],
-                theta=[vocab(essay) for essay, _, _ in flagged],
+                theta=[essay_label(vocab(essay)) for essay, _, _ in flagged],
                 mode='markers',
                 name=_t("oil_charts.fuera_de_limite"),
                 marker=dict(size=12, color=[color for _, _, color in flagged],
