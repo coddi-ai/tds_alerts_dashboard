@@ -600,6 +600,15 @@ def _top_reason(entry, period):
     return f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
 
 
+def _top_score_driver(bundle, unit, start, cutoff):
+    rows = (row for row in bundle.daily if row["unit"] == unit and start <= row["day"] <= cutoff)
+    totals, _, _ = _component_points(rows)
+    groups = [(name, points) for (kind, name), points in totals.items() if kind == "group"]
+    if not groups:
+        return None
+    return min(groups, key=lambda item: (-item[1], item[0].casefold()))[0]
+
+
 def _observed_points(rows, start, cutoff):
     points_by_day = {}
     for row in rows:
@@ -619,13 +628,18 @@ def fleet_criticality_panel(bundle, day, period):
     headers = ("col_rank", "col_unit", "top_reason", "col_movement", "top_last_milestone", "top_coverage")
     rows = []
     for rank, entry in enumerate(entries, 1):
-        unit, critical_days, _, _, observed, latest, _ = entry
+        unit, critical_days, _, _, observed, latest, intervention_days = entry
         reason = _top_reason(entry, period)
+        score_based = not critical_days and (period != "history" or not intervention_days)
+        main_group = _top_score_driver(bundle, unit, start, cutoff) if score_based else None
         rows.append(html.Tr([
             html.Td(rank),
             html.Td(_open_unit(unit, "criticality", period)),
-            html.Td(dbc.Badge(reason, color="danger") if critical_days else reason,
-                    **{"data-label": t("emin_history.top_reason")}),
+            html.Td([
+                dbc.Badge(reason, color="danger") if critical_days else reason,
+                html.Small(t("emin_history.top_main_component", component=main_group), className="d-block text-muted")
+                if main_group else None,
+            ], **{"data-label": t("emin_history.top_reason")}),
             html.Td(_movement_summary(_movement_for_unit(bundle.daily, unit, cutoff)),
                     **{"data-label": t("emin_history.col_movement")}),
             html.Td(_day_label(latest) if latest else "—",
@@ -975,7 +989,7 @@ def _major_event(row: dict) -> str | None:
 
 CHRONOLOGY_PAGE_SIZE = 40
 CHRONOLOGY_SOURCE_TYPES = ("event", "alert", "maintenance", "downtime", "oil", "other")
-CHRONOLOGY_TYPES = ("all", "milestones", "replacements", *CHRONOLOGY_SOURCE_TYPES)
+CHRONOLOGY_TYPES = ("all", "milestones", "high_signal", "replacements", *CHRONOLOGY_SOURCE_TYPES)
 
 
 def _unit_evidence_rows(bundle, unit, cutoff):
@@ -997,6 +1011,52 @@ def _evidence_type(row):
     if kind.startswith("downtime_") or kind in {"downtime", "stop"}:
         return "downtime"
     return kind if kind in {"event", "alert", "oil"} else "other"
+
+
+def _is_high_signal(row):
+    if row.get("kind") != "event" or not isinstance(details := row.get("details"), dict):
+        return False
+    severity = _normalized_text(str(details.get("Severidad") or "")).strip()
+    return severity in {"high", "alta", "alto"} and (_number(details.get("Puntos del evento")) or 0) > 0
+
+
+def _high_signals_panel(rows, start, cutoff):
+    if not cutoff:
+        return None
+    start = start or (date.fromisoformat(cutoff) - timedelta(days=6)).isoformat()
+    events = [
+        row for row in rows
+        if start <= str(row.get("day") or "") <= cutoff and _is_high_signal(row)
+    ]
+    if not events:
+        return None
+    days = {row["day"] for row in events}
+    return dbc.Card([
+        section_header(t("emin_history.chronology_high_signal"), "fas fa-exclamation-circle"),
+        dbc.CardBody([
+            html.P(t(
+                "emin_history.high_signal_summary", count=len(events), days=len(days),
+                start=_day_label(start), end=_day_label(cutoff),
+            ), className="small text-muted mb-2"),
+            html.P(t("emin_history.high_signal_note"), className="small text-muted mb-2"),
+            html.Details([
+                html.Summary(t("emin_history.high_signal_latest", count=min(3, len(events)))),
+                html.Ul([
+                    html.Li([
+                        html.Strong(str(row["details"].get("Evento") or t("emin_history.drivers_event_unavailable"))),
+                        html.Small(_format_timestamp(row.get("event_at") or row["day"]), className="d-block text-muted"),
+                        _record_disclosure(row, t("emin_history.chronology_high_signal")),
+                    ], className="emin-history-milestone py-2")
+                    for row in events[:3]
+                ], className="list-unstyled mb-0"),
+            ]),
+            html.Button(
+                t("emin_history.high_signal_open_chronology"), type="button",
+                className="btn btn-sm btn-outline-primary mt-2",
+                **{"data-emin-record-filter": "high_signal", "data-emin-record-query": f"{start}..{cutoff}"},
+            ),
+        ]),
+    ], class_name="shadow-sm unit-card mb-3")
 
 
 def _executed_replacement(row):
@@ -1107,6 +1167,7 @@ def chronology_page(bundle, unit, cutoff, kind, query, page):
     needle = _normalized_text((query or "").strip())
     event_day, separator, event_name = needle.partition(" · ")
     exact_event = kind == "event" and separator and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_day)
+    day_range = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", needle)
     filtered = []
     candidates = (
         [row for _, row in _replacement_records(rows, cutoff)] if kind == "replacements" else rows
@@ -1114,11 +1175,16 @@ def chronology_page(bundle, unit, cutoff, kind, query, page):
     for row in candidates:
         if kind == "milestones" and not _major_event(row):
             continue
+        if kind == "high_signal" and not _is_high_signal(row):
+            continue
         if kind in CHRONOLOGY_SOURCE_TYPES and kind != _evidence_type(row):
             continue
         if exact_event:
             details = row.get("details") or {}
             if not isinstance(details, dict) or row.get("day") != event_day or _normalized_text(str(details.get("Evento") or "").strip()) != event_name:
+                continue
+        elif day_range:
+            if not day_range[1] <= str(row.get("day") or "") <= day_range[2]:
                 continue
         elif needle:
             fields = (row.get("event_at"), row.get("details"), row.get("summary"), row.get("description"))
@@ -1195,6 +1261,7 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
                 *highlight_body,
             ]),
         ], id="emin-history-milestones", class_name="shadow-sm unit-card mb-3"),
+        _high_signals_panel(rows, period_start, cutoff),
         _replacements_panel(rows, cutoff),
         dbc.Card([
             section_header(t("emin_history.full_chronology"), "fas fa-history"),

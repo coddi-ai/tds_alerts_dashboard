@@ -312,6 +312,23 @@ In the isolated browser, the CT-187 tire contribution opened four
 matching source rows. The replacements shortcut then cleared that query
 and showed the four completed replacements for the same unit.
 
+### High-severity source evidence
+
+The unit detail shows source events marked `HIGH` with positive source
+event points for the active top window, or the final seven days through
+the cut when opened directly. Its chronology shortcut keeps the same
+date range. Source event points can subsequently be capped or
+deduplicated by the scorer. High severity does not promote an event
+to an explicit critical finding or change the top order. For
+score-based positions, the top adds the group with the largest applied
+component score as a preview of the detail.
+
+The local seven-day cut contained 239 such records across 14 units.
+Zero-point high-severity records are excluded. The focused offline
+suite passed 57 tests. The isolated CT-187 browser check showed the
+tire group in the top and returned 18 high-severity source records
+when the user opened the same seven-day window in the chronology.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under
