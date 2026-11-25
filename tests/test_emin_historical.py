@@ -2,15 +2,17 @@
 
 import gzip
 import json
+from types import SimpleNamespace
 
 import pytest
 from dash import dcc
 import plotly.graph_objects as go
 
-from dashboard.components.emin_historical import build_historical_view, filter_options
+from dashboard.components.emin_historical import _fleet_movement_trend, build_historical_view, filter_options
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
+from src.i18n import t
 
 
 RUN = "20261124T0000-0300-" + "a" * 64
@@ -21,6 +23,50 @@ def test_trend_callback_value_accepts_legacy_figures_and_v2_graphs():
 
     assert _trend_figure_from_view({"trend": figure}) is figure
     assert _trend_figure_from_view({"trend": dcc.Graph(figure=figure)}) is figure
+
+
+def _fleet_view_bundle(variations):
+    return SimpleNamespace(dashboard={
+        "catalog": {"cutoffs": ["2026-11-24"], "units": ["EMIN-001", "EMIN-002"]},
+        "fleet": {"2026-11-24": {
+            "period_variations": {"week": variations},
+            "critical_units": [],
+            "score_priority_units": [],
+        }},
+        "period_tops": {},
+    })
+
+
+def test_fleet_variation_plot_includes_every_comparable_unit():
+    bundle = _fleet_view_bundle({
+        "EMIN-001": {"status": "worsened", "previous_average": 4.0, "current_average": 8.0,
+                     "delta": 4.0, "current_days": 7},
+        "EMIN-002": {"status": "improved", "previous_average": 9.0, "current_average": 3.0,
+                     "delta": -6.0, "current_days": 7},
+    })
+
+    graph = _fleet_movement_trend(bundle, "2026-11-24", "week")
+
+    points = [trace for trace in graph.figure.data if trace.name != t("emin_history.no_change_line")]
+    assert sum(len(trace.x) for trace in points) == 2
+    assert all(row[4] == "week" for trace in points for row in trace.customdata)
+    assert graph.figure.layout.xaxis.range is None
+    assert graph.figure.layout.yaxis.scaleanchor is None
+
+
+def test_quarter_without_prior_comparison_shows_a_clear_empty_state():
+    bundle = _fleet_view_bundle({
+        unit: {"status": "insufficient", "previous_average": None, "current_average": None}
+        for unit in ("EMIN-001", "EMIN-002")
+    })
+    bundle.dashboard["fleet"]["2026-11-24"]["period_variations"] = {"quarter": bundle.dashboard["fleet"]["2026-11-24"]["period_variations"]["week"]}
+
+    graph = _fleet_movement_trend(bundle, "2026-11-24", "quarter")
+
+    assert graph.figure.layout.xaxis.visible is False
+    assert graph.figure.layout.yaxis.visible is False
+    message = graph.figure.layout.annotations[0].text
+    assert t("emin_history.quarter_comparison_unavailable") in message
 
 
 def _daily(day, unit, rank, points, *, groups=None, observed=False, estimated=False):

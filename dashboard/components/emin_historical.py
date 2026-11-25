@@ -227,6 +227,16 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
     figure = go.Figure()
     valid = [item for item in variations.values()
              if _number(item.get("previous_average")) is not None and _number(item.get("current_average")) is not None]
+    if not valid:
+        note = t("emin_history.fleet_plot_coverage", shown=0, total=len(units), unavailable=len(units))
+        if period == "quarter":
+            note += "<br>" + t("emin_history.quarter_comparison_unavailable")
+        figure = _empty_figure(t("emin_history.variation_title"), note, 430)
+        figure.update_xaxes(visible=False)
+        figure.update_yaxes(visible=False)
+        return dcc.Graph(id="emin-history-movement-trend", figure=figure,
+                         config={"displayModeBar": False}, responsive=True,
+                         style={"height": "430px", "width": "100%"})
     if valid:
         extent = max(max(item["previous_average"], item["current_average"]) for item in valid) or 1
         figure.add_trace(go.Scatter(x=[0, extent], y=[0, extent], mode="lines", name=t("emin_history.no_change_line"),
