@@ -16,17 +16,23 @@
         return positions;
     }
 
+    function openChronology(kind, query) {
+        const setProps = window.dash_clientside?.set_props;
+        if (!setProps) return;
+        setProps("emin-history-record-type", {value: kind});
+        setProps("emin-history-record-search", {value: query});
+        const type = document.getElementById("emin-history-record-type");
+        type?.focus({preventScroll: true});
+        type?.scrollIntoView({block: "center"});
+    }
+
     document.addEventListener("click", (event) => {
         const button = event.target.closest("[data-emin-open-unit], [data-emin-back], [data-emin-movement-filter], [data-emin-group-filter], [data-emin-record-filter]");
         const setProps = window.dash_clientside?.set_props;
         if (!button || !setProps) return;
 
         if (button.hasAttribute("data-emin-record-filter")) {
-            setProps("emin-history-record-type", {value: button.dataset.eminRecordFilter});
-            setProps("emin-history-record-search", {value: button.dataset.eminRecordQuery || ""});
-            const type = document.getElementById("emin-history-record-type");
-            type?.focus({preventScroll: true});
-            type?.scrollIntoView({block: "center"});
+            openChronology(button.dataset.eminRecordFilter, button.dataset.eminRecordQuery || "");
             return;
         }
 
@@ -55,6 +61,13 @@
 
     window.dash_clientside = window.dash_clientside || {};
     window.dash_clientside.eminHistory = {
+        openTrendDay(clickData) {
+            const day = String(clickData?.points?.[0]?.x || "").slice(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+                openChronology("all", day);
+            }
+            return window.dash_clientside.no_update;
+        },
         switchView(value) {
             const page = document.querySelector(".emin-history-page");
             if (page !== activePage) {

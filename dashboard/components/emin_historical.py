@@ -218,8 +218,13 @@ def _movement_for_unit(rows: tuple[dict, ...] | list[dict], unit: str | None, cu
     for row in sorted(observed, key=lambda item: str(item.get("day") or "")):
         by_day[row["day"]] = row
     history = list(by_day.values())
+    current = history[-1] if history else None
+    date_context = {
+        "lag_days": _days_between(current["day"], cutoff) if current else None,
+        "gap_days": _days_between(history[-2]["day"], current["day"]) if len(history) >= 2 else None,
+    }
     if len(history) < 2:
-        return {"status": "insufficient", "current": history[-1] if history else None, "previous": None, "delta": None}
+        return {"status": "insufficient", "current": current, "previous": None, "delta": None, **date_context}
     previous, current = history[-2], history[-1]
     delta = _number(current.get("points")) - _number(previous.get("points"))
     if delta < -0.001:
@@ -228,7 +233,23 @@ def _movement_for_unit(rows: tuple[dict, ...] | list[dict], unit: str | None, cu
         label = "worsened"
     else:
         label = "stable"
-    return {"status": label, "current": current, "previous": previous, "delta": delta}
+    return {"status": label, "current": current, "previous": previous, "delta": delta, **date_context}
+
+
+def _days_between(start, end):
+    try:
+        return (date.fromisoformat(end) - date.fromisoformat(start)).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _movement_date_notes(movement):
+    notes = []
+    if (movement.get("lag_days") or 0) > 0:
+        notes.append(t("emin_history.movement_observation_lag", days=movement["lag_days"]))
+    if (movement.get("gap_days") or 0) > 1:
+        notes.append(t("emin_history.movement_comparison_gap", days=movement["gap_days"]))
+    return notes
 
 
 def _number(value) -> float | None:
@@ -749,6 +770,7 @@ def _movement_summary(movement: dict):
     return html.Div([
         _movement_badge(movement),
         html.Small(dates, className="d-block text-muted mt-1") if dates else None,
+        *[html.Small(note, className="d-block text-muted") for note in _movement_date_notes(movement)],
     ])
 
 
@@ -819,7 +841,13 @@ def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
             hovertemplate="%{x|%d-%m-%Y}<br>%{y:.2f}<extra>%{fullData.name}</extra>",
         ))
     figure.update_xaxes(type="date", title_text=t("emin_history.axis_day"), gridcolor="#ecf0f1", automargin=True, tickformat="%d %b", tickfont={"size": 9})
-    figure.update_yaxes(title_text=t("emin_history.axis_score"), gridcolor="#ecf0f1", automargin=True, rangemode="tozero")
+    figure.update_yaxes(
+        title_text=t("emin_history.axis_score"), gridcolor="#ecf0f1", automargin=True,
+        autorangeoptions={"include": 0},
+    )
+    scores = [score for score in observed if score is not None] + [score for _, score in estimated]
+    if max(scores) == 0:
+        figure.update_yaxes(range=[-0.05, 1], tickvals=[0, 1])
     figure = apply_dashboard_theme(figure, title=title, height=350)
     figure.update_layout(margin={"l": 62, "r": 22, "t": 52, "b": 70}, legend={"orientation": "h", "y": -0.28})
     return figure
@@ -847,10 +875,10 @@ def _groups_panel(rows: list[dict], selected_group: str | None):
 
 
 def _observation_label(row: dict) -> str:
-    if row.get("has_observation"):
-        return t("emin_history.observed")
     if row.get("estimated"):
         return t("emin_history.estimated")
+    if row.get("has_observation"):
+        return t("emin_history.observed")
     return t("emin_history.no_record")
 
 
@@ -871,18 +899,20 @@ def _ranking_table(rows: list[dict], movements: dict[str, dict]):
     header = html.Thead(html.Tr([html.Th(label, scope="col") for label in headings]))
     body_rows = []
     for row in rows:
+        observed = row.get("has_observation") is True and not row.get("estimated")
+        score = _number(row.get("points")) if observed or row.get("estimated") else None
         groups = row.get("event_groups", [])
         group_label = ", ".join(str(value) for value in groups[:2])
         if len(groups) > 2:
             group_label += f" +{len(groups) - 2}"
         cells = [
-            row.get("rank") if row.get("rank") is not None else "—",
+            row.get("rank") if score is not None and row.get("rank") is not None else "—",
             _open_unit(row["unit"], "ranking"),
-            f"{score:.3f}" if (score := _number(row.get("points"))) is not None else "—",
+            f"{score:.3f}" if score is not None else "—",
             _movement_summary(movements[row["unit"]]),
             _observation_label(row),
-            row.get("alerts", 0),
-            row.get("health_events", 0),
+            row.get("alerts", 0) if observed else "—",
+            row.get("health_events", 0) if observed else "—",
             group_label or "—",
         ]
         body_rows.append(html.Tr([html.Td(value) for value in cells]))
@@ -918,7 +948,13 @@ def _status_panel(unit: str | None, movement: dict):
             ]), _movement_badge(movement)], className="emin-history-status-top"),
             html.P(t(f"emin_history.status_explain_{status}"), className="text-muted mb-2 mt-3"),
             html.Div(dates, className="emin-history-comparison-dates"),
+            *[html.Small(note, className="d-block text-muted") for note in _movement_date_notes(movement)],
             html.Div(points, className="emin-history-comparison-points"),
+            html.Button(
+                t("emin_history.open_latest_observation_records"), type="button",
+                className="btn btn-link btn-sm p-0 mt-2",
+                **{"data-emin-record-filter": "all", "data-emin-record-query": current["day"]},
+            ) if current else None,
         ]),
         class_name="emin-history-card emin-history-status-card mb-3",
     )
@@ -1168,6 +1204,7 @@ def chronology_page(bundle, unit, cutoff, kind, query, page):
     event_day, separator, event_name = needle.partition(" · ")
     exact_event = kind == "event" and separator and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_day)
     day_range = re.fullmatch(r"(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})", needle)
+    exact_day = re.fullmatch(r"\d{4}-\d{2}-\d{2}", needle)
     filtered = []
     candidates = (
         [row for _, row in _replacement_records(rows, cutoff)] if kind == "replacements" else rows
@@ -1185,6 +1222,9 @@ def chronology_page(bundle, unit, cutoff, kind, query, page):
                 continue
         elif day_range:
             if not day_range[1] <= str(row.get("day") or "") <= day_range[2]:
+                continue
+        elif exact_day:
+            if row.get("day") != needle:
                 continue
         elif needle:
             fields = (row.get("event_at"), row.get("details"), row.get("summary"), row.get("description"))

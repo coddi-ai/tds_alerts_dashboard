@@ -329,6 +329,20 @@ suite passed 57 tests. The isolated CT-187 browser check showed the
 tire group in the top and returned 18 high-severity source records
 when the user opened the same seven-day window in the chronology.
 
+### Observation dates and evidence navigation
+
+The recent change displays the lag between the last observation and
+the selected cut whenever there is a lag, plus the calendar gap when
+the two observations are not consecutive. The cut ranking leaves
+score, rank and observed counts blank for rows with no score coverage.
+Estimated scores remain labelled. An observed zero stays visible.
+
+Selecting a trend marker or the latest observation shortcut opens the
+chronology on that Santiago day. The same date can be entered in the
+search field. With the local package, BULL-027 had last been observed
+15 days earlier. The isolated browser returned one record when using
+the 9 November shortcut and one for the 12 October trend marker.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

@@ -78,6 +78,12 @@ def register_emin_historical_callbacks(app):
         ],
         Input("emin-history-view-tabs", "value"),
     )
+    app.clientside_callback(
+        ClientsideFunction(namespace="eminHistory", function_name="openTrendDay"),
+        Output("emin-history-trend-action", "data"),
+        Input("emin-history-trend", "clickData"),
+        prevent_initial_call=True,
+    )
     @callback(
         Output("emin-history-criticality", "children"),
         Input("client-selector", "value"),

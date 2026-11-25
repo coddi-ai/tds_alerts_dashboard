@@ -141,14 +141,16 @@ def create_layout() -> html.Div:
                             dbc.Col(
                                 dbc.Card([
                                     section_header(t("emin_history.trend_section"), "fas fa-chart-line"),
-                                    dbc.CardBody(
+                                    dbc.CardBody([
+                                        html.P(t("emin_history.trend_open_records"), className="small text-muted mb-1"),
+                                        dcc.Store(id="emin-history-trend-action"),
                                         dcc.Graph(
                                             id="emin-history-trend",
                                             config={"displayModeBar": False},
                                             responsive=True,
                                             style={"height": "350px", "width": "100%"},
-                                        )
-                                    ),
+                                        ),
+                                    ]),
                                 ], class_name="shadow-sm unit-card",
                                 ),
                                 xs=12,
@@ -176,6 +178,7 @@ def create_layout() -> html.Div:
                                     html.Label(t("emin_history.chronology_search"), htmlFor="emin-history-record-search", className="fleet-search__label"),
                                     dcc.Input(
                                         id="emin-history-record-search", type="search", value="", debounce=0.4,
+                                        placeholder=t("emin_history.chronology_search_placeholder"),
                                         className="form-control form-control-sm",
                                     ),
                                 ], xs=12, md=8),
