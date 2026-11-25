@@ -28,13 +28,15 @@ def _daily(day, unit, rank, points, *, groups=None, observed=False, estimated=Fa
     }
 
 
-def _make_package(root, *, synthetic=False, run=RUN):
-    package = root / "emin_historical" / "published" / run
-    package.mkdir(parents=True)
-    (root / "emin_historical" / "published" / "latest.json").write_text(
-        json.dumps({"run": run}), encoding="utf-8"
+def _make_package(root, *, synthetic=False, run=RUN, week="2026-W48", published_at="2026-11-25T12:00:00Z"):
+    package = root / "fleet_history" / "golden" / "emin" / week
+    package.mkdir(parents=True, exist_ok=True)
+    files = {name: f"{run}--{name}" for name in ("manifest.json", "daily.json", "observed.json", "dashboard.json.gz")}
+    (package / "latest.json").write_text(
+        json.dumps({"run": run, "week_year_iso": week, "published_at": published_at, "files": files}),
+        encoding="utf-8",
     )
-    (package / "manifest.json").write_text(
+    (package / files["manifest.json"]).write_text(
         json.dumps({"synthetic": synthetic, "weeks": 12, "units": 2,
                     "dashboard_contract": "coddi.emin.historical-dashboard.v1",
                     "online": {"evidence_as_of": "2026-11-25T12:00:00Z"}}),
@@ -64,8 +66,8 @@ def _make_package(root, *, synthetic=False, run=RUN):
             "event_at": "2026-11-25T13:00:00-03:00", "details": {"Evento": "Evento posterior al corte"},
         },
     ]
-    (package / "daily.json").write_text(json.dumps(daily), encoding="utf-8")
-    (package / "observed.json").write_text(json.dumps(observed), encoding="utf-8")
+    (package / files["daily.json"]).write_text(json.dumps(daily), encoding="utf-8")
+    (package / files["observed.json"]).write_text(json.dumps(observed), encoding="utf-8")
     movements = {
         "EMIN-001": {"status": "improved", "current": daily[1], "previous": daily[0], "delta": -1.5,
                      "lag_days": 0, "gap_days": 1, "historical_status": None},
@@ -74,7 +76,7 @@ def _make_package(root, *, synthetic=False, run=RUN):
     }
     annotated = [dict(row, analysis={"major_event": ("text" if row.get("details", {}).get("Evento", "").startswith("Cambio de motor") else None),
                                     "high_signal": False, "replacement_day": None}) for row in observed]
-    with gzip.open(package / "dashboard.json.gz", "wt", encoding="utf-8") as dashboard_file:
+    with gzip.open(package / files["dashboard.json.gz"], "wt", encoding="utf-8") as dashboard_file:
       json.dump({
         "contract": "coddi.emin.historical-dashboard.v1",
         "catalog": {"cutoffs": ["2026-11-24", "2026-11-23"], "units": ["EMIN-001", "EMIN-002"],
@@ -123,6 +125,17 @@ def test_loads_current_package_and_resolves_only_inside_data_root(tmp_path):
     assert bundle.observed[0]["details"]["Evento"] == "Mantención preventiva"
 
 
+def test_selects_newest_capture_across_iso_week_folders(tmp_path):
+    _make_package(tmp_path)
+    newer_run = "20261201T0000-0300-" + "b" * 64
+    _make_package(tmp_path, run=newer_run, week="2026-W49", published_at="2026-12-01T12:00:00Z")
+
+    bundle = load_emin_historical_bundle(tmp_path)
+
+    assert bundle.run == newer_run
+    assert load_emin_historical_bundle(tmp_path, run_name=RUN).run == RUN
+
+
 def test_rejects_synthetic_package(tmp_path):
     root = _make_package(tmp_path, synthetic=True)
 
@@ -131,14 +144,15 @@ def test_rejects_synthetic_package(tmp_path):
 
 
 def test_rejects_invalid_pointer_and_incomplete_daily_schema(tmp_path):
-    root = tmp_path / "emin_historical" / "published"
+    root = tmp_path / "fleet_history" / "golden" / "emin" / "2026-W48"
     root.mkdir(parents=True)
-    (root / "latest.json").write_text(json.dumps({"run": "../latest.json"}), encoding="utf-8")
+    (root / "latest.json").write_text(json.dumps({"run": "../latest.json", "week_year_iso": "2026-W48",
+                                                  "files": {}}), encoding="utf-8")
     with pytest.raises(InvalidHistoricalBundle, match="identificador"):
         load_emin_historical_bundle(tmp_path)
 
     package = _make_package(tmp_path)
-    path = package / "emin_historical" / "published" / RUN / "daily.json"
+    path = package / "fleet_history" / "golden" / "emin" / "2026-W48" / f"{RUN}--daily.json"
     path.write_text("[{}]", encoding="utf-8")
     with pytest.raises(InvalidHistoricalBundle, match="contrato"):
         load_emin_historical_bundle(package)

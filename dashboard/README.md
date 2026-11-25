@@ -43,13 +43,16 @@ The dashboard expects processed data under `data/{technique}/{layer}/{client}/` 
 missing, `dashboard/app.py` automatically syncs it from S3 via `src/data/s3_downloader.py`. If you
 already have a `data/` folder, it's used as-is and no sync happens.
 
-The EMIN historical tab reads the immutable `data/emin_historical/published/<run>/` package. It
-requires compressed `dashboard.json.gz` with contract `coddi.emin.historical-dashboard.v1`, produced by
-`Analisis_Historico_Flota`. That read model contains the precomputed fleet views, four criticality
-windows, equipment movements, component contributions, and evidence classifications. The tab
-resolves package row references and renders the selected view; scoring, ordering, aggregation, and
-event classification belong to the producer. A package from before this contract is not sufficient
-to render the historical tab and must be republished by the data repo.
+The EMIN historical tab reads the immutable weekly package from
+`data/fleet_history/golden/emin/{YYYY-Www}/`, mirrored from
+`s3://teck-cda-datasource/MultiTechnique Alerts/fleet_history/golden/emin/{YYYY-Www}/` by the same
+S3 sync used by the other tabs. Each week contains versioned `manifest`, `daily`, `observed`, and
+compressed `dashboard` files plus `latest.json`. The dashboard chooses the pointer with the newest
+capture time. The read model contract is `coddi.emin.historical-dashboard.v1`, produced by
+`Analisis_Historico_Flota`; it contains the precomputed fleet views, criticality windows, equipment
+movements, component contributions, and evidence classifications. The tab resolves package file
+references and renders the selected view; scoring, ordering, aggregation, and event classification
+belong to the producer. A package from before this contract must be republished by the data repo.
 
 ### 4. Start Dashboard
 
