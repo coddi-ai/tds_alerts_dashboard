@@ -8,7 +8,7 @@ import pytest
 from dash import dcc
 import plotly.graph_objects as go
 
-from dashboard.components.emin_historical import _fleet_movement_trend, build_historical_view, filter_options
+from dashboard.components.emin_historical import _fleet_movement_trend, build_historical_view, filter_options, fleet_criticality_top
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
@@ -67,6 +67,16 @@ def test_quarter_without_prior_comparison_shows_a_clear_empty_state():
     assert graph.figure.layout.yaxis.visible is False
     message = graph.figure.layout.annotations[0].text
     assert t("emin_history.quarter_comparison_unavailable") in message
+
+
+def test_criticality_top_tracks_the_selected_period():
+    bundle = _fleet_view_bundle({})
+    week = {"start": "2026-11-23", "entries": [{"unit": "EMIN-001"}]}
+    month = {"start": "2026-11-01", "entries": [{"unit": "EMIN-002"}]}
+    bundle.dashboard["period_tops"] = {"2026-11-24": {"week": week, "month": month}}
+
+    assert fleet_criticality_top(bundle, "2026-11-24", "week") == week
+    assert fleet_criticality_top(bundle, "2026-11-24", "month") == month
 
 
 def _daily(day, unit, rank, points, *, groups=None, observed=False, estimated=False):
