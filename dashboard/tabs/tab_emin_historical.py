@@ -76,6 +76,7 @@ def create_layout() -> html.Div:
                         ),
                         class_name="emin-history-card mb-3",
                     ),
+                    dcc.Loading(html.Div(id="emin-history-highlights"), type="circle"),
                     dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
                     dbc.Row(
                         [
