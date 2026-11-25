@@ -249,6 +249,19 @@ isolated Dash browser review selected 90 days, opened CT-186, verified
 its position and reason, then returned to the same period, cut and
 unit control.
 
+### Unit score contributions
+
+The unit detail lists applied event points by component or event group
+using the producer's `event_contributions[].applied` values. Alerts,
+tribology, and residual points appear separately when the package cannot
+attribute them to an individual component. The top uses the entire
+selected period. Other entry points show the latest observed day through
+the cut. Estimated scores are excluded from this breakdown.
+
+The local package check reconciled every one of the 3,683 observed daily
+scores, built the detail for EXC-069 and confirmed that an estimated row
+produces no attribution. The EMIN regression suite passed seven tests.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

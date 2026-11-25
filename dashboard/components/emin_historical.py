@@ -112,6 +112,7 @@ def build_historical_view(
         _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
         if period_start else None
     )
+    contributors = _criticality_components_panel(trend_rows, period_start, selected_day)
     fleet_highlights = _fleet_highlights(daily_rows, bundle.observed, selected_day)
 
     return {
@@ -123,7 +124,7 @@ def build_historical_view(
         "movement": _movement_figure(movements),
         "groups": _groups_figure(daily_rows, group),
         "ranking": _ranking_table(filtered_rows, movements),
-        "status": html.Div([top_context, _status_panel(selected_unit, status)]),
+        "status": html.Div([top_context, _status_panel(selected_unit, status), contributors]),
         "trend": _trend_figure(trend_rows, selected_unit),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day),
     }
@@ -393,6 +394,93 @@ def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
     span = (date.fromisoformat(cutoff) - date.fromisoformat(score_start)).days + 1
     insufficient = sum(len(scores.get(unit, {})) < 2 for unit in units)
     return entries[:5], start, cutoff, span, insufficient
+
+
+def _component_points(rows):
+    """Attribute the published, applied event points without allocating other sources."""
+    groups = Counter()
+    days = set()
+    for row in rows:
+        total = _number(row.get("points"))
+        if row.get("has_observation") is not True or row.get("estimated") or total is None:
+            continue
+        days.add(row["day"])
+        source_points = {
+            key: amount for key in ("alert_points", "oil_points")
+            if (amount := _number(row.get(key))) is not None and amount > 0
+        }
+        if sum(source_points.values()) > total + 1e-6:
+            groups["source", "unattributed"] += total
+            continue
+        for key, amount in source_points.items():
+            groups["source", key] += amount
+        residual = total - sum(source_points.values())
+        contributions = row.get("event_contributions")
+        event_budget = _number(row.get("event_points"))
+        allocated = Counter()
+        if isinstance(contributions, list):
+            for item in contributions:
+                if not isinstance(item, dict):
+                    continue
+                group, applied = item.get("group"), _number(item.get("applied"))
+                if isinstance(group, str) and group.strip() and applied is not None and applied > 0:
+                    allocated[group.strip()] += applied
+        # Older packages may only have the event subtotal. Inconsistent
+        # breakdowns stay unattributed instead of crediting a wrong component.
+        if event_budget is not None and sum(allocated.values()) <= min(event_budget, residual) + 1e-6:
+            for group, applied in allocated.items():
+                groups["group", group] += applied
+                residual -= applied
+        if residual > 1e-6:
+            groups["source", "unattributed"] += residual
+    return groups, days
+
+
+def _criticality_components_panel(trend_rows, period_start, cutoff):
+    if period_start and cutoff:
+        rows = [row for row in trend_rows if period_start <= row["day"] <= cutoff]
+    else:
+        last_observed = next((
+            row for row in reversed(trend_rows)
+            if row.get("has_observation") is True and not row.get("estimated")
+            and _number(row.get("points")) is not None
+        ), None)
+        rows = [last_observed] if last_observed else []
+
+    totals, days = _component_points(rows)
+    body = []
+    if not days:
+        body.append(html.P(t("emin_history.drivers_no_observation"), className="text-muted mb-0"))
+    else:
+        last = max(days)
+        context = (
+            t("emin_history.drivers_period", start=_day_label(period_start), end=_day_label(cutoff), count=len(days))
+            if period_start else t("emin_history.drivers_day", day=_day_label(last))
+        )
+        body.append(html.P(context, className="small text-muted mb-2"))
+        if not totals:
+            body.append(html.P(t("emin_history.drivers_zero"), className="mb-0"))
+        else:
+            labels = {key: key[1] if key[0] == "group" else t(f"emin_history.drivers_{key[1]}") for key in totals}
+            ordered = sorted(totals, key=lambda key: (key[0] != "group", -totals[key], labels[key].casefold()))
+            body.append(dbc.Table([
+                html.Thead(html.Tr([
+                    html.Th(t("emin_history.drivers_category"), scope="col"),
+                    html.Th(t("emin_history.drivers_points"), scope="col", className="text-end"),
+                ])),
+                html.Tbody([
+                    html.Tr([
+                        html.Td(labels[key]),
+                        html.Td(f"{totals[key]:.2f}", className="text-end"),
+                    ])
+                    for key in ordered
+                ]),
+            ], responsive=True, size="sm", class_name="emin-history-table mb-2"))
+            body.append(html.P(t("emin_history.drivers_note"), className="small text-muted mb-0"))
+    return dbc.Card([
+        section_header(t("emin_history.drivers_title"), "fas fa-cogs"),
+        dbc.CardBody(body),
+    ], class_name="shadow-sm unit-card mb-3")
 
 
 def _top_reason(entry, period):
