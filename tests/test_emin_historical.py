@@ -4,13 +4,23 @@ import gzip
 import json
 
 import pytest
+from dash import dcc
+import plotly.graph_objects as go
 
 from dashboard.components.emin_historical import build_historical_view, filter_options
 from dashboard.callbacks import emin_historical_callbacks
+from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 
 
 RUN = "20261124T0000-0300-" + "a" * 64
+
+
+def test_trend_callback_value_accepts_legacy_figures_and_v2_graphs():
+    figure = go.Figure()
+
+    assert _trend_figure_from_view({"trend": figure}) is figure
+    assert _trend_figure_from_view({"trend": dcc.Graph(figure=figure)}) is figure
 
 
 def _daily(day, unit, rank, points, *, groups=None, observed=False, estimated=False):

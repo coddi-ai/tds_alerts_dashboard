@@ -36,6 +36,12 @@ def _empty_outputs(note: str):
     )
 
 
+def _trend_figure_from_view(view: dict):
+    """Normalize legacy figures and v2 Graph wrappers to the Dash figure prop."""
+    trend = view["trend"]
+    return getattr(trend, "figure", trend)
+
+
 def register_emin_historical_callbacks(app):
     """Register EMIN-only package filters, views, and internal tab navigation."""
 
@@ -154,9 +160,10 @@ def register_emin_historical_callbacks(app):
             include_chronology=False, require_high_signal=high_only is True,
             trend_window=trend_window, fleet_window=fleet_window,
         )
+        trend_figure = _trend_figure_from_view(view)
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
-            return (no_update,) * 5 + (view["status"], view["trend"].figure, view["evidence"])
+            return (no_update,) * 5 + (view["status"], trend_figure, view["evidence"])
         return (
             view["meta"],
             fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
@@ -164,7 +171,7 @@ def register_emin_historical_callbacks(app):
             view["groups"],
             view["ranking"],
             view["status"],
-            view["trend"].figure,
+            trend_figure,
             view["evidence"],
         )
 
