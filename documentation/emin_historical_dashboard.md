@@ -84,8 +84,8 @@ responsive charts, and S3 freshness handling are implemented on branch
 
 ### Local commits
 
-The branch is local only. Record the implementation commit hash here after the
-validated local commit; no remote push is part of this task.
+Implementation commit: `8914f09` (`feat: add EMIN historical fleet overview`).
+The branch is local only; no remote push is part of this task.
 
 ### Validation
 
