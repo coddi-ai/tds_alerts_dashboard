@@ -543,7 +543,7 @@
  "emin_history.variation_title": "Variación de la condición por equipo",
  "emin_history.period_axis": "Periodo · {period}",
  "emin_history.period_comparison_insufficient": "Aún no hay dos periodos comparables con observaciones suficientes.",
- "emin_history.variation_chart_note": "Cada punto representa una unidad comparable: horizontal es el periodo anterior y vertical el periodo seleccionado. Sobre la diagonal indica aumento del puntaje heurístico. Los puntos destacados priorizan equipos críticos; selecciónalos para abrir su detalle.",
+ "emin_history.variation_chart_note": "Cada punto representa una unidad comparable: horizontal es el periodo anterior y vertical el periodo seleccionado. Por encima de la diagonal, subió el puntaje (señal peor); por debajo, bajó (señal mejor); cerca de la línea, cambió poco. Rojo: empeoró; verde: mejoró; azul: se mantuvo; gris: comparación insuficiente. Los puntos destacados priorizan equipos críticos; selecciónalos para abrir su detalle.",
  "emin_history.period_data_pending": "Este paquete aún no incluye las variaciones precalculadas de toda la flota. Se mostrarán al sincronizar una publicación del productor con el nuevo contrato.",
  "emin_history.previous_period_axis": "Puntaje medio · periodo anterior",
  "emin_history.current_period_axis": "Puntaje medio · periodo seleccionado",

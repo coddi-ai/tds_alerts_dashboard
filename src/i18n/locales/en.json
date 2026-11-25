@@ -543,7 +543,7 @@
  "emin_history.variation_title": "Condition variation by equipment",
  "emin_history.period_axis": "Period · {period}",
  "emin_history.period_comparison_insufficient": "There are not yet two comparable periods with enough observations.",
- "emin_history.variation_chart_note": "Each point represents a comparable unit: horizontal is the previous period and vertical is the selected period. Above the diagonal means the heuristic score increased. Highlighted points prioritize critical equipment; select one to open its details.",
+ "emin_history.variation_chart_note": "Each point represents a comparable unit: horizontal is the previous period and vertical is the selected period. Above the diagonal means a higher score (worse signal); below it means lower (better signal); near the line means little change. Red: worsened; green: improved; blue: stable; gray: insufficient comparison. Highlighted points prioritize critical equipment; select one to open its details.",
  "emin_history.period_data_pending": "This package does not yet include precomputed fleet wide variations. They will appear when a producer publication with the new contract is synchronized.",
  "emin_history.previous_period_axis": "Average score · previous period",
  "emin_history.current_period_axis": "Average score · selected period",
