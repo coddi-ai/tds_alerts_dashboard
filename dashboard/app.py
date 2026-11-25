@@ -49,6 +49,9 @@ import dashboard.callbacks.telemetry_callbacks
 # Import oil callbacks (uses @callback decorator, auto-registered on import)
 import dashboard.callbacks.oil_callbacks
 
+# Import Operación y rendimiento callbacks (uses @callback decorator, auto-registered on import)
+import dashboard.callbacks.operation_performance_callbacks
+
 # "Fuentes de Datos" popover of the remaining pages (auto-registered on import)
 import dashboard.callbacks.data_sources_callbacks
 
@@ -167,6 +170,7 @@ import dashboard.pages.monitoring_alerts
 import dashboard.pages.monitoring_telemetry
 import dashboard.pages.monitoring_oil
 import dashboard.pages.monitoring_mantenciones
+import dashboard.pages.monitoring_operation_performance
 import dashboard.pages.predictive_motor
 import dashboard.pages.predictive_transmision
 import dashboard.pages.agents_campbell_ai

@@ -358,6 +358,18 @@ def _build_client_availability_uncached(
     )
     result["erp_warnings"] = _probe_erp_warnings(client, root_path)
 
+    # Operación y rendimiento (OP-PE): the weekly gold tables of the panels and the silver data
+    # quality, one folder per week (src/data/operation_performance.py).
+    op_pe_root = root_path / "operation-performance" / client_lower
+    result["op_pe_gold"] = _probe_partitioned(
+        client, "operation-performance", "op_pe_gold", (op_pe_root / "gold",),
+        note="Tablas oro semanales de Operación y rendimiento.",
+    )
+    result["op_pe_quality"] = _probe_partitioned(
+        client, "operation-performance", "op_pe_quality", (op_pe_root / "silver",),
+        note="Calidad de datos semanal (capa plata).",
+    )
+
     return result
 
 

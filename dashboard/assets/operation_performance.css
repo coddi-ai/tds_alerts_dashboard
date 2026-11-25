@@ -1,0 +1,147 @@
+/* Monitoreo > Operación y rendimiento (dashboard/tabs/tab_operation_performance.py).
+   Layout and neutral tones only: value-driven colors come from shared/severity.py (decision chips,
+   KPI tiles) and from dashboard/components/operation_performance_charts.py (figures). KPI tiles,
+   filter labels and the keyboard-reachable tabs reuse the Monitor de Aceite classes (oil_monitor.css). */
+
+.opp-week-caption {
+    font-size: 13px;
+    color: var(--oil-muted, #475569);
+    line-height: 1.4;
+    padding-bottom: 6px;
+}
+
+/* ---- Panel card ------------------------------------------------------------------------------ */
+.opp-panel .card-body { padding: 18px 20px; }
+
+.opp-panel__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-bottom: 12px;
+}
+
+.opp-panel__heading { display: flex; align-items: flex-start; gap: 12px; }
+
+.opp-panel__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: var(--oil-soft, #f1f5f9);
+    color: #1e3a5f;
+    font-size: 15px;
+}
+
+.opp-panel__title { font-size: 16px; font-weight: 700; color: var(--oil-ink, #0f172a); }
+.opp-panel__question { font-size: 13px; color: var(--oil-muted, #475569); }
+.opp-panel__caption { font-size: 13px; color: var(--oil-muted, #475569); padding-top: 4px; }
+
+.opp-panel__controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px 20px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.opp-control { flex: 0 1 auto; }
+.opp-control .form-check-inline { margin-right: 14px; }
+
+.opp-panel__howto {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--oil-line, #e2e8f0);
+    font-size: 12.5px;
+    color: var(--oil-muted, #475569);
+}
+
+.opp-panel__howto .fa-circle-info { color: #64748b; }
+
+/* ---- Decision filter: each option is the decision's own chip --------------------------------- */
+.opp-decision-filter .form-check-label { cursor: pointer; }
+.opp-decision-filter .form-check-input:not(:checked) + .form-check-label .kpi-chip { opacity: .45; }
+
+/* ---- Method accordion and lists -------------------------------------------------------------- */
+.opp-method .accordion-button { font-size: 14px; font-weight: 600; padding: 10px 16px; }
+.opp-method .accordion-body { font-size: 13px; color: var(--oil-ink, #0f172a); }
+
+.opp-list { padding-left: 1.1rem; }
+.opp-list li { margin-bottom: 6px; line-height: 1.5; }
+
+/* ---- Empty / error states -------------------------------------------------------------------- */
+.opp-empty {
+    max-width: 560px;
+    margin: 48px auto;
+    padding: 32px 24px;
+    text-align: center;
+    border: 1px dashed var(--oil-line, #e2e8f0);
+    border-radius: 12px;
+    background: #ffffff;
+}
+
+.opp-empty__icon { font-size: 34px; color: #94a3b8; }
+
+/* ---- One page: ranking + unit under analysis --------------------------------------------------- */
+.opp-hint { font-size: 12.5px; color: var(--oil-muted, #475569); margin: 0 0 4px; }
+
+.opp-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.opp-count { font-size: 13px; color: var(--oil-ink, #0f172a); white-space: nowrap; }
+
+#opp-ranking-card { border-top: 3px solid #1e3a5f; }
+#opp-ranking-card .opp-panel__title { font-size: 18px; }
+
+/* The unit card stays in view while the (tall) ranking scrolls past it. */
+.opp-sticky { position: sticky; top: 76px; }
+@media (max-width: 1199.98px) { .opp-sticky { position: static; } }
+
+.opp-focus__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--oil-line, #e2e8f0);
+}
+.opp-focus__unit { font-size: 26px; font-weight: 800; line-height: 1.1; color: var(--oil-ink, #0f172a); }
+.opp-focus__rank { font-size: 13px; color: var(--oil-muted, #475569); }
+.opp-focus__head .kpi-chip { font-size: 13px; padding: 4px 12px; }
+.opp-focus__cause { font-size: 14px; font-weight: 600; color: var(--oil-ink, #0f172a); }
+
+.opp-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.opp-stat { padding: 10px 12px; border-radius: 8px; background: #f8fafc; }
+.opp-stat__label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--oil-muted, #475569);
+}
+.opp-stat__value { font-size: 22px; font-weight: 700; color: var(--oil-ink, #0f172a); line-height: 1.2; }
+.opp-stat__caption { font-size: 11.5px; color: var(--oil-muted, #475569); }
+
+.opp-ramp-list { display: flex; flex-direction: column; gap: 6px; }
+.opp-ramp-btn {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 8px;
+    width: 100%;
+    padding: 8px 10px;
+    text-align: left;
+    border: 1px solid var(--oil-line, #e2e8f0);
+    border-radius: 8px;
+    background: #ffffff;
+    cursor: pointer;
+}
+.opp-ramp-btn:hover { background: var(--oil-soft, #f1f5f9); }
+.opp-ramp-btn:focus-visible { outline: 2px solid var(--oil-focus, #2563eb); outline-offset: 2px; }
+.opp-ramp-btn__id { font-weight: 700; color: #1e3a5f; }
+.opp-ramp-btn__name { font-size: 13px; color: var(--oil-ink, #0f172a); }
+.opp-ramp-btn__value { grid-column: 2; font-size: 12px; color: var(--oil-muted, #475569); }

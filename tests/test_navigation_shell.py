@@ -253,8 +253,8 @@ def test_every_section_and_link_has_its_own_icon(full_nav):
 
     assert list(sections) == ["overview", "monitoring", "predictive", "agents", "reporting", "integration", "admin"]
     assert len(set(sections.values())) == len(sections) == 7
-    assert len(links) == 16 and set(links) == set(NAV_PATHS)
-    assert len(set(links.values())) == 16
+    assert len(links) == 17 and set(links) == set(NAV_PATHS)
+    assert len(set(links.values())) == 17
     # A link never reuses a section's icon either, so the rail and the flyout read apart.
     assert not set(sections.values()) & set(links.values())
     assert all(icon for icon in [*sections.values(), *links.values()])

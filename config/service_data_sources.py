@@ -62,6 +62,7 @@ SERVICE_DATA_SOURCES: dict[str, tuple[str, ...]] = {
     ),
     "integration-validacion-avisos": ("erp_warnings", "erp_sap_config"),
     "integration-seguimiento-avisos": ("erp_warnings",),
+    "monitoring-operation-performance": ("op_pe_gold", "op_pe_quality"),
     "admin-user-registry": ("auth_events_store",),
     "admin-mailing": ("alerts_consolidated",),
 }
@@ -123,6 +124,9 @@ SOURCE_DATE_FIELDS: dict[str, DateField] = {
     "telemetry_system_health": DateField("evaluation_timestamp", glob="**/*.parquet"),
     "telemetry_manifest": DateField("execution_timestamp"),
     "maintenance_contract": DateField("reference_date", glob="query_10_equipment_status.parquet"),
+    # Operación y rendimiento: one folder per week; the day of the newest row of every week.
+    "op_pe_gold": DateField("dia", glob="*/camion_dia.parquet"),
+    "op_pe_quality": DateField("dia", glob="*/calidad.parquet"),
 }
 
 

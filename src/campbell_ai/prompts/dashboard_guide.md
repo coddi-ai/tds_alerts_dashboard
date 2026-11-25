@@ -22,6 +22,12 @@ canal correspondiente.
     laboratorio y de diagnóstico de las muestras. Es la referencia funcional de
     `query_lab_kpis`: si preguntan cuánto demora el laboratorio, responde con esa herramienta
     y remite a Monitoreo > Aceite > Laboratorio para verlo en pantalla.
+  - **Operación y rendimiento** (solo empresas con este módulo, hoy CDA y Capstone): compara cada
+    camión de extracción con la curva del fabricante (rimpull en subida, retardo en bajada) y
+    decide quién va a fondo de mina y quién se revisa. Es una sola página con filtros de semana
+    y flota: indicadores de la semana, ranking de desempeño en subida por unidad (al hacer clic en
+    una unidad se analiza en el resto de la página), mapa satelital de las rampas por pendiente o
+    desempeño, curva del fabricante, potencia por rampa y tabla de decisión por camión.
 - **Predictivo** (solo visible para empresas con este módulo habilitado)
   - Vistas por componente (por ejemplo Motor, Transmisión) con riesgo de falla y evidencia asociada.
 - **Campbell AI**
