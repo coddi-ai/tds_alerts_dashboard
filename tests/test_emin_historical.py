@@ -1,12 +1,13 @@
 """Contract and presentation checks for the EMIN historical dashboard page."""
 
+import gzip
 import json
 
 import pytest
 
 from dashboard.components.emin_historical import build_historical_view, filter_options
 from dashboard.callbacks import emin_historical_callbacks
-from src.data.emin_historical import EminHistoricalBundle, InvalidHistoricalBundle, load_emin_historical_bundle
+from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 
 
 RUN = "20261124T0000-0300-" + "a" * 64
@@ -35,6 +36,7 @@ def _make_package(root, *, synthetic=False, run=RUN):
     )
     (package / "manifest.json").write_text(
         json.dumps({"synthetic": synthetic, "weeks": 12, "units": 2,
+                    "dashboard_contract": "coddi.emin.historical-dashboard.v1",
                     "online": {"evidence_as_of": "2026-11-25T12:00:00Z"}}),
         encoding="utf-8",
     )
@@ -64,6 +66,42 @@ def _make_package(root, *, synthetic=False, run=RUN):
     ]
     (package / "daily.json").write_text(json.dumps(daily), encoding="utf-8")
     (package / "observed.json").write_text(json.dumps(observed), encoding="utf-8")
+    movements = {
+        "EMIN-001": {"status": "improved", "current": daily[1], "previous": daily[0], "delta": -1.5,
+                     "lag_days": 0, "gap_days": 1, "historical_status": None},
+        "EMIN-002": {"status": "stable", "current": daily[3], "previous": daily[2], "delta": 0,
+                     "lag_days": 0, "gap_days": 1, "historical_status": None},
+    }
+    annotated = [dict(row, analysis={"major_event": ("text" if row.get("details", {}).get("Evento", "").startswith("Cambio de motor") else None),
+                                    "high_signal": False, "replacement_day": None}) for row in observed]
+    with gzip.open(package / "dashboard.json.gz", "wt", encoding="utf-8") as dashboard_file:
+      json.dump({
+        "contract": "coddi.emin.historical-dashboard.v1",
+        "catalog": {"cutoffs": ["2026-11-24", "2026-11-23"], "units": ["EMIN-001", "EMIN-002"],
+                    "groups": ["Motor / Emisiones"], "periods": ["short", "medium", "long", "history"]},
+        "fleet": {
+            "2026-11-23": {"rows": [daily[0], daily[2]], "movements": {"EMIN-001": movements["EMIN-001"], "EMIN-002": movements["EMIN-002"]},
+                           "movement_counts": {"improved": 1, "stable": 1}, "groups": {"Motor / Emisiones": [daily[0]]},
+                           "groups_summary": [{"group": "Motor / Emisiones", "count": 1}], "high_signal_counts": {},
+                           "critical_units": [], "critical_remaining": [], "critical_event_days": {}, "critical_total": 0,
+                           "score_priority_units": [], "healthiest_units": [], "can_distinguish_health": True},
+            "2026-11-24": {"rows": [daily[1], daily[3]], "movements": movements,
+                           "movement_counts": {"improved": 1, "stable": 1}, "groups": {"Motor / Emisiones": [daily[1]]},
+                           "groups_summary": [{"group": "Motor / Emisiones", "count": 1}], "high_signal_counts": {},
+                           "critical_units": [], "critical_remaining": [], "critical_event_days": {}, "critical_total": 0,
+                           "score_priority_units": [], "healthiest_units": [], "can_distinguish_health": True},
+        },
+        "tops": {day: {period: {"start": day, "cutoff": day, "span_days": 1, "covered_days": 1,
+                                "insufficient_units": 0, "entries": [], "movement_by_unit": movements,
+                                "overlaps_short": False, "history_signal_only": False}
+                       for period in ("short", "medium", "long", "history")} for day in ("2026-11-23", "2026-11-24")},
+        "units": {"EMIN-001": {"daily": [daily[0], daily[1]], "evidence": annotated,
+                                "by_cutoff": {"2026-11-24": {"movement": movements["EMIN-001"],
+                                                              "movement_drivers": [],
+                                                              "trend": [daily[0], daily[1]],
+                                                              "components": {"short": {"start": "2026-11-24", "cutoff": "2026-11-24", "observed_days": 1, "attributed_points": 0, "components": []}}}}}},
+        "evidence": annotated,
+      }, dashboard_file)
     return root
 
 
@@ -129,64 +167,6 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert list(view["trend"].data[0].x) == ["2026-11-23", "2026-11-24"]
     assert list(view["trend"].data[0].y) == [13.5, 12.0]
     assert "Puntaje heurístico" in view["trend"].layout.yaxis.title.text
-
-
-def test_recent_movement_distinguishes_improved_worsened_stable_and_insufficient():
-    daily = (
-        _daily("2026-11-23", "EMIN-A", 1, 10, observed=True),
-        _daily("2026-11-24", "EMIN-A", 1, 7, observed=True),
-        _daily("2026-11-23", "EMIN-B", 2, 5, observed=True),
-        _daily("2026-11-24", "EMIN-B", 2, 9, observed=True),
-        _daily("2026-11-23", "EMIN-C", 3, 3, observed=True),
-        _daily("2026-11-24", "EMIN-C", 3, 3, observed=True),
-        _daily("2026-11-23", "EMIN-D", 4, 6, observed=True),
-        _daily("2026-11-24", "EMIN-D", 4, 0, estimated=True),
-        _daily("2026-11-23", "EMIN-E", 5, 0),
-        _daily("2026-11-24", "EMIN-E", 5, 0),
-    )
-    bundle = EminHistoricalBundle(RUN, {}, daily, ())
-
-    view = build_historical_view(bundle, "2026-11-24", "__all__", "EMIN-A")
-    ranking = _visible(view["ranking"])
-    movement_counts = {
-        status: sum(unit["status"] == status for unit in view["movements"].values())
-        for status in ("improved", "worsened", "stable", "insufficient")
-    }
-
-    assert "Mejoró" in ranking
-    assert "Empeoró" in ranking
-    assert "Se mantuvo" in ranking
-    assert "Sin comparación" in ranking
-    assert movement_counts == {"improved": 1, "worsened": 1, "stable": 1, "insufficient": 2}
-    assert "10.000 → 7.000" in _visible(view["status"])
-
-
-def test_overview_prioritizes_recent_source_critical_and_separates_score_extremes():
-    daily = (
-        _daily("2026-11-19", "EMIN-CRIT", 1, 1, observed=True),
-        _daily("2026-11-19", "EMIN-LOW", 2, 2, observed=True),
-        _daily("2026-11-19", "EMIN-HIGH", 3, 12, observed=True),
-        _daily("2026-11-12", "EMIN-OLD", 4, 20, observed=True),
-    )
-    observed = (
-        {"unit": "EMIN-CRIT", "day": "2026-11-19", "level": "critical", "details": {"Evento": "Temperatura elevada"}},
-        {"unit": "EMIN-OLD", "day": "2026-11-12", "level": "critical", "details": {"Evento": "Falla antigua"}},
-        {"unit": "EMIN-LOW", "day": "2026-11-19", "level": "", "details": {"Evento": "Mantención preventiva del motor"}},
-    )
-    bundle = EminHistoricalBundle(RUN, {}, daily, observed)
-
-    view = build_historical_view(bundle, "2026-11-19", "__all__", "EMIN-CRIT")
-    highlights = view["fleet_highlights"]
-    timeline = _visible(build_historical_view(bundle, "2026-11-19", "__all__", "EMIN-LOW")["evidence"])
-
-    assert highlights["critical"] == ["EMIN-CRIT"]
-    assert highlights["score_priority"] == ["EMIN-HIGH"]
-    assert highlights["healthiest"] == ["EMIN-LOW"]
-    assert highlights["coverage_start"] == "2026-11-13"
-    assert "Mantención preventiva del motor" in timeline
-    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 0
-    assert "Hitos del equipo" in timeline
-    assert timeline.index("Cronología completa") < timeline.index("Mantención preventiva del motor")
 
 
 def test_page_callbacks_require_server_authorization_for_emin(monkeypatch):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from datetime import date, datetime, timedelta
 from math import isfinite
 import re
@@ -25,30 +24,12 @@ _MOVEMENT_COLORS = {
     "stable": "#3498db",
     "insufficient": "#7f8c8d",
 }
-_MAJOR_TEXT_PATTERNS = (
-    r"motor.{0,35}(reemplaz|cambi|recambi|swap)",
-    r"(reemplaz|cambi|recambi).{0,35}motor",
-    r"engine.{0,35}(replac|chang|swap)",
-    r"(replac|chang|swap).{0,35}engine",
-    r"explosion|exploded|exploto|incendio|\bfire\b|\brevent(?:o|ar|ada|ado|aron|ando)\b|ruptur|fractur|catastrof|gripad|seized|blown",
-)
-
-
 def filter_options(bundle: EminHistoricalBundle) -> dict:
-    """Build ordered cutoff, event-group and equipment options from the package."""
-    days = sorted({row["day"] for row in bundle.daily}, reverse=True)
-    groups = sorted(
-        {str(group) for row in bundle.daily for group in row.get("event_groups", []) if group},
-        key=str.casefold,
-    )
-    latest = [row for row in bundle.daily if row["day"] == (days[0] if days else None)]
-    latest.sort(key=lambda row: (row.get("rank") is None, row.get("rank") or 9999, row["unit"]))
-    current_units = list(dict.fromkeys(row["unit"] for row in latest))
-    historical_units = sorted(
-        {row["unit"] for row in bundle.daily} - set(current_units),
-        key=str.casefold,
-    )
-    units = current_units + historical_units
+    """Read the prebuilt dashboard catalog; only display labels are formatted here."""
+    catalog = bundle.dashboard["catalog"]
+    days = catalog.get("cutoffs", [])
+    groups = catalog.get("groups", [])
+    units = catalog.get("units", [])
     return {
         "days": [{"label": _day_label(day), "value": day} for day in days],
         "groups": [{"label": t("emin_history.all_groups"), "value": "__all__"}]
@@ -71,44 +52,32 @@ def build_historical_view(
     require_high_signal: bool = False,
 ) -> dict:
     """Build fleet overview and an evidence-backed individual equipment timeline."""
-    all_days = sorted({row["day"] for row in bundle.daily})
-    selected_day = day if day in all_days else (all_days[-1] if all_days else None)
-    daily_rows = [row for row in bundle.daily if row["day"] == selected_day]
-    daily_rows.sort(key=lambda row: (row.get("rank") is None, row.get("rank") or 9999, row["unit"]))
+    all_days = bundle.dashboard["catalog"].get("cutoffs", [])
+    selected_day = day if day in all_days else (all_days[0] if all_days else None)
+    fleet_data = bundle.dashboard.get("fleet", {}).get(selected_day, {})
+    daily_rows = fleet_data.get("rows", [])
     filtered_rows = daily_rows
     if group and group != "__all__":
-        filtered_rows = [row for row in daily_rows if group in row.get("event_groups", [])]
+        filtered_rows = fleet_data.get("groups", {}).get(group, [])
 
-    all_units = {row["unit"] for row in bundle.daily}
+    all_units = set(bundle.dashboard["catalog"].get("units", []))
     selected_unit = unit if unit in all_units else (daily_rows[0]["unit"] if daily_rows else None)
-    selected_unit_rows = [row for row in bundle.daily if row["unit"] == selected_unit]
-    trend_rows = sorted(
-        (row for row in selected_unit_rows if not selected_day or row["day"] <= selected_day),
-        key=lambda row: row["day"],
-    )
-    movements = {
-        row["unit"]: _movement_for_unit(bundle.daily, row["unit"], selected_day)
-        for row in daily_rows
-    }
+    unit_data = bundle.dashboard.get("units", {}).get(selected_unit, {})
+    selected_unit_rows = unit_data.get("daily", [])
+    trend_rows = unit_data.get("by_cutoff", {}).get(selected_day, {}).get("trend", [])
+    movements = fleet_data.get("movements", {})
     query = (search or "").strip().casefold()
-    high_counts = None
-    if require_high_signal and selected_day:
-        start = _criticality_start(all_days, selected_day, "short")
-        high_counts = Counter(
-            row["unit"] for row in bundle.observed
-            if row.get("unit") in movements and start <= str(row.get("day") or "") <= selected_day
-            and _is_high_signal(row)
-        )
+    high_counts = fleet_data.get("high_signal_counts") if require_high_signal else None
     filtered_rows = [
         row for row in filtered_rows
         if query in row["unit"].casefold()
         and (movement_filter in (None, "__all__") or movements[row["unit"]]["status"] == movement_filter)
         and (high_counts is None or high_counts.get(row["unit"], 0))
     ]
-    status = movements.get(selected_unit) or _movement_for_unit(bundle.daily, selected_unit, selected_day)
-    evidence_rows = _unit_evidence_rows(bundle, selected_unit, selected_day)
+    status = movements.get(selected_unit) or {"status": "insufficient", "current": None, "previous": None, "delta": None}
+    evidence_rows = [row for row in unit_data.get("evidence", []) if not selected_day or str(row.get("day") or "") <= selected_day]
     period_start = (
-        _criticality_start(all_days, selected_day, evidence_period, evidence_rows)
+        bundle.dashboard.get("tops", {}).get(selected_day, {}).get(evidence_period, {}).get("start")
         if isinstance(evidence_period, str) and evidence_period in CRITICALITY_PERIODS
         else None
     )
@@ -116,17 +85,29 @@ def build_historical_view(
         _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
         if period_start else None
     )
-    movement_drivers = _movement_drivers_panel(status)
-    contributors = _criticality_components_panel(trend_rows, period_start, selected_day)
-    fleet_highlights = _fleet_highlights(daily_rows, bundle.observed, selected_day)
+    selected_data = unit_data.get("by_cutoff", {}).get(selected_day, {})
+    movement_drivers = _movement_drivers_panel(status, selected_data.get("movement_drivers", []))
+    contributors = _criticality_components_panel(selected_data.get("components", {}).get(evidence_period or "short", {}))
+    fleet_highlights = {
+        "critical": fleet_data.get("critical_units", []),
+        "critical_remaining": fleet_data.get("critical_remaining", []),
+        "critical_events": fleet_data.get("critical_event_days", {}),
+        "has_history": fleet_data.get("has_history", False),
+        "critical_total": fleet_data.get("critical_total", 0),
+        "score_priority": fleet_data.get("score_priority_units", []),
+        "healthiest": fleet_data.get("healthiest_units", []),
+        "can_distinguish": fleet_data.get("can_distinguish_health", False),
+        "scores": fleet_data.get("scores_by_unit", {}),
+        "coverage_end": selected_day,
+    }
 
     return {
         "meta": _metadata(bundle, selected_day),
         "daily_rows": daily_rows,
         "fleet_highlights": fleet_highlights,
         "movements": movements,
-        "kpis": _movement_kpis(movements),
-        "groups": _groups_panel(daily_rows, group),
+        "kpis": _movement_kpis(fleet_data.get("movement_counts", {})),
+        "groups": _groups_panel_from_items(fleet_data.get("groups_summary", []), group),
         "ranking": _ranking_table(filtered_rows, movements, high_counts),
         "status": html.Div([top_context, _status_panel(selected_unit, status), movement_drivers, contributors]),
         "trend": _trend_figure(trend_rows, selected_unit),
@@ -159,8 +140,8 @@ def _metadata(bundle: EminHistoricalBundle, selected_day: str | None):
     captions = [
         t("emin_history.cutoff_meta", day=_day_label(selected_day)),
         t("emin_history.captured_meta", timestamp=_format_timestamp(evidence_as_of)),
-        t("emin_history.days_meta", count=len({row["day"] for row in bundle.daily})),
-        t("emin_history.units_meta", count=len({row["unit"] for row in bundle.daily})),
+        t("emin_history.days_meta", count=len(bundle.dashboard.get("catalog", {}).get("cutoffs", []))),
+        t("emin_history.units_meta", count=len(bundle.dashboard.get("catalog", {}).get("units", []))),
     ]
     return html.Small(" · ".join(captions), className="text-muted")
 
@@ -215,50 +196,6 @@ def _movement_label(status: str) -> str:
     }[status])
 
 
-def _movement_for_unit(rows: tuple[dict, ...] | list[dict], unit: str | None, cutoff: str | None) -> dict:
-    observed = [
-        row for row in rows
-        if row.get("unit") == unit
-        and (not cutoff or str(row.get("day") or "") <= cutoff)
-        and row.get("has_observation") is True
-        and not row.get("estimated")
-        and _number(row.get("points")) is not None
-    ]
-    by_day = {}
-    for row in sorted(observed, key=lambda item: str(item.get("day") or "")):
-        by_day[row["day"]] = row
-    history = list(by_day.values())
-    current = history[-1] if history else None
-    date_context = {
-        "lag_days": _days_between(current["day"], cutoff) if current else None,
-        "gap_days": _days_between(history[-2]["day"], current["day"]) if len(history) >= 2 else None,
-    }
-    if len(history) < 2:
-        return {"status": "insufficient", "current": current, "previous": None, "delta": None, **date_context}
-    previous, current = history[-2], history[-1]
-    delta = _number(current.get("points")) - _number(previous.get("points"))
-    if delta < -0.001:
-        label = "improved"
-    elif delta > 0.001:
-        label = "worsened"
-    else:
-        label = "stable"
-    recent_start = (date.fromisoformat(cutoff) - timedelta(days=CRITICALITY_PERIODS["short"] - 1)).isoformat() if cutoff else None
-    recent = recent_start is None or previous["day"] >= recent_start
-    return {
-        "status": label if recent else "insufficient",
-        "historical_status": label if not recent else None,
-        "current": current, "previous": previous, "delta": delta, **date_context,
-    }
-
-
-def _days_between(start, end):
-    try:
-        return (date.fromisoformat(end) - date.fromisoformat(start)).days
-    except (TypeError, ValueError):
-        return None
-
-
 def _movement_date_notes(movement):
     notes = []
     if movement.get("historical_status"):
@@ -278,65 +215,16 @@ def _number(value) -> float | None:
         return None
 
 
-def _movement_kpis(movements: dict[str, dict]):
-    counts = Counter(value["status"] for value in movements.values())
+def _movement_kpis(counts: dict[str, int]):
     return dbc.Row(
         [
-            _kpi_card(t("emin_history.movement_improved"), counts["improved"], "fas fa-arrow-down", t("emin_history.movement_improved_detail"), "improved"),
-            _kpi_card(t("emin_history.movement_worsened"), counts["worsened"], "fas fa-arrow-up", t("emin_history.movement_worsened_detail"), "worsened"),
-            _kpi_card(t("emin_history.movement_stable"), counts["stable"], "fas fa-equals", t("emin_history.movement_stable_detail"), "stable"),
-            _kpi_card(t("emin_history.movement_insufficient"), counts["insufficient"], "fas fa-minus-circle", t("emin_history.movement_insufficient_detail"), "insufficient"),
+            _kpi_card(t("emin_history.movement_improved"), counts.get("improved", 0), "fas fa-arrow-down", t("emin_history.movement_improved_detail"), "improved"),
+            _kpi_card(t("emin_history.movement_worsened"), counts.get("worsened", 0), "fas fa-arrow-up", t("emin_history.movement_worsened_detail"), "worsened"),
+            _kpi_card(t("emin_history.movement_stable"), counts.get("stable", 0), "fas fa-equals", t("emin_history.movement_stable_detail"), "stable"),
+            _kpi_card(t("emin_history.movement_insufficient"), counts.get("insufficient", 0), "fas fa-minus-circle", t("emin_history.movement_insufficient_detail"), "insufficient"),
         ],
         className="g-3",
     )
-
-
-def _fleet_highlights(daily_rows: list[dict], observed_rows: tuple[dict, ...], cutoff: str | None):
-    """Build source-backed critical and lower-score lists for the selected cut."""
-    try:
-        start = (date.fromisoformat(cutoff) - timedelta(days=6)).isoformat()
-    except (TypeError, ValueError):
-        start = cutoff
-
-    known_units = {row["unit"] for row in daily_rows}
-    critical_events = {}
-    for row in observed_rows:
-        unit = row.get("unit")
-        day = str(row.get("day") or "")
-        if not start or unit not in known_units or not start <= day <= cutoff:
-            continue
-        if _explicit_milestone(row) == "source" and day > critical_events.get(unit, ""):
-            critical_events[unit] = day
-    critical_units = set(critical_events)
-    scored = [
-        row for row in daily_rows
-        if row.get("has_observation") is True and not row.get("estimated")
-        and (score := _number(row.get("points"))) is not None
-        and score >= 0 and isfinite(score)
-    ]
-    scored.sort(key=lambda row: (_number(row.get("points")), str(row.get("unit", "")).casefold()))
-    critical = sorted(critical_units, key=str.casefold)
-    critical.sort(key=critical_events.get, reverse=True)
-    eligible = [row for row in scored if row.get("unit") not in critical_units]
-    distinct_scores = sorted({_number(row["points"]) for row in eligible})
-    low_signal, score_priority = [], []
-    if len(distinct_scores) >= 2:
-        upper_start = distinct_scores[len(distinct_scores) // 2]
-        low_signal = [row for row in eligible if _number(row["points"]) < upper_start][:5]
-        upper = [row for row in eligible if _number(row["points"]) >= upper_start]
-        score_priority = sorted(upper, key=lambda row: -_number(row["points"]))[:5]
-    return {
-        "critical": critical[:5],
-        "critical_remaining": critical[5:],
-        "critical_events": critical_events,
-        "has_history": any(start and start <= str(row.get("day") or "") <= cutoff for row in observed_rows),
-        "critical_total": len(critical),
-        "score_priority": [row["unit"] for row in score_priority],
-        "healthiest": [row["unit"] for row in low_signal],
-        "can_distinguish": len(distinct_scores) >= 2,
-        "coverage_start": start,
-        "coverage_end": cutoff,
-    }
 
 
 def _open_unit(unit: str, origin: str, period: str = ""):
@@ -356,132 +244,12 @@ def _open_unit(unit: str, origin: str, period: str = ""):
 CRITICALITY_PERIODS = {"short": 7, "medium": 90, "long": 180, "history": None}
 
 
-def _criticality_start(days, cutoff, period, evidence=()):
-    if not cutoff or not days:
-        return None
-    window = CRITICALITY_PERIODS[period]
-    if window is None:
-        first = days[0]
-        for row in evidence:
-            day = row.get("day")
-            if isinstance(day, str) and day < first:
-                try:
-                    first = date.fromisoformat(day).isoformat()
-                except ValueError:
-                    continue
-        return first
-    return (date.fromisoformat(cutoff) - timedelta(days=window - 1)).isoformat()
-
-
 def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
-    """Rank units by explicit critical days, then by their observed signal."""
+    """Read the producer's precomputed top for one selected cutoff and window."""
     period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "short"
-    days = sorted({row["day"] for row in bundle.daily})
-    cutoff = day if day in days else (days[-1] if days else None)
-    start = _criticality_start(days, cutoff, period, bundle.observed)
-    if not start:
-        return [], None, None, 0, 0
-
-    scores = {}
-    units = {row["unit"] for row in bundle.daily if start <= row["day"] <= cutoff}
-    for row in bundle.daily:
-        if not start <= row["day"] <= cutoff or row.get("has_observation") is not True or row.get("estimated"):
-            continue
-        points = _number(row.get("points"))
-        if points is not None:
-            scores.setdefault(row["unit"], {})[row["day"]] = points
-
-    critical = {}
-    interventions = {}
-    latest = {}
-    for row in bundle.observed:
-        unit, event_day = row.get("unit"), str(row.get("day") or "")
-        if unit not in units or not start <= event_day <= cutoff:
-            continue
-        kind = _explicit_milestone(row)
-        if kind in {"source", "intervention"}:
-            latest[unit] = max(event_day, latest.get(unit, ""))
-        if kind == "source":
-            critical.setdefault(unit, set()).add(event_day)
-        if kind == "intervention":
-            interventions.setdefault(unit, set()).add(event_day)
-
-    entries = []
-    for unit in sorted(units):
-        daily = scores.get(unit, {})
-        observed = len(daily)
-        critical_days = len(critical.get(unit, ()))
-        intervention_days = len(interventions.get(unit, ()))
-        comparable = observed >= 2
-        has_history = period == "history" and intervention_days > 0
-        if not critical_days and not has_history and (not comparable or not any(value > 0 for value in daily.values())):
-            continue
-        average = sum(daily.values()) / observed if comparable else None
-        recurrence = sum(value > 0 for value in daily.values()) / observed if comparable else None
-        entries.append((unit, critical_days, average, recurrence, observed, latest.get(unit), intervention_days))
-
-    def rank(entry):
-        _, critical_days, average, recurrence, observed, _, intervention_days = entry
-        average = average if average is not None else -1
-        recurrence = recurrence if recurrence is not None else -1
-        signal = (average, recurrence) if period == "short" else (recurrence, average)
-        historical_priority = intervention_days if period == "history" else 0
-        return (critical_days, historical_priority, *signal, observed)
-
-    entries.sort(key=rank, reverse=True)
-    score_start = max(start, days[0]) if period == "history" else start
-    span = (date.fromisoformat(cutoff) - date.fromisoformat(score_start)).days + 1
-    insufficient = sum(len(scores.get(unit, {})) < 2 for unit in units)
-    return entries[:5], start, cutoff, span, insufficient
-
-
-def _component_points(rows):
-    """Attribute the published, applied event points without allocating other sources."""
-    groups = Counter()
-    days = set()
-    event_days = {}
-    for row in rows:
-        total = _number(row.get("points"))
-        if row.get("has_observation") is not True or row.get("estimated") or total is None:
-            continue
-        days.add(row["day"])
-        source_points = {
-            key: amount for key in ("alert_points", "oil_points")
-            if (amount := _number(row.get(key))) is not None and amount > 0
-        }
-        if sum(source_points.values()) > total + 1e-6:
-            groups["source", "unattributed"] += total
-            continue
-        for key, amount in source_points.items():
-            groups["source", key] += amount
-        residual = total - sum(source_points.values())
-        contributions = row.get("event_contributions")
-        event_budget = _number(row.get("event_points"))
-        allocated = Counter()
-        accepted = []
-        if isinstance(contributions, list):
-            for item in contributions:
-                if not isinstance(item, dict):
-                    continue
-                group, applied = item.get("group"), _number(item.get("applied"))
-                if isinstance(group, str) and group.strip() and applied is not None and applied > 0:
-                    group = group.strip()
-                    allocated[group] += applied
-                    event = item.get("event")
-                    label = event.strip() if isinstance(event, str) and event.strip() else None
-                    accepted.append((group, label, applied))
-        # Older packages may only have the event subtotal. Inconsistent
-        # breakdowns stay unattributed instead of crediting a wrong component.
-        if event_budget is not None and sum(allocated.values()) <= min(event_budget, residual) + 1e-6:
-            for group, applied in allocated.items():
-                groups["group", group] += applied
-                residual -= applied
-            for group, label, applied in accepted:
-                daily_events = event_days.setdefault(group, {}).setdefault(row["day"], Counter())
-                daily_events[label] += applied
-        if residual > 1e-6:
-            groups["source", "unattributed"] += residual
-    return groups, days, event_days
+    available = bundle.dashboard.get("catalog", {}).get("cutoffs", [])
+    cutoff = day if day in bundle.dashboard.get("tops", {}) else (available[0] if available else None)
+    return bundle.dashboard.get("tops", {}).get(cutoff, {}).get(period, {})
 
 
 def _component_label(key):
@@ -489,29 +257,18 @@ def _component_label(key):
     return label if kind == "group" else t(f"emin_history.drivers_{label}")
 
 
-def _movement_drivers_panel(movement):
+def _movement_drivers_panel(movement, changes):
     previous, current = movement.get("previous"), movement.get("current")
-    if not previous or not current:
+    if not previous or not current or not changes:
         return None
-    before, _, _ = _component_points([previous])
-    after, _, _ = _component_points([current])
-    changes = {
-        key: after[key] - before[key]
-        for key in before.keys() | after.keys()
-        if abs(after[key] - before[key]) > 0.001
-    }
-    if not changes:
-        return None
-
-    keys = sorted(changes, key=lambda key: (-abs(changes[key]), _component_label(key).casefold()))
     rows = [
         html.Tr([
-            html.Th(_component_label(key), scope="row", className="emin-history-driver-label"),
-            html.Td(f"{before[key]:.2f}", className="text-end"),
-            html.Td(f"{after[key]:.2f}", className="text-end"),
-            html.Td(f"{changes[key]:+.2f}", className="text-end fw-semibold"),
+            html.Th(t(f"emin_history.drivers_{item['key']}") if item["key"] in {"alert_points", "oil_points", "unattributed"} else item["key"], scope="row", className="emin-history-driver-label"),
+            html.Td(f"{item['before']:.2f}", className="text-end"),
+            html.Td(f"{item['after']:.2f}", className="text-end"),
+            html.Td(f"{item['delta']:+.2f}", className="text-end fw-semibold"),
         ])
-        for key in keys
+        for item in changes
     ]
     headings = [
         html.Th(t("emin_history.drivers_category"), scope="col"),
@@ -522,7 +279,7 @@ def _movement_drivers_panel(movement):
     return dbc.Card([
         section_header(t("emin_history.driver_change_title"), "fas fa-exchange-alt"),
         dbc.CardBody(html.Details([
-            html.Summary(t("emin_history.driver_change_summary", count=len(keys), delta=f'{movement["delta"]:+.2f}')),
+            html.Summary(t("emin_history.driver_change_summary", count=len(changes), delta=f'{movement["delta"]:+.2f}')),
             html.P(t("emin_history.driver_change_note"), className="small text-muted mt-2 mb-2"),
             dbc.Table([
                 html.Thead(html.Tr(headings)),
@@ -532,39 +289,23 @@ def _movement_drivers_panel(movement):
     ], class_name="shadow-sm unit-card mb-3")
 
 
-def _criticality_components_panel(trend_rows, period_start, cutoff):
-    if period_start and cutoff:
-        rows = [row for row in trend_rows if period_start <= row["day"] <= cutoff]
-    else:
-        last_observed = next((
-            row for row in reversed(trend_rows)
-            if row.get("has_observation") is True and not row.get("estimated")
-            and _number(row.get("points")) is not None
-        ), None)
-        rows = [last_observed] if last_observed else []
-
-    totals, days, event_days = _component_points(rows)
+def _criticality_components_panel(data):
     body = []
-    if not days:
+    components = data.get("components", []) if isinstance(data, dict) else []
+    if not data or not data.get("observed_days"):
         body.append(html.P(t("emin_history.drivers_no_observation"), className="text-muted mb-0"))
     else:
-        last = max(days)
-        context = (
-            t("emin_history.drivers_period", start=_day_label(period_start), end=_day_label(cutoff), count=len(days))
-            if period_start else t("emin_history.drivers_day", day=_day_label(last))
-        )
+        context = t("emin_history.drivers_period", start=_day_label(data["start"]), end=_day_label(data["cutoff"]), count=data["observed_days"])
         body.append(html.P(context, className="small text-muted mb-2"))
-        if not totals:
+        if not components:
             body.append(html.P(t("emin_history.drivers_zero"), className="mb-0"))
         else:
-            labels = {key: _component_label(key) for key in totals}
-            total = sum(totals.values())
-            attributed = sum(points for (kind, _), points in totals.items() if kind == "group")
+            total = sum(item["points"] for item in components)
+            attributed = data.get("attributed_points", 0)
             body.append(html.P(
                 t("emin_history.drivers_attribution", points=f"{attributed:.2f}", total=f"{total:.2f}"),
                 className="mb-2 fw-semibold",
             ))
-            ordered = sorted(totals, key=lambda key: (key[0] != "group", -totals[key], labels[key].casefold()))
             body.append(dbc.Table([
                 html.Thead(html.Tr([
                     html.Th(t("emin_history.drivers_category"), scope="col"),
@@ -572,17 +313,13 @@ def _criticality_components_panel(trend_rows, period_start, cutoff):
                 ])),
                 html.Tbody([
                     html.Tr([
-                        html.Td(
-                            _component_evidence(labels[key], event_days[key[1]])
-                            if key[0] == "group" else labels[key],
-                            className="emin-history-driver-label",
-                        ),
+                        html.Td(_component_evidence(item), className="emin-history-driver-label"),
                         html.Td([
-                            html.Strong(f"{totals[key]:.2f}"),
-                            html.Small(f"{totals[key] / total:.1%}", className="d-block text-muted"),
+                            html.Strong(f"{item['points']:.2f}"),
+                            html.Small(f"{item['share']:.1%}", className="d-block text-muted"),
                         ], className="text-end text-nowrap"),
                     ])
-                    for key in ordered
+                    for item in components
                 ]),
             ], responsive=True, size="sm", class_name="emin-history-table emin-history-drivers-table mb-2"))
             body.append(html.P(t("emin_history.drivers_note"), className="small text-muted mb-0"))
@@ -592,85 +329,44 @@ def _criticality_components_panel(trend_rows, period_start, cutoff):
     ], class_name="shadow-sm unit-card mb-3")
 
 
-def _component_evidence(label, events_by_day):
-    days = sorted(events_by_day, reverse=True)
-    examples = [
-        html.Li([
-            html.Strong(_day_label(day), className="d-block"),
-            html.Ul([
-                html.Li([
-                    t(
-                        "emin_history.drivers_event_points",
-                        event=event or t("emin_history.drivers_event_unavailable"),
-                        points=f"{points:.2f}",
-                    ),
-                    html.Button(
-                        t("emin_history.drivers_find_records"), type="button",
-                        className="btn btn-link btn-sm d-block p-0",
-                        **{"data-emin-record-filter": "event", "data-emin-record-query": f"{day} · {event}"},
-                    ) if event else None,
-                ])
-                for event, points in events_by_day[day].most_common(3)
-            ], className="mb-1"),
-            html.Small(t("emin_history.drivers_more_events", count=len(events_by_day[day]) - 3), className="text-muted")
-            if len(events_by_day[day]) > 3 else None,
-        ], className="mb-2")
-        for day in days[:3]
-    ]
+def _component_evidence(item):
+    key = item["key"]
+    label = t(f"emin_history.drivers_{key}") if key in {"alert_points", "oil_points", "unattributed"} else key
+    examples = [html.Li([html.Strong(_day_label(row["day"])), f" · {row['event'] or t('emin_history.drivers_event_unavailable')} · {row['points']:.2f}"]) for row in item.get("events", [])[:12]]
     return html.Div([
         html.Strong(label),
-        html.Small(t("emin_history.drivers_group_days", count=len(days), day=_day_label(days[0])), className="d-block text-muted"),
         html.Details([
             html.Summary(t("emin_history.drivers_show_events")),
-            html.P(t("emin_history.drivers_sample_note"), className="text-muted small mb-1"),
-            html.Ul(examples, className="list-unstyled mb-0"),
-        ], className="emin-history-driver-evidence"),
+            html.Ul(examples, className="mb-0"),
+        ], className="emin-history-driver-evidence") if examples else None,
     ])
-
-
-def _top_reason(entry, period):
-    _, critical_days, average, recurrence, observed, _, intervention_days = entry
-    if critical_days:
-        return t("emin_history.top_critical_days", count=critical_days)
-    if period == "history" and intervention_days:
-        return t("emin_history.top_intervention_days", count=intervention_days)
-    signal = t("emin_history.top_signal_count", count=round(recurrence * observed), observed=observed)
-    average_label = t("emin_history.top_average", score=f"{average:.2f}")
-    return f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
-
-
-def _top_score_driver(bundle, unit, start, cutoff):
-    rows = (row for row in bundle.daily if row["unit"] == unit and start <= row["day"] <= cutoff)
-    totals, _, _ = _component_points(rows)
-    groups = [(name, points) for (kind, name), points in totals.items() if kind == "group"]
-    if not groups:
-        return None
-    return min(groups, key=lambda item: (-item[1], item[0].casefold()))[0]
-
-
-def _observed_points(rows, start, cutoff):
-    points_by_day = {}
-    for row in rows:
-        day = row["day"]
-        if start <= day <= cutoff and row.get("has_observation") is True and not row.get("estimated"):
-            points = _number(row.get("points"))
-            if points is not None:
-                points_by_day[day] = points
-    return points_by_day
 
 
 def fleet_criticality_panel(bundle, day, period):
     period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "short"
-    entries, start, cutoff, span, insufficient = fleet_criticality_top(bundle, day, period)
+    payload = fleet_criticality_top(bundle, day, period)
+    entries = payload.get("entries", [])
+    start, cutoff = payload.get("start"), payload.get("cutoff")
+    span = payload.get("span_days", 0)
+    insufficient = payload.get("insufficient_units", 0)
     if not start:
         return html.P(t("emin_history.top_empty"), className="text-muted mb-0")
     headers = ("col_rank", "col_unit", "top_reason", "col_movement", "top_last_milestone", "top_coverage")
     rows = []
     for rank, entry in enumerate(entries, 1):
-        unit, critical_days, _, _, observed, latest, intervention_days = entry
-        reason = _top_reason(entry, period)
-        score_based = not critical_days and (period != "history" or not intervention_days)
-        main_group = _top_score_driver(bundle, unit, start, cutoff) if score_based else None
+        unit = entry["unit"]
+        reason_data = entry.get("reason", {})
+        critical_days = entry.get("critical_days", 0)
+        if reason_data.get("kind") == "critical_days":
+            reason = t("emin_history.top_critical_days", count=reason_data.get("count", 0))
+        elif reason_data.get("kind") == "intervention_days":
+            reason = t("emin_history.top_intervention_days", count=reason_data.get("count", 0))
+        else:
+            signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
+            average = reason_data.get("average")
+            average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
+            reason = f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
+        main_group = entry.get("main_component")
         rows.append(html.Tr([
             html.Td(rank),
             html.Td(_open_unit(unit, "criticality", period)),
@@ -679,21 +375,19 @@ def fleet_criticality_panel(bundle, day, period):
                 html.Small(t("emin_history.top_main_component", component=main_group), className="d-block text-muted")
                 if main_group else None,
             ], **{"data-label": t("emin_history.top_reason")}),
-            html.Td(_movement_summary(_movement_for_unit(bundle.daily, unit, cutoff)),
+            html.Td(_movement_summary(payload.get("movement_by_unit", {}).get(unit, {"status": "insufficient"})),
                     **{"data-label": t("emin_history.col_movement")}),
-            html.Td(_day_label(latest) if latest else "—",
+            html.Td(_day_label(entry.get("latest_milestone")) if entry.get("latest_milestone") else "—",
                     **{"data-label": t("emin_history.top_last_milestone")}),
-            html.Td(f"{observed}/{span}", **{"data-label": t("emin_history.top_coverage")}),
+            html.Td(f"{entry.get('observed_days', 0)}/{span}", **{"data-label": t("emin_history.top_coverage")}),
         ]))
-    short_bounds = (date.fromisoformat(cutoff) - timedelta(days=89)).isoformat()
-    long_bounds = (date.fromisoformat(cutoff) - timedelta(days=179)).isoformat()
-    coverage = _observed_points(bundle.daily, start, cutoff)
-    same_scores = period in {"medium", "long"} and bool(coverage) and not _observed_points(bundle.daily, long_bounds, (date.fromisoformat(short_bounds) - timedelta(days=1)).isoformat())
-    history_uses_signal = period == "history" and entries and not any(entry[1] or entry[-1] for entry in entries)
+    coverage = payload.get("covered_days", 0)
+    same_scores = payload.get("overlaps_short", False)
+    history_uses_signal = payload.get("history_signal_only", False)
     return html.Div([
         html.P(t(f"emin_history.top_question_{period}"), className="fw-semibold mb-1"),
         html.P(t("emin_history.top_window", start=_day_label(start), end=_day_label(cutoff)), className="small text-muted mb-1"),
-        html.P(t("emin_history.top_coverage_days", count=len(coverage), span=span), className="small text-muted mb-2"),
+        html.P(t("emin_history.top_coverage_days", count=coverage, span=span), className="small text-muted mb-2"),
         html.P(t("emin_history.top_overlap"), className="small text-muted mb-2") if same_scores else None,
         html.P(t("emin_history.top_history_coverage"), className="small text-muted mb-2") if period == "history" else None,
         html.P(t("emin_history.top_history_signal_only"), className="small text-muted mb-2") if history_uses_signal else None,
@@ -707,70 +401,38 @@ def fleet_criticality_panel(bundle, day, period):
 
 
 def _top_unit_context(bundle, cutoff, period, unit, trend_rows, evidence_rows):
-    entries, start, _, span, _ = fleet_criticality_top(bundle, cutoff, period)
-    match = next(((position, entry) for position, entry in enumerate(entries, 1) if entry[0] == unit), None)
+    payload = fleet_criticality_top(bundle, cutoff, period)
+    entries = payload.get("entries", [])
+    match = next(((position, entry) for position, entry in enumerate(entries, 1) if entry["unit"] == unit), None)
     if not match:
         return None
     position, entry = match
-    points = _observed_points(trend_rows, start, cutoff)
-    dated_events = [row for row in evidence_rows if start <= str(row.get("day") or "") <= cutoff]
+    start, span = payload.get("start"), payload.get("span_days", 0)
+    reason_data = entry.get("reason", {})
+    if reason_data.get("kind") == "critical_days":
+        reason = t("emin_history.top_critical_days", count=reason_data.get("count", 0))
+    elif reason_data.get("kind") == "intervention_days":
+        reason = t("emin_history.top_intervention_days", count=reason_data.get("count", 0))
+    else:
+        signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
+        average = reason_data.get("average")
+        average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
+        reason = f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
     context = [
         html.P(t("emin_history.top_unit_position", rank=position, period=t(f"emin_history.top_{period}")), className="mb-1 fw-semibold"),
-        html.P(_top_reason(entry, period), className="mb-1"),
-        html.P(t("emin_history.top_coverage_days", count=len(points), span=span), className="text-muted small mb-2"),
+        html.P(reason, className="mb-1"),
+        html.P(t("emin_history.top_coverage_days", count=entry.get("observed_days", 0), span=span), className="text-muted small mb-2"),
     ]
-    if entry[1]:
-        critical = next(row for row in dated_events if _explicit_milestone(row) == "source")
+    if entry.get("critical_days"):
         context.append(html.P([
-            t("emin_history.top_source_on", day=_day_label(critical["day"])), " ",
+            t("emin_history.top_source_on", day=_day_label(entry.get("latest_critical"))), " ",
             html.A(t("emin_history.top_go_evidence"), href="#emin-history-milestones"),
         ], className="mb-2"))
-    elif period == "history" and entry[-1]:
+    elif period == "history" and entry.get("intervention_days"):
         context.append(html.P([
-            t("emin_history.top_intervention_on", day=_day_label(entry[-2])), " ",
+            t("emin_history.top_intervention_on", day=_day_label(entry.get("latest_intervention"))), " ",
             html.A(t("emin_history.top_go_evidence"), href="#emin-history-milestones"),
         ], className="mb-2"))
-
-    if period == "medium":
-        component_days = {}
-        for row in trend_rows:
-            if row["day"] not in points or points[row["day"]] <= 0:
-                continue
-            for component in row.get("event_groups", []):
-                if isinstance(component, str) and component.strip():
-                    component_days.setdefault(component, set()).add(row["day"])
-        most_frequent = sorted(component_days, key=lambda key: (-len(component_days[key]), key.casefold()))[:3]
-        context.append(html.H6(t("emin_history.top_recurrent_groups"), className="mt-3"))
-        context.append(html.Ul([
-            html.Li(t("emin_history.top_group_days", group=group, count=len(component_days[group])))
-            for group in most_frequent
-        ], className="mb-0") if most_frequent else html.P(t("emin_history.top_no_groups"), className="small text-muted mb-0"))
-
-    if period == "long":
-        months = {}
-        for day, points_for_day in sorted(points.items()):
-            months.setdefault(day[:7], []).append(points_for_day)
-        context.append(html.H6(t("emin_history.top_monthly"), className="mt-3"))
-        context.append(html.Ul([
-            html.Li(t("emin_history.top_month_signal", month=month, count=sum(value > 0 for value in values), observed=len(values)))
-            for month, values in months.items()
-        ]) if months else html.P(t("emin_history.top_empty"), className="small text-muted"))
-        comparison = t("emin_history.top_no_comparison")
-        for intervention in dated_events:
-            if _explicit_milestone(intervention) != "intervention":
-                continue
-            event = date.fromisoformat(intervention["day"])
-            lower, upper = (event - timedelta(days=14)).isoformat(), (event + timedelta(days=14)).isoformat()
-            before = [value for day, value in points.items() if lower <= day < intervention["day"]]
-            after = [value for day, value in points.items() if intervention["day"] < day <= upper]
-            if len(before) >= 2 and len(after) >= 2:
-                comparison = t(
-                    "emin_history.top_intervention_comparison", day=_day_label(intervention["day"]),
-                    before=f"{sum(before)/len(before):.2f}", after=f"{sum(after)/len(after):.2f}",
-                    before_days=len(before), after_days=len(after),
-                )
-                break
-        context.append(html.P(comparison, className="small text-muted mb-0"))
     return dbc.Card([
         section_header(t("emin_history.top_why_unit"), "fas fa-clipboard-list"),
         dbc.CardBody(context),
@@ -793,7 +455,7 @@ def _movement_summary(movement: dict):
 
 
 def fleet_highlights_panel(highlights: dict, daily_rows: list[dict], movements: dict[str, dict]):
-    scores = {row["unit"]: _number(row.get("points")) for row in daily_rows}
+    scores = highlights.get("scores", {})
     has_history = highlights["has_history"]
     lower_note = "distinct_scores_required"
     if highlights["can_distinguish"]:
@@ -871,23 +533,20 @@ def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
     return figure
 
 
-def _groups_panel(rows: list[dict], selected_group: str | None):
-    counts = Counter(group for row in rows for group in set(row.get("event_groups", [])))
-    if not counts:
+def _groups_panel_from_items(items, selected_group):
+    if not items:
         return html.P(t("emin_history.empty_groups"), className="text-muted mb-0")
-    ordered = sorted(counts, key=lambda group: (-counts[group], group.casefold()))[:8]
-    if selected_group in counts and selected_group not in ordered:
-        ordered.append(selected_group)
+    ordered = list(items)
     return html.Details([
         html.Summary(t("emin_history.group_explore")),
         html.P(t("emin_history.group_explore_note"), className="small text-muted my-2"),
         html.Ul([
             html.Li(html.Button([
-                html.Span(group),
-                dbc.Badge(str(counts[group]), color="primary" if group == selected_group else "secondary"),
+                html.Span(item["group"]),
+                dbc.Badge(str(item["count"]), color="primary" if item["group"] == selected_group else "secondary"),
             ], type="button", className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2",
-                **{"data-emin-group-filter": group, "aria-pressed": str(group == selected_group).lower()}))
-            for group in ordered
+                **{"data-emin-group-filter": item["group"], "aria-pressed": str(item["group"] == selected_group).lower()}))
+            for item in ordered
         ], className="list-unstyled d-flex flex-wrap gap-2 mb-0"),
     ])
 
@@ -1016,33 +675,10 @@ def _normalized_text(value: str) -> str:
     return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
-def _explicit_milestone(row: dict) -> str | None:
-    """Classify flags and severity supplied by the source."""
-    details = row.get("details") if isinstance(row.get("details"), dict) else {}
-    for key in ("critical", "is_critical", "catastrophic"):
-        if details.get(key) is True or row.get(key) is True:
-            return "source"
-    levels = [row.get("level"), row.get("severity"), details.get("level"), details.get("severity")]
-    if any(_normalized_text(str(level or "")).strip() in {"critical", "critico", "severe", "grave", "catastrophic", "catastrofico"} for level in levels):
-        return "source"
-    if any(details.get(key) is True or row.get(key) is True for key in ("is_major", "major_event")):
-        return "intervention" if str(row.get("kind", "")).startswith("maintenance_") else "text"
-    return None
-
-
 def _major_event(row: dict) -> str | None:
-    """Highlight explicit high severity or major-event wording from source fields."""
-    explicit = _explicit_milestone(row)
-    if explicit:
-        return explicit
-    details = row.get("details") if isinstance(row.get("details"), dict) else {}
-    text = _normalized_text(" ".join(str(value) for value in details.values() if value is not None))
-    text += " " + _normalized_text(str(row.get("summary") or row.get("description") or ""))
-    if re.search(r"\b(pendiente|programad[oa]|planificad[oa]|sin evidencia|no se (?:registro|detecto|realizo)|scheduled|pending)\b", text):
-        return None
-    if any(re.search(pattern, text) for pattern in _MAJOR_TEXT_PATTERNS):
-        return "text"
-    return None
+    """Read the producer's event classification; this module only labels it."""
+    analysis = row.get("analysis")
+    return analysis.get("major_event") if isinstance(analysis, dict) else None
 
 
 CHRONOLOGY_PAGE_SIZE = 40
@@ -1051,15 +687,8 @@ CHRONOLOGY_TYPES = ("all", "milestones", "high_signal", "replacements", *CHRONOL
 
 
 def _unit_evidence_rows(bundle, unit, cutoff):
-    rows = [
-        row for row in bundle.observed
-        if row.get("unit") == unit and (not cutoff or str(row.get("day") or "") <= cutoff)
-    ]
-    return sorted(
-        rows,
-        key=lambda row: (str(row.get("event_at") or row.get("day") or ""), str(row.get("kind", ""))),
-        reverse=True,
-    )
+    rows = bundle.dashboard.get("units", {}).get(unit, {}).get("evidence", [])
+    return [row for row in rows if not cutoff or str(row.get("day") or "") <= cutoff]
 
 
 def _evidence_type(row):
@@ -1072,10 +701,7 @@ def _evidence_type(row):
 
 
 def _is_high_signal(row):
-    if row.get("kind") != "event" or not isinstance(details := row.get("details"), dict):
-        return False
-    severity = _normalized_text(str(details.get("Severidad") or "")).strip()
-    return severity in {"high", "alta", "alto"} and (_number(details.get("Puntos del evento")) or 0) > 0
+    return bool((row.get("analysis") or {}).get("high_signal"))
 
 
 def _high_signals_panel(rows, start, cutoff):
@@ -1118,19 +744,8 @@ def _high_signals_panel(rows, start, cutoff):
 
 
 def _executed_replacement(row):
-    """Use documented Golden action and execution date, not free-text wording."""
-    if row.get("kind") != "maintenance_golden_action":
-        return None
-    details = row.get("details")
-    if not isinstance(details, dict) or _normalized_text(str(details.get("Acción") or "")).strip() != "reemplazo":
-        return None
-    try:
-        executed_at = datetime.fromisoformat(str(details.get("Realizada el") or ""))
-    except ValueError:
-        return None
-    if executed_at.tzinfo is not None:
-        executed_at = executed_at.astimezone(CHILE)
-    return executed_at.date().isoformat()
+    """Read the producer's documented replacement date, without reclassifying text."""
+    return (row.get("analysis") or {}).get("replacement_day")
 
 
 def _replacement_records(rows, cutoff):
@@ -1220,7 +835,7 @@ def _chronology_table(rows, *, expand_records=False):
 
 def chronology_page(bundle, unit, cutoff, kind, query, page):
     unit = unit or filter_options(bundle)["default_unit"]
-    cutoff = cutoff or max((row["day"] for row in bundle.daily), default=None)
+    cutoff = cutoff or next(iter(bundle.dashboard.get("catalog", {}).get("cutoffs", [])), None)
     rows = _unit_evidence_rows(bundle, unit, cutoff)
     needle = _normalized_text((query or "").strip())
     event_day, separator, event_name = needle.partition(" · ")
