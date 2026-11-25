@@ -9,8 +9,8 @@ pit and which ones are reviewed, and why. The page reads top to bottom as one an
     3. the map: the real GPS path of the busiest climb ramps over satellite imagery, colored by how
        demanding each 100 m is, how the fleet performs there, or where the selected unit is slower
        than the fleet (a click on a ramp selects it);
-    4. the selected unit's climbs over the manufacturer curve, and the power of every truck on the
-       selected ramp;
+    4. climbs over the manufacturer curve (the unit under analysis, plus other units of its model to
+       compare), and the power of every truck on the selected ramp;
     5. the decision per truck (table).
 
 The week and fleet filters apply to the whole page. The diagnosis, trend, descent and data-quality
@@ -20,6 +20,8 @@ data: src/data/operation_performance.py.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
@@ -74,7 +76,7 @@ def build_page(data: op.WeekData, all_fleets: bool) -> html.Div:
         ], className="opp-ranking-row"),
         _map_card(),
         dbc.Row([
-            dbc.Col(_curve_card(data), xs=12, xl=6),
+            dbc.Col(_curve_card(data, unit), xs=12, xl=6),
             dbc.Col(_ramp_card(data, unit), xs=12, xl=6),
         ]),
         _decision_card(data, all_fleets),
@@ -131,10 +133,19 @@ def _map_card() -> dbc.Card:
     )
 
 
-def _curve_card(data: op.WeekData) -> dbc.Card:
+def _curve_card(data: op.WeekData, unit: Optional[str]) -> dbc.Card:
+    # Starts on the unit under analysis (and follows it); other units of the same model can be added.
+    per_unit = op.unit_climbs(data.pasadas)
+    selected = [unit] if unit in set(per_unit["unidad"]) else []
+    model = per_unit.loc[per_unit["unidad"] == unit, "modelo"].iloc[0] if selected else None
+    selector = views.control(t("opp.curve.units"), dcc.Dropdown(
+        id="opp-curve-units", multi=True, value=selected, placeholder=t("opp.curve.units_placeholder"),
+        options=views.curve_unit_options(per_unit, model, selected)), "opp-curve-units", width=320)
     return views.panel_card(
         t("opp.panel.curve.title"), t("opp.panel.curve.question"),
-        views.graph("opp-curve-graph"), caption=html.Span(id="opp-curve-caption"),
+        views.graph("opp-curve-graph"),
+        controls=[selector, html.P(t("opp.curve.units_hint"), className="opp-hint mb-0 align-self-end")],
+        caption=html.Span(id="opp-curve-caption"),
         how_to_read=t("opp.panel.curve.how" if data.measured_payload else "opp.panel.curve.how_nominal"),
         icon="fa-chart-line",
     )

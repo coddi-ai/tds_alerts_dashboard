@@ -3,8 +3,9 @@
 client -> weeks (latest selected) -> fleets -> the page. Two selections tie the page together:
 
 - the unit under analysis (`opp-unit`): chosen in its dropdown or by clicking a bar of the ranking.
-  It redraws the ranking (outlined), its side card, the curve, the ramp boxes and the map's
-  "unidad" coloring, and moves the ramp selection to the ramp where that unit loses most;
+  It redraws the ranking (outlined), its side card, the ramp boxes and the map's "unidad" coloring,
+  restarts the curve's unit selector (`opp-curve-units`, where other units of the same model can be
+  added to compare) on it, and moves the ramp selection to the ramp where that unit loses most;
 - the ramp (`opp-ramp-select`): chosen in its dropdown, by clicking a ramp on the map or one of the
   unit's worst ramps. It redraws the ramp boxes and outlines the ramp on the map.
 
@@ -196,23 +197,38 @@ def update_unit_focus(unit, client, folder, fleet):
 
 
 @callback(
+    Output("opp-curve-units", "value"),
+    Input("opp-unit", "value"),
+    prevent_initial_call=True,
+)
+def curve_follows_unit(unit):
+    """A new unit under analysis restarts the curve on it (the user may then add others)."""
+    return [unit] if unit else []
+
+
+@callback(
     Output("opp-curve-graph", "figure"),
     Output("opp-curve-caption", "children"),
-    Input("opp-unit", "value"),
+    Output("opp-curve-units", "options"),
+    Input("opp-curve-units", "value"),
     *PAGE_STATE,
 )
-def update_curve(unit, client, folder, fleet):
-    """The curve of the selected unit's model, with the unit's climbs over the fleet's."""
+def update_curve(units, client, folder, fleet):
+    """The curve of the first selected unit's model, with up to MAX_CURVE_UNITS units of that model
+    over the rest of the fleet. Units of another model are disabled in the selector."""
     data = week_data(client, folder, fleet)
     if data is None:
         raise PreventUpdate
-    climbs = op.base_climbs(data.pasadas)
-    models = data.models
-    mine = climbs.loc[climbs["unidad"] == unit, "modelo"] if unit else climbs.iloc[0:0]["modelo"]
-    model = mine.iloc[0] if not mine.empty else (models[0] if models else None)
-    caption = t("opp.panel.curve.caption", modelo=model or "—", unidad=unit or "—",
-                n=int((climbs["unidad"] == unit).sum()) if unit else 0)
-    return charts.curve_figure(data.pasadas, data.curvas, model, [unit] if unit else []), caption
+    per_unit = op.unit_climbs(data.pasadas)
+    models = dict(zip(per_unit["unidad"], per_unit["modelo"]))
+    units = [u for u in (units or []) if u in models]
+    model = models[units[0]] if units else (data.models[0] if data.models else None)
+    units = [u for u in units if models[u] == model][:charts.MAX_CURVE_UNITS]
+    climbs = dict(zip(per_unit["unidad"], per_unit["pasadas"]))
+    caption = t("opp.panel.curve.caption", modelo=model or "—", unidad=", ".join(units) or "—",
+                n=sum(int(climbs[u]) for u in units))
+    figure = charts.curve_figure(data.pasadas, data.curvas, model, units)
+    return figure, caption, views.curve_unit_options(per_unit, model, units)
 
 
 # ------------------------------------------------------------------------------------------------

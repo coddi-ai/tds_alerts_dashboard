@@ -21,10 +21,10 @@ CLIENT = "TESTCO"
 def _camiones(week):
     rows = [
         # unidad, flota, iv_rel, iv, climbs, decision, cause, lost vs fleet, lost vs curve, ranking
-        ("T1", "F1", 1.04, 1.06, 40, op.FONDO_DE_MINA, None, 2.0, 1.0, 1),
+        ("T1", "F1", 1.04, 1.06, 40, op.CONFORME, None, 2.0, 1.0, 1),
         ("T2", "F1", 0.98, 0.99, 35, op.SEGUIMIENTO, "Sin causa en señales (camino, tráfico o carga)", 8.0, 6.0, 2),
         ("T3", "F1", 0.94, 0.95, 30, op.REVISAR, "Turbo / admisión (presión de turbo baja)", 20.5, 15.0, 3),
-        ("T4", "F2", 1.01, 0.97, 25, op.FONDO_DE_MINA, None, 1.0, 0.0, 1),
+        ("T4", "F2", 1.01, 0.97, 25, op.CONFORME, None, 1.0, 0.0, 1),
         ("T5", "F2", 0.99, 1.00, 4, op.SIN_DATOS, None, 0.5, 0.0, 2),
     ]
     frame = pd.DataFrame(rows, columns=["unidad", "flota", "iv_rel_p50", "iv_p50", "pasadas_capacidad", "decision",
@@ -143,7 +143,8 @@ def _write_week(base, folder, *, manifest=True, iv_rel_t3=0.94, with_escape=Fals
     silver.mkdir(parents=True)
     week = op.Week.parse(folder)
     days = [week.monday, date.fromordinal(week.monday.toordinal() + 1)]
-    _camiones(folder).to_parquet(gold / "camiones.parquet")
+    # Written with the pipeline's own name for the best decision; load_week shows it as "Conforme".
+    _camiones(folder).replace({"decision": {op.CONFORME: "Fondo de mina"}}).to_parquet(gold / "camiones.parquet")
     pasadas = _pasadas(days[0])
     pasadas.to_parquet(gold / "pasadas_eval.parquet")
     _tramos(pasadas).to_parquet(silver / "tramos.parquet")
@@ -244,7 +245,7 @@ def test_week_kpis_without_climbs():
 
 
 @pytest.mark.parametrize("iv_rel, climbs, expected", [
-    (1.00, 10, op.FONDO_DE_MINA), (1.05, 50, op.FONDO_DE_MINA), (0.99, 10, op.SEGUIMIENTO),
+    (1.00, 10, op.CONFORME), (1.05, 50, op.CONFORME), (0.99, 10, op.SEGUIMIENTO),
     (0.97, 10, op.SEGUIMIENTO), (0.969, 10, op.REVISAR), (1.10, 9, op.SIN_DATOS), (None, 30, op.SIN_DATOS),
 ])
 def test_decision_thresholds(iv_rel, climbs, expected):
@@ -381,7 +382,7 @@ def test_ranking_colors_follow_the_decision(week47):
     figure = charts.ranking_figure(week47.camiones)
     colors = {trace.name: trace.marker.color for trace in figure.data}
     assert colors[op.REVISAR] == SEVERITY_TIERS["alto"]["fill"]
-    assert colors[op.FONDO_DE_MINA] == SEVERITY_TIERS["bajo"]["fill"]
+    assert colors[op.CONFORME] == SEVERITY_TIERS["bajo"]["fill"]
     # highest relative IV on top: the category array runs bottom to top
     assert list(figure.layout.yaxis.categoryarray)[-1] == "T1"
 
@@ -510,8 +511,60 @@ def test_unit_callbacks(data_root):
     bold = [text for text in figure.layout.yaxis.ticktext if text.startswith("<b>")]
     assert bold == ["<b>▶ T2 · F1</b>"]
     assert cb.update_unit_focus("T2", CLIENT, folder, "all") is not None
-    figure, caption = cb.update_curve("T4", CLIENT, folder, "all")
+    figure, caption, options = cb.update_curve(["T4"], CLIENT, folder, "all")
     assert "M2" in caption and any("T4" in trace.name for trace in figure.data)
+    # Units of another model than the curve's are listed but disabled.
+    assert {o["value"]: o["disabled"] for o in options} == {"T1": True, "T2": True, "T3": True, "T4": False, "T5": False}
+    # Several units of one model share the curve; one of another model is dropped.
+    figure, caption, _ = cb.update_curve(["T1", "T3", "T4"], CLIENT, folder, "all")
+    named = {trace.name for trace in figure.data}
+    assert "M1" in caption and "T1, T3" in caption
+    assert any("T1" in n for n in named) and any("T3" in n for n in named) and not any("T4" in n for n in named)
+    assert cb.curve_follows_unit("T2") == ["T2"]
+
+
+def test_the_pipeline_decision_name_is_shown_as_conforme(week47):
+    assert "Fondo de mina" not in set(week47.camiones["decision"])
+    assert set(week47.camiones["decision"]) == {op.CONFORME, op.SEGUIMIENTO, op.REVISAR, op.SIN_DATOS}
+
+
+def test_units_are_listed_letters_first_then_by_number():
+    assert op.sort_units(["CA-81", "CA-9", "CA-30", "CA-100"]) == ["CA-9", "CA-30", "CA-81", "CA-100"]
+    assert op.sort_units(["101", "11", "9"]) == ["9", "11", "101"]
+    assert op.sort_units(["B2", "A10", "A2", "X"]) == ["A2", "A10", "B2", "X"]
+
+
+def test_unit_selectors_use_the_natural_order(week47):
+    from dashboard.components import operation_performance_views as views
+
+    camiones = week47.camiones.assign(unidad=["CA-81", "CA-9", "CA-30", "CA-100", "CA-31"])
+    assert [o["value"] for o in views.unit_options(camiones)] == ["CA-9", "CA-30", "CA-31", "CA-81", "CA-100"]
+    per_unit = op.unit_climbs(week47.pasadas)
+    assert list(per_unit["unidad"]) == ["T1", "T2", "T3", "T4", "T5"]
+    # Once MAX_CURVE_UNITS are selected, the other units of the model are disabled too.
+    many = pd.DataFrame({"unidad": [f"U{i}" for i in range(1, 8)], "modelo": "M1", "pasadas": 12})
+    chosen = [f"U{i}" for i in range(1, 6)]
+    options = views.curve_unit_options(many, "M1", chosen)
+    assert [o["value"] for o in options if o["disabled"]] == ["U6", "U7"]
+    assert options[0]["label"] == "U1 · 12 subidas"
+
+
+def test_map_labels_carry_a_marker_and_the_view_fits_the_paths(week47):
+    """A text-only Scattermap makes MapLibre reject the layer (text-offset NaN) and the map then
+    ignores every later update, so the ramp labels must carry a (transparent) marker."""
+    from dashboard.components import operation_performance_charts as charts
+
+    segments = op.ramp_map_data(CLIENT, op.Week(2026, 47))[1]
+    figure = charts.ramp_map_figure(segments, "pendiente")
+    assert all(trace.mode != "text" for trace in figure.data)
+    # Every point inside the map: MapLibre's world is 512·2^zoom px wide (Web Mercator).
+    import numpy as np
+    lat = pd.Series([-26.60, -26.51]); lon = pd.Series([-70.32, -70.29])
+    view = charts._map_view(lat, lon)
+    px_per_deg = 512 * 2 ** view["zoom"] / 360
+    height = (lat.max() - lat.min()) / np.cos(np.radians(view["center"]["lat"])) * px_per_deg
+    width = (lon.max() - lon.min()) * px_per_deg
+    assert height <= charts.MAP_HEIGHT and width <= charts.MAP_FIT_WIDTH
 
 
 def test_unit_focus_lists_its_worst_ramps_as_buttons(week47):

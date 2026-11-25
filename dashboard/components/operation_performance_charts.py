@@ -30,6 +30,8 @@ from src.i18n import current_language, t
 # Validated with the dataviz palette checker (lightness band, chroma floor, CVD and normal-vision
 # separation, contrast on white): keep the order when adding a slot.
 CAUSE_COLORS = ("#2471a3", "#a04000", "#7d3c98", "#138d75", "#922b21")
+# Units highlighted together over the manufacturer curve: one categorical hue each, never cycled.
+MAX_CURVE_UNITS = len(CAUSE_COLORS)
 NEUTRAL_MARK = "#a3acb9"          # "no engine cause", the rest of the fleet, "Sin datos suficientes"
 INK = BRAND_TITLE
 LOADED_COLOR, EMPTY_COLOR = CAUSE_COLORS[1], CAUSE_COLORS[0]
@@ -310,6 +312,9 @@ def escape_figure(escape: Optional[pd.DataFrame]) -> go.Figure:
 # Curva y rampas
 # ------------------------------------------------------------------------------------------------
 
+FORCE_TICKS = (5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200)
+
+
 def curve_figure(pasadas: Optional[pd.DataFrame], curvas: Optional[pd.DataFrame], model: Optional[str],
                  highlight: Sequence[str] = ()) -> go.Figure:
     """Loaded full-throttle climbs (required force vs real speed) over the model's propulsion curve."""
@@ -331,10 +336,10 @@ def curve_figure(pasadas: Optional[pd.DataFrame], curvas: Optional[pd.DataFrame]
             x=curve["v_kmh"], y=curve["fuerza_t"], mode="lines", name=str(curve["curva"].iloc[0]),
             line={"color": INK, "width": 2.5}, hovertemplate="%{x:.1f} km/h · %{y:.1f} t<extra></extra>",
         ))
-    highlight = [u for u in highlight if u in set(climbs["unidad"])]
+    highlight = [u for u in highlight if u in set(climbs["unidad"])][:MAX_CURVE_UNITS]
     rest = op.sample(climbs[~climbs["unidad"].isin(highlight)])
     point_hover = ("<b>%{customdata[0]}</b> · " + t("opp.hover.slope") + " %{customdata[1]:.1f} % · %{customdata[2]:.0f} t<br>"
-                   "%{x:.1f} km/h · IV %{customdata[3]:.2f}<extra></extra>")
+                   "%{x:.1f} km/h · " + t("opp.hover.iv_curve") + " %{customdata[3]:.2f}<extra></extra>")
 
     def custom(frame):
         return np.column_stack([frame["unidad"], frame["pend_pct"], frame["gvw_t"], frame["iv"]])
@@ -347,17 +352,19 @@ def curve_figure(pasadas: Optional[pd.DataFrame], curvas: Optional[pd.DataFrame]
         part = climbs[climbs["unidad"] == unit]
         fig.add_trace(go.Scattergl(
             x=part["v_kmh"], y=part["fuerza_req_t"], mode="markers", name=t("opp.legend.truck", unidad=unit),
-            marker={"color": CAUSE_COLORS[index % len(CAUSE_COLORS)], "size": 8, "opacity": 0.85,
+            marker={"color": CAUSE_COLORS[index], "size": 8, "opacity": 0.85,
                     "line": {"color": "#ffffff", "width": 1}},
             customdata=custom(part), hovertemplate=point_hover,
         ))
     return _style(fig, height=500, x=t("opp.axis.speed"), y=t("opp.axis.force_log"),
-                  xaxis={"range": [0, x_max]}, yaxis={"type": "log"})
+                  xaxis={"range": [0, x_max]},
+                  # Whole values on the log axis (plotly's default labels minor ticks "9, 8, 6..." for 90, 80, 60).
+                  yaxis={"type": "log", "tickvals": FORCE_TICKS, "ticktext": [fmt(v, 0) for v in FORCE_TICKS]})
 
 
 def ramp_box_figure(climbs: pd.DataFrame, camiones: Optional[pd.DataFrame], metric: str = "hp_pendiente",
                     selected: Optional[str] = None) -> go.Figure:
-    """One box per truck on a ramp (alphabetical), colored by the truck's decision; fleet median marked.
+    """One box per truck on a ramp (natural unit order), colored by the truck's decision; fleet median marked.
     The selected unit's box is drawn bold, with its own legend entry."""
     climbs = climbs.dropna(subset=[metric]) if not climbs.empty else climbs
     if climbs.empty:
@@ -366,7 +373,7 @@ def ramp_box_figure(climbs: pd.DataFrame, camiones: Optional[pd.DataFrame], metr
     if camiones is not None and not camiones.empty:
         decisions = dict(zip(camiones["unidad"], camiones["decision"]))
     df = climbs.assign(decision=climbs["unidad"].map(decisions).fillna(op.SIN_DATOS))
-    units = sorted(df["unidad"].unique())
+    units = op.sort_units(df["unidad"].unique())
     label = t(f"opp.metric.{metric}")
     value_format = ":,.0f" if metric == "hp_pendiente" else ":.3f"
     fig = go.Figure()
@@ -408,14 +415,21 @@ PERFORMANCE_SCALE = [[0.0, "#b91c1c"], [0.35, "#f87171"], [0.5, "#f8fafc"], [0.6
 PERFORMANCE_SPAN = 0.15     # the performance scale runs 0,85 - 1,15
 
 
+MAP_HEIGHT = 580
+MAP_FIT_WIDTH = 900         # px; the card is wider on a desktop, narrower on a laptop, so fit a modest width
+MAP_FIT_MARGIN = 1.25       # room around the paths (and for the colorbar)
+
+
 def _map_view(lat: pd.Series, lon: pd.Series) -> dict:
-    """Center and zoom that fit the points (a ~1.000 x 560 px map)."""
-    lat_span = float(lat.max() - lat.min()) or 0.005
-    lon_span = float(lon.max() - lon.min()) or 0.005
-    span = max(lon_span, 1.8 * lat_span, 0.002)
-    zoom = float(np.clip(9.4 - np.log2(span), 10, 16.5))
-    return {"center": {"lat": float((lat.max() + lat.min()) / 2), "lon": float((lon.max() + lon.min()) / 2)},
-            "zoom": zoom}
+    """Center and zoom that fit every point in a MAP_FIT_WIDTH x MAP_HEIGHT map. MapLibre tiles are
+    512 px, so at zoom z the world is 512·2^z px wide; a degree of latitude is 1/cos(lat) times taller
+    than one of longitude (Web Mercator)."""
+    center_lat = float((lat.max() + lat.min()) / 2)
+    lat_span = max(float(lat.max() - lat.min()), 0.002) / np.cos(np.radians(center_lat))
+    lon_span = max(float(lon.max() - lon.min()), 0.002)
+    fit = min(np.log2(MAP_FIT_WIDTH * 360 / (512 * lon_span)), np.log2(MAP_HEIGHT * 360 / (512 * lat_span)))
+    zoom = float(np.clip(fit - np.log2(MAP_FIT_MARGIN), 9, 16.5))
+    return {"center": {"lat": center_lat, "lon": float((lon.max() + lon.min()) / 2)}, "zoom": zoom}
 
 
 def ramp_map_figure(segments: pd.DataFrame, mode: str = "pendiente", base: str = "satelite",
@@ -484,10 +498,14 @@ def ramp_map_figure(segments: pd.DataFrame, mode: str = "pendiente", base: str =
         + value_hover + "<br>" + t("opp.map.hover_click") + "<extra></extra>",
     ))
 
-    # Ramp ids at the top of each path, so a ramp named in a list can be found on the map.
+    # Ramp ids at the top of each path, so a ramp named in a list can be found on the map. The trace
+    # carries an invisible marker on purpose: with mode="text" alone plotly.js computes the label
+    # offset from a missing marker size (NaN), MapLibre rejects the layer and the map then ignores
+    # every later update (coloring, base map, selected ramp).
     tops = segments.sort_values("k").groupby("rampa_id", sort=False).tail(1)
     fig.add_trace(go.Scattermap(
-        lat=tops["lat"], lon=tops["lon"], mode="text", text=tops["rampa_id"], showlegend=False,
+        lat=tops["lat"], lon=tops["lon"], mode="markers+text", text=tops["rampa_id"], showlegend=False,
+        marker={"size": 6, "opacity": 0},
         textfont={"size": 11, "color": "#ffffff" if base == "satelite" else INK}, textposition="top right",
         hoverinfo="skip",
     ))
@@ -500,7 +518,7 @@ def ramp_map_figure(segments: pd.DataFrame, mode: str = "pendiente", base: str =
     else:
         map_layout = {"style": "open-street-map"}
     fig.update_layout(
-        map={**map_layout, **view}, height=580, margin={"l": 0, "r": 0, "t": 0, "b": 0},
+        map={**map_layout, **view}, height=MAP_HEIGHT, margin={"l": 0, "r": 0, "t": 0, "b": 0},
         separators=separators(), font={"family": FONT_FAMILY, "size": 12, "color": INK},
         hoverlabel={"bgcolor": "#ffffff", "bordercolor": BRAND_AXIS}, showlegend=False,
         # Keep the user's pan and zoom when the coloring, the unit or the selected ramp change.

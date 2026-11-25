@@ -52,18 +52,21 @@ PASADAS_COLUMNS = (
     "v_max_retardo_kmh", "curva_retardo", "exceso_retardo", "bajo_flota", "causa", "payload_t_media",
 )
 
-# --- Decision (camiones.decision), by the truck's median relative IV -----------------------------
-FONDO_DE_MINA = "Fondo de mina"
+# --- Decision (camiones.decision), by the truck's median relative speed index -------------------
+CONFORME = "Conforme"
 SEGUIMIENTO = "Seguimiento"
 REVISAR = "Revisar"
 SIN_DATOS = "Sin datos suficientes"
-DECISIONS = (FONDO_DE_MINA, SEGUIMIENTO, REVISAR, SIN_DATOS)
-IV_REL_OK = 1.00            # >= : Fondo de mina
+DECISIONS = (CONFORME, SEGUIMIENTO, REVISAR, SIN_DATOS)
+# The pipeline names the best decision "Fondo de mina"; the dashboard shows it as "Conforme". The
+# gold table is renamed on load (load_week), so every panel, filter and test sees one name.
+PIPELINE_DECISION_NAMES = {"Fondo de mina": CONFORME}
+IV_REL_OK = 1.00            # >= : Conforme
 IV_REL_REVIEW = 0.97        # <  : Revisar (between both: Seguimiento)
 MIN_CLIMBS = 10             # fewer loaded full-throttle climbs in the week: Sin datos suficientes
 
 # Severity tier (shared/severity.py) of each decision: one severity scale for the whole dashboard.
-DECISION_TIER = {FONDO_DE_MINA: "bajo", SEGUIMIENTO: "atencion", REVISAR: "alto", SIN_DATOS: None}
+DECISION_TIER = {CONFORME: "bajo", SEGUIMIENTO: "atencion", REVISAR: "alto", SIN_DATOS: None}
 
 # Causes that do not point at the engine (CDA: road, traffic or load; Capstone: electric drive,
 # load or road). They are drawn neutral so the engine causes stand out.
@@ -252,6 +255,8 @@ def load_week(client: str, week: Week, root=None) -> WeekData:
         columns = PASADAS_COLUMNS if name == "pasadas_eval" else None
         frame = load_table(client, week, name, GOLD, columns, root)
         setattr(data, "pasadas" if name == "pasadas_eval" else name, frame)
+    if data.camiones is not None and "decision" in data.camiones:
+        data.camiones["decision"] = data.camiones["decision"].replace(PIPELINE_DECISION_NAMES)
     if (client_root(client, root) / SILVER / week.folder / MANIFEST).is_file():
         data.calidad = load_table(client, week, QUALITY_TABLE, SILVER, root=root)
     return data
@@ -351,7 +356,7 @@ def decision_of(iv_rel: Optional[float], climbs: int) -> str:
     if climbs < MIN_CLIMBS or iv_rel is None or pd.isna(iv_rel):
         return SIN_DATOS
     if iv_rel >= IV_REL_OK:
-        return FONDO_DE_MINA
+        return CONFORME
     if iv_rel >= IV_REL_REVIEW:
         return SEGUIMIENTO
     return REVISAR
@@ -478,6 +483,33 @@ def quality_matrix(calidad: Optional[pd.DataFrame], column: str = "horas_con_gps
 # ------------------------------------------------------------------------------------------------
 # Selected unit and map of ramps
 # ------------------------------------------------------------------------------------------------
+
+_UNIT_ID = re.compile(r"^(\D*?)[\s\-_]*(\d+)(.*)$")
+
+
+def unit_sort_key(unit) -> tuple:
+    """Natural order of unit ids: letters first, then the number as a number ("CA-9" < "CA-30",
+    "11" < "101"). Ids without a number go last, alphabetically."""
+    text = str(unit)
+    match = _UNIT_ID.match(text.strip())
+    if not match:
+        return (1, text.upper(), 0, "")
+    prefix, number, rest = match.groups()
+    return (0, prefix.upper(), int(number), rest.upper())
+
+
+def sort_units(units) -> List[str]:
+    return sorted(units, key=unit_sort_key)
+
+
+def unit_climbs(pasadas: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Per unit with loaded full-throttle climbs: `unidad`, `modelo`, `pasadas`, in natural unit order."""
+    climbs = base_climbs(pasadas)
+    if climbs.empty:
+        return pd.DataFrame(columns=["unidad", "modelo", "pasadas"])
+    per_unit = climbs.groupby("unidad", as_index=False).agg(modelo=("modelo", "first"), pasadas=("unidad", "size"))
+    return per_unit.set_index("unidad").loc[sort_units(per_unit["unidad"])].reset_index()
+
 
 def default_unit(camiones: Optional[pd.DataFrame]) -> Optional[str]:
     """The unit the page opens on: the worst one in "Revisar", else the lowest firm relative IV."""

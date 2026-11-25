@@ -15,7 +15,7 @@ import pandas as pd
 from dash import dash_table, dcc, html
 
 from dashboard.components.oil_ui import NEUTRAL, kpi_tile
-from dashboard.components.operation_performance_charts import fmt
+from dashboard.components.operation_performance_charts import MAX_CURVE_UNITS, fmt
 from shared.severity import SEVERITY_TIERS
 from src.data import operation_performance as op
 from src.i18n import t
@@ -88,7 +88,7 @@ def decision_chip(decision) -> html.Span:
 # ------------------------------------------------------------------------------------------------
 
 def decision_counts(camiones: Optional[pd.DataFrame]) -> html.Div:
-    """"23 Fondo de mina · 12 Seguimiento · 9 Revisar": one chip per decision present."""
+    """"23 Conforme · 12 Seguimiento · 9 Revisar": one chip per decision present."""
     if camiones is None or camiones.empty:
         return html.Div()
     counts = camiones["decision"].value_counts()
@@ -98,11 +98,29 @@ def decision_counts(camiones: Optional[pd.DataFrame]) -> html.Div:
 
 
 def unit_options(camiones: Optional[pd.DataFrame]) -> list:
-    """Every unit of the week, best ranked first per fleet, labelled with its decision."""
+    """Every unit of the week in natural order (letters, then the number ascending), labelled with
+    its decision."""
     if camiones is None or camiones.empty:
         return []
-    rows = camiones.sort_values(["flota", "ranking"])
-    return [{"label": f"{r.unidad} · {r.decision}", "value": r.unidad} for r in rows.itertuples()]
+    decisions = dict(zip(camiones["unidad"], camiones["decision"]))
+    return [{"label": f"{u} · {decisions[u]}", "value": u} for u in op.sort_units(decisions)]
+
+
+def curve_unit_options(per_unit: pd.DataFrame, model: Optional[str], selected) -> list:
+    """Units with loaded full-throttle climbs, in natural order. A unit of another model than the
+    curve's, or any new one once MAX_CURVE_UNITS are selected, is listed but disabled."""
+    selected = set(selected or [])
+    several_models = per_unit["modelo"].nunique() > 1
+    full = len(selected) >= MAX_CURVE_UNITS
+    options = []
+    for row in per_unit.itertuples():
+        label = t("opp.curve.unit_option", unidad=row.unidad, n=int(row.pasadas))
+        if several_models:
+            label += f" · {row.modelo}"
+        other_model = model is not None and row.modelo != model
+        options.append({"label": label, "value": row.unidad,
+                        "disabled": row.unidad not in selected and (other_model or full)})
+    return options
 
 
 def _stat(label: str, value, caption: Optional[str] = None) -> html.Div:
@@ -258,12 +276,12 @@ def method_accordion(measured_payload: bool) -> dbc.Accordion:
     load = t("opp.method.load_measured" if measured_payload else "opp.method.load_nominal")
     ok, review = fmt(op.IV_REL_OK), fmt(op.IV_REL_REVIEW)
     items = [
-        html.Li([html.Strong("IV · "), t("opp.method.iv")]),
+        html.Li([html.Strong(t("opp.method.iv_label") + " · "), t("opp.method.iv")]),
         html.Li([html.Strong(t("opp.method.iv_rel_label") + " · "), t("opp.method.iv_rel")]),
         html.Li([html.Strong(t("opp.method.base_label") + " · "), t("opp.method.base")]),
         html.Li([html.Strong(t("opp.method.load_label") + " · "), load]),
         html.Li([html.Strong(t("opp.method.decision_label") + " · "),
-                 decision_chip(op.FONDO_DE_MINA), f" ≥ {ok} · ", decision_chip(op.SEGUIMIENTO), f" {review} – {ok} · ",
+                 decision_chip(op.CONFORME), f" ≥ {ok} · ", decision_chip(op.SEGUIMIENTO), f" {review} – {ok} · ",
                  decision_chip(op.REVISAR), f" < {review} · ", decision_chip(op.SIN_DATOS), " ",
                  t("opp.method.min_climbs", n=op.MIN_CLIMBS)]),
     ]
