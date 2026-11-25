@@ -400,6 +400,7 @@ def _component_points(rows):
     """Attribute the published, applied event points without allocating other sources."""
     groups = Counter()
     days = set()
+    event_days = {}
     for row in rows:
         total = _number(row.get("points"))
         if row.get("has_observation") is not True or row.get("estimated") or total is None:
@@ -418,22 +419,30 @@ def _component_points(rows):
         contributions = row.get("event_contributions")
         event_budget = _number(row.get("event_points"))
         allocated = Counter()
+        accepted = []
         if isinstance(contributions, list):
             for item in contributions:
                 if not isinstance(item, dict):
                     continue
                 group, applied = item.get("group"), _number(item.get("applied"))
                 if isinstance(group, str) and group.strip() and applied is not None and applied > 0:
-                    allocated[group.strip()] += applied
+                    group = group.strip()
+                    allocated[group] += applied
+                    event = item.get("event")
+                    label = event.strip() if isinstance(event, str) and event.strip() else None
+                    accepted.append((group, label, applied))
         # Older packages may only have the event subtotal. Inconsistent
         # breakdowns stay unattributed instead of crediting a wrong component.
         if event_budget is not None and sum(allocated.values()) <= min(event_budget, residual) + 1e-6:
             for group, applied in allocated.items():
                 groups["group", group] += applied
                 residual -= applied
+            for group, label, applied in accepted:
+                daily_events = event_days.setdefault(group, {}).setdefault(row["day"], Counter())
+                daily_events[label] += applied
         if residual > 1e-6:
             groups["source", "unattributed"] += residual
-    return groups, days
+    return groups, days, event_days
 
 
 def _criticality_components_panel(trend_rows, period_start, cutoff):
@@ -447,7 +456,7 @@ def _criticality_components_panel(trend_rows, period_start, cutoff):
         ), None)
         rows = [last_observed] if last_observed else []
 
-    totals, days = _component_points(rows)
+    totals, days, event_days = _component_points(rows)
     body = []
     if not days:
         body.append(html.P(t("emin_history.drivers_no_observation"), className="text-muted mb-0"))
@@ -462,25 +471,67 @@ def _criticality_components_panel(trend_rows, period_start, cutoff):
             body.append(html.P(t("emin_history.drivers_zero"), className="mb-0"))
         else:
             labels = {key: key[1] if key[0] == "group" else t(f"emin_history.drivers_{key[1]}") for key in totals}
+            total = sum(totals.values())
+            attributed = sum(points for (kind, _), points in totals.items() if kind == "group")
+            body.append(html.P(
+                t("emin_history.drivers_attribution", points=f"{attributed:.2f}", total=f"{total:.2f}"),
+                className="mb-2 fw-semibold",
+            ))
             ordered = sorted(totals, key=lambda key: (key[0] != "group", -totals[key], labels[key].casefold()))
             body.append(dbc.Table([
                 html.Thead(html.Tr([
                     html.Th(t("emin_history.drivers_category"), scope="col"),
-                    html.Th(t("emin_history.drivers_points"), scope="col", className="text-end"),
+                    html.Th(t("emin_history.drivers_points_share"), scope="col", className="text-end"),
                 ])),
                 html.Tbody([
                     html.Tr([
-                        html.Td(labels[key]),
-                        html.Td(f"{totals[key]:.2f}", className="text-end"),
+                        html.Td(
+                            _component_evidence(labels[key], event_days[key[1]])
+                            if key[0] == "group" else labels[key],
+                            className="emin-history-driver-label",
+                        ),
+                        html.Td([
+                            html.Strong(f"{totals[key]:.2f}"),
+                            html.Small(f"{totals[key] / total:.1%}", className="d-block text-muted"),
+                        ], className="text-end text-nowrap"),
                     ])
                     for key in ordered
                 ]),
-            ], responsive=True, size="sm", class_name="emin-history-table mb-2"))
+            ], responsive=True, size="sm", class_name="emin-history-table emin-history-drivers-table mb-2"))
             body.append(html.P(t("emin_history.drivers_note"), className="small text-muted mb-0"))
     return dbc.Card([
         section_header(t("emin_history.drivers_title"), "fas fa-cogs"),
         dbc.CardBody(body),
     ], class_name="shadow-sm unit-card mb-3")
+
+
+def _component_evidence(label, events_by_day):
+    days = sorted(events_by_day, reverse=True)
+    examples = [
+        html.Li([
+            html.Strong(_day_label(day), className="d-block"),
+            html.Ul([
+                html.Li(t(
+                    "emin_history.drivers_event_points",
+                    event=event or t("emin_history.drivers_event_unavailable"),
+                    points=f"{points:.2f}",
+                ))
+                for event, points in events_by_day[day].most_common(3)
+            ], className="mb-1"),
+            html.Small(t("emin_history.drivers_more_events", count=len(events_by_day[day]) - 3), className="text-muted")
+            if len(events_by_day[day]) > 3 else None,
+        ], className="mb-2")
+        for day in days[:3]
+    ]
+    return html.Div([
+        html.Strong(label),
+        html.Small(t("emin_history.drivers_group_days", count=len(days), day=_day_label(days[0])), className="d-block text-muted"),
+        html.Details([
+            html.Summary(t("emin_history.drivers_show_events")),
+            html.P(t("emin_history.drivers_sample_note"), className="text-muted small mb-1"),
+            html.Ul(examples, className="list-unstyled mb-0"),
+        ], className="emin-history-driver-evidence"),
+    ])
 
 
 def _top_reason(entry, period):

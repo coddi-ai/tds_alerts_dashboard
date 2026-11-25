@@ -258,6 +258,13 @@ attribute them to an individual component. The top uses the entire
 selected period. Other entry points show the latest observed day through
 the cut. Estimated scores are excluded from this breakdown.
 
+The detail now shows the component-attributed share of the full score,
+each row's share, and the number and latest date of contributing days.
+The disclosure on each component samples up to three distinct published
+event descriptions on each of its latest three contributing days.
+Those are producer score records. Original evidence remains in the
+chronology, and unallocated source points stay visible separately.
+
 The local package check reconciled every one of the 3,683 observed daily
 scores, built the detail for EXC-069 and confirmed that an estimated row
 produces no attribution. The EMIN regression suite passed seven tests.

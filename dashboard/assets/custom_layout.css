@@ -1093,6 +1093,13 @@
     padding: 0.25rem 0;
     text-align: start;
 }
+.emin-history-drivers-table .emin-history-driver-label {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+.emin-history-driver-evidence > summary {
+    min-height: 32px;
+}
 .emin-history-milestone + .emin-history-milestone {
     border-top: 1px solid var(--bs-border-color, #e7ebee);
 }
