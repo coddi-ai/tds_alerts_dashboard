@@ -269,6 +269,32 @@ The local package check reconciled every one of the 3,683 observed daily
 scores, built the detail for EXC-069 and confirmed that an estimated row
 produces no attribution. The EMIN regression suite passed seven tests.
 
+### Review workflow refinements
+
+Recent movement has a contribution comparison using the same two
+observed days and applied source scores. It also shows offsetting
+changes when the net score stays stable. The trend leaves gaps for
+days without observed scores and draws estimates as separate markers.
+In the fleet overview, movement counts and event groups provide access
+to the ranking filters. The duplicate movement chart was removed.
+The Top 5 uses compact cards at phone widths to keep the reason,
+movement, milestone and coverage visible.
+
+The full chronology supports text search, evidence type filters and
+pages of 40 records. It remains bounded by the selected cut and each
+listed record can disclose original fields. Search and filter changes
+reset pagination. CT-194 has 9,447 records in the local package.
+
+The offline regression command above passed 57 tests. The isolated
+browser review confirmed that the worsened shortcut selected four
+units and focused the ranking. It also moved to chronology records
+41–80, then selected maintenance and returned to the first 40 of 134
+matching records for the default unit.
+
+At the November 24 cut, 13 units had changes in their score
+contributions. The package check reconciled each observed unit
+comparison with its published score delta.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

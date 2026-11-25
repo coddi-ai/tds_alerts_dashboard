@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 from dash import html
 
-from src.charts.theme import BRAND_ACCENT, BRAND_MUTED, CATEGORICAL_COLORS, apply_dashboard_theme
+from src.charts.theme import BRAND_ACCENT, BRAND_MUTED, apply_dashboard_theme
 from src.data.emin_historical import EminHistoricalBundle
 from src.i18n import t
 
@@ -67,6 +67,7 @@ def build_historical_view(
     search: str | None = None,
     movement_filter: str | None = None,
     evidence_period: str | None = None,
+    include_chronology: bool = True,
 ) -> dict:
     """Build fleet overview and an evidence-backed individual equipment timeline."""
     all_days = sorted({row["day"] for row in bundle.daily})
@@ -95,14 +96,7 @@ def build_historical_view(
         and (movement_filter in (None, "__all__") or movements[row["unit"]]["status"] == movement_filter)
     ]
     status = movements.get(selected_unit) or _movement_for_unit(bundle.daily, selected_unit, selected_day)
-    evidence_rows = [
-        row for row in bundle.observed
-        if row.get("unit") == selected_unit and (not selected_day or str(row.get("day") or "") <= selected_day)
-    ]
-    evidence_rows.sort(
-        key=lambda row: (str(row.get("event_at") or row.get("day") or ""), str(row.get("kind", ""))),
-        reverse=True,
-    )
+    evidence_rows = _unit_evidence_rows(bundle, selected_unit, selected_day)
     period_start = (
         _criticality_start(all_days, selected_day, evidence_period, evidence_rows)
         if isinstance(evidence_period, str) and evidence_period in CRITICALITY_PERIODS
@@ -112,6 +106,7 @@ def build_historical_view(
         _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
         if period_start else None
     )
+    movement_drivers = _movement_drivers_panel(status)
     contributors = _criticality_components_panel(trend_rows, period_start, selected_day)
     fleet_highlights = _fleet_highlights(daily_rows, bundle.observed, selected_day)
 
@@ -121,12 +116,11 @@ def build_historical_view(
         "fleet_highlights": fleet_highlights,
         "movements": movements,
         "kpis": _movement_kpis(movements),
-        "movement": _movement_figure(movements),
-        "groups": _groups_figure(daily_rows, group),
+        "groups": _groups_panel(daily_rows, group),
         "ranking": _ranking_table(filtered_rows, movements),
-        "status": html.Div([top_context, _status_panel(selected_unit, status), contributors]),
+        "status": html.Div([top_context, _status_panel(selected_unit, status), movement_drivers, contributors]),
         "trend": _trend_figure(trend_rows, selected_unit),
-        "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day),
+        "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
     }
 
 
@@ -184,6 +178,12 @@ def _kpi_card(label: str, value: str | int, icon: str, detail: str = "", status:
                     ),
                     html.Div(str(value), className="emin-history-kpi-value"),
                     html.Div(detail or "\u00a0", className="emin-history-kpi-detail"),
+                    html.Button(
+                        t("emin_history.movement_view_units"), type="button",
+                        className="btn btn-link btn-sm p-0 mt-2",
+                        **{"data-emin-movement-filter": status,
+                           "aria-label": t("emin_history.movement_view_category", category=label)},
+                    ) if status and value else None,
                 ]
             ),
             class_name="emin-history-card h-100",
@@ -445,6 +445,54 @@ def _component_points(rows):
     return groups, days, event_days
 
 
+def _component_label(key):
+    kind, label = key
+    return label if kind == "group" else t(f"emin_history.drivers_{label}")
+
+
+def _movement_drivers_panel(movement):
+    previous, current = movement.get("previous"), movement.get("current")
+    if not previous or not current:
+        return None
+    before, _, _ = _component_points([previous])
+    after, _, _ = _component_points([current])
+    changes = {
+        key: after[key] - before[key]
+        for key in before.keys() | after.keys()
+        if abs(after[key] - before[key]) > 0.001
+    }
+    if not changes:
+        return None
+
+    keys = sorted(changes, key=lambda key: (-abs(changes[key]), _component_label(key).casefold()))
+    rows = [
+        html.Tr([
+            html.Th(_component_label(key), scope="row", className="emin-history-driver-label"),
+            html.Td(f"{before[key]:.2f}", className="text-end"),
+            html.Td(f"{after[key]:.2f}", className="text-end"),
+            html.Td(f"{changes[key]:+.2f}", className="text-end fw-semibold"),
+        ])
+        for key in keys
+    ]
+    headings = [
+        html.Th(t("emin_history.drivers_category"), scope="col"),
+        html.Th(_day_label(previous["day"]), scope="col", className="text-end"),
+        html.Th(_day_label(current["day"]), scope="col", className="text-end"),
+        html.Th(t("emin_history.driver_change_delta"), scope="col", className="text-end"),
+    ]
+    return dbc.Card([
+        section_header(t("emin_history.driver_change_title"), "fas fa-exchange-alt"),
+        dbc.CardBody(html.Details([
+            html.Summary(t("emin_history.driver_change_summary", count=len(keys), delta=f'{movement["delta"]:+.2f}')),
+            html.P(t("emin_history.driver_change_note"), className="small text-muted mt-2 mb-2"),
+            dbc.Table([
+                html.Thead(html.Tr(headings)),
+                html.Tbody(rows),
+            ], responsive=True, size="sm", class_name="emin-history-table emin-history-drivers-table mb-0"),
+        ], open=True)),
+    ], class_name="shadow-sm unit-card mb-3")
+
+
 def _criticality_components_panel(trend_rows, period_start, cutoff):
     if period_start and cutoff:
         rows = [row for row in trend_rows if period_start <= row["day"] <= cutoff]
@@ -470,7 +518,7 @@ def _criticality_components_panel(trend_rows, period_start, cutoff):
         if not totals:
             body.append(html.P(t("emin_history.drivers_zero"), className="mb-0"))
         else:
-            labels = {key: key[1] if key[0] == "group" else t(f"emin_history.drivers_{key[1]}") for key in totals}
+            labels = {key: _component_label(key) for key in totals}
             total = sum(totals.values())
             attributed = sum(points for (kind, _), points in totals.items() if kind == "group")
             body.append(html.P(
@@ -569,10 +617,13 @@ def fleet_criticality_panel(bundle, day, period):
         rows.append(html.Tr([
             html.Td(rank),
             html.Td(_open_unit(unit, "criticality", period)),
-            html.Td(dbc.Badge(reason, color="danger") if critical_days else reason),
-            html.Td(_movement_summary(_movement_for_unit(bundle.daily, unit, cutoff))),
-            html.Td(_day_label(latest) if latest else "—"),
-            html.Td(f"{observed}/{span}"),
+            html.Td(dbc.Badge(reason, color="danger") if critical_days else reason,
+                    **{"data-label": t("emin_history.top_reason")}),
+            html.Td(_movement_summary(_movement_for_unit(bundle.daily, unit, cutoff)),
+                    **{"data-label": t("emin_history.col_movement")}),
+            html.Td(_day_label(latest) if latest else "—",
+                    **{"data-label": t("emin_history.top_last_milestone")}),
+            html.Td(f"{observed}/{span}", **{"data-label": t("emin_history.top_coverage")}),
         ]))
     short_bounds = (date.fromisoformat(cutoff) - timedelta(days=89)).isoformat()
     long_bounds = (date.fromisoformat(cutoff) - timedelta(days=179)).isoformat()
@@ -589,7 +640,7 @@ def fleet_criticality_panel(bundle, day, period):
         dbc.Table([
             html.Thead(html.Tr([html.Th(t(f"emin_history.{key}"), scope="col") for key in headers])),
             html.Tbody(rows),
-        ], responsive=True, hover=True, size="sm", class_name="emin-history-table mb-2")
+        ], responsive=True, hover=True, size="sm", class_name="emin-history-table emin-history-top-table mb-2")
         if rows else html.P(t("emin_history.top_empty"), className="text-muted mb-2"),
         html.Small(t("emin_history.top_low_coverage", count=insufficient), className="text-muted"),
     ])
@@ -711,86 +762,67 @@ def _empty_figure(title: str, message: str, height: int = 340) -> go.Figure:
     return apply_dashboard_theme(figure, title=title, height=height)
 
 
-def _movement_figure(movements: dict[str, dict]) -> go.Figure:
-    title = t("emin_history.movement_title")
-    labels = [
-        t("emin_history.movement_improved"),
-        t("emin_history.movement_worsened"),
-        t("emin_history.movement_stable"),
-        t("emin_history.movement_insufficient"),
-    ]
-    statuses = ["improved", "worsened", "stable", "insufficient"]
-    counts = Counter(value["status"] for value in movements.values())
-    if not movements:
-        return _empty_figure(title, t("emin_history.empty_movement"), 320)
-    figure = go.Figure(go.Bar(
-        x=[counts[status] for status in statuses],
-        y=labels,
-        orientation="h",
-        marker_color=[_MOVEMENT_COLORS[status] for status in statuses],
-        cliponaxis=False,
-        hovertemplate="%{y}: %{x}<extra></extra>",
-    ))
-    figure.update_xaxes(title_text=t("emin_history.axis_units"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True, nticks=4)
-    figure.update_yaxes(automargin=True, ticks="", tickfont={"size": 10})
-    figure = apply_dashboard_theme(figure, title=title, height=320)
-    figure.update_layout(margin={"l": 115, "r": 22, "t": 52, "b": 50})
-    return figure
-
-
 def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
     title = t("emin_history.trend_title", unit=unit or t("emin_history.no_unit"))
     if not rows:
         return _empty_figure(title, t("emin_history.empty_trend"), 350)
-    custom = [
-        [row.get("rank"), bool(row.get("has_observation")), bool(row.get("estimated"))]
+    observed = [
+        _number(row.get("points"))
+        if row.get("has_observation") is True and not row.get("estimated") else None
         for row in rows
     ]
-    symbols = ["circle" if row.get("has_observation") and not row.get("estimated") else "diamond" for row in rows]
+    estimated = [
+        (row["day"], score)
+        for row in rows
+        if row.get("estimated") and (score := _number(row.get("points"))) is not None
+    ]
+    if all(score is None for score in observed) and not estimated:
+        return _empty_figure(title, t("emin_history.empty_trend"), 350)
     figure = go.Figure(go.Scatter(
         x=[row["day"] for row in rows],
-        y=[_number(row.get("points")) for row in rows],
-        customdata=custom,
+        y=observed,
+        name=t("emin_history.observed"),
         mode="lines+markers",
         line={"color": BRAND_ACCENT, "width": 2},
-        marker={"size": 8, "color": BRAND_ACCENT, "symbol": symbols},
-        hovertemplate=(
-            "%{x}<br>Puntaje heurístico: %{y}<br>Puesto diario: %{customdata[0]}"
-            "<br>Observado: %{customdata[1]}<br>Estimado: %{customdata[2]}<extra></extra>"
-        ),
+        marker={"size": 7, "color": BRAND_ACCENT},
+        hovertemplate="%{x|%d-%m-%Y}<br>%{y:.2f}<extra>%{fullData.name}</extra>",
         connectgaps=False,
     ))
+    if estimated:
+        figure.add_trace(go.Scatter(
+            x=[day for day, _ in estimated],
+            y=[score for _, score in estimated],
+            name=t("emin_history.estimated"),
+            mode="markers",
+            marker={"size": 8, "color": BRAND_MUTED, "symbol": "diamond-open"},
+            hovertemplate="%{x|%d-%m-%Y}<br>%{y:.2f}<extra>%{fullData.name}</extra>",
+        ))
     figure.update_xaxes(type="date", title_text=t("emin_history.axis_day"), gridcolor="#ecf0f1", automargin=True, tickformat="%d %b", tickfont={"size": 9})
     figure.update_yaxes(title_text=t("emin_history.axis_score"), gridcolor="#ecf0f1", automargin=True, rangemode="tozero")
     figure = apply_dashboard_theme(figure, title=title, height=350)
-    figure.update_layout(margin={"l": 62, "r": 22, "t": 52, "b": 52})
+    figure.update_layout(margin={"l": 62, "r": 22, "t": 52, "b": 70}, legend={"orientation": "h", "y": -0.28})
     return figure
 
 
-def _groups_figure(rows: list[dict], selected_group: str | None) -> go.Figure:
+def _groups_panel(rows: list[dict], selected_group: str | None):
     counts = Counter(group for row in rows for group in set(row.get("event_groups", [])))
     if not counts:
-        return _empty_figure(t("emin_history.groups_title"), t("emin_history.empty_groups"), 320)
-    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
-    if selected_group and selected_group != "__all__" and selected_group in counts and selected_group not in dict(ordered):
-        ordered.append((selected_group, counts[selected_group]))
-    ordered.reverse()
-    labels = [name for name, _ in ordered]
-    colors = [BRAND_ACCENT if name == selected_group else CATEGORICAL_COLORS[0] for name in labels]
-    figure = go.Figure(go.Bar(
-        x=[count for _, count in ordered], y=labels, orientation="h", marker_color=colors,
-        cliponaxis=False, hovertemplate="%{y}<br>Equipos: %{x}<extra></extra>",
-    ))
-    figure.update_xaxes(title_text=t("emin_history.axis_units"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True, nticks=4)
-    figure.update_yaxes(automargin=True, ticks="", tickvals=labels, ticktext=[_group_tick_label(label) for label in labels], tickfont={"size": 10})
-    figure = apply_dashboard_theme(figure, title=t("emin_history.groups_title"), height=320)
-    figure.update_layout(margin={"l": 100, "r": 22, "t": 52, "b": 50})
-    return figure
-
-
-def _group_tick_label(label: str) -> str:
-    parts = label.split(" / ", 1)
-    return f"{parts[0]} /<br>{parts[1]}" if len(parts) == 2 else label
+        return html.P(t("emin_history.empty_groups"), className="text-muted mb-0")
+    ordered = sorted(counts, key=lambda group: (-counts[group], group.casefold()))[:8]
+    if selected_group in counts and selected_group not in ordered:
+        ordered.append(selected_group)
+    return html.Details([
+        html.Summary(t("emin_history.group_explore")),
+        html.P(t("emin_history.group_explore_note"), className="small text-muted my-2"),
+        html.Ul([
+            html.Li(html.Button([
+                html.Span(group),
+                dbc.Badge(str(counts[group]), color="primary" if group == selected_group else "secondary"),
+            ], type="button", className="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2",
+                **{"data-emin-group-filter": group, "aria-pressed": str(group == selected_group).lower()}))
+            for group in ordered
+        ], className="list-unstyled d-flex flex-wrap gap-2 mb-0"),
+    ])
 
 
 def _observation_label(row: dict) -> str:
@@ -891,8 +923,11 @@ def _kind_label(kind: str) -> str:
         "maintenance_observed": t("emin_history.kind_maintenance"),
         "maintenance_action": t("emin_history.kind_maintenance"),
         "maintenance_golden_action": t("emin_history.kind_maintenance"),
+        "maintenance_week": t("emin_history.kind_maintenance"),
+        "downtime_observed": t("emin_history.kind_downtime"),
         "downtime_record": t("emin_history.kind_downtime"),
         "downtime": t("emin_history.kind_downtime"),
+        "stop": t("emin_history.kind_downtime"),
     }
     return labels.get(kind, kind.replace("_", " ").capitalize() if kind else "—")
 
@@ -931,7 +966,114 @@ def _major_event(row: dict) -> str | None:
     return None
 
 
-def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutoff=None):
+CHRONOLOGY_PAGE_SIZE = 40
+CHRONOLOGY_TYPES = ("all", "milestones", "event", "alert", "maintenance", "downtime", "oil", "other")
+
+
+def _unit_evidence_rows(bundle, unit, cutoff):
+    rows = [
+        row for row in bundle.observed
+        if row.get("unit") == unit and (not cutoff or str(row.get("day") or "") <= cutoff)
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (str(row.get("event_at") or row.get("day") or ""), str(row.get("kind", ""))),
+        reverse=True,
+    )
+
+
+def _evidence_type(row):
+    kind = str(row.get("kind") or "")
+    if kind.startswith("maintenance_"):
+        return "maintenance"
+    if kind.startswith("downtime_") or kind in {"downtime", "stop"}:
+        return "downtime"
+    return kind if kind in {"event", "alert", "oil"} else "other"
+
+
+def _milestone_badge(level):
+    labels = {"source": "major_source", "intervention": "major_intervention", "text": "major_text"}
+    colors = {"source": "danger", "intervention": "primary", "text": "warning"}
+    return dbc.Badge(t(f"emin_history.{labels[level]}"), color=colors[level], text_color="dark" if level == "text" else "white")
+
+
+def _record_disclosure(row, fallback):
+    fields = row.get("details")
+    evidence = (
+        html.Dl([
+            element
+            for key, value in fields.items() if value not in (None, "")
+            for element in (html.Dt(str(key)), html.Dd(str(value)))
+        ], className="mb-0")
+        if isinstance(fields, dict) and fields
+        else html.P(str(row.get("summary") or row.get("description") or fallback), className="mb-0")
+    )
+    return html.Details([
+        html.Summary(t("emin_history.open_record")),
+        evidence,
+    ], className="emin-history-record mt-2")
+
+
+def _chronology_table(rows, *, expand_records=False):
+    table_head = html.Thead(html.Tr([
+        html.Th(t("emin_history.evidence_time"), scope="col"),
+        html.Th(t("emin_history.evidence_source"), scope="col"),
+        html.Th(t("emin_history.evidence_detail"), scope="col"),
+        html.Th(t("emin_history.major_event"), scope="col"),
+    ]))
+    table_rows = []
+    for row in rows:
+        major = _major_event(row)
+        detail = _source_detail(row.get("details") or row.get("summary") or row.get("description") or {})
+        table_rows.append(html.Tr(
+            [
+                html.Td(_format_timestamp(row.get("event_at") or row.get("day"))),
+                html.Td(_kind_label(str(row.get("kind", "")))),
+                html.Td([detail, _record_disclosure(row, detail)] if expand_records else detail),
+                html.Td(_milestone_badge(major) if major else html.Span("—", className="text-muted")),
+            ],
+            className="emin-history-major-row" if major else None,
+        ))
+    return html.Div(
+        dbc.Table([table_head, html.Tbody(table_rows)], hover=True, striped=True, responsive=True,
+                  class_name="emin-history-evidence-table align-middle mb-0"),
+        className="emin-history-evidence-scroll",
+    )
+
+
+def chronology_page(bundle, unit, cutoff, kind, query, page):
+    unit = unit or filter_options(bundle)["default_unit"]
+    cutoff = cutoff or max((row["day"] for row in bundle.daily), default=None)
+    rows = _unit_evidence_rows(bundle, unit, cutoff)
+    needle = _normalized_text((query or "").strip())
+    filtered = []
+    for row in rows:
+        if kind == "milestones" and not _major_event(row):
+            continue
+        if kind in CHRONOLOGY_TYPES[2:] and kind != _evidence_type(row):
+            continue
+        if needle:
+            fields = (row.get("event_at"), row.get("details"), row.get("summary"), row.get("description"))
+            if needle not in _normalized_text(" ".join(str(field) for field in fields if field)):
+                continue
+        filtered.append(row)
+
+    size = CHRONOLOGY_PAGE_SIZE
+    last_page = max(0, (len(filtered) - 1) // size)
+    page = min(max(0, page), last_page)
+    start = page * size
+    page_rows = filtered[start:start + size]
+    content = html.Div([
+        html.P(t(
+            "emin_history.chronology_showing", start=start + 1, end=start + len(page_rows),
+            count=len(filtered), total=len(rows),
+        ), className="small text-muted mb-2", role="status"),
+        _chronology_table(page_rows, expand_records=True),
+    ]) if page_rows else html.P(t("emin_history.chronology_no_match"), className="text-muted mb-0")
+    return content, page, page == 0, page == last_page
+
+
+def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutoff=None, include_chronology=True):
     heading = html.Div(
         [
             html.Strong(unit or t("emin_history.no_unit")),
@@ -942,40 +1084,12 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
     if not rows:
         return html.Div([heading, dbc.Alert(t("emin_history.empty_timeline"), color="light", class_name="mb-0")])
 
-    table_head = html.Thead(html.Tr([
-        html.Th(t("emin_history.evidence_time")),
-        html.Th(t("emin_history.evidence_source")),
-        html.Th(t("emin_history.evidence_detail")),
-        html.Th(t("emin_history.major_event")),
-    ]))
-    labels = {"source": "major_source", "intervention": "major_intervention", "text": "major_text"}
-    colors = {"source": "danger", "intervention": "primary", "text": "warning"}
-
-    def badge(level):
-        return dbc.Badge(t(f"emin_history.{labels[level]}"), color=colors[level], text_color="dark" if level == "text" else "white")
-
-    table_rows = []
     highlights = []
     for row in rows:
         major = _major_event(row)
-        source_detail = _source_detail(row.get("details") or row.get("summary") or row.get("description") or {})
         if major:
-            highlights.append((major, str(row.get("event_at") or row.get("day") or ""), row, source_detail))
-        marker = badge(major) if major else html.Span("—", className="text-muted")
-        table_rows.append(html.Tr(
-            [
-                html.Td(_format_timestamp(row.get("event_at") or row.get("day"))),
-                html.Td(_kind_label(str(row.get("kind", "")))),
-                html.Td(source_detail),
-                html.Td(marker),
-            ],
-            className="emin-history-major-row" if major else None,
-        ))
-    table = html.Div(
-        dbc.Table([table_head, html.Tbody(table_rows)], hover=True, striped=True, responsive=True, size="sm", class_name="emin-history-evidence-table align-middle mb-0"),
-        className="emin-history-evidence-scroll",
-    )
-    note = html.Small(t("emin_history.timeline_note", count=len(rows)), className="text-muted d-block mt-2")
+            detail = _source_detail(row.get("details") or row.get("summary") or row.get("description") or {})
+            highlights.append((major, str(row.get("event_at") or row.get("day") or ""), row, detail))
     highlights.sort(key=lambda item: item[1], reverse=True)
     priority = {"source": 0, "intervention": 1, "text": 2}
     highlights.sort(key=lambda item: (
@@ -985,26 +1099,13 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
 
     def event_row(item):
         level, _, row, detail = item
-        fields = row.get("details")
-        evidence = (
-            html.Dl([
-                element
-                for key, value in fields.items() if value not in (None, "")
-                for element in (html.Dt(str(key)), html.Dd(str(value)))
-            ], className="mb-0")
-            if isinstance(fields, dict) and fields
-            else html.P(str(row.get("summary") or row.get("description") or detail), className="mb-0")
-        )
         return html.Li([
             html.Div([
-                badge(level),
+                _milestone_badge(level),
                 html.Span(_format_timestamp(row.get("event_at") or row.get("day")), className="text-muted small"),
             ], className="d-flex flex-wrap gap-2 mb-2"),
             html.Div(detail, className="emin-history-highlight-detail"),
-            html.Details([
-                html.Summary(t("emin_history.open_record")),
-                evidence,
-            ], className="emin-history-record mt-2"),
+            _record_disclosure(row, detail),
         ], className="emin-history-milestone py-2")
 
     highlight_body = (
@@ -1028,6 +1129,9 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
         ], id="emin-history-milestones", class_name="shadow-sm unit-card mb-3"),
         dbc.Card([
             section_header(t("emin_history.full_chronology"), "fas fa-history"),
-            dbc.CardBody([heading, table, note]),
-        ], class_name="shadow-sm unit-card mb-3"),
+            dbc.CardBody([
+                heading, _chronology_table(rows[:CHRONOLOGY_PAGE_SIZE]),
+                html.Small(t("emin_history.timeline_note", count=len(rows)), className="text-muted d-block mt-2"),
+            ]),
+        ], class_name="shadow-sm unit-card mb-3") if include_chronology else None,
     ])

@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 
 from dashboard.auth import allowed_clients
-from dashboard.components.emin_historical import build_historical_view, filter_options, fleet_criticality_panel, fleet_highlights_panel
+from dashboard.components.emin_historical import build_historical_view, chronology_page, filter_options, fleet_criticality_panel, fleet_highlights_panel
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -28,8 +28,7 @@ def _empty_outputs(note: str):
         dbc.Alert(note, color="light", class_name="mb-0"),
         dbc.Alert(note, color="light", class_name="mb-0"),
         None,
-        _empty_figure(t("emin_history.movement_title"), note),
-        _empty_figure(t("emin_history.groups_title"), note),
+        None,
         dbc.Alert(note, color="light", class_name="mb-0"),
         dbc.Alert(note, color="light", class_name="mb-0"),
         _empty_figure(t("emin_history.trend_title", unit=t("emin_history.no_unit")), note),
@@ -103,8 +102,7 @@ def register_emin_historical_callbacks(app):
             Output("emin-history-meta", "children"),
             Output("emin-history-highlights", "children"),
             Output("emin-history-kpis", "children"),
-            Output("emin-history-movement", "figure"),
-            Output("emin-history-groups", "figure"),
+            Output("emin-history-groups", "children"),
             Output("emin-history-ranking", "children"),
             Output("emin-history-status", "children"),
             Output("emin-history-trend", "figure"),
@@ -132,18 +130,48 @@ def register_emin_historical_callbacks(app):
         except (FileNotFoundError, InvalidHistoricalBundle, OSError):
             return _empty_outputs(t("emin_history.package_invalid"))
         period = evidence_context.get("period") if isinstance(evidence_context, dict) and evidence_context.get("unit") == unit else None
-        view = build_historical_view(bundle, day, group, unit, search, movement_filter, period)
+        view = build_historical_view(bundle, day, group, unit, search, movement_filter, period, include_chronology=False)
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
-            return (no_update,) * 6 + (view["status"], view["trend"], view["evidence"])
+            return (no_update,) * 5 + (view["status"], view["trend"], view["evidence"])
         return (
             view["meta"],
             fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
             view["kpis"],
-            view["movement"],
             view["groups"],
             view["ranking"],
             view["status"],
             view["trend"],
             view["evidence"],
         )
+
+
+    @callback(
+        Output("emin-history-record-results", "children"),
+        Output("emin-history-record-page", "data"),
+        Output("emin-history-record-previous", "disabled"),
+        Output("emin-history-record-next", "disabled"),
+        Input("client-selector", "value"),
+        Input("emin-history-package", "data"),
+        Input("emin-history-cutoff", "value"),
+        Input("emin-history-unit", "value"),
+        Input("emin-history-record-type", "value"),
+        Input("emin-history-record-search", "value"),
+        Input("emin-history-record-previous", "n_clicks"),
+        Input("emin-history-record-next", "n_clicks"),
+        State("emin-history-record-page", "data"),
+        State("user-info-store", "data"),
+    )
+    def update_chronology(client, package, cutoff, unit, kind, query, previous, following, page, user_data):
+        if not _authorized_emin(client, user_data):
+            return None, 0, True, True
+        if not isinstance(package, dict) or not package.get("run"):
+            return t("emin_history.package_missing"), 0, True, True
+        try:
+            bundle = load_emin_historical_bundle(run_name=package["run"])
+        except (FileNotFoundError, InvalidHistoricalBundle, OSError):
+            return t("emin_history.package_invalid"), 0, True, True
+
+        delta = {"emin-history-record-previous": -1, "emin-history-record-next": 1}.get(ctx.triggered_id)
+        page = (page + delta) if delta is not None and isinstance(page, int) else 0
+        return chronology_page(bundle, unit, cutoff, kind, query, page)

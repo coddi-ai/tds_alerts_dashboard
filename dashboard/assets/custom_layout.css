@@ -1100,6 +1100,64 @@
 .emin-history-driver-evidence > summary {
     min-height: 32px;
 }
+@media (max-width: 575px) {
+    .emin-history-top-table thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+
+    .emin-history-top-table,
+    .emin-history-top-table tbody {
+        display: block;
+        width: 100%;
+    }
+
+    .emin-history-top-table tbody tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 0.5rem 0.75rem;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+        border: 1px solid var(--bs-border-color, #e7ebee);
+        border-radius: 0.375rem;
+    }
+
+    .emin-history-top-table tbody td {
+        border: 0;
+        box-shadow: none;
+        overflow-wrap: anywhere;
+        padding: 0;
+        white-space: normal;
+    }
+
+    .emin-history-top-table tbody td:first-child {
+        text-align: end;
+        font-weight: 600;
+        grid-column: 2;
+        grid-row: 1;
+    }
+
+    .emin-history-top-table tbody td:nth-child(2) {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .emin-history-top-table tbody td:nth-child(3),
+    .emin-history-top-table tbody td:nth-child(4) {
+        grid-column: 1 / -1;
+    }
+
+    .emin-history-top-table td[data-label]::before {
+        display: block;
+        color: var(--bs-secondary-color, #53636c);
+        font-size: 0.72rem;
+        content: attr(data-label);
+    }
+}
 .emin-history-milestone + .emin-history-milestone {
     border-top: 1px solid var(--bs-border-color, #e7ebee);
 }
@@ -1124,7 +1182,8 @@
 .emin-history-record dd {
     overflow-wrap: anywhere;
 }
-#emin-history-detail-heading {
+#emin-history-detail-heading,
+#emin-history-ranking-heading {
     scroll-margin-top: 6rem;
 }
 .emin-history-highlight-detail {

@@ -3,7 +3,7 @@
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
-from dashboard.components.emin_historical import CRITICALITY_PERIODS, section_header
+from dashboard.components.emin_historical import CHRONOLOGY_TYPES, CRITICALITY_PERIODS, section_header
 from src.i18n import t
 
 
@@ -69,9 +69,10 @@ def create_layout() -> html.Div:
                             dcc.Loading(html.Div(id="emin-history-criticality"), type="circle"),
                         ]),
                     ], class_name="shadow-sm unit-card mb-3"),
+                    dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
                     dbc.Card(
                         [
-                            section_header(t("emin_history.ranking_title"), "fas fa-list-ol"),
+                            html.Div(section_header(t("emin_history.ranking_title"), "fas fa-list-ol"), id="emin-history-ranking-heading", tabIndex=-1),
                             dbc.CardBody([
                                 dbc.Row([
                                     dbc.Col([
@@ -107,43 +108,9 @@ def create_layout() -> html.Div:
                         class_name="emin-history-card mb-3",
                     ),
                     dcc.Loading(html.Div(id="emin-history-highlights"), type="circle"),
-                    dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
-                    dbc.Row(
-                        [
-                            dbc.Col(
-                                dbc.Card(
-                                    dbc.CardBody(
-                                        dcc.Graph(
-                                            id="emin-history-movement",
-                                            config={"displayModeBar": False},
-                                            responsive=True,
-                                            style={"height": "320px", "width": "100%"},
-                                        )
-                                    ),
-                                    class_name="emin-history-card h-100",
-                                ),
-                                xs=12,
-                                xl=5,
-                                class_name="mb-3",
-                            ),
-                            dbc.Col(
-                                dbc.Card(
-                                    dbc.CardBody(
-                                        dcc.Graph(
-                                            id="emin-history-groups",
-                                            config={"displayModeBar": False},
-                                            responsive=True,
-                                            style={"height": "320px", "width": "100%"},
-                                        )
-                                    ),
-                                    class_name="emin-history-card h-100",
-                                ),
-                                xs=12,
-                                xl=7,
-                                class_name="mb-3",
-                            ),
-                        ],
-                        className="g-3",
+                    dbc.Card(
+                        dbc.CardBody(dcc.Loading(html.Div(id="emin-history-groups"), type="circle")),
+                        class_name="shadow-sm unit-card mb-3",
                     ),
                     dbc.Alert(
                         [html.I(className="fas fa-info-circle me-2"), t("emin_history.fleet_note")],
@@ -191,6 +158,36 @@ def create_layout() -> html.Div:
                         className="g-3",
                     ),
                     dcc.Loading(html.Div(id="emin-history-evidence"), type="circle"),
+                    dbc.Card([
+                        section_header(t("emin_history.full_chronology"), "fas fa-history"),
+                        dbc.CardBody([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label(t("emin_history.chronology_type"), htmlFor="emin-history-record-type", className="fleet-search__label"),
+                                    dbc.Select(
+                                        id="emin-history-record-type", size="sm", value="all",
+                                        options=[
+                                            {"label": t(f"emin_history.chronology_{kind}"), "value": kind}
+                                            for kind in CHRONOLOGY_TYPES
+                                        ],
+                                    ),
+                                ], xs=12, md=4),
+                                dbc.Col([
+                                    html.Label(t("emin_history.chronology_search"), htmlFor="emin-history-record-search", className="fleet-search__label"),
+                                    dcc.Input(
+                                        id="emin-history-record-search", type="search", value="", debounce=0.4,
+                                        className="form-control form-control-sm",
+                                    ),
+                                ], xs=12, md=8),
+                            ], className="g-2 mb-3"),
+                            dcc.Store(id="emin-history-record-page", data=0),
+                            dcc.Loading(html.Div(id="emin-history-record-results"), type="circle"),
+                            html.Div([
+                                dbc.Button(t("emin_history.chronology_previous"), id="emin-history-record-previous", color="secondary", outline=True, size="sm", disabled=True),
+                                dbc.Button(t("emin_history.chronology_next"), id="emin-history-record-next", color="secondary", outline=True, size="sm", disabled=True),
+                            ], className="d-flex gap-2 mt-3"),
+                        ]),
+                    ], class_name="shadow-sm unit-card mb-3"),
                     dbc.Alert(
                         [html.I(className="fas fa-info-circle me-2"), t("emin_history.detail_note")],
                         color="light",

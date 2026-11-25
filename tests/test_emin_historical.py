@@ -148,13 +148,16 @@ def test_recent_movement_distinguishes_improved_worsened_stable_and_insufficient
 
     view = build_historical_view(bundle, "2026-11-24", "__all__", "EMIN-A")
     ranking = _visible(view["ranking"])
-    movement_counts = list(view["movement"].data[0].x)
+    movement_counts = {
+        status: sum(unit["status"] == status for unit in view["movements"].values())
+        for status in ("improved", "worsened", "stable", "insufficient")
+    }
 
     assert "Mejoró" in ranking
     assert "Empeoró" in ranking
     assert "Se mantuvo" in ranking
     assert "Sin comparación" in ranking
-    assert movement_counts == [1, 1, 1, 2]
+    assert movement_counts == {"improved": 1, "worsened": 1, "stable": 1, "insufficient": 2}
     assert "10.000 → 7.000" in _visible(view["status"])
 
 

@@ -17,9 +17,21 @@
     }
 
     document.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-emin-open-unit], [data-emin-back]");
+        const button = event.target.closest("[data-emin-open-unit], [data-emin-back], [data-emin-movement-filter], [data-emin-group-filter]");
         const setProps = window.dash_clientside?.set_props;
         if (!button || !setProps) return;
+
+        if (button.hasAttribute("data-emin-movement-filter") || button.hasAttribute("data-emin-group-filter")) {
+            if (button.hasAttribute("data-emin-movement-filter")) {
+                setProps("emin-history-movement-filter", {value: button.dataset.eminMovementFilter});
+            } else {
+                setProps("emin-history-group", {value: button.dataset.eminGroupFilter});
+            }
+            const ranking = document.getElementById("emin-history-ranking-heading");
+            ranking?.focus({preventScroll: true});
+            ranking?.scrollIntoView({block: "start"});
+            return;
+        }
 
         if (button.hasAttribute("data-emin-back")) {
             setProps("emin-history-view-tabs", {value: "fleet"});
