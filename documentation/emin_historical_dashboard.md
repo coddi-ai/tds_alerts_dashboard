@@ -216,7 +216,9 @@ The EMIN overview shows up to five units for the selected cut and period:
 windows include the cut. The ranking counts distinct days with explicit
 source severity first. For short term it then uses average observed
 score, followed by the share of observed days with positive points.
-The other periods use the same two measures in reverse order.
+The other periods use the same two measures in reverse order. Historical
+ranking also uses documented major intervention days after critical days
+and before score-based measures.
 
 Score calculations require two distinct observed days with finite scores.
 Estimates are excluded. An explicit critical day can qualify a unit on
@@ -224,8 +226,28 @@ its own. The table shows observed score days against the period, the
 latest documented milestone and the number of units with limited score
 coverage. For historical coverage, the denominator starts at the first
 published scoring day, even if the underlying evidence goes back further.
-Opening a unit from the top brings the selected period's milestones
-forward, with the full chronology still available.
+The top is the main review queue. The full ranking follows it, and the
+low-signal list is collapsed by default. Each top row separates the reason
+for its position from recent score movement. The view calls out when the
+90- and 180-day windows have the same scoring days.
+
+Opening a unit from the top explains its position and brings the selected
+period's milestones forward. Medium-term detail shows event groups
+recurring on days with a signal. Long-term detail summarizes monthly
+observations and compares the 14 days on either side of the latest usable
+major intervention, requiring two observed days on each side. The full
+chronology remains available.
+
+On the real 24 November cut, the two fixed longer windows shared 84
+published scoring days. None of the 108,932 observed records carried the
+structured critical or intervention flags consumed by this view. Sixteen
+records matched milestone wording and retain the text-match label. The
+historical top therefore ranks the observed score signal on that package.
+
+The offline command above passed 57 tests. With the real package, the
+isolated Dash browser review selected 90 days, opened CT-186, verified
+its position and reason, then returned to the same period, cut and
+unit control.
 
 ### Publishing follow-up
 

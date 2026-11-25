@@ -108,6 +108,10 @@ def build_historical_view(
         if isinstance(evidence_period, str) and evidence_period in CRITICALITY_PERIODS
         else None
     )
+    top_context = (
+        _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
+        if period_start else None
+    )
     fleet_highlights = _fleet_highlights(daily_rows, bundle.observed, selected_day)
 
     return {
@@ -119,7 +123,7 @@ def build_historical_view(
         "movement": _movement_figure(movements),
         "groups": _groups_figure(daily_rows, group),
         "ranking": _ranking_table(filtered_rows, movements),
-        "status": _status_panel(selected_unit, status),
+        "status": html.Div([top_context, _status_panel(selected_unit, status)]),
         "trend": _trend_figure(trend_rows, selected_unit),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day),
     }
@@ -348,6 +352,7 @@ def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
             scores.setdefault(row["unit"], {})[row["day"]] = points
 
     critical = {}
+    interventions = {}
     latest = {}
     for row in bundle.observed:
         unit, event_day = row.get("unit"), str(row.get("day") or "")
@@ -358,25 +363,30 @@ def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
             latest[unit] = max(event_day, latest.get(unit, ""))
         if kind == "source":
             critical.setdefault(unit, set()).add(event_day)
+        if kind == "intervention":
+            interventions.setdefault(unit, set()).add(event_day)
 
     entries = []
     for unit in sorted(units):
         daily = scores.get(unit, {})
         observed = len(daily)
         critical_days = len(critical.get(unit, ()))
+        intervention_days = len(interventions.get(unit, ()))
         comparable = observed >= 2
-        if not critical_days and (not comparable or not any(value > 0 for value in daily.values())):
+        has_history = period == "history" and intervention_days > 0
+        if not critical_days and not has_history and (not comparable or not any(value > 0 for value in daily.values())):
             continue
         average = sum(daily.values()) / observed if comparable else None
         recurrence = sum(value > 0 for value in daily.values()) / observed if comparable else None
-        entries.append((unit, critical_days, average, recurrence, observed, latest.get(unit)))
+        entries.append((unit, critical_days, average, recurrence, observed, latest.get(unit), intervention_days))
 
     def rank(entry):
-        _, critical_days, average, recurrence, observed, _ = entry
+        _, critical_days, average, recurrence, observed, _, intervention_days = entry
         average = average if average is not None else -1
         recurrence = recurrence if recurrence is not None else -1
         signal = (average, recurrence) if period == "short" else (recurrence, average)
-        return (critical_days, *signal, observed)
+        historical_priority = intervention_days if period == "history" else 0
+        return (critical_days, historical_priority, *signal, observed)
 
     entries.sort(key=rank, reverse=True)
     score_start = max(start, days[0]) if period == "history" else start
@@ -385,36 +395,136 @@ def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
     return entries[:5], start, cutoff, span, insufficient
 
 
+def _top_reason(entry, period):
+    _, critical_days, average, recurrence, observed, _, intervention_days = entry
+    if critical_days:
+        return t("emin_history.top_critical_days", count=critical_days)
+    if period == "history" and intervention_days:
+        return t("emin_history.top_intervention_days", count=intervention_days)
+    signal = t("emin_history.top_signal_count", count=round(recurrence * observed), observed=observed)
+    average_label = t("emin_history.top_average", score=f"{average:.2f}")
+    return f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
+
+
+def _observed_points(rows, start, cutoff):
+    points_by_day = {}
+    for row in rows:
+        day = row["day"]
+        if start <= day <= cutoff and row.get("has_observation") is True and not row.get("estimated"):
+            points = _number(row.get("points"))
+            if points is not None:
+                points_by_day[day] = points
+    return points_by_day
+
+
 def fleet_criticality_panel(bundle, day, period):
     period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "short"
     entries, start, cutoff, span, insufficient = fleet_criticality_top(bundle, day, period)
     if not start:
         return html.P(t("emin_history.top_empty"), className="text-muted mb-0")
-    headers = ("col_rank", "col_unit", "top_reason", "top_last_milestone", "top_coverage")
+    headers = ("col_rank", "col_unit", "top_reason", "col_movement", "top_last_milestone", "top_coverage")
     rows = []
-    for rank, (unit, critical_days, average, recurrence, observed, latest) in enumerate(entries, 1):
-        reason = (
-            t("emin_history.top_critical_days", count=critical_days) if critical_days else
-            t("emin_history.top_average", score=f"{average:.2f}") if period == "short" else
-            t("emin_history.top_recurrence", percentage=f"{recurrence:.0%}")
-        )
+    for rank, entry in enumerate(entries, 1):
+        unit, critical_days, _, _, observed, latest, _ = entry
+        reason = _top_reason(entry, period)
         rows.append(html.Tr([
             html.Td(rank),
             html.Td(_open_unit(unit, "criticality", period)),
             html.Td(dbc.Badge(reason, color="danger") if critical_days else reason),
+            html.Td(_movement_summary(_movement_for_unit(bundle.daily, unit, cutoff))),
             html.Td(_day_label(latest) if latest else "—"),
             html.Td(f"{observed}/{span}"),
         ]))
+    short_bounds = (date.fromisoformat(cutoff) - timedelta(days=89)).isoformat()
+    long_bounds = (date.fromisoformat(cutoff) - timedelta(days=179)).isoformat()
+    coverage = _observed_points(bundle.daily, start, cutoff)
+    same_scores = period in {"medium", "long"} and bool(coverage) and not _observed_points(bundle.daily, long_bounds, (date.fromisoformat(short_bounds) - timedelta(days=1)).isoformat())
+    history_uses_signal = period == "history" and entries and not any(entry[1] or entry[-1] for entry in entries)
     return html.Div([
-        html.P(t("emin_history.top_window", start=_day_label(start), end=_day_label(cutoff)), className="small text-muted mb-2"),
+        html.P(t(f"emin_history.top_question_{period}"), className="fw-semibold mb-1"),
+        html.P(t("emin_history.top_window", start=_day_label(start), end=_day_label(cutoff)), className="small text-muted mb-1"),
+        html.P(t("emin_history.top_coverage_days", count=len(coverage), span=span), className="small text-muted mb-2"),
+        html.P(t("emin_history.top_overlap"), className="small text-muted mb-2") if same_scores else None,
+        html.P(t("emin_history.top_history_coverage"), className="small text-muted mb-2") if period == "history" else None,
+        html.P(t("emin_history.top_history_signal_only"), className="small text-muted mb-2") if history_uses_signal else None,
         dbc.Table([
             html.Thead(html.Tr([html.Th(t(f"emin_history.{key}"), scope="col") for key in headers])),
             html.Tbody(rows),
         ], responsive=True, hover=True, size="sm", class_name="emin-history-table mb-2")
         if rows else html.P(t("emin_history.top_empty"), className="text-muted mb-2"),
         html.Small(t("emin_history.top_low_coverage", count=insufficient), className="text-muted"),
-        html.Small(t("emin_history.top_history_coverage"), className="d-block text-muted") if period == "history" else None,
     ])
+
+
+def _top_unit_context(bundle, cutoff, period, unit, trend_rows, evidence_rows):
+    entries, start, _, span, _ = fleet_criticality_top(bundle, cutoff, period)
+    match = next(((position, entry) for position, entry in enumerate(entries, 1) if entry[0] == unit), None)
+    if not match:
+        return None
+    position, entry = match
+    points = _observed_points(trend_rows, start, cutoff)
+    dated_events = [row for row in evidence_rows if start <= str(row.get("day") or "") <= cutoff]
+    context = [
+        html.P(t("emin_history.top_unit_position", rank=position, period=t(f"emin_history.top_{period}")), className="mb-1 fw-semibold"),
+        html.P(_top_reason(entry, period), className="mb-1"),
+        html.P(t("emin_history.top_coverage_days", count=len(points), span=span), className="text-muted small mb-2"),
+    ]
+    if entry[1]:
+        critical = next(row for row in dated_events if _explicit_milestone(row) == "source")
+        context.append(html.P([
+            t("emin_history.top_source_on", day=_day_label(critical["day"])), " ",
+            html.A(t("emin_history.top_go_evidence"), href="#emin-history-milestones"),
+        ], className="mb-2"))
+    elif period == "history" and entry[-1]:
+        context.append(html.P([
+            t("emin_history.top_intervention_on", day=_day_label(entry[-2])), " ",
+            html.A(t("emin_history.top_go_evidence"), href="#emin-history-milestones"),
+        ], className="mb-2"))
+
+    if period == "medium":
+        component_days = {}
+        for row in trend_rows:
+            if row["day"] not in points or points[row["day"]] <= 0:
+                continue
+            for component in row.get("event_groups", []):
+                if isinstance(component, str) and component.strip():
+                    component_days.setdefault(component, set()).add(row["day"])
+        most_frequent = sorted(component_days, key=lambda key: (-len(component_days[key]), key.casefold()))[:3]
+        context.append(html.H6(t("emin_history.top_recurrent_groups"), className="mt-3"))
+        context.append(html.Ul([
+            html.Li(t("emin_history.top_group_days", group=group, count=len(component_days[group])))
+            for group in most_frequent
+        ], className="mb-0") if most_frequent else html.P(t("emin_history.top_no_groups"), className="small text-muted mb-0"))
+
+    if period == "long":
+        months = {}
+        for day, points_for_day in sorted(points.items()):
+            months.setdefault(day[:7], []).append(points_for_day)
+        context.append(html.H6(t("emin_history.top_monthly"), className="mt-3"))
+        context.append(html.Ul([
+            html.Li(t("emin_history.top_month_signal", month=month, count=sum(value > 0 for value in values), observed=len(values)))
+            for month, values in months.items()
+        ]) if months else html.P(t("emin_history.top_empty"), className="small text-muted"))
+        comparison = t("emin_history.top_no_comparison")
+        for intervention in dated_events:
+            if _explicit_milestone(intervention) != "intervention":
+                continue
+            event = date.fromisoformat(intervention["day"])
+            lower, upper = (event - timedelta(days=14)).isoformat(), (event + timedelta(days=14)).isoformat()
+            before = [value for day, value in points.items() if lower <= day < intervention["day"]]
+            after = [value for day, value in points.items() if intervention["day"] < day <= upper]
+            if len(before) >= 2 and len(after) >= 2:
+                comparison = t(
+                    "emin_history.top_intervention_comparison", day=_day_label(intervention["day"]),
+                    before=f"{sum(before)/len(before):.2f}", after=f"{sum(after)/len(after):.2f}",
+                    before_days=len(before), after_days=len(after),
+                )
+                break
+        context.append(html.P(comparison, className="small text-muted mb-0"))
+    return dbc.Card([
+        section_header(t("emin_history.top_why_unit"), "fas fa-clipboard-list"),
+        dbc.CardBody(context),
+    ], class_name="shadow-sm unit-card mb-3")
 
 
 def _movement_summary(movement: dict):
@@ -433,55 +543,27 @@ def _movement_summary(movement: dict):
 
 def fleet_highlights_panel(highlights: dict, daily_rows: list[dict], movements: dict[str, dict]):
     scores = {row["unit"]: _number(row.get("points")) for row in daily_rows}
-
-    def unit_list(units: list[str], reason: str):
-        if not units:
-            return None
-        return html.Ul([
+    has_history = highlights["has_history"]
+    lower_note = "distinct_scores_required"
+    if highlights["can_distinguish"]:
+        lower_note = "lower_signal_note" if has_history else "lower_signal_partial"
+    return dbc.Card(dbc.CardBody(html.Details([
+        html.Summary(t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title")),
+        html.P(t(f"emin_history.{lower_note}"), className="text-muted small mb-1"),
+        html.Ul([
             html.Li([
                 html.Div([
-                    _open_unit(unit, reason),
+                    _open_unit(unit, "lowest_observed_score"),
                     html.Small(
-                        t("emin_history.source_event_day", day=_day_label(highlights["critical_events"][unit]))
-                        if reason == "source_critical"
-                        else t("emin_history.score_on_cut", score=f"{scores[unit]:.3f}", day=_day_label(highlights["coverage_end"])),
+                        t("emin_history.score_on_cut", score=f"{scores[unit]:.3f}", day=_day_label(highlights["coverage_end"])),
                         className="d-block text-muted",
                     ),
                 ]),
                 _movement_summary(movements[unit]),
             ], className="emin-history-unit-item")
-            for unit in units
-        ], className="list-unstyled mb-0")
-
-    has_history = highlights["has_history"]
-    critical_note = "critical_window" if highlights["critical_total"] else ("no_recent_critical" if has_history else "no_window_history")
-    lower_note = "distinct_scores_required"
-    if highlights["can_distinguish"]:
-        lower_note = "lower_signal_note" if has_history else "lower_signal_partial"
-    return dbc.Row([
-        dbc.Col(dbc.Card([
-            section_header(t("emin_history.review_first"), "fas fa-clipboard-list"),
-            dbc.CardBody([
-                dbc.Badge(t("emin_history.critical_recent_title", count=highlights["critical_total"]), color="danger" if highlights["critical_total"] else "secondary", class_name="mb-2"),
-                html.P(t(f"emin_history.{critical_note}", start=_day_label(highlights["coverage_start"]), end=_day_label(highlights["coverage_end"])), className="text-muted small"),
-                unit_list(highlights["critical"], "source_critical"),
-                html.Details([
-                    html.Summary(t("emin_history.show_more", count=len(highlights["critical_remaining"]))),
-                    unit_list(highlights["critical_remaining"], "source_critical"),
-                ]) if highlights["critical_remaining"] else None,
-                dbc.Badge(t("emin_history.score_priority"), color="warning", text_color="dark", class_name="mt-2 mb-1"),
-                unit_list(highlights["score_priority"], "score_priority")
-                or html.P(t("emin_history.distinct_scores_required"), className="text-muted small mb-0"),
-            ]),
-        ], class_name="shadow-sm unit-card h-100"), xs=12, lg=6, class_name="mb-3"),
-        dbc.Col(dbc.Card([
-            section_header(t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title"), "fas fa-chart-line"),
-            dbc.CardBody([
-                html.P(t(f"emin_history.{lower_note}"), className="text-muted small"),
-                unit_list(highlights["healthiest"], "lowest_observed_score"),
-            ]),
-        ], class_name="shadow-sm unit-card h-100"), xs=12, lg=6, class_name="mb-3"),
-    ], className="g-3")
+            for unit in highlights["healthiest"]
+        ], className="list-unstyled mb-0"),
+    ])), class_name="shadow-sm unit-card mb-3")
 
 
 def _empty_figure(title: str, message: str, height: int = 340) -> go.Figure:
@@ -804,7 +886,7 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
                 if period_start else None,
                 *highlight_body,
             ]),
-        ], class_name="shadow-sm unit-card mb-3"),
+        ], id="emin-history-milestones", class_name="shadow-sm unit-card mb-3"),
         dbc.Card([
             section_header(t("emin_history.full_chronology"), "fas fa-history"),
             dbc.CardBody([heading, table, note]),

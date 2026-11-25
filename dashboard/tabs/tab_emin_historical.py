@@ -69,7 +69,6 @@ def create_layout() -> html.Div:
                             dcc.Loading(html.Div(id="emin-history-criticality"), type="circle"),
                         ]),
                     ], class_name="shadow-sm unit-card mb-3"),
-                    dcc.Loading(html.Div(id="emin-history-highlights"), type="circle"),
                     dbc.Card(
                         [
                             section_header(t("emin_history.ranking_title"), "fas fa-list-ol"),
@@ -107,6 +106,7 @@ def create_layout() -> html.Div:
                         ],
                         class_name="emin-history-card mb-3",
                     ),
+                    dcc.Loading(html.Div(id="emin-history-highlights"), type="circle"),
                     dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
                     dbc.Row(
                         [
