@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 
 from dashboard.auth import allowed_clients
-from dashboard.components.emin_historical import build_historical_view, filter_options
+from dashboard.components.emin_historical import build_historical_view, filter_options, fleet_highlights_panel
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -25,6 +25,7 @@ def _empty_figure(title: str, note: str) -> go.Figure:
 
 def _empty_outputs(note: str):
     return (
+        dbc.Alert(note, color="light", class_name="mb-0"),
         dbc.Alert(note, color="light", class_name="mb-0"),
         None,
         _empty_figure(t("emin_history.movement_title"), note),
@@ -85,6 +86,7 @@ def register_emin_historical_callbacks(app):
     @callback(
         [
             Output("emin-history-meta", "children"),
+            Output("emin-history-highlights", "children"),
             Output("emin-history-kpis", "children"),
             Output("emin-history-movement", "figure"),
             Output("emin-history-groups", "figure"),
@@ -114,6 +116,7 @@ def register_emin_historical_callbacks(app):
         view = build_historical_view(bundle, day, group, unit)
         return (
             view["meta"],
+            fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"]),
             view["kpis"],
             view["movement"],
             view["groups"],

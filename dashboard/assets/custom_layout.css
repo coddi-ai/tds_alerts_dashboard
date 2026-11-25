@@ -1121,6 +1121,18 @@
 .emin-history-status-card {
     border-left: 4px solid #3498db;
 }
+.emin-history-highlights .emin-history-card {
+    border-top: 3px solid #e7ebee;
+}
+.emin-history-highlights .emin-history-card:first-child {
+    border-top-color: #dc3545;
+}
+.emin-history-highlights .emin-history-card:last-child {
+    border-top-color: #28a745;
+}
+.emin-history-highlight-detail {
+    overflow-wrap: anywhere;
+}
 .emin-history-status-top {
     align-items: center;
     display: flex;

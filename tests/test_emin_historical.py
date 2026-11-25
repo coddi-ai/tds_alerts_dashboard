@@ -124,7 +124,7 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert "Temperatura elevada del sistema EGR" in timeline
     assert "Mantención preventiva" in timeline
     assert "Evento posterior al corte" not in timeline
-    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 1
+    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 2
     assert "señal heurística bajó" in _visible(view["status"]).lower()
     assert list(view["trend"].data[0].x) == ["2026-11-23", "2026-11-24"]
     assert list(view["trend"].data[0].y) == [13.5, 12.0]
@@ -156,6 +156,34 @@ def test_recent_movement_distinguishes_improved_worsened_stable_and_insufficient
     assert "Sin comparación" in ranking
     assert movement_counts == [1, 1, 1, 2]
     assert "10.000 → 7.000" in _visible(view["status"])
+
+
+def test_overview_prioritizes_recent_source_critical_and_separates_score_extremes():
+    daily = (
+        _daily("2026-11-19", "EMIN-CRIT", 1, 1, observed=True),
+        _daily("2026-11-19", "EMIN-LOW", 2, 2, observed=True),
+        _daily("2026-11-19", "EMIN-HIGH", 3, 12, observed=True),
+        _daily("2026-11-12", "EMIN-OLD", 4, 20, observed=True),
+    )
+    observed = (
+        {"unit": "EMIN-CRIT", "day": "2026-11-19", "level": "critical", "details": {"Evento": "Temperatura elevada"}},
+        {"unit": "EMIN-OLD", "day": "2026-11-12", "level": "critical", "details": {"Evento": "Falla antigua"}},
+        {"unit": "EMIN-LOW", "day": "2026-11-19", "level": "", "details": {"Evento": "Mantención preventiva del motor"}},
+    )
+    bundle = EminHistoricalBundle(RUN, {}, daily, observed)
+
+    view = build_historical_view(bundle, "2026-11-19", "__all__", "EMIN-CRIT")
+    highlights = view["fleet_highlights"]
+    timeline = _visible(build_historical_view(bundle, "2026-11-19", "__all__", "EMIN-LOW")["evidence"])
+
+    assert highlights["critical"] == ["EMIN-CRIT"]
+    assert highlights["score_priority"] == ["EMIN-HIGH"]
+    assert highlights["healthiest"] == ["EMIN-LOW"]
+    assert highlights["coverage_start"] == "2026-11-13"
+    assert "Mantención preventiva del motor" in timeline
+    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 0
+    assert "Hitos del equipo" in timeline
+    assert timeline.index("Cronología completa") < timeline.index("Mantención preventiva del motor")
 
 
 def test_page_callbacks_require_server_authorization_for_emin(monkeypatch):

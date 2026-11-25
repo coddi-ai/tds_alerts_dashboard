@@ -82,19 +82,23 @@ English labels.
 
 The fleet overview summarizes improved, worsened, stable, and incomparable
 units; plots movement counts and event groups; and adds the recent movement to
-each unit's ranking row. Equipment detail shows the latest observed comparison,
+each unit's ranking row. It separates recent source critical events from score
+priority and the lowest observed score list. Criticality uses source severity
+within the seven calendar days ending at the selected cut. The score lists use
+observed, non-estimated finite scores and do not overlap. Equipment detail shows the latest observed comparison,
 heuristic score history, and a dated timeline of all source observations in
-the package through the selected cut. Explicit source severity and textual
-major-event matches have different labels.
+the package through the selected cut. Major events appear in a separate
+highlights section before the full chronology. Explicit source severity and
+textual major-event matches have different labels.
 
 ### Changed areas
 
 - Page layout: `dashboard/tabs/tab_emin_historical.py` adds the two views and
   view-specific filters.
 - Presentation and interpretation: `dashboard/components/emin_historical.py`
-  calculates movement and builds the charts, ranking, status card, and full
-  timeline; `dashboard/callbacks/emin_historical_callbacks.py` handles the view
-  switch and bound data.
+  calculates movement and builds the charts, prioritized fleet lists, ranking,
+  status card, and highlighted timeline; `dashboard/callbacks/emin_historical_callbacks.py`
+  handles the view switch and bound data.
 - Responsive style: `dashboard/assets/custom_layout.css` keeps the EMIN header
   legible, frees the mobile content width, uses a navigation drawer, and turns
   evidence rows into readable cards on narrow screens.
@@ -117,7 +121,7 @@ major-event matches have different labels.
 
 - Focused offline regression command:
   `$repo = (Get-Location).Path; docker run --rm --network none --entrypoint python -v "${repo}:/app" -w /app tds-alerts-dashboard-emin-test:latest -m pytest -q tests/test_emin_historical.py tests/test_s3_downloader_sync.py tests/test_client_services.py tests/test_navigation_shell.py`
-  — 56 passed (8 warnings from existing pytest hooks / return-value tests).
+  — 57 passed (8 warnings from existing pytest hooks / return-value tests).
 - Python compile check:
   `python -m py_compile dashboard/components/emin_historical.py dashboard/callbacks/emin_historical_callbacks.py dashboard/tabs/tab_emin_historical.py tests/test_emin_historical.py`
   — passed.
@@ -136,6 +140,9 @@ major-event matches have different labels.
   temporarily used `synthetic: false` only to exercise the production consumer;
   it was removed after review. The package loader's `synthetic: true` rejection
   is separately covered by a test.
+- The fleet-priority and event-highlights additions were not re-audited in a
+  browser during this follow-up. Their behavior is covered by offline tests;
+  repeat the 1,440 px, 1,024 px, and 390 px visual review before integration.
 - The earlier full offline suite for the original implementation reported
   2,480 passed, 13 skipped, 20 failed, and 51 errors in unrelated report/AI and
   page-view fixtures. This redesign did not rerun the full repository suite;
@@ -154,6 +161,9 @@ major-event matches have different labels.
 - The ranking and score are heuristic, not a failure probability. Movement
   labels describe score direction, not a diagnostic result. Alerts can lag by
   one day.
+- Critical review prioritization depends on source severity fields and covers
+  seven calendar days through the selected cut. Text matches remain review
+  cues and do not raise an equipment's critical priority.
 - The page remains EMIN-only and read-only; server-side authorization still
   checks the user's allowed client.
 
