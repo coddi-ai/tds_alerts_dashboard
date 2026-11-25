@@ -264,6 +264,10 @@ The disclosure on each component samples up to three distinct published
 event descriptions on each of its latest three contributing days.
 Those are producer score records. Original evidence remains in the
 chronology, and unallocated source points stay visible separately.
+For a published event description the detail can filter the chronology
+to records with the same equipment, day and event name. Several source
+records can match one contribution, so the action does not imply a
+one-to-one source record ID.
 
 The local package check reconciled every one of the 3,683 observed daily
 scores, built the detail for EXC-069 and confirmed that an estimated row
@@ -294,6 +298,19 @@ matching records for the default unit.
 At the November 24 cut, 13 units had changes in their score
 contributions. The package check reconciled each observed unit
 comparison with its published score delta.
+
+### Completed replacements
+
+The detail shows the latest three Golden replacement actions with a
+valid execution date through the cut. The chronology offers all such
+actions as a filter, with the original source fields available for each.
+Replacements are displayed separately from critical findings and do not
+change priority. The local 24 November cut had 73 dated replacements
+across 23 units. All 2,766 positively scored event contributions with
+descriptions had matching unit, day and name in the local chronology.
+In the isolated browser, the CT-187 tire contribution opened four
+matching source rows. The replacements shortcut then cleared that query
+and showed the four completed replacements for the same unit.
 
 ### Publishing follow-up
 

@@ -17,9 +17,18 @@
     }
 
     document.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-emin-open-unit], [data-emin-back], [data-emin-movement-filter], [data-emin-group-filter]");
+        const button = event.target.closest("[data-emin-open-unit], [data-emin-back], [data-emin-movement-filter], [data-emin-group-filter], [data-emin-record-filter]");
         const setProps = window.dash_clientside?.set_props;
         if (!button || !setProps) return;
+
+        if (button.hasAttribute("data-emin-record-filter")) {
+            setProps("emin-history-record-type", {value: button.dataset.eminRecordFilter});
+            setProps("emin-history-record-search", {value: button.dataset.eminRecordQuery || ""});
+            const type = document.getElementById("emin-history-record-type");
+            type?.focus({preventScroll: true});
+            type?.scrollIntoView({block: "center"});
+            return;
+        }
 
         if (button.hasAttribute("data-emin-movement-filter") || button.hasAttribute("data-emin-group-filter")) {
             if (button.hasAttribute("data-emin-movement-filter")) {

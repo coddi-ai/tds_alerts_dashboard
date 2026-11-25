@@ -559,11 +559,18 @@ def _component_evidence(label, events_by_day):
         html.Li([
             html.Strong(_day_label(day), className="d-block"),
             html.Ul([
-                html.Li(t(
-                    "emin_history.drivers_event_points",
-                    event=event or t("emin_history.drivers_event_unavailable"),
-                    points=f"{points:.2f}",
-                ))
+                html.Li([
+                    t(
+                        "emin_history.drivers_event_points",
+                        event=event or t("emin_history.drivers_event_unavailable"),
+                        points=f"{points:.2f}",
+                    ),
+                    html.Button(
+                        t("emin_history.drivers_find_records"), type="button",
+                        className="btn btn-link btn-sm d-block p-0",
+                        **{"data-emin-record-filter": "event", "data-emin-record-query": f"{day} · {event}"},
+                    ) if event else None,
+                ])
                 for event, points in events_by_day[day].most_common(3)
             ], className="mb-1"),
             html.Small(t("emin_history.drivers_more_events", count=len(events_by_day[day]) - 3), className="text-muted")
@@ -967,7 +974,8 @@ def _major_event(row: dict) -> str | None:
 
 
 CHRONOLOGY_PAGE_SIZE = 40
-CHRONOLOGY_TYPES = ("all", "milestones", "event", "alert", "maintenance", "downtime", "oil", "other")
+CHRONOLOGY_SOURCE_TYPES = ("event", "alert", "maintenance", "downtime", "oil", "other")
+CHRONOLOGY_TYPES = ("all", "milestones", "replacements", *CHRONOLOGY_SOURCE_TYPES)
 
 
 def _unit_evidence_rows(bundle, unit, cutoff):
@@ -989,6 +997,57 @@ def _evidence_type(row):
     if kind.startswith("downtime_") or kind in {"downtime", "stop"}:
         return "downtime"
     return kind if kind in {"event", "alert", "oil"} else "other"
+
+
+def _executed_replacement(row):
+    """Use documented Golden action and execution date, not free-text wording."""
+    if row.get("kind") != "maintenance_golden_action":
+        return None
+    details = row.get("details")
+    if not isinstance(details, dict) or _normalized_text(str(details.get("Acción") or "")).strip() != "reemplazo":
+        return None
+    try:
+        executed_at = datetime.fromisoformat(str(details.get("Realizada el") or ""))
+    except ValueError:
+        return None
+    if executed_at.tzinfo is not None:
+        executed_at = executed_at.astimezone(CHILE)
+    return executed_at.date().isoformat()
+
+
+def _replacement_records(rows, cutoff):
+    dated = []
+    for row in rows:
+        day = _executed_replacement(row)
+        if day and (not cutoff or day <= cutoff):
+            dated.append((day, row))
+    return sorted(dated, key=lambda item: item[0], reverse=True)
+
+
+def _replacements_panel(rows, cutoff):
+    replacements = _replacement_records(rows, cutoff)
+    if not replacements:
+        return None
+    return dbc.Card([
+        section_header(t("emin_history.chronology_replacements"), "fas fa-tools"),
+        dbc.CardBody([
+            html.P(t("emin_history.replacements_summary", total=len(replacements), shown=min(3, len(replacements))),
+                   className="small text-muted mb-2"),
+            html.Ul([
+                html.Li([
+                    html.Strong(row["details"].get("Componente") or t("emin_history.replacements_unknown_component")),
+                    html.Small(_day_label(day), className="d-block text-muted"),
+                    _record_disclosure(row, t("emin_history.chronology_replacements")),
+                ], className="emin-history-milestone py-2")
+                for day, row in replacements[:3]
+            ], className="list-unstyled mb-2"),
+            html.Button(
+                t("emin_history.replacements_open_chronology"), type="button",
+                className="btn btn-sm btn-outline-primary",
+                **{"data-emin-record-filter": "replacements"},
+            ),
+        ]),
+    ], class_name="shadow-sm unit-card mb-3")
 
 
 def _milestone_badge(level):
@@ -1046,13 +1105,22 @@ def chronology_page(bundle, unit, cutoff, kind, query, page):
     cutoff = cutoff or max((row["day"] for row in bundle.daily), default=None)
     rows = _unit_evidence_rows(bundle, unit, cutoff)
     needle = _normalized_text((query or "").strip())
+    event_day, separator, event_name = needle.partition(" · ")
+    exact_event = kind == "event" and separator and re.fullmatch(r"\d{4}-\d{2}-\d{2}", event_day)
     filtered = []
-    for row in rows:
+    candidates = (
+        [row for _, row in _replacement_records(rows, cutoff)] if kind == "replacements" else rows
+    )
+    for row in candidates:
         if kind == "milestones" and not _major_event(row):
             continue
-        if kind in CHRONOLOGY_TYPES[2:] and kind != _evidence_type(row):
+        if kind in CHRONOLOGY_SOURCE_TYPES and kind != _evidence_type(row):
             continue
-        if needle:
+        if exact_event:
+            details = row.get("details") or {}
+            if not isinstance(details, dict) or row.get("day") != event_day or _normalized_text(str(details.get("Evento") or "").strip()) != event_name:
+                continue
+        elif needle:
             fields = (row.get("event_at"), row.get("details"), row.get("summary"), row.get("description"))
             if needle not in _normalized_text(" ".join(str(field) for field in fields if field)):
                 continue
@@ -1127,6 +1195,7 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
                 *highlight_body,
             ]),
         ], id="emin-history-milestones", class_name="shadow-sm unit-card mb-3"),
+        _replacements_panel(rows, cutoff),
         dbc.Card([
             section_header(t("emin_history.full_chronology"), "fas fa-history"),
             dbc.CardBody([
