@@ -10,7 +10,7 @@
 
 The dashboard reads only those partitions (see ``src/data/alert_partitions.py`` and
 ``src/data/telemetry_partitions.py``); this script is the only code that opens the source files.
-The two datasets share the run, the schedule and the time zone, but are built, validated, swapped
+The two datasets share the run, but are built, validated, swapped
 and synced independently: each has its own S3 keys and its own backfill marker. A client with no
 telemetry source (EMIN publishes none) simply has no telemetry partitions.
 
@@ -32,17 +32,16 @@ Weekly run (default)
     then re-run with ``--sync-s3`` to push the full history and unlock the weekly sync.
     ``--dataset telemetry`` runs only the telemetry half (the alerts one is unchanged).
 
-``--schedule``
-    Stay in the foreground, in the configured time zone (``ALERT_PARTITIONS_TIMEZONE``, default
-    ``America/Santiago``). Two schedules: every client *except the daily ones* runs every
-    Wednesday 04:00; the *daily clients* (``ALERT_PARTITIONS_DAILY_CLIENTS``, default ``emin``: its
-    data is published every day, the others' weekly) run every day at ``ALERT_PARTITIONS_DAILY_TIME``
-    (default 10:30, after the data engineer's 10:00 end of EMIN's update and before its 12:00 e-mail).
-
 ``--verify-s3``
     Compare S3 with the local partitions (keys, sizes, hashes, row counts). Writes nothing.
 
 Exit status: 0 ok, 1 build/validation error, 2 S3 sync error.
+
+This script is a MANUAL tool and has no schedule of its own. The weekly run (Wednesday 08:00) and the
+daily run of the daily clients (EMIN, 11:30) are started by the app itself, in the background, from
+``src/data/partition_scheduler.py`` (timezone, weekday, times and daily clients are configured there,
+through the ``ALERT_PARTITIONS_*`` variables); it runs this script and records the exit status, which
+the alert-summary e-mail waits for. There is no container or EventBridge rule for it any more.
 
 Examples
 --------
@@ -52,14 +51,10 @@ Examples
     python scripts/partition_alerts.py --backfill --sync-s3             # after validating
     python scripts/partition_alerts.py --verify-s3
     python scripts/partition_alerts.py                                  # one weekly run now
-    python scripts/partition_alerts.py --schedule                       # Wed 04:00, forever
 
 Environment: ``DASHBOARD_DATA_ROOT`` (data root), ``ALERT_PARTITIONS_S3_BUCKET`` (falls back to
 ``BUCKET_NAME``), ``ALERT_PARTITIONS_S3_PREFIX`` (default ``MultiTechnique Alerts/alerts/golden``),
-``ALERT_PARTITIONS_WEEKDAY`` (default ``wednesday``), ``ALERT_PARTITIONS_TIME`` (``04:00``),
-``ALERT_PARTITIONS_TIMEZONE`` (``America/Santiago``), ``ALERT_PARTITIONS_DAILY_CLIENTS``
-(comma-separated, default ``emin``; ``none`` for no daily client), ``ALERT_PARTITIONS_DAILY_TIME`` (``10:30``), ``ACCESS_KEY``/``SECRET_KEY`` (optional;
-the task role is used otherwise).
+``ACCESS_KEY``/``SECRET_KEY`` (optional; the task role is used otherwise).
 """
 
 from __future__ import annotations
@@ -67,12 +62,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import signal
 import sys
-from datetime import datetime, time as day_time, timedelta
 from pathlib import Path
-from threading import Event
-from zoneinfo import ZoneInfo
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -89,86 +80,7 @@ DATASETS = ("alerts", "telemetry")
 # The per-alert telemetry published for each client. This script is the only code that names (and
 # opens) it; the dashboard reads the partitions built from it.
 TELEMETRY_SOURCE_FILE = "alerts_detail_wide_with_gps.csv"
-DEFAULT_WEEKDAY = "wednesday"
-DEFAULT_TIME = "04:00"
-DEFAULT_TIMEZONE = "America/Santiago"
-# Clients whose data is published every day: they are partitioned (and synced) on every day of the
-# schedule, not only on the weekly day, so their sections and e-mail do not wait for Wednesday.
-DEFAULT_DAILY_CLIENTS = "emin"
-# EMIN finishes updating its data at 10:00 (confirmed by the data engineer) and its e-mail goes out
-# at 12:00, with a data sync right before: 10:30 leaves a margin on both sides.
-DEFAULT_DAILY_TIME = "10:30"
 EXIT_OK, EXIT_BUILD_ERROR, EXIT_S3_ERROR = 0, 1, 2
-
-_WEEKDAYS = {
-    "monday": 0, "lunes": 0, "tuesday": 1, "martes": 1, "wednesday": 2, "miercoles": 2,
-    "thursday": 3, "jueves": 3, "friday": 4, "viernes": 4, "saturday": 5, "sabado": 5,
-    "sunday": 6, "domingo": 6,
-}
-_STOP = Event()
-
-
-# ---------------------------------------------------------------------------
-# Schedule
-# ---------------------------------------------------------------------------
-
-def parse_weekday(value: str) -> int:
-    text = value.strip().lower()
-    if text.isdigit() and 0 <= int(text) <= 6:
-        return int(text)
-    if text in _WEEKDAYS:
-        return _WEEKDAYS[text]
-    raise ValueError(f"weekday must be a day name or 0..6, got {value!r}")
-
-
-def parse_time(value: str) -> day_time:
-    parts = value.strip().split(":")
-    if len(parts) not in (2, 3):
-        raise ValueError(f"time must be HH:MM, got {value!r}")
-    return day_time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) == 3 else 0)
-
-
-def next_run(now: datetime, weekday: int, run_time: day_time) -> datetime:
-    """The next ``weekday`` at ``run_time`` strictly after ``now`` (``now`` carries the zone)."""
-    candidate = now.replace(hour=run_time.hour, minute=run_time.minute,
-                            second=run_time.second, microsecond=0)
-    candidate += timedelta(days=(weekday - now.weekday()) % 7)
-    if candidate <= now:
-        candidate += timedelta(days=7)
-    return candidate
-
-
-def next_daily_run(now: datetime, run_time: day_time) -> datetime:
-    """The next ``run_time`` (today or tomorrow) strictly after ``now``."""
-    candidate = now.replace(hour=run_time.hour, minute=run_time.minute,
-                            second=run_time.second, microsecond=0)
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
-
-
-def parse_clients(value: str | None) -> list[str]:
-    """``"emin, cda"`` -> ``["emin", "cda"]``; empty or ``none`` -> no client."""
-    text = (value or "").strip().lower()
-    if text in ("", "none", "-"):
-        return []
-    return [name.strip() for name in text.split(",") if name.strip()]
-
-
-def weekly_clients(requested: list[str] | None, daily_clients: list[str], found: list[str]) -> list[str]:
-    """Clients of the weekly run: every one found (or requested) that is not a daily client.
-
-    Daily clients have their own, later run every day, so the weekly one leaves them out.
-    """
-    names = [name.lower() for name in (requested if requested is not None else found)]
-    daily = {name.lower() for name in daily_clients}
-    return [name for name in names if name not in daily]
-
-
-def daily_run_clients(requested: list[str] | None, daily_clients: list[str]) -> list[str]:
-    """Clients of the daily run: the daily clients (limited to the requested ones, if any)."""
-    daily = [name.lower() for name in daily_clients]
-    return [name for name in daily if requested is None or name in requested]
 
 
 # ---------------------------------------------------------------------------
@@ -304,11 +216,6 @@ def _run_telemetry(name: str, root: str | None, common: dict) -> int:
 # CLI
 # ---------------------------------------------------------------------------
 
-def _env(name: str, default: str) -> str:
-    value = os.getenv(name)
-    return value.strip() if value and value.strip() else default
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Partition consolidated_alerts.csv and the alert telemetry into weekly Parquet files.",
@@ -329,19 +236,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Compare partitions with the CSV (default: on for --backfill).")
     parser.add_argument("--verify-s3", action="store_true",
                         help="Compare S3 with the local partitions; writes nothing.")
-    parser.add_argument("--schedule", action="store_true",
-                        help="Run on schedule, in the foreground: the weekly clients on their day, the daily clients every day.")
-    parser.add_argument("--run-on-start", action="store_true", help="With --schedule: run once immediately.")
-    parser.add_argument("--daily-clients", default=_env("ALERT_PARTITIONS_DAILY_CLIENTS", DEFAULT_DAILY_CLIENTS),
-                        help="With --schedule: clients run every day at --daily-time instead of weekly "
-                             "(comma-separated, 'none' for no one).")
-    parser.add_argument("--daily-time", default=_env("ALERT_PARTITIONS_DAILY_TIME", DEFAULT_DAILY_TIME),
-                        help="With --schedule: local time HH:MM of the daily clients' run.")
-    parser.add_argument("--weekday", default=_env("ALERT_PARTITIONS_WEEKDAY", DEFAULT_WEEKDAY))
-    parser.add_argument("--time", default=_env("ALERT_PARTITIONS_TIME", DEFAULT_TIME),
-                        help="Local run time HH:MM.")
-    parser.add_argument("--timezone", default=_env("ALERT_PARTITIONS_TIMEZONE", DEFAULT_TIMEZONE),
-                        help="IANA zone the schedule is expressed in.")
     parser.add_argument("--bucket", default=None, help="S3 bucket (default: $ALERT_PARTITIONS_S3_BUCKET or $BUCKET_NAME).")
     parser.add_argument("--s3-prefix", default=None,
                         help=f"S3 prefix (default: $ALERT_PARTITIONS_S3_PREFIX or {s3_sync.DEFAULT_S3_PREFIX!r}).")
@@ -349,8 +243,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.sync_s3 and not args.backfill:
         parser.error("--sync-s3 only applies to --backfill (the weekly run always syncs)")
-    if args.schedule and (args.backfill or args.verify_s3):
-        parser.error("--schedule runs the weekly mode; do not combine it with --backfill/--verify-s3")
     return args
 
 
@@ -362,11 +254,11 @@ def _load_env() -> None:
         pass
 
 
-def _run_from_args(args: argparse.Namespace, clients: list[str] | None = None) -> int:
+def _run_from_args(args: argparse.Namespace) -> int:
     weekly = not args.backfill and not args.verify_s3
     return run(
         root=args.data_root,
-        clients=clients if clients is not None else ([c.lower() for c in args.clients] if args.clients else None),
+        clients=[c.lower() for c in args.clients] if args.clients else None,
         backfill=args.backfill,
         sync_s3=weekly or args.sync_s3,
         validate=args.validate if args.validate is not None else args.backfill,
@@ -376,56 +268,11 @@ def _run_from_args(args: argparse.Namespace, clients: list[str] | None = None) -
     )
 
 
-def schedule_forever(args: argparse.Namespace) -> int:
-    zone = ZoneInfo(args.timezone)
-    weekday, run_time = parse_weekday(args.weekday), parse_time(args.time)
-    daily_time = parse_time(args.daily_time)
-    daily_clients = parse_clients(args.daily_clients)
-    requested = [c.lower() for c in args.clients] if args.clients else None
-    logger.info("Scheduled: weekly clients on weekday=%s at %s; daily clients %s every day at %s; timezone=%s",
-                args.weekday, run_time.isoformat(), daily_clients or "(none)", daily_time.isoformat(), args.timezone)
-    signal.signal(signal.SIGTERM, lambda *_: _STOP.set())
-    signal.signal(signal.SIGINT, lambda *_: _STOP.set())
-    if args.run_on_start:
-        _log_cycle(_run_from_args(args))
-    while not _STOP.is_set():
-        now = datetime.now(zone)
-        due = [(next_run(now, weekday, run_time), "weekly")]
-        if daily_run_clients(requested, daily_clients):
-            due.append((next_daily_run(now, daily_time), "daily"))
-        following, kind = min(due)
-        logger.info("Next run: %s (%s)", following.isoformat(), kind)
-        if _STOP.wait(max(0.0, (following - now).total_seconds())):
-            break
-        try:
-            if kind == "daily":
-                clients = daily_run_clients(requested, daily_clients)
-            else:
-                found = builder.discover_clients(args.data_root)  # looked up now: a new client is picked up
-                clients = weekly_clients(requested, daily_clients, found)
-            if not clients:
-                logger.info("No %s client to run", kind)
-                continue
-            _log_cycle(_run_from_args(args, clients))
-        except Exception:  # noqa: BLE001 - a failed run must not end the schedule
-            logger.exception("Scheduled run crashed; the next one retries")
-    return EXIT_OK
-
-
-def _log_cycle(status: int) -> None:
-    if status == EXIT_OK:
-        logger.info("Scheduled run finished OK")
-    else:
-        logger.error("Scheduled run finished with exit status %d (see errors above); next run retries", status)
-
-
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=os.getenv("ALERT_PARTITIONS_LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     _load_env()
     args = parse_args(argv)
-    if args.schedule:
-        return schedule_forever(args)
     return _run_from_args(args)
 
 

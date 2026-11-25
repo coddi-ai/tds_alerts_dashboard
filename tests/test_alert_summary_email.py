@@ -331,7 +331,7 @@ def test_weekly_email_content():
         "Ver Alertas en el Dashboard", "10 unidades", "1 c/u",
         "c/u = cada una. Las unidades con la misma cantidad de alertas se agrupan en una sola fila.",
         "Mostrando 5 de 62 alertas del período. Se priorizan las alertas multitécnicas y las unidades con más alertas.",
-        "Este resumen se genera automáticamente cada miércoles a las 12:00 (hora de Chile) y cubre las alertas "
+        "Este resumen se genera automáticamente cada miércoles a las 08:30 (hora de Chile) y cubre las alertas "
         "registradas entre el 02/11/2026 y el 08/11/2026.",
         "Coddi · coddi.ai",
     ):
@@ -339,6 +339,45 @@ def test_weekly_email_content():
     assert content.meta == {
         "report": "alert_summary", "variant": "weekly", "total_alerts": 62, "affected_units": 19,
     }
+
+
+def test_a_regular_email_carries_no_erratum_notice():
+    """The erratum option is off by default: the regular email has neither the notice nor the prefix."""
+    regular = render(records_for(WORKED_EXAMPLE))
+    explicit_off = alert_summary.render_alert_summary(
+        "capstone", config.get_schedule("capstone"), periods.compute_period("weekly", date(2026, 11, 11)),
+        date(2026, 11, 11), records_for(WORKED_EXAMPLE), "https://dash.example/alertas", erratum=False,
+    )
+    assert regular.html == explicit_off.html and regular.subject == explicit_off.subject
+    assert "ERRATA" not in regular.html and "ERRATA" not in regular.subject
+    assert "erratum" not in regular.meta
+
+
+def test_the_erratum_email_adds_only_the_notice_and_the_subject_prefix():
+    send = date(2026, 11, 11)
+    records = records_for(WORKED_EXAMPLE)
+    schedule = config.get_schedule("capstone")
+    period = periods.compute_period("weekly", send)
+    regular = alert_summary.render_alert_summary("capstone", schedule, period, send, records, "https://x/y")
+    erratum = alert_summary.render_alert_summary("capstone", schedule, period, send, records, "https://x/y", erratum=True)
+
+    assert erratum.subject == "[FE DE ERRATA] [CODDI] Monitoreo de Alertas 11/11/2026"
+    assert erratum.subject == periods.ERRATUM_SUBJECT_PREFIX + regular.subject
+    notice = (
+        "FE DE ERRATA:</strong> El correo enviado anteriormente con el resumen de alertas fue generado con "
+        "datos incompletos, debido a los cambios conversados en la reunión de ayer. Este correo contiene la "
+        "información corregida contemplando la flota completa y reemplaza al anterior. Considerar que estas "
+        "alertas también serán afectadas por la decisión de disminuir el tamaño de la flota."
+    )
+    assert notice in erratum.html
+    assert erratum.html.index("FE DE ERRATA:") < erratum.html.index("Resumen Semanal de Alertas")  # at the top
+    # Everything else is the regular email: take the notice row and the subject out and nothing differs.
+    body = erratum.html
+    start = body.index("\n\n  <!-- Fe de erratas")
+    end = body.index("</tr>", start) + len("</tr>")
+    stripped = (body[:start] + body[end:]).replace(erratum.subject, regular.subject)
+    assert stripped == regular.html
+    assert erratum.meta == {**regular.meta, "erratum": True}
 
 
 def test_the_total_caption_follows_the_period_not_a_fixed_seven_days():

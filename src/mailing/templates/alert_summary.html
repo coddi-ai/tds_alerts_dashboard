@@ -18,6 +18,13 @@
 
   <!-- Top bar -->
   <tr><td bgcolor="#1d4ed8" height="6" style="background-color:#1d4ed8;height:6px;font-size:0;line-height:0;">&nbsp;</td></tr>
+{%- if erratum_text %}
+
+  <!-- Fe de erratas (one-time correction send only) -->
+  <tr><td style="padding:16px 24px 0 24px;font-family:Arial,Helvetica,sans-serif;">
+    <div style="padding:12px 14px;background-color:#fef3c7;border-left:4px solid #b45309;font-size:14px;line-height:21px;color:#451a03;"><strong>{{ erratum_title }}</strong> {{ erratum_text }}</div>
+  </td></tr>
+{%- endif %}
 
   <!-- Header -->
   <tr><td style="padding:24px 24px 8px 24px;font-family:Arial,Helvetica,sans-serif;">

@@ -266,12 +266,23 @@ register_report_files(app)
 # Flask route {PATH_PREFIX}informe-falla/file: re-checks access and serves a generated informe preliminar PDF.
 register_informe_falla_files(app)
 
-# Automatic alert-summary emails (Emin daily, Capstone weekly, 12:00 America/Santiago).
+# Automatic alert-summary emails (Emin daily 12:00, Capstone weekly Wednesday 08:30, America/Santiago).
 # Only in production (DEPLOY_STATUS); MAILING_SCHEDULER_ENABLED=false also turns it off there.
 # Several workers are safe (persisted marker). Not started when the module is imported by the test suite.
 if "pytest" not in sys.modules:
     from src.mailing import start_mailing_scheduler
     start_mailing_scheduler()
+
+# Alert partitioner (weekly Parquet partitions + S3 sync): the app runs it itself, in the background, so its
+# schedule lives next to the mailing one and the e-mail can wait for it. Wednesday 08:00 for every client (one
+# hour after the 07:00 alert creation) and, for the daily clients (EMIN), every day 11:30, America/Santiago;
+# the alert-summary e-mail follows at 08:30 and only goes out if this period's run finished OK. Runs
+# `scripts/partition_alerts.py` in a subprocess, so it never blocks a request. Same rules as the mailing
+# scheduler: production only, a persisted marker makes each run happen once across workers/restarts.
+# ALERT_PARTITIONS_SCHEDULER_ENABLED=false turns it off. See src/data/partition_scheduler.py.
+if "pytest" not in sys.modules:
+    from src.data.partition_scheduler import start_partition_scheduler
+    start_partition_scheduler()
 
 
 @app.server.after_request

@@ -161,6 +161,16 @@ def _period_caption(period: periods.Period, frequency: str) -> str:
     return f"{period.days} días"
 
 
+# One-time notice of a correction send (`erratum=True`), approved text. Regular e-mails never carry it.
+ERRATUM_NOTICE_TITLE = "FE DE ERRATA:"
+ERRATUM_NOTICE_TEXT = (
+    "El correo enviado anteriormente con el resumen de alertas fue generado con datos incompletos, "
+    "debido a los cambios conversados en la reunión de ayer. Este correo contiene la información "
+    "corregida contemplando la flota completa y reemplaza al anterior. Considerar que estas alertas "
+    "también serán afectadas por la decisión de disminuir el tamaño de la flota."
+)
+
+
 def render_alert_summary(
     client: str,
     schedule: dict,
@@ -169,10 +179,15 @@ def render_alert_summary(
     records: List[stats.AlertRecord],
     button_url: Optional[str] = None,
     subject: Optional[str] = None,
+    erratum: bool = False,
 ) -> ReportContent:
-    """Pure rendering: records in, `ReportContent` out (no I/O)."""
+    """Pure rendering: records in, `ReportContent` out (no I/O).
+
+    `erratum` adds the FE DE ERRATA notice at the top and the `[FE DE ERRATA]` subject prefix; with
+    it off (the default) the output is exactly the regular e-mail.
+    """
     frequency = schedule["frequency"]
-    subject = subject or periods.build_subject(send_date)
+    subject = subject or periods.build_subject(send_date, erratum=erratum)
     subtitle_period, footer = _period_texts(period, frequency, schedule)
     total = len(records)
     units = len(stats.unit_counts(records))
@@ -187,10 +202,14 @@ def render_alert_summary(
         "total": total,
         "button_url": button_url,
         "footer": footer,
+        "erratum_title": ERRATUM_NOTICE_TITLE if erratum else "",
+        "erratum_text": ERRATUM_NOTICE_TEXT if erratum else "",
         "kpis": [], "unit_rows": [], "unit_note": False, "system_rows": [], "featured": [],
     }
 
     meta = {"report": ALERT_SUMMARY, "variant": frequency, "total_alerts": total, "affected_units": units}
+    if erratum:
+        meta["erratum"] = True
     if total:
         systems = [
             {"name": r.name, "count": r.count, "bar_pct": r.bar_pct, "pct": r.pct, "color": ""}
@@ -258,7 +277,10 @@ def build_alert_summary(request: ReportRequest) -> ReportContent:
     url = get_dashboard_alerts_url()
     if not url:
         logger.warning("mailing: DASHBOARD_URL is not set; the email goes without the button")
-    content = render_alert_summary(request.client, schedule, period, request.send_date, records, url, request.subject)
+    content = render_alert_summary(
+        request.client, schedule, period, request.send_date, records, url, request.subject,
+        erratum=request.erratum,
+    )
     logger.info("mailing: alert summary built (client=%s meta=%s)", request.client, content.meta)
     return content
 

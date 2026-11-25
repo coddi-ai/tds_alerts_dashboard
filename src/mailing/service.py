@@ -42,6 +42,7 @@ GENERIC_BUILD_ERROR = "No se pudo generar el resumen."
 
 TRIGGER_SCHEDULED = "scheduled"
 TRIGGER_MANUAL = "manual"
+TRIGGER_ERRATUM = "erratum"
 
 # ---------------------------------------------------------------------------
 # Authorization
@@ -82,11 +83,12 @@ def _build_report(
     send_date: date,
     subject: Optional[str] = None,
     period: Optional[periods.Period] = None,
+    erratum: bool = False,
 ) -> report.ReportContent:
     """Build the email through the registered report builder (shared by every trigger).
 
     `subject` and `period` are the validated custom values of a manual send; scheduled sends
-    never pass them.
+    never pass them. `erratum` is only passed by the one-time correction send.
     """
     period = period or periods.compute_period(schedule["frequency"], send_date)
     request = report.ReportRequest(
@@ -96,6 +98,7 @@ def _build_report(
         period_end=period.end,
         send_date=send_date,
         subject=subject,
+        erratum=erratum,
     )
     builder = report.get_report_builder()
     try:
@@ -105,7 +108,7 @@ def _build_report(
     except Exception:  # noqa: BLE001 - the UI must not see internals
         logger.exception("mailing: report builder failed (client=%s)", client)
         raise MailingError(GENERIC_BUILD_ERROR, code="build_failed")
-    expected = subject or periods.build_subject(send_date)
+    expected = subject or periods.build_subject(send_date, erratum=erratum)
     if content.subject != expected:
         # The subject is a contract (and what get_mailing_context shows): the service owns it.
         logger.warning("mailing: builder subject differs from contract; using contract subject")
@@ -281,6 +284,44 @@ def send_manual(
 # ---------------------------------------------------------------------------
 
 
+def partition_dependency_problem(client: str, scheduled_date: date) -> Optional[str]:
+    """Why the scheduled e-mail cannot be built from the partitions yet, or None (see
+    `config.MAILING_PARTITION_DEPENDENCY`). The run status is the one the partitioner records."""
+    job = config.MAILING_PARTITION_DEPENDENCY.get(config.normalize_client(client))
+    if job is None:
+        return None
+    from src.data import partition_scheduler  # imported here: the data layer imports this package's config
+
+    return partition_scheduler.partition_run_problem(job, scheduled_date)
+
+
+def alerts_generated_problem(client: str, scheduled_date: date) -> Optional[str]:
+    """Why the scheduled e-mail must not go for lack of alerts, or None (see `config.MAILING_REQUIRE_ALERTS`).
+
+    Counts the client's alerts of the e-mail's period with the very pipeline the e-mail uses
+    (`alert_summary.load_period_records`: the partitions, Chile days), so what is checked is what would be sent.
+    Unreadable data counts as a problem too: the e-mail is not built on data that cannot be read.
+    """
+    key = config.normalize_client(client)
+    if key not in config.MAILING_REQUIRE_ALERTS:
+        return None
+    schedule = config.get_schedule(key)
+    period = periods.compute_period(schedule["frequency"], scheduled_date)
+    try:
+        from . import alert_summary
+
+        found = len(alert_summary.load_period_records(key, period.start, period.end))
+    except Exception as exc:  # noqa: BLE001 - fail closed, say why
+        logger.exception("mailing: could not count the alerts of the period (client=%s)", key)
+        return f"the alerts of {period.start}..{period.end} could not be read ({type(exc).__name__})"
+    if found == 0:
+        return (
+            f"no alert of {key} in the partitions for {period.start}..{period.end}: the alert creation "
+            "did not run or did not reach the partitions"
+        )
+    return None
+
+
 def run_scheduled(
     client: str,
     scheduled_date: Optional[date] = None,
@@ -290,8 +331,9 @@ def run_scheduled(
 
     `skipped` means another process/thread (or an earlier run) already owns the marker for
     `(client, scheduled_date)`: this is what makes the send exactly-once across workers and
-    restarts. The data is synced from S3 once before the first build (data_sync.py). Failures are
-    retried with growing waits (`MAILING_RETRY_DELAYS`), then logged.
+    restarts. The partitioner run it depends on must have finished OK, and (capstone) the period must have
+    alerts, or nothing is sent. The data is synced from S3 once before the first build (data_sync.py). Failures are retried with growing
+    waits (`MAILING_RETRY_DELAYS`), then logged.
     """
     key = config.normalize_client(client)
     schedule = config.get_schedule(key)
@@ -304,8 +346,28 @@ def run_scheduled(
         logger.info("mailing: scheduled run already claimed (client=%s date=%s)", key, scheduled_date)
         return "skipped"
 
+    # The partitions this e-mail reads must come from a partitioner run that FINISHED OK. Checked before
+    # anything is built; not met = not sent, an error in the log, no retry (the claim above holds).
+    problem = partition_dependency_problem(key, scheduled_date)
+    if problem:
+        logger.error(
+            "mailing: scheduled send NOT SENT, partitioner dependency not met (client=%s date=%s): %s",
+            key, scheduled_date, problem,
+        )
+        state.finish(key, scheduled_date, "failed", f"partitioner dependency: {problem}")
+        return "failed"
+
     # Fresh data first (the app's own S3 sync, once per date); a failure only logs and the email goes out.
     data_sync.sync_before_send(scheduled_date)
+
+    # Alerts must exist for the period (capstone): checked on the freshly synced partitions, before building.
+    problem = alerts_generated_problem(key, scheduled_date)
+    if problem:
+        logger.error(
+            "mailing: scheduled send NOT SENT, no alerts generated (client=%s date=%s): %s", key, scheduled_date, problem
+        )
+        state.finish(key, scheduled_date, "failed", f"no alerts: {problem}")
+        return "failed"
 
     emails = recipients.scheduled_emails(key)
     delays = list(config.get_retry_delays())
@@ -336,6 +398,64 @@ def run_scheduled(
         attempts, key, scheduled_date, subject,
     )
     state.finish(key, scheduled_date, "failed", last_reason)
+    return "failed"
+
+
+# ---------------------------------------------------------------------------
+# One-time erratum send
+# ---------------------------------------------------------------------------
+
+
+def build_erratum_preview(client: str, send_date: date) -> dict:
+    """`{"subject", "html", "recipients", "meta"}` of the erratum send. Sends nothing.
+
+    The regular summary of `send_date` (same period, content and recipients as the scheduled
+    e-mail) with the FE DE ERRATA notice and subject prefix. Internal entry point, like
+    `run_scheduled`: no user involved.
+    """
+    key = config.normalize_client(client)
+    schedule = _schedule_or_raise(key)
+    content = _build_report(key, schedule, send_date, erratum=True)
+    return {
+        "subject": content.subject,
+        "html": content.html,
+        "recipients": recipients.scheduled_emails(key),
+        "meta": content.meta,
+    }
+
+
+def send_erratum(client: str, send_date: date) -> str:
+    """Send the corrected summary with the FE DE ERRATA notice, once. Returns `sent`, `failed` or `skipped`.
+
+    Same builder, same recipients (`recipients.scheduled_emails`) and same delivery function as the
+    regular scheduled e-mail; only the notice and the subject prefix are added. It has its own
+    at-most-once marker (`erratum_<client>_<date>.json`), so it never touches the scheduled-run
+    markers and a second call cannot send it again. No retry: a delivery that timed out may still
+    have gone out, so after a `failed` result the operator checks and removes the marker by hand.
+    """
+    key = config.normalize_client(client)
+    schedule = _schedule_or_raise(key)
+    if not state.claim(key, send_date, kind=state.KIND_ERRATUM):
+        logger.warning("mailing: erratum send already claimed (client=%s date=%s)", key, send_date)
+        return "skipped"
+
+    emails = recipients.scheduled_emails(key)
+    subject = periods.build_subject(send_date, erratum=True)
+    try:
+        content = _build_report(key, schedule, send_date, erratum=True)
+        subject = content.subject
+        outcome = delivery.send_email(content.subject, content.html, emails)
+    except MailingError as exc:
+        outcome = delivery.DeliveryResult(False, exc.user_message)
+    except Exception:  # noqa: BLE001
+        logger.exception("mailing: unexpected error in the erratum send (client=%s)", key)
+        outcome = delivery.DeliveryResult(False, GENERIC_BUILD_ERROR)
+    _log_attempt(key, TRIGGER_ERRATUM, None, subject, emails, outcome, attempt=1)
+    if outcome.ok:
+        state.finish(key, send_date, "sent", kind=state.KIND_ERRATUM)
+        return "sent"
+    logger.error("mailing: erratum send FAILED (client=%s date=%s subject=%s)", key, send_date, subject)
+    state.finish(key, send_date, "failed", outcome.reason, kind=state.KIND_ERRATUM)
     return "failed"
 
 

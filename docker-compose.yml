@@ -64,53 +64,11 @@ services:
       - ./src:/app/src:ro
     restart: unless-stopped
 
-  # Particiona consolidated_alerts.csv en Parquet por semana
-  # (data/alerts/golden/{client}/{week}/file.parquet), que es lo que leen Alertas >
-  # Vista General / Vista Detallada, y la telemetria por alerta (CSV ancho de
-  # data/telemetry/golden/{client}/) en data/alerts/golden/{client}/{week}/telemetry.parquet
-  # (la semana de su alerta), que lee Evidencia de Telemetria. Corre solo, en primer plano:
-  # duerme hasta su ventana (miercoles 04:00 en la zona horaria configurada), regenera las
-  # particiones cuyo contenido cambio -incluida la semana en curso- y las sincroniza con S3. Un
-  # fallo de S3 queda en el log y se reintenta en la corrida siguiente; las particiones locales
-  # siguen siendo validas.
-  #
-  # Puesta en marcha (en este orden): 1) backfill local, 2) validarlo, 3) backfill con
-  # --sync-s3. El sync semanal se niega a correr para un cliente cuyo historial completo no
-  # esta en S3; alertas y telemetria tienen cada una su propia marca de backfill (la de alertas
-  # no habilita la telemetria). --dataset alerts|telemetry corre solo una de las dos mitades:
-  #   docker compose run --rm alerts-partitioner python scripts/partition_alerts.py --backfill
-  #   docker compose run --rm alerts-partitioner python scripts/partition_alerts.py --backfill --sync-s3
-  #   docker compose run --rm alerts-partitioner python scripts/partition_alerts.py --backfill --sync-s3 --dataset telemetry
-  alerts-partitioner:
-    build:
-      context: .
-      dockerfile: Dockerfile.app
-    container_name: alerts-partitioner
-    command: ["python", "scripts/partition_alerts.py", "--schedule"]
-    env_file:
-      - .env
-    environment:
-      # Zona horaria en la que se expresa la ventana: explicita, no la del contenedor.
-      - ALERT_PARTITIONS_TIMEZONE=${ALERT_PARTITIONS_TIMEZONE:-America/Santiago}
-      - ALERT_PARTITIONS_WEEKDAY=${ALERT_PARTITIONS_WEEKDAY:-wednesday}
-      - ALERT_PARTITIONS_TIME=${ALERT_PARTITIONS_TIME:-04:00}
-      # Clientes cuyos datos se publican cada dia (emin): se particionan y sincronizan todos los dias
-      # (no en la corrida semanal). 'none' = ninguno.
-      - ALERT_PARTITIONS_DAILY_CLIENTS=${ALERT_PARTITIONS_DAILY_CLIENTS:-emin}
-      # Hora de la corrida diaria de esos clientes: emin termina su actualizacion a las 10:00 y su
-      # correo sale a las 12:00; los demas clientes siguen en miercoles 04:00.
-      - ALERT_PARTITIONS_DAILY_TIME=${ALERT_PARTITIONS_DAILY_TIME:-10:30}
-      # Mismo bucket/prefijo para el backfill y la corrida semanal. Vacio = BUCKET_NAME y el
-      # prefijo del medallion (MultiTechnique Alerts/alerts/golden).
-      - ALERT_PARTITIONS_S3_BUCKET=${ALERT_PARTITIONS_S3_BUCKET:-}
-      - ALERT_PARTITIONS_S3_PREFIX=${ALERT_PARTITIONS_S3_PREFIX:-}
-      - BUCKET_NAME=${BUCKET_NAME:-}
-      - ACCESS_KEY=${ACCESS_KEY:-}
-      - SECRET_KEY=${SECRET_KEY:-}
-    healthcheck:
-      disable: true # la imagen trae un healthcheck HTTP del dashboard; este servicio no sirve HTTP
-    volumes:
-      # Lectura y escritura: es el unico servicio que escribe las particiones.
-      - ./data:/app/data
-      - ./logs:/app/logs
-    restart: unless-stopped
+  # NOTA: no hay servicio `alerts-partitioner`. El particionado de alertas (y de la telemetria por
+  # alerta) lo corre la propia app en segundo plano, igual que el envio de correos: miercoles 08:00
+  # (todos los clientes) y, para EMIN, todos los dias 11:30, America/Santiago; el resumen de alertas
+  # sale a las 08:30 y solo si esa corrida termino bien. Ver src/data/partition_scheduler.py. Solo
+  # corre con DEPLOY_STATUS=POC/production (nunca en este compose de desarrollo, donde ./data va :ro).
+  # Las variables ALERT_PARTITIONS_* (zona, dia, hora, clientes diarios, bucket/prefijo S3) se leen del
+  # entorno de la app. scripts/partition_alerts.py sigue siendo la herramienta manual (--backfill,
+  # --validate, --sync-s3, --verify-s3); ya no esta agendado.

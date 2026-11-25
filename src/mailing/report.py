@@ -25,6 +25,7 @@ class ReportRequest:
     period_end: date     # inclusive
     send_date: date
     subject: Optional[str] = None  # custom subject of a manual send; None = the automatic one
+    erratum: bool = False  # one-time correction send: the builder adds the "FE DE ERRATA" notice
 
 
 @dataclass(frozen=True)

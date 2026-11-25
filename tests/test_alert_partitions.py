@@ -1,4 +1,4 @@
-"""Partitioned alert storage (one Parquet file per week): layout, partitioner, read path, S3 sync, schedule.
+"""Partitioned alert storage (one Parquet file per week): layout, partitioner, read path, S3 sync.
 
 The views must show exactly what they showed when they loaded the whole CSV, so the central
 tests here run the previous General-tab algorithm over the whole CSV history (`csv_history`, the
@@ -13,7 +13,6 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -827,34 +826,6 @@ def test_a_validation_failure_stops_the_push_to_s3(data_root, monkeypatch):
     assert status == cli.EXIT_BUILD_ERROR and s3.puts == []
 
 
-def test_schedule_is_wednesday_four_am_in_an_explicit_timezone():
-    args = cli.parse_args([])
-    assert (args.weekday, args.time, args.timezone) == ("wednesday", "04:00", "America/Santiago")
-    zone = ZoneInfo(args.timezone)
-    weekday, run_time = cli.parse_weekday(args.weekday), cli.parse_time(args.time)
-
-    # Tuesday evening -> the next day at 04:00; Wednesday 03:00 -> same day; Wednesday 04:00 -> +7.
-    assert cli.next_run(datetime(2026, 11, 17, 20, 0, tzinfo=zone), weekday, run_time) == datetime(2026, 11, 18, 4, 0, tzinfo=zone)
-    assert cli.next_run(datetime(2026, 11, 18, 3, 0, tzinfo=zone), weekday, run_time) == datetime(2026, 11, 18, 4, 0, tzinfo=zone)
-    assert cli.next_run(datetime(2026, 11, 18, 4, 0, tzinfo=zone), weekday, run_time) == datetime(2026, 11, 25, 4, 0, tzinfo=zone)
-    # The wall-clock hour holds across Chile's DST change (first Sunday of September 2026).
-    after_change = cli.next_run(datetime(2026, 9, 7, 12, 0, tzinfo=zone), weekday, run_time)
-    assert after_change == datetime(2026, 9, 9, 4, 0, tzinfo=zone) and after_change.utcoffset() == timedelta(hours=-3)
-    # ... and across the April change back to UTC-4 (summer time ends 2026-04-04).
-    summer = cli.next_run(datetime(2026, 3, 30, 12, 0, tzinfo=zone), weekday, run_time)
-    winter = cli.next_run(datetime(2026, 4, 6, 12, 0, tzinfo=zone), weekday, run_time)
-    assert (summer, summer.utcoffset()) == (datetime(2026, 4, 1, 4, 0, tzinfo=zone), timedelta(hours=-3))
-    assert (winter, winter.utcoffset()) == (datetime(2026, 4, 8, 4, 0, tzinfo=zone), timedelta(hours=-4))
-
-
-def test_schedule_settings_can_be_overridden_by_environment(monkeypatch):
-    monkeypatch.setenv("ALERT_PARTITIONS_TIMEZONE", "UTC")
-    monkeypatch.setenv("ALERT_PARTITIONS_WEEKDAY", "thursday")
-    monkeypatch.setenv("ALERT_PARTITIONS_TIME", "05:30")
-    args = cli.parse_args([])
-    assert (args.weekday, args.time, args.timezone) == ("thursday", "05:30", "UTC")
-
-
 def test_a_csv_without_an_optional_column_still_loads_and_scopes(data_root):
     from dashboard.components.alerts_charts import NO_SIGNAL_KEY
     from dashboard.components.alerts_report import prepare_scope_rows
@@ -866,58 +837,14 @@ def test_a_csv_without_an_optional_column_still_loads_and_scopes(data_root):
     assert set(prepare_scope_rows(scope)["signal_key"]) == {NO_SIGNAL_KEY}  # no signal column = no signal
 
 
-def test_daily_clients_have_their_own_run_and_the_weekly_run_leaves_them_out():
-    zone = ZoneInfo("America/Santiago")
-    daily = cli.parse_clients("emin")
-    assert daily == ["emin"] and cli.parse_clients("none") == [] and cli.parse_clients("Emin, cda") == ["emin", "cda"]
-
-    found = ["capstone", "cda", "emin"]
-    assert cli.weekly_clients(None, daily, found) == ["capstone", "cda"]       # emin has its own run
-    assert cli.weekly_clients(None, [], found) == found
-    assert cli.weekly_clients(["emin", "capstone"], daily, found) == ["capstone"]
-    assert cli.daily_run_clients(None, daily) == ["emin"]
-    assert cli.daily_run_clients(["capstone"], daily) == []                    # --client limits the daily set too
-    assert cli.daily_run_clients(["emin"], daily) == ["emin"]
-    assert cli.daily_run_clients(None, []) == []
-
-    # The default daily time is after EMIN's data is complete (10:00) and before its 12:00 e-mail.
-    assert cli.parse_time(cli.DEFAULT_DAILY_TIME) == cli.parse_time("10:30")
-    daily_time = cli.parse_time("10:30")
-    assert cli.next_daily_run(datetime(2026, 11, 18, 10, 0, tzinfo=zone), daily_time) == datetime(2026, 11, 18, 10, 30, tzinfo=zone)
-    assert cli.next_daily_run(datetime(2026, 11, 18, 10, 30, tzinfo=zone), daily_time) == datetime(2026, 11, 19, 10, 30, tzinfo=zone)
-
-
-def test_the_schedule_runs_weekly_clients_on_their_day_and_emin_every_day_after_ten(monkeypatch):
-    """Walk four runs of the loop with a fake clock."""
-    zone = ZoneInfo("America/Santiago")
-    args = cli.parse_args(["--schedule"])
-    assert (args.time, args.daily_time, args.daily_clients) == ("04:00", "10:30", "emin")
-    clock = [datetime(2026, 11, 17, 20, 0, tzinfo=zone)]
-    calls = []
-
-    class FakeDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return clock[0]
-
-    def fake_wait(seconds):
-        clock[0] = clock[0] + timedelta(seconds=seconds)
-        return len(calls) >= 4  # stop after the fourth run
-
-    monkeypatch.setattr(cli, "datetime", FakeDatetime)
-    monkeypatch.setattr(cli._STOP, "wait", fake_wait)
-    monkeypatch.setattr(cli.builder, "discover_clients", lambda root=None: ["capstone", "cda", "emin"])
-    monkeypatch.setattr(cli, "_run_from_args",
-                        lambda a, clients=None: (calls.append((clock[0].strftime("%Y-%m-%d %H:%M"), clients)), 0)[1])
-    monkeypatch.setattr(cli.signal, "signal", lambda *a: None)
-    cli._STOP.clear()
-    try:
-        cli.schedule_forever(args)
-    finally:
-        cli._STOP.clear()
-    assert calls == [
-        ("2026-11-18 04:00", ["capstone", "cda"]),   # Wednesday, weekly clients only
-        ("2026-11-18 10:30", ["emin"]),              # EMIN's own run, after its 10:00 update
-        ("2026-11-19 10:30", ["emin"]),
-        ("2026-11-20 10:30", ["emin"]),
-    ]
+def test_the_script_is_a_manual_tool_with_no_schedule_of_its_own():
+    """The schedule moved into the app (src/data/partition_scheduler.py): one scheduler, not two."""
+    for flag in ("--schedule", "--run-on-start", "--daily-clients", "--daily-time", "--weekday", "--time", "--timezone"):
+        with pytest.raises(SystemExit):
+            cli.parse_args([flag])
+    for name in ("schedule_forever", "next_run", "next_daily_run", "parse_weekday", "weekly_clients", "daily_run_clients"):
+        assert not hasattr(cli, name), name
+    # What stays: the manual flags.
+    args = cli.parse_args(["--backfill", "--sync-s3", "--client", "capstone", "--dataset", "alerts"])
+    assert (args.backfill, args.sync_s3, args.clients, args.dataset) == (True, True, ["capstone"], "alerts")
+    assert cli.parse_args(["--verify-s3"]).verify_s3 and cli.parse_args(["--validate"]).validate is True
