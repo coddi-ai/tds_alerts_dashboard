@@ -108,9 +108,9 @@ major-event matches have different labels.
 ### Local commits
 
 - `8914f09` — `feat: add EMIN historical fleet overview`.
-- `TBD` — redesign with separate fleet overview and equipment detail.
-- `TBD` — this handoff update.
-- Both commits are local on branch `ai/codex/emin-historico-flota`; no remote
+- `8ca88d8` — `docs: record EMIN historical dashboard handoff`.
+- `854db57` — `feat: split EMIN fleet history overview and detail`.
+- These commits are local on branch `ai/codex/emin-historico-flota`; no remote
   push is part of this task.
 
 ### Validation
