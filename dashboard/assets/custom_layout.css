@@ -1115,3 +1115,232 @@
         white-space: normal;
     }
 }
+.emin-history-view-panel {
+    min-width: 0;
+}
+.emin-history-status-card {
+    border-left: 4px solid #3498db;
+}
+.emin-history-status-top {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: space-between;
+}
+.emin-history-status-eyebrow {
+    color: #7f8c8d;
+    font-size: 0.75rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+.emin-history-movement-badge {
+    font-size: 0.78rem;
+    padding: 0.45em 0.7em;
+    white-space: nowrap;
+}
+.emin-history-comparison-dates {
+    color: #53636c;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+.emin-history-comparison-points {
+    color: #7f8c8d;
+    font-size: 0.8rem;
+    margin-top: 3px;
+}
+.emin-history-major-row > td {
+    background: #fff9f1 !important;
+}
+.emin-history-evidence-scroll {
+    max-height: 620px;
+    overflow: auto;
+}
+@media (max-width: 575px) {
+    #emin-history-movement .xtick text,
+    #emin-history-movement .xtitle,
+    #emin-history-groups .xtick text,
+    #emin-history-groups .xtitle {
+        display: none;
+    }
+}
+
+/* EMIN fleet history: adapt the shared dashboard shell at phone/tablet widths. */
+@media (max-width: 900px) {
+    #dashboard-shell:has(.emin-history-page) > div:first-child .container-fluid > .row {
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 12px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) > div:first-child .container-fluid > .row > div {
+        flex: 0 1 auto;
+        min-width: 0;
+        width: auto;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-text,
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-divider,
+    #dashboard-shell:has(.emin-history-page) .topbar-client-label,
+    #dashboard-shell:has(.emin-history-page) .topbar-logout-label,
+    #dashboard-shell:has(.emin-history-page) .user-display-text {
+        display: none;
+    }
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-logo {
+        height: 36px !important;
+        max-width: 105px !important;
+        padding: 3px 8px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) #client-logo-img {
+        height: 36px !important;
+        max-width: 84px !important;
+        margin-left: 6px;
+    }
+    #dashboard-shell:has(.emin-history-page) #client-selector {
+        width: 100px !important;
+        font-size: 0.8rem !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .user-display {
+        margin-right: 8px;
+    }
+    #dashboard-shell:has(.emin-history-page) .user-display-avatar {
+        margin-right: 0;
+    }
+    #dashboard-shell:has(.emin-history-page) .topbar-logout .fa-sign-out-alt {
+        margin-right: 0 !important;
+    }
+    #dashboard-shell:has(.emin-history-page) #app-sidebar {
+        width: 0 !important;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: none !important;
+    }
+    #dashboard-shell:has(.emin-history-page) #app-content-wrapper {
+        width: 100%;
+        min-width: 0;
+        margin-left: 0 !important;
+        padding: 16px 12px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .sidebar-toggle-btn {
+        left: 6px;
+        top: 88px;
+    }
+    #dashboard-shell:has(.emin-history-page) .emin-history-page {
+        min-width: 0;
+        overflow-x: clip;
+    }
+    #dashboard-shell:has(.emin-history-page) .emin-history-page .js-plotly-plot {
+        max-width: 100%;
+    }
+    #dashboard-shell:has(.emin-history-page).mobile-nav-open #app-sidebar {
+        width: 260px !important;
+        min-width: 260px;
+        overflow-y: auto;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2) !important;
+    }
+    #dashboard-shell:has(.emin-history-page).mobile-nav-open .sidebar-toggle-btn {
+        left: 246px;
+    }
+}
+@media (max-width: 575px) {
+    #dashboard-shell:has(.emin-history-page) .emin-history-page {
+        padding: 12px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .emin-history-page > .row h2 {
+        font-size: clamp(1.35rem, 5.8vw, 1.7rem);
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-scroll {
+        max-height: none;
+        overflow: visible;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table {
+        display: block;
+        width: 100%;
+        border-collapse: separate;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table thead {
+        display: none;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody {
+        display: block;
+        width: 100%;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 4px 10px;
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        border: 1px solid #e7ebee;
+        border-radius: 8px;
+        background: #fff;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody td {
+        display: block;
+        min-width: 0 !important;
+        padding: 2px 0;
+        border: 0;
+        overflow-wrap: anywhere;
+        white-space: normal;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody td:nth-child(1) {
+        grid-column: 1;
+        grid-row: 1;
+        color: #687780;
+        font-size: 0.72rem;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody td:nth-child(2) {
+        grid-column: 2;
+        grid-row: 1;
+        text-align: right;
+        font-weight: 600;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody td:nth-child(3) {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody td:nth-child(4) {
+        grid-column: 1 / -1;
+        grid-row: 3;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table.table-striped > tbody > tr:nth-of-type(odd) > * {
+        background: transparent;
+        box-shadow: none;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody tr.emin-history-major-row {
+        background: #fff9f1;
+    }
+    #dashboard-shell:has(.emin-history-page) #emin-history-evidence .emin-history-evidence-table tbody tr.emin-history-major-row > * {
+        background: transparent !important;
+    }
+}
+@media (max-width: 480px) {
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-logo,
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-divider,
+    #dashboard-shell:has(.emin-history-page) .topbar-brand-text {
+        display: none !important;
+    }
+    #dashboard-shell:has(.emin-history-page) #client-logo-img {
+        display: block !important;
+        height: 32px !important;
+        max-width: 68px !important;
+        margin-left: 0;
+    }
+    #dashboard-shell:has(.emin-history-page) #client-selector {
+        width: 94px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) #language-selector {
+        width: 88px !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .topbar-client-icon,
+    #dashboard-shell:has(.emin-history-page) .topbar-row .fa-globe {
+        display: none !important;
+    }
+    #dashboard-shell:has(.emin-history-page) .topbar-row > div[class*="me-4"] {
+        margin-right: 8px !important;
+    }
+}

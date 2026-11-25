@@ -27,15 +27,17 @@ def _empty_outputs(note: str):
     return (
         dbc.Alert(note, color="light", class_name="mb-0"),
         None,
-        _empty_figure(t("emin_history.trend_title", unit=t("emin_history.no_unit")), note),
+        _empty_figure(t("emin_history.movement_title"), note),
         _empty_figure(t("emin_history.groups_title"), note),
         dbc.Alert(note, color="light", class_name="mb-0"),
+        dbc.Alert(note, color="light", class_name="mb-0"),
+        _empty_figure(t("emin_history.trend_title", unit=t("emin_history.no_unit")), note),
         dbc.Alert(note, color="light", class_name="mb-0"),
     )
 
 
 def register_emin_historical_callbacks(app):
-    """Register data-bound filter options and the read-only historical view."""
+    """Register EMIN-only package filters, views, and internal tab navigation."""
 
     @callback(
         [
@@ -70,11 +72,25 @@ def register_emin_historical_callbacks(app):
 
     @callback(
         [
+            Output("emin-history-overview-panel", "style"),
+            Output("emin-history-detail-panel", "style"),
+        ],
+        Input("emin-history-view-tabs", "value"),
+    )
+    def switch_emin_history_view(active_view):
+        if active_view == "unit":
+            return {"display": "none"}, {"display": "block"}
+        return {"display": "block"}, {"display": "none"}
+
+    @callback(
+        [
             Output("emin-history-meta", "children"),
             Output("emin-history-kpis", "children"),
-            Output("emin-history-trend", "figure"),
+            Output("emin-history-movement", "figure"),
             Output("emin-history-groups", "figure"),
             Output("emin-history-ranking", "children"),
+            Output("emin-history-status", "children"),
+            Output("emin-history-trend", "figure"),
             Output("emin-history-evidence", "children"),
         ],
         [
@@ -99,8 +115,10 @@ def register_emin_historical_callbacks(app):
         return (
             view["meta"],
             view["kpis"],
-            view["trend"],
+            view["movement"],
             view["groups"],
             view["ranking"],
+            view["status"],
+            view["trend"],
             view["evidence"],
         )

@@ -6,7 +6,7 @@ import pytest
 
 from dashboard.components.emin_historical import build_historical_view, filter_options
 from dashboard.callbacks import emin_historical_callbacks
-from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
+from src.data.emin_historical import EminHistoricalBundle, InvalidHistoricalBundle, load_emin_historical_bundle
 
 
 RUN = "20261124T0000-0300-" + "a" * 64
@@ -44,15 +44,25 @@ def _make_package(root, *, synthetic=False, run=RUN):
         _daily("2026-11-23", "EMIN-002", 2, 0.0),
         _daily("2026-11-24", "EMIN-002", 2, 0.0),
     ]
+    observed = [
+        {
+            "unit": "EMIN-001", "day": "2026-11-23", "kind": "maintenance_action", "level": "",
+            "event_at": "2026-11-23T08:00:00-03:00", "details": {"Evento": "Mantención preventiva"},
+        },
+        {
+            "unit": "EMIN-001", "day": "2026-11-24", "kind": "event", "level": "",
+            "event_at": "2026-11-24T11:00:00-03:00", "details": {"Evento": "Temperatura elevada del sistema EGR", "Componente": "Postratamiento"},
+        },
+        {
+            "unit": "EMIN-001", "day": "2026-11-24", "kind": "maintenance_action", "level": "",
+            "event_at": "2026-11-24T13:00:00-03:00", "details": {"Evento": "Cambio de motor tras una explosión"},
+        },
+        {
+            "unit": "EMIN-001", "day": "2026-11-25", "kind": "event", "level": "",
+            "event_at": "2026-11-25T13:00:00-03:00", "details": {"Evento": "Evento posterior al corte"},
+        },
+    ]
     (package / "daily.json").write_text(json.dumps(daily), encoding="utf-8")
-    observed = [{
-        "unit": "EMIN-001",
-        "day": "2026-11-24",
-        "kind": "event",
-        "level": "",
-        "event_at": "2026-11-24T11:00:00-03:00",
-        "details": {"Evento": "Temperatura elevada del sistema EGR", "Componente": "Postratamiento"},
-    }]
     (package / "observed.json").write_text(json.dumps(observed), encoding="utf-8")
     return root
 
@@ -72,7 +82,7 @@ def test_loads_current_package_and_resolves_only_inside_data_root(tmp_path):
 
     assert bundle.run == RUN
     assert len(bundle.daily) == 4
-    assert bundle.observed[0]["details"]["Evento"].endswith("EGR")
+    assert bundle.observed[0]["details"]["Evento"] == "Mantención preventiva"
 
 
 def test_rejects_synthetic_package(tmp_path):
@@ -96,7 +106,7 @@ def test_rejects_invalid_pointer_and_incomplete_daily_schema(tmp_path):
         load_emin_historical_bundle(package)
 
 
-def test_filter_options_and_view_keep_group_evidence_and_heuristic_language(tmp_path):
+def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     root = _make_package(tmp_path)
     bundle = load_emin_historical_bundle(root)
     options = filter_options(bundle)
@@ -105,12 +115,47 @@ def test_filter_options_and_view_keep_group_evidence_and_heuristic_language(tmp_
     assert {item["value"] for item in options["groups"]} == {"__all__", "Motor / Emisiones"}
     view = build_historical_view(bundle, "2026-11-24", "Motor / Emisiones", "EMIN-001")
 
-    assert "EMIN-001" in _visible(view["ranking"])
-    assert "EMIN-002" not in _visible(view["ranking"])
-    assert "Temperatura elevada del sistema EGR" in _visible(view["evidence"])
+    ranking = _visible(view["ranking"])
+    timeline = _visible(view["evidence"])
+    assert "EMIN-001" in ranking
+    assert "EMIN-002" not in ranking
+    assert "Mejoró" in ranking
+    assert "Cambio de motor tras una explosión" in timeline
+    assert "Temperatura elevada del sistema EGR" in timeline
+    assert "Mantención preventiva" in timeline
+    assert "Evento posterior al corte" not in timeline
+    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 1
+    assert "señal heurística bajó" in _visible(view["status"]).lower()
     assert list(view["trend"].data[0].x) == ["2026-11-23", "2026-11-24"]
-    assert view["trend"].layout.yaxis.autorange == "reversed"
-    assert "no representa una probabilidad" in _visible(view["kpis"]).lower()
+    assert list(view["trend"].data[0].y) == [13.5, 12.0]
+    assert "Puntaje heurístico" in view["trend"].layout.yaxis.title.text
+
+
+def test_recent_movement_distinguishes_improved_worsened_stable_and_insufficient():
+    daily = (
+        _daily("2026-11-23", "EMIN-A", 1, 10, observed=True),
+        _daily("2026-11-24", "EMIN-A", 1, 7, observed=True),
+        _daily("2026-11-23", "EMIN-B", 2, 5, observed=True),
+        _daily("2026-11-24", "EMIN-B", 2, 9, observed=True),
+        _daily("2026-11-23", "EMIN-C", 3, 3, observed=True),
+        _daily("2026-11-24", "EMIN-C", 3, 3, observed=True),
+        _daily("2026-11-23", "EMIN-D", 4, 6, observed=True),
+        _daily("2026-11-24", "EMIN-D", 4, 0, estimated=True),
+        _daily("2026-11-23", "EMIN-E", 5, 0),
+        _daily("2026-11-24", "EMIN-E", 5, 0),
+    )
+    bundle = EminHistoricalBundle(RUN, {}, daily, ())
+
+    view = build_historical_view(bundle, "2026-11-24", "__all__", "EMIN-A")
+    ranking = _visible(view["ranking"])
+    movement_counts = list(view["movement"].data[0].x)
+
+    assert "Mejoró" in ranking
+    assert "Empeoró" in ranking
+    assert "Se mantuvo" in ranking
+    assert "Sin comparación" in ranking
+    assert movement_counts == [1, 1, 1, 2]
+    assert "10.000 → 7.000" in _visible(view["status"])
 
 
 def test_page_callbacks_require_server_authorization_for_emin(monkeypatch):
