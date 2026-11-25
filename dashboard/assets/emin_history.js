@@ -54,8 +54,12 @@
         }
         origin = {button, positions: scrollPositions(button)};
         const unit = button.dataset.eminOpenUnit;
+        const period = button.dataset.eminPeriod;
         setProps("emin-history-evidence-context", {data: {unit, period: button.dataset.eminPeriod}});
         setProps("emin-history-unit", {value: unit});
+        if (["week", "month", "quarter", "history"].includes(period)) {
+            setProps("emin-history-trend-window", {value: period});
+        }
         setProps("emin-history-view-tabs", {value: "unit"});
     });
 
@@ -64,9 +68,10 @@
         openFleetUnit(clickData) {
             const unit = clickData?.points?.[0]?.customdata?.[0];
             if (typeof unit !== "string" || !unit) {
-                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update];
             }
-            return [unit, "unit"];
+            const period = clickData?.points?.[0]?.customdata?.[4];
+            return [unit, "unit", ["week", "month", "quarter", "history"].includes(period) ? period : "week"];
         },
         openTrendDay(clickData) {
             const day = String(clickData?.points?.[0]?.x || "").slice(0, 10);

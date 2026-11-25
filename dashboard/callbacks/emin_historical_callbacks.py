@@ -50,7 +50,7 @@ def register_emin_historical_callbacks(app):
             Output("emin-history-package", "data"),
         ],
         Input("client-selector", "value"),
-        State("user-info-store", "data"),
+        Input("user-info-store", "data"),
     )
     def load_emin_filter_options(client, user_data):
         if not _authorized_emin(client, user_data):
@@ -83,6 +83,7 @@ def register_emin_historical_callbacks(app):
         [
             Output("emin-history-unit", "value", allow_duplicate=True),
             Output("emin-history-view-tabs", "value", allow_duplicate=True),
+            Output("emin-history-trend-window", "value", allow_duplicate=True),
         ],
         Input("emin-history-movement-trend", "clickData"),
         prevent_initial_call=True,
@@ -98,7 +99,7 @@ def register_emin_historical_callbacks(app):
         Input("client-selector", "value"),
         Input("emin-history-package", "data"),
         Input("emin-history-cutoff", "value"),
-        Input("emin-history-top-period", "value"),
+        Input("emin-history-fleet-window", "value"),
         State("user-info-store", "data"),
     )
     def update_fleet_criticality(client, package, day, period, user_data):
@@ -155,7 +156,7 @@ def register_emin_historical_callbacks(app):
         )
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
-            return (no_update,) * 5 + (view["status"], view["trend"], view["evidence"])
+            return (no_update,) * 5 + (view["status"], view["trend"].figure, view["evidence"])
         return (
             view["meta"],
             fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
@@ -163,7 +164,7 @@ def register_emin_historical_callbacks(app):
             view["groups"],
             view["ranking"],
             view["status"],
-            view["trend"],
+            view["trend"].figure,
             view["evidence"],
         )
 

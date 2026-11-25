@@ -90,17 +90,16 @@ def build_historical_view(
     ]
     status = movements.get(selected_unit) or {"status": "insufficient", "current": None, "previous": None, "delta": None}
     evidence_rows = [row for row in unit_data.get("evidence", []) if not selected_day or str(row.get("day") or "") <= selected_day]
-    period_start = (
-        bundle.dashboard.get("tops", {}).get(selected_day, {}).get(evidence_period, {}).get("start")
-        if isinstance(evidence_period, str) and evidence_period in CRITICALITY_PERIODS
-        else None
-    )
+    selected_period = evidence_period if evidence_period in CRITICALITY_PERIODS else "week"
+    period_start = fleet_criticality_top(bundle, selected_day, selected_period).get("start")
     top_context = (
-        _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
+        _top_unit_context(bundle, selected_day, selected_period, selected_unit, trend_rows, evidence_rows)
         if period_start else None
     )
     movement_drivers = _movement_drivers_panel(status, selected_data.get("movement_drivers", []))
-    contributors = _criticality_components_panel(selected_data.get("components", {}).get(evidence_period or "short", {}))
+    legacy_period = {"week": "short", "month": "medium", "quarter": "long", "history": "history"}[selected_period]
+    contributors = _criticality_components_panel(selected_data.get("components", {}).get(selected_period)
+                                                 or selected_data.get("components", {}).get(legacy_period, {}))
     fleet_highlights = {
         "critical": fleet_data.get("critical_units", []),
         "critical_remaining": fleet_data.get("critical_remaining", []),
@@ -222,9 +221,7 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
 
     priority = set(fleet.get("critical_units", [])) | set(fleet.get("score_priority_units", []))
     top_units = {
-        row.get("unit") for row in bundle.dashboard.get("tops", {}).get(selected_day, {}).get(
-            {"week": "short", "month": "medium", "quarter": "long", "history": "history"}.get(period, "short"), {}
-        ).get("entries", [])
+        row.get("unit") for row in bundle.dashboard.get("period_tops", {}).get(selected_day, {}).get(period, {}).get("entries", [])
     }
     priority |= top_units
     figure = go.Figure()
@@ -246,7 +243,7 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
         figure.add_trace(go.Scatter(
             x=[item["previous_average"] for _, item in entries],
             y=[item["current_average"] for _, item in entries],
-            customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0)]
+            customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0), period]
                         for unit, item in entries],
             text=[unit if unit in priority else "" for unit, _ in entries],
             textposition="top center", mode="markers+text",
@@ -263,12 +260,15 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
         ))
     unavailable = max(0, len(units) - plotted)
     figure.update_xaxes(title_text=t("emin_history.previous_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
-    figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True, scaleanchor="x", scaleratio=1)
+    figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
     figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=430)
     figure.update_layout(hovermode="closest", margin={"l": 62, "r": 28, "t": 54, "b": 82},
                          legend={"orientation": "h", "y": -0.23}, clickmode="event+select")
+    coverage_note = t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable)
+    if period == "quarter" and plotted == 0:
+        coverage_note += "<br>" + t("emin_history.quarter_comparison_unavailable")
     figure.add_annotation(x=0.99, y=0.99, xref="paper", yref="paper", xanchor="right", yanchor="top",
-                          text=t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable),
+                          text=coverage_note,
                           showarrow=False, bgcolor="rgba(255,255,255,.88)", font={"size": 11, "color": BRAND_MUTED})
     return dcc.Graph(id="emin-history-movement-trend", figure=figure,
                      config={"displayModeBar": False}, responsive=True,
@@ -323,15 +323,21 @@ def _open_unit(unit: str, origin: str, period: str = ""):
     )
 
 
-CRITICALITY_PERIODS = {"short": 7, "medium": 90, "long": 180, "history": None}
+CRITICALITY_PERIODS = {"week": 7, "month": 31, "quarter": 92, "history": None}
 
 
 def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
     """Read the producer's precomputed top for one selected cutoff and window."""
-    period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "short"
+    period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "week"
     available = bundle.dashboard.get("catalog", {}).get("cutoffs", [])
-    cutoff = day if day in bundle.dashboard.get("tops", {}) else (available[0] if available else None)
-    return bundle.dashboard.get("tops", {}).get(cutoff, {}).get(period, {})
+    periods = bundle.dashboard.get("period_tops", {})
+    cutoff = day if day in periods else (available[0] if available else None)
+    if cutoff in periods:
+        return periods.get(cutoff, {}).get(period, {})
+    # A legacy v1 package can still serve weekly and historical tops; it has no
+    # calendar-month or quarter read models, so those views remain unavailable.
+    legacy = {"week": "short", "history": "history"}.get(period)
+    return bundle.dashboard.get("tops", {}).get(cutoff, {}).get(legacy, {}) if legacy else {}
 
 
 def _movement_drivers_panel(movement, changes):
@@ -436,7 +442,7 @@ def _criticality_components_panel(data):
 
 
 def fleet_criticality_panel(bundle, day, period):
-    period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "short"
+    period = period if isinstance(period, str) and period in CRITICALITY_PERIODS else "week"
     payload = fleet_criticality_top(bundle, day, period)
     entries = payload.get("entries", [])
     start, cutoff = payload.get("start"), payload.get("cutoff")
@@ -457,7 +463,7 @@ def fleet_criticality_panel(bundle, day, period):
             signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
             average = reason_data.get("average")
             average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
-            reason = f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
+            reason = f"{average_label} · {signal}" if period == "week" else f"{signal} · {average_label}"
         main_group = entry.get("main_component")
         card_body = [
             html.Div([
@@ -519,7 +525,7 @@ def _top_unit_context(bundle, cutoff, period, unit, trend_rows, evidence_rows):
         signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
         average = reason_data.get("average")
         average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
-        reason = f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
+        reason = f"{average_label} · {signal}" if period == "week" else f"{signal} · {average_label}"
     context = [
         html.P(t("emin_history.top_unit_position", rank=position, period=t(f"emin_history.top_{period}")), className="mb-1 fw-semibold"),
         html.P(reason, className="mb-1"),

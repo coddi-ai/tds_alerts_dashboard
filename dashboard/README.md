@@ -63,6 +63,8 @@ and the full roster remains below the chart. Weekly, monthly, quarterly, and his
 shared with equipment detail, where the chart shows precomputed period deltas around zero. Weekly event
 references persist from the start of the ISO week through the selected cutoff. If the package does not
 cover a comparable prior quarter, the quarter view explicitly reports insufficient coverage.
+The criticality cards use the same selected calendar period as the fleet map. Opening a point or a
+criticality card carries that period into the equipment detail.
 
 ### 4. Start Dashboard
 

@@ -3,7 +3,7 @@
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
-from dashboard.components.emin_historical import CHRONOLOGY_TYPES, CRITICALITY_PERIODS, section_header
+from dashboard.components.emin_historical import CHRONOLOGY_TYPES, section_header
 from src.i18n import t
 
 
@@ -92,16 +92,7 @@ def create_layout() -> html.Div:
                     dbc.Card([
                         section_header(t("emin_history.top_title"), "fas fa-list-ol"),
                         dbc.CardBody([
-                            html.Div([
-                                html.Label(t("emin_history.top_period"), htmlFor="emin-history-top-period", className="fleet-search__label"),
-                                dbc.Select(
-                                    id="emin-history-top-period", size="sm", value="short",
-                                    options=[
-                                        {"label": t(f"emin_history.top_{key}"), "value": key}
-                                        for key in CRITICALITY_PERIODS
-                                    ],
-                                ),
-                            ], className="fleet-search"),
+                            html.P(t("emin_history.top_period_follow"), className="small text-muted mb-2"),
                             dcc.Loading(html.Div(id="emin-history-criticality"), type="circle"),
                         ]),
                     ], class_name="shadow-sm unit-card mb-3"),
