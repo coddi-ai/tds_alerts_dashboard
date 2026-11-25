@@ -1005,31 +1005,6 @@
     box-shadow: 0 2px 8px rgba(26, 37, 47, 0.045);
     background: #fff;
 }
-.emin-history-card-header {
-    background: #fff;
-    border-bottom-color: #edf0f2;
-    color: #2c3e50;
-    font-weight: 600;
-}
-.emin-history-filter-title {
-    color: #2c3e50;
-    font-size: 0.95rem;
-    font-weight: 650;
-    margin-bottom: 12px;
-}
-.emin-history-meta-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-}
-.emin-history-meta-pill {
-    background: #f3f6f8;
-    border: 1px solid #e7ebee;
-    border-radius: 999px;
-    color: #5d6d75;
-    font-size: 0.78rem;
-    padding: 4px 10px;
-}
 .emin-history-kpi-top {
     align-items: center;
     color: #687780;
@@ -1105,15 +1080,6 @@
     #emin-history-groups .ytick text {
         font-size: 9px !important;
     }
-    .emin-history-meta-list {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 5px;
-    }
-    .emin-history-meta-pill {
-        max-width: 100%;
-        white-space: normal;
-    }
 }
 .emin-history-view-panel {
     min-width: 0;
@@ -1121,14 +1087,14 @@
 .emin-history-status-card {
     border-left: 4px solid #3498db;
 }
-.emin-history-priority {
-    border-top: 3px solid #dc3545;
+.emin-history-unit-link {
+    background: none;
+    border: 0;
+    padding: 0.25rem 0;
+    text-align: start;
 }
-.emin-history-lower-signal {
-    border-top: 3px solid #28a745;
-}
-.emin-history-highlights .emin-history-card {
-    border-top: 3px solid #e7ebee;
+.emin-history-milestone + .emin-history-milestone {
+    border-top: 1px solid var(--bs-border-color, #e7ebee);
 }
 .emin-history-unit-item {
     display: flex;
@@ -1153,9 +1119,6 @@
 }
 #emin-history-detail-heading {
     scroll-margin-top: 6rem;
-}
-.emin-history-highlights .emin-history-card:first-child:has(.bg-danger) {
-    border-top-color: #dc3545;
 }
 .emin-history-highlight-detail {
     overflow-wrap: anywhere;

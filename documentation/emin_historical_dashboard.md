@@ -194,6 +194,21 @@ scores and five lower observed scores at this cut. There were no recent
 explicit critical records, so a live positive example of that branch
 was unavailable.
 
+### Visual alignment with Resumen
+
+The overview uses the same compact search and unit link styling as
+Resumen de flota. The cut remains visible across both views. Group and
+movement filters share the ranking header space, and the fleet charts
+follow the ranking. The detail uses light section headers and a single
+card for the milestone list.
+
+Playwright used the real local cut on 24 November 2026 in the isolated
+Dash view. It confirmed that the ranking precedes the charts and that
+the CT-187 unit code opens its detail with the three section headers.
+Document width matched the viewport at 1440, 1024, and 390 px. Timeline
+rows rendered as cards at 390 px. The offline command above passed
+57 tests with 8 warnings.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

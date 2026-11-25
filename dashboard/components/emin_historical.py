@@ -141,14 +141,20 @@ def _format_timestamp(value: str | None) -> str:
 def _metadata(bundle: EminHistoricalBundle, selected_day: str | None):
     online = bundle.manifest.get("online") or {}
     evidence_as_of = online.get("evidence_as_of") or online.get("prepared_at")
-    return html.Div(
-        [
-            html.Span(t("emin_history.cutoff_meta", day=_day_label(selected_day)), className="emin-history-meta-pill"),
-            html.Span(t("emin_history.captured_meta", timestamp=_format_timestamp(evidence_as_of)), className="emin-history-meta-pill"),
-            html.Span(t("emin_history.days_meta", count=len({row["day"] for row in bundle.daily})), className="emin-history-meta-pill"),
-            html.Span(t("emin_history.units_meta", count=len({row["unit"] for row in bundle.daily})), className="emin-history-meta-pill"),
-        ],
-        className="emin-history-meta-list",
+    captions = [
+        t("emin_history.cutoff_meta", day=_day_label(selected_day)),
+        t("emin_history.captured_meta", timestamp=_format_timestamp(evidence_as_of)),
+        t("emin_history.days_meta", count=len({row["day"] for row in bundle.daily})),
+        t("emin_history.units_meta", count=len({row["unit"] for row in bundle.daily})),
+    ]
+    return html.Small(" · ".join(captions), className="text-muted")
+
+
+def section_header(title: str, icon: str):
+    """Match the section headers used in Resumen de unidad."""
+    return dbc.CardHeader(
+        html.H5([html.I(className=f"{icon} me-2", **{"aria-hidden": "true"}), title], className="mb-0"),
+        class_name="bg-light",
     )
 
 
@@ -285,9 +291,9 @@ def _fleet_highlights(daily_rows: list[dict], observed_rows: tuple[dict, ...], c
 
 def _open_unit(unit: str, origin: str):
     return html.Button(
-        t("emin_history.open_unit"),
+        unit,
         type="button",
-        className="btn btn-sm btn-outline-primary emin-history-action",
+        className="fleet-unit-link emin-history-unit-link",
         **{
             "data-emin-open-unit": unit,
             "data-emin-origin": origin,
@@ -319,16 +325,15 @@ def fleet_highlights_panel(highlights: dict, daily_rows: list[dict], movements: 
         return html.Ul([
             html.Li([
                 html.Div([
-                    html.Strong(unit),
+                    _open_unit(unit, reason),
                     html.Small(
                         t("emin_history.source_event_day", day=_day_label(highlights["critical_events"][unit]))
                         if reason == "source_critical"
                         else t("emin_history.score_on_cut", score=f"{scores[unit]:.3f}", day=_day_label(highlights["coverage_end"])),
                         className="d-block text-muted",
                     ),
-                    _movement_summary(movements[unit]),
                 ]),
-                _open_unit(unit, reason),
+                _movement_summary(movements[unit]),
             ], className="emin-history-unit-item")
             for unit in units
         ], className="list-unstyled mb-0")
@@ -339,24 +344,28 @@ def fleet_highlights_panel(highlights: dict, daily_rows: list[dict], movements: 
     if highlights["can_distinguish"]:
         lower_note = "lower_signal_note" if has_history else "lower_signal_partial"
     return dbc.Row([
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H3(t("emin_history.review_first"), className="h5"),
-            html.H4(t("emin_history.critical_recent_title", count=highlights["critical_total"]), className="h6"),
-            html.P(t(f"emin_history.{critical_note}", start=_day_label(highlights["coverage_start"]), end=_day_label(highlights["coverage_end"])), className="text-muted small"),
-            unit_list(highlights["critical"], "source_critical"),
-            html.Details([
-                html.Summary(t("emin_history.show_more", count=len(highlights["critical_remaining"]))),
-                unit_list(highlights["critical_remaining"], "source_critical"),
-            ]) if highlights["critical_remaining"] else None,
-            html.H4(t("emin_history.score_priority"), className="h6 mt-3"),
-            unit_list(highlights["score_priority"], "score_priority")
-            or html.P(t("emin_history.distinct_scores_required"), className="text-muted small mb-0"),
-        ]), class_name="emin-history-card emin-history-priority h-100"), xs=12, lg=6, class_name="mb-3"),
-        dbc.Col(dbc.Card(dbc.CardBody([
-            html.H3(t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title"), className="h5"),
-            html.P(t(f"emin_history.{lower_note}"), className="text-muted small"),
-            unit_list(highlights["healthiest"], "lowest_observed_score"),
-        ]), class_name="emin-history-card emin-history-lower-signal h-100"), xs=12, lg=6, class_name="mb-3"),
+        dbc.Col(dbc.Card([
+            section_header(t("emin_history.review_first"), "fas fa-clipboard-list"),
+            dbc.CardBody([
+                dbc.Badge(t("emin_history.critical_recent_title", count=highlights["critical_total"]), color="danger" if highlights["critical_total"] else "secondary", class_name="mb-2"),
+                html.P(t(f"emin_history.{critical_note}", start=_day_label(highlights["coverage_start"]), end=_day_label(highlights["coverage_end"])), className="text-muted small"),
+                unit_list(highlights["critical"], "source_critical"),
+                html.Details([
+                    html.Summary(t("emin_history.show_more", count=len(highlights["critical_remaining"]))),
+                    unit_list(highlights["critical_remaining"], "source_critical"),
+                ]) if highlights["critical_remaining"] else None,
+                dbc.Badge(t("emin_history.score_priority"), color="warning", text_color="dark", class_name="mt-2 mb-1"),
+                unit_list(highlights["score_priority"], "score_priority")
+                or html.P(t("emin_history.distinct_scores_required"), className="text-muted small mb-0"),
+            ]),
+        ], class_name="shadow-sm unit-card h-100"), xs=12, lg=6, class_name="mb-3"),
+        dbc.Col(dbc.Card([
+            section_header(t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title"), "fas fa-chart-line"),
+            dbc.CardBody([
+                html.P(t(f"emin_history.{lower_note}"), className="text-muted small"),
+                unit_list(highlights["healthiest"], "lowest_observed_score"),
+            ]),
+        ], class_name="shadow-sm unit-card h-100"), xs=12, lg=6, class_name="mb-3"),
     ], className="g-3")
 
 
@@ -468,7 +477,7 @@ def _ranking_table(rows: list[dict], movements: dict[str, dict]):
     headings = [
         t("emin_history.col_rank"), t("emin_history.col_unit"), t("emin_history.col_score"),
         t("emin_history.col_movement"), t("emin_history.col_observation"), t("emin_history.col_alerts"),
-        t("emin_history.col_events"), t("emin_history.col_groups"), t("emin_history.open_unit"),
+        t("emin_history.col_events"), t("emin_history.col_groups"),
     ]
     header = html.Thead(html.Tr([html.Th(label, scope="col") for label in headings]))
     body_rows = []
@@ -479,14 +488,13 @@ def _ranking_table(rows: list[dict], movements: dict[str, dict]):
             group_label += f" +{len(groups) - 2}"
         cells = [
             row.get("rank") if row.get("rank") is not None else "—",
-            row["unit"],
+            _open_unit(row["unit"], "ranking"),
             f"{score:.3f}" if (score := _number(row.get("points"))) is not None else "—",
             _movement_summary(movements[row["unit"]]),
             _observation_label(row),
             row.get("alerts", 0),
             row.get("health_events", 0),
             group_label or "—",
-            _open_unit(row["unit"], "ranking"),
         ]
         body_rows.append(html.Tr([html.Td(value) for value in cells]))
     return html.Div(
@@ -627,7 +635,7 @@ def _timeline_panel(unit: str | None, rows: list[dict]):
     priority = {"source": 0, "intervention": 1, "text": 2}
     highlights.sort(key=lambda item: priority[item[0]])
 
-    def event_card(item):
+    def event_row(item):
         level, _, row, detail = item
         fields = row.get("details")
         evidence = (
@@ -639,7 +647,7 @@ def _timeline_panel(unit: str | None, rows: list[dict]):
             if isinstance(fields, dict) and fields
             else html.P(str(row.get("summary") or row.get("description") or detail), className="mb-0")
         )
-        return dbc.Card(dbc.CardBody([
+        return html.Li([
             html.Div([
                 badge(level),
                 html.Span(_format_timestamp(row.get("event_at") or row.get("day")), className="text-muted small"),
@@ -649,16 +657,25 @@ def _timeline_panel(unit: str | None, rows: list[dict]):
                 html.Summary(t("emin_history.open_record")),
                 evidence,
             ], className="emin-history-record mt-2"),
-        ]), class_name="emin-history-card mb-2")
+        ], className="emin-history-milestone py-2")
 
-    highlight_panel = html.Div([
-        html.H5(t("emin_history.highlights_title"), className="h6 mb-2"),
-        *([event_card(item) for item in highlights[:3]]
-          if highlights else [dbc.Alert(t("emin_history.no_major_events"), color="light", class_name="mb-3")]),
-        html.Details([
-            html.Summary(t("emin_history.show_more", count=len(highlights) - 3)),
-            *[event_card(item) for item in highlights[3:]],
-        ]) if len(highlights) > 3 else None,
-    ], className="emin-history-highlights mb-4")
-    chronology_heading = html.H5(t("emin_history.full_chronology"), className="h6 mb-2")
-    return html.Div([heading, highlight_panel, chronology_heading, table, note])
+    highlight_body = (
+        [
+            html.Ul([event_row(item) for item in highlights[:3]], className="list-unstyled mb-0"),
+            html.Details([
+                html.Summary(t("emin_history.show_more", count=len(highlights) - 3)),
+                html.Ul([event_row(item) for item in highlights[3:]], className="list-unstyled mb-0"),
+            ]) if len(highlights) > 3 else None,
+        ]
+        if highlights else [html.P(t("emin_history.no_major_events"), className="text-muted mb-0")]
+    )
+    return html.Div([
+        dbc.Card([
+            section_header(t("emin_history.highlights_title"), "fas fa-flag"),
+            dbc.CardBody(highlight_body),
+        ], class_name="shadow-sm unit-card mb-3"),
+        dbc.Card([
+            section_header(t("emin_history.full_chronology"), "fas fa-history"),
+            dbc.CardBody([heading, table, note]),
+        ], class_name="shadow-sm unit-card mb-3"),
+    ])

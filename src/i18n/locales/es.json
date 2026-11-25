@@ -414,6 +414,7 @@
  "emin_history.no_highlights": "Sin unidades para mostrar en esta categoría.",
  "emin_history.highlights_title": "Hitos del equipo",
  "emin_history.no_major_events": "No hay hitos mayores detectados en los registros del equipo para este corte.",
+ "emin_history.trend_section": "Evolución",
  "emin_history.full_chronology": "Cronología completa",
  "emin_history.method_note": "La vista resume evidencias de los paquetes históricos EMIN. El puesto 1 indica mayor prioridad de revisión. El puesto y el puntaje son heurísticos y comparativos; no son una probabilidad de falla. Las alertas pueden tener un desfase de un día. Los grupos del ranking se agregan por equipo y jornada; la tabla de evidencia conserva los registros fuente de esa jornada.",
  "emin_history.movement_improved": "Mejoró",
