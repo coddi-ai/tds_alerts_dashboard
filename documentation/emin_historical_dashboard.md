@@ -209,6 +209,24 @@ Document width matched the viewport at 1440, 1024, and 390 px. Timeline
 rows rendered as cards at 390 px. The offline command above passed
 57 tests with 8 warnings.
 
+### Fleet criticality by period
+
+The EMIN overview shows up to five units for the selected cut and period:
+7 days, 90 days, 180 days or the full available source history. All fixed
+windows include the cut. The ranking counts distinct days with explicit
+source severity first. For short term it then uses average observed
+score, followed by the share of observed days with positive points.
+The other periods use the same two measures in reverse order.
+
+Score calculations require two distinct observed days with finite scores.
+Estimates are excluded. An explicit critical day can qualify a unit on
+its own. The table shows observed score days against the period, the
+latest documented milestone and the number of units with limited score
+coverage. For historical coverage, the denominator starts at the first
+published scoring day, even if the underlying evidence goes back further.
+Opening a unit from the top brings the selected period's milestones
+forward, with the full chronology still available.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

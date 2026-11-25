@@ -26,7 +26,9 @@
             return;
         }
         origin = {button, positions: scrollPositions(button)};
-        setProps("emin-history-unit", {value: button.dataset.eminOpenUnit});
+        const unit = button.dataset.eminOpenUnit;
+        setProps("emin-history-evidence-context", {data: {unit, period: button.dataset.eminPeriod}});
+        setProps("emin-history-unit", {value: unit});
         setProps("emin-history-view-tabs", {value: "unit"});
     });
 

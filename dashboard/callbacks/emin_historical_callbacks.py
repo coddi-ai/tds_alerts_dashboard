@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 
 from dashboard.auth import allowed_clients
-from dashboard.components.emin_historical import build_historical_view, filter_options, fleet_highlights_panel
+from dashboard.components.emin_historical import build_historical_view, filter_options, fleet_criticality_panel, fleet_highlights_panel
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -80,6 +80,25 @@ def register_emin_historical_callbacks(app):
         Input("emin-history-view-tabs", "value"),
     )
     @callback(
+        Output("emin-history-criticality", "children"),
+        Input("client-selector", "value"),
+        Input("emin-history-package", "data"),
+        Input("emin-history-cutoff", "value"),
+        Input("emin-history-top-period", "value"),
+        State("user-info-store", "data"),
+    )
+    def update_fleet_criticality(client, package, day, period, user_data):
+        if not _authorized_emin(client, user_data):
+            return None
+        if not isinstance(package, dict) or not package.get("run"):
+            return dbc.Alert(t("emin_history.package_missing"), color="light", class_name="mb-0")
+        try:
+            bundle = load_emin_historical_bundle(run_name=package["run"])
+        except (FileNotFoundError, InvalidHistoricalBundle, OSError):
+            return dbc.Alert(t("emin_history.package_invalid"), color="light", class_name="mb-0")
+        return fleet_criticality_panel(bundle, day, period)
+
+    @callback(
         [
             Output("emin-history-meta", "children"),
             Output("emin-history-highlights", "children"),
@@ -99,10 +118,11 @@ def register_emin_historical_callbacks(app):
             Input("emin-history-unit", "value"),
             Input("emin-history-search", "value"),
             Input("emin-history-movement-filter", "value"),
+            Input("emin-history-evidence-context", "data"),
         ],
         State("user-info-store", "data"),
     )
-    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, user_data):
+    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, evidence_context, user_data):
         if not _authorized_emin(client, user_data):
             return _empty_outputs(t("emin_history.emin_only"))
         if not isinstance(package, dict) or not package.get("run"):
@@ -111,8 +131,10 @@ def register_emin_historical_callbacks(app):
             bundle = load_emin_historical_bundle(run_name=package["run"])
         except (FileNotFoundError, InvalidHistoricalBundle, OSError):
             return _empty_outputs(t("emin_history.package_invalid"))
-        view = build_historical_view(bundle, day, group, unit, search, movement_filter)
-        if set(ctx.triggered_prop_ids) == {"emin-history-unit.value"}:
+        period = evidence_context.get("period") if isinstance(evidence_context, dict) and evidence_context.get("unit") == unit else None
+        view = build_historical_view(bundle, day, group, unit, search, movement_filter, period)
+        triggers = set(ctx.triggered_prop_ids)
+        if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
             return (no_update,) * 6 + (view["status"], view["trend"], view["evidence"])
         return (
             view["meta"],
