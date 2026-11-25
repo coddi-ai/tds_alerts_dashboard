@@ -343,6 +343,18 @@ search field. With the local package, BULL-027 had last been observed
 15 days earlier. The isolated browser returned one record when using
 the 9 November shortcut and one for the 12 October trend marker.
 
+The fleet uses its seven-day window to qualify a recent comparison.
+If the window has fewer than two observed scores, it counts the unit
+under no recent comparison and shows the dated historical change
+separately when available. Five units met that condition on 24 November.
+The optional high-severity filter in the full ranking uses the same
+seven-day window and displays each matching unit's source-record count.
+Fourteen units qualified, nine of them outside the short-term Top 5.
+Both counts were reproduced in the isolated browser. The high-severity
+filter returned CT-211 outside the Top 5, and the no-recent-comparison
+shortcut returned the five units with their older context. The focused
+offline suite passed 57 tests.
+
 ### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under

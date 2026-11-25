@@ -68,6 +68,7 @@ def build_historical_view(
     movement_filter: str | None = None,
     evidence_period: str | None = None,
     include_chronology: bool = True,
+    require_high_signal: bool = False,
 ) -> dict:
     """Build fleet overview and an evidence-backed individual equipment timeline."""
     all_days = sorted({row["day"] for row in bundle.daily})
@@ -90,10 +91,19 @@ def build_historical_view(
         for row in daily_rows
     }
     query = (search or "").strip().casefold()
+    high_counts = None
+    if require_high_signal and selected_day:
+        start = _criticality_start(all_days, selected_day, "short")
+        high_counts = Counter(
+            row["unit"] for row in bundle.observed
+            if row.get("unit") in movements and start <= str(row.get("day") or "") <= selected_day
+            and _is_high_signal(row)
+        )
     filtered_rows = [
         row for row in filtered_rows
         if query in row["unit"].casefold()
         and (movement_filter in (None, "__all__") or movements[row["unit"]]["status"] == movement_filter)
+        and (high_counts is None or high_counts.get(row["unit"], 0))
     ]
     status = movements.get(selected_unit) or _movement_for_unit(bundle.daily, selected_unit, selected_day)
     evidence_rows = _unit_evidence_rows(bundle, selected_unit, selected_day)
@@ -117,7 +127,7 @@ def build_historical_view(
         "movements": movements,
         "kpis": _movement_kpis(movements),
         "groups": _groups_panel(daily_rows, group),
-        "ranking": _ranking_table(filtered_rows, movements),
+        "ranking": _ranking_table(filtered_rows, movements, high_counts),
         "status": html.Div([top_context, _status_panel(selected_unit, status), movement_drivers, contributors]),
         "trend": _trend_figure(trend_rows, selected_unit),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
@@ -233,7 +243,13 @@ def _movement_for_unit(rows: tuple[dict, ...] | list[dict], unit: str | None, cu
         label = "worsened"
     else:
         label = "stable"
-    return {"status": label, "current": current, "previous": previous, "delta": delta, **date_context}
+    recent_start = (date.fromisoformat(cutoff) - timedelta(days=CRITICALITY_PERIODS["short"] - 1)).isoformat() if cutoff else None
+    recent = recent_start is None or previous["day"] >= recent_start
+    return {
+        "status": label if recent else "insufficient",
+        "historical_status": label if not recent else None,
+        "current": current, "previous": previous, "delta": delta, **date_context,
+    }
 
 
 def _days_between(start, end):
@@ -245,6 +261,8 @@ def _days_between(start, end):
 
 def _movement_date_notes(movement):
     notes = []
+    if movement.get("historical_status"):
+        notes.append(t("emin_history.movement_older_comparison", label=_movement_label(movement["historical_status"])))
     if (movement.get("lag_days") or 0) > 0:
         notes.append(t("emin_history.movement_observation_lag", days=movement["lag_days"]))
     if (movement.get("gap_days") or 0) > 1:
@@ -888,7 +906,7 @@ def _movement_badge(movement: dict):
     return dbc.Badge(_movement_label(status), color=colors[status], class_name="emin-history-movement-badge")
 
 
-def _ranking_table(rows: list[dict], movements: dict[str, dict]):
+def _ranking_table(rows: list[dict], movements: dict[str, dict], high_counts=None):
     if not rows:
         return dbc.Alert(t("emin_history.empty_ranking"), color="light", class_name="mb-0")
     headings = [
@@ -907,7 +925,11 @@ def _ranking_table(rows: list[dict], movements: dict[str, dict]):
             group_label += f" +{len(groups) - 2}"
         cells = [
             row.get("rank") if score is not None and row.get("rank") is not None else "—",
-            _open_unit(row["unit"], "ranking"),
+            [
+                _open_unit(row["unit"], "ranking"),
+                html.Small(t("emin_history.ranking_high_count", count=high_counts[row["unit"]]), className="d-block text-muted")
+                if high_counts is not None else None,
+            ],
             f"{score:.3f}" if score is not None else "—",
             _movement_summary(movements[row["unit"]]),
             _observation_label(row),

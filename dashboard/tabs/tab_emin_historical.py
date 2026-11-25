@@ -102,6 +102,11 @@ def create_layout() -> html.Div:
                                         ),
                                     ], xs=12, md=4),
                                 ], class_name="g-2 mb-3"),
+                                dbc.Checkbox(
+                                    id="emin-history-high-signal-only", value=False,
+                                    label=t("emin_history.ranking_high_signal_only"),
+                                    class_name="mb-3",
+                                ),
                                 dcc.Loading(html.Div(id="emin-history-ranking"), type="circle"),
                             ]),
                         ],

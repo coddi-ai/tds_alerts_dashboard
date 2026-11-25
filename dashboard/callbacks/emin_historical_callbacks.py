@@ -122,11 +122,12 @@ def register_emin_historical_callbacks(app):
             Input("emin-history-unit", "value"),
             Input("emin-history-search", "value"),
             Input("emin-history-movement-filter", "value"),
+            Input("emin-history-high-signal-only", "value"),
             Input("emin-history-evidence-context", "data"),
         ],
         State("user-info-store", "data"),
     )
-    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, evidence_context, user_data):
+    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, high_only, evidence_context, user_data):
         if not _authorized_emin(client, user_data):
             return _empty_outputs(t("emin_history.emin_only"))
         if not isinstance(package, dict) or not package.get("run"):
@@ -136,7 +137,10 @@ def register_emin_historical_callbacks(app):
         except (FileNotFoundError, InvalidHistoricalBundle, OSError):
             return _empty_outputs(t("emin_history.package_invalid"))
         period = evidence_context.get("period") if isinstance(evidence_context, dict) and evidence_context.get("unit") == unit else None
-        view = build_historical_view(bundle, day, group, unit, search, movement_filter, period, include_chronology=False)
+        view = build_historical_view(
+            bundle, day, group, unit, search, movement_filter, period,
+            include_chronology=False, require_high_signal=high_only is True,
+        )
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
             return (no_update,) * 5 + (view["status"], view["trend"], view["evidence"])
