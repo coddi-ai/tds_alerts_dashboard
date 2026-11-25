@@ -167,7 +167,34 @@ textual major-event matches have different labels.
 - The page remains EMIN-only and read-only; server-side authorization still
   checks the user's allowed client.
 
-### Open questions and next action
+### Fleet-to-unit review · 25 November 2026
+
+The fleet cards and ranking now open the unit directly. Returning restores
+the source button and scroll position while retaining the cut and the ranking
+filters. Search and movement filters affect the ranking only. The detail
+shows the first three milestones, with disclosure controls for additional
+milestones and the source fields for each record.
+
+Validation used the local real package for the 24 November cut. Playwright
+opened CT-187 from its fleet card, expanded a source record, and verified
+the return to the original control with the cut retained. The detail had no
+document overflow at 1440, 1024, or 390 px. The 390 px event rows rendered as
+cards. The browser used an isolated Dash layout with the production EMIN
+components and callbacks, so this did not verify the production login or
+the full dashboard shell.
+
+Offline command from the worktree in PowerShell:
+
+```powershell
+docker run --rm --network none --entrypoint python -v "${PWD}:/app" -w /app tds-alerts-dashboard-emin-test:latest -m pytest -q --disable-warnings tests/test_emin_historical.py tests/test_s3_downloader_sync.py tests/test_client_services.py tests/test_navigation_shell.py
+```
+
+Result: 57 passed with 8 warnings. The real package had five prioritized
+scores and five lower observed scores at this cut. There were no recent
+explicit critical records, so a live positive example of that branch
+was unavailable.
+
+### Publishing follow-up
 
 - Confirm who owns publication of `latest.json` and immutable run folders under
   the documented prefix, including whether the producer will include complete

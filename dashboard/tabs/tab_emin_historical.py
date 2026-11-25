@@ -118,7 +118,29 @@ def create_layout() -> html.Div:
                     dbc.Card(
                         [
                             dbc.CardHeader(t("emin_history.ranking_title"), class_name="emin-history-card-header"),
-                            dbc.CardBody(dcc.Loading(html.Div(id="emin-history-ranking"), type="circle")),
+                            dbc.CardBody([
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Label(t("emin_history.search_unit"), html_for="emin-history-search"),
+                                        dbc.Input(id="emin-history-search", type="search", debounce=True),
+                                    ], xs=12, md=6),
+                                    dbc.Col([
+                                        dbc.Label(t("emin_history.col_movement"), html_for="emin-history-movement-filter"),
+                                        dbc.Select(
+                                            id="emin-history-movement-filter",
+                                            value="__all__",
+                                            options=[
+                                                {"label": t("emin_history.all_movements"), "value": "__all__"},
+                                                *[
+                                                    {"label": t(f"emin_history.movement_{state}"), "value": state}
+                                                    for state in ("improved", "worsened", "stable", "insufficient")
+                                                ],
+                                            ],
+                                        ),
+                                    ], xs=12, md=6),
+                                ], class_name="g-2 mb-3"),
+                                dcc.Loading(html.Div(id="emin-history-ranking"), type="circle"),
+                            ]),
                         ],
                         class_name="emin-history-card mb-3",
                     ),
@@ -152,6 +174,14 @@ def create_layout() -> html.Div:
                         ),
                         class_name="emin-history-card mb-3",
                     ),
+                    html.Div([
+                        html.Button(
+                            t("emin_history.back_to_fleet"), type="button",
+                            className="btn btn-sm btn-outline-primary emin-history-action",
+                            **{"data-emin-back": "true"},
+                        ),
+                        html.H3(t("emin_history.tab_unit"), id="emin-history-detail-heading", tabIndex=-1, className="h5 mb-0"),
+                    ], className="d-flex flex-wrap align-items-center gap-2 mb-3"),
                     dcc.Loading(html.Div(id="emin-history-status"), type="circle"),
                     dbc.Row(
                         [

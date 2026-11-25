@@ -1121,14 +1121,41 @@
 .emin-history-status-card {
     border-left: 4px solid #3498db;
 }
+.emin-history-priority {
+    border-top: 3px solid #dc3545;
+}
+.emin-history-lower-signal {
+    border-top: 3px solid #28a745;
+}
 .emin-history-highlights .emin-history-card {
     border-top: 3px solid #e7ebee;
 }
-.emin-history-highlights .emin-history-card:first-child {
-    border-top-color: #dc3545;
+.emin-history-unit-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.6rem 0;
+    border-top: 1px solid #e7ebee;
 }
-.emin-history-highlights .emin-history-card:last-child {
-    border-top-color: #28a745;
+.emin-history-action {
+    min-height: 36px;
+    white-space: nowrap;
+}
+.emin-history-page summary {
+    color: var(--bs-primary, #286090);
+    cursor: pointer;
+    padding-block: 0.35rem;
+}
+.emin-history-record dd {
+    overflow-wrap: anywhere;
+}
+#emin-history-detail-heading {
+    scroll-margin-top: 6rem;
+}
+.emin-history-highlights .emin-history-card:first-child:has(.bg-danger) {
+    border-top-color: #dc3545;
 }
 .emin-history-highlight-detail {
     overflow-wrap: anywhere;

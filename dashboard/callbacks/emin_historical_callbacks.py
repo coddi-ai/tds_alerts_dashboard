@@ -1,6 +1,6 @@
 """Callbacks for the EMIN historical fleet page."""
 
-from dash import Input, Output, State, callback
+from dash import ClientsideFunction, Input, Output, State, callback, ctx, no_update
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 
@@ -71,18 +71,14 @@ def register_emin_historical_callbacks(app):
             {"run": bundle.run},
         )
 
-    @callback(
+    app.clientside_callback(
+        ClientsideFunction(namespace="eminHistory", function_name="switchView"),
         [
             Output("emin-history-overview-panel", "style"),
             Output("emin-history-detail-panel", "style"),
         ],
         Input("emin-history-view-tabs", "value"),
     )
-    def switch_emin_history_view(active_view):
-        if active_view == "unit":
-            return {"display": "none"}, {"display": "block"}
-        return {"display": "block"}, {"display": "none"}
-
     @callback(
         [
             Output("emin-history-meta", "children"),
@@ -101,10 +97,12 @@ def register_emin_historical_callbacks(app):
             Input("emin-history-cutoff", "value"),
             Input("emin-history-group", "value"),
             Input("emin-history-unit", "value"),
+            Input("emin-history-search", "value"),
+            Input("emin-history-movement-filter", "value"),
         ],
         State("user-info-store", "data"),
     )
-    def update_emin_historical_view(client, package, day, group, unit, user_data):
+    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, user_data):
         if not _authorized_emin(client, user_data):
             return _empty_outputs(t("emin_history.emin_only"))
         if not isinstance(package, dict) or not package.get("run"):
@@ -113,10 +111,12 @@ def register_emin_historical_callbacks(app):
             bundle = load_emin_historical_bundle(run_name=package["run"])
         except (FileNotFoundError, InvalidHistoricalBundle, OSError):
             return _empty_outputs(t("emin_history.package_invalid"))
-        view = build_historical_view(bundle, day, group, unit)
+        view = build_historical_view(bundle, day, group, unit, search, movement_filter)
+        if set(ctx.triggered_prop_ids) == {"emin-history-unit.value"}:
+            return (no_update,) * 6 + (view["status"], view["trend"], view["evidence"])
         return (
             view["meta"],
-            fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"]),
+            fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
             view["kpis"],
             view["movement"],
             view["groups"],
