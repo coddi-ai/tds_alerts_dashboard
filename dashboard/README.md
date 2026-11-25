@@ -48,11 +48,21 @@ The EMIN historical tab reads the immutable weekly package from
 `s3://teck-cda-datasource/MultiTechnique Alerts/fleet_history/golden/emin/{YYYY-Www}/` by the same
 S3 sync used by the other tabs. Each week contains versioned `manifest`, `daily`, `observed`, and
 compressed `dashboard` files plus `latest.json`. The dashboard chooses the pointer with the newest
-capture time. The read model contract is `coddi.emin.historical-dashboard.v1`, produced by
-`Analisis_Historico_Flota`; it contains the precomputed fleet views, criticality windows, equipment
-movements, component contributions, and evidence classifications. The tab resolves package file
-references and renders the selected view; scoring, ordering, aggregation, and event classification
-belong to the producer. A package from before this contract must be republished by the data repo.
+capture time. The current read model contract is `coddi.emin.historical-dashboard.v2`, produced by
+`Analisis_Historico_Flota`; it contains precomputed fleet views for all units, weekly/monthly/quarterly/
+historical variation, criticality windows, equipment movements, component contributions, and evidence
+classifications. The reader remains compatible with v1 for existing packages; the fleet variation view
+is available after the data repo publishes and syncs v2. The tab resolves package file references and
+renders the selected view; scoring, ordering, aggregation, and event classification belong to the
+producer. A package from before v1 must be republished by the data repo.
+
+The fleet overview plots every unit with comparable observations: previous-period average on the
+horizontal axis, selected-period average on the vertical axis, and color for improved, worsened, or
+stable. Priority units receive larger markers and labels; units without a valid comparison are counted,
+and the full roster remains below the chart. Weekly, monthly, quarterly, and historical controls are
+shared with equipment detail, where the chart shows precomputed period deltas around zero. Weekly event
+references persist from the start of the ISO week through the selected cutoff. If the package does not
+cover a comparable prior quarter, the quarter view explicitly reports insufficient coverage.
 
 ### 4. Start Dashboard
 

@@ -61,6 +61,13 @@
 
     window.dash_clientside = window.dash_clientside || {};
     window.dash_clientside.eminHistory = {
+        openFleetUnit(clickData) {
+            const unit = clickData?.points?.[0]?.customdata?.[0];
+            if (typeof unit !== "string" || !unit) {
+                return [window.dash_clientside.no_update, window.dash_clientside.no_update];
+            }
+            return [unit, "unit"];
+        },
         openTrendDay(clickData) {
             const day = String(clickData?.points?.[0]?.x || "").slice(0, 10);
             if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {

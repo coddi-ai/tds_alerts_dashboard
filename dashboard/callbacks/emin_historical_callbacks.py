@@ -79,6 +79,15 @@ def register_emin_historical_callbacks(app):
         Input("emin-history-view-tabs", "value"),
     )
     app.clientside_callback(
+        ClientsideFunction(namespace="eminHistory", function_name="openFleetUnit"),
+        [
+            Output("emin-history-unit", "value", allow_duplicate=True),
+            Output("emin-history-view-tabs", "value", allow_duplicate=True),
+        ],
+        Input("emin-history-movement-trend", "clickData"),
+        prevent_initial_call=True,
+    )
+    app.clientside_callback(
         ClientsideFunction(namespace="eminHistory", function_name="openTrendDay"),
         Output("emin-history-trend-action", "data"),
         Input("emin-history-trend", "clickData"),
@@ -118,6 +127,8 @@ def register_emin_historical_callbacks(app):
             Input("client-selector", "value"),
             Input("emin-history-package", "data"),
             Input("emin-history-cutoff", "value"),
+            Input("emin-history-fleet-window", "value"),
+            Input("emin-history-trend-window", "value"),
             Input("emin-history-group", "value"),
             Input("emin-history-unit", "value"),
             Input("emin-history-search", "value"),
@@ -127,7 +138,7 @@ def register_emin_historical_callbacks(app):
         ],
         State("user-info-store", "data"),
     )
-    def update_emin_historical_view(client, package, day, group, unit, search, movement_filter, high_only, evidence_context, user_data):
+    def update_emin_historical_view(client, package, day, fleet_window, trend_window, group, unit, search, movement_filter, high_only, evidence_context, user_data):
         if not _authorized_emin(client, user_data):
             return _empty_outputs(t("emin_history.emin_only"))
         if not isinstance(package, dict) or not package.get("run"):
@@ -140,6 +151,7 @@ def register_emin_historical_callbacks(app):
         view = build_historical_view(
             bundle, day, group, unit, search, movement_filter, period,
             include_chronology=False, require_high_signal=high_only is True,
+            trend_window=trend_window, fleet_window=fleet_window,
         )
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:

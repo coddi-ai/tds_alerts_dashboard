@@ -1005,6 +1005,15 @@
     box-shadow: 0 2px 8px rgba(26, 37, 47, 0.045);
     background: #fff;
 }
+.emin-history-top-unit-card {
+    border: 1px solid #e7ebee;
+    border-left: 4px solid #3498db;
+    border-radius: 10px;
+    overflow-wrap: anywhere;
+}
+.emin-history-top-unit-card--critical {
+    border-left-color: #dc3545;
+}
 .emin-history-kpi-top {
     align-items: center;
     color: #687780;
@@ -1100,64 +1109,6 @@
 .emin-history-driver-evidence > summary {
     min-height: 32px;
 }
-@media (max-width: 575px) {
-    .emin-history-top-table thead {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-    }
-
-    .emin-history-top-table,
-    .emin-history-top-table tbody {
-        display: block;
-        width: 100%;
-    }
-
-    .emin-history-top-table tbody tr {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        gap: 0.5rem 0.75rem;
-        padding: 0.75rem;
-        margin-bottom: 0.5rem;
-        border: 1px solid var(--bs-border-color, #e7ebee);
-        border-radius: 0.375rem;
-    }
-
-    .emin-history-top-table tbody td {
-        border: 0;
-        box-shadow: none;
-        overflow-wrap: anywhere;
-        padding: 0;
-        white-space: normal;
-    }
-
-    .emin-history-top-table tbody td:first-child {
-        text-align: end;
-        font-weight: 600;
-        grid-column: 2;
-        grid-row: 1;
-    }
-
-    .emin-history-top-table tbody td:nth-child(2) {
-        grid-column: 1;
-        grid-row: 1;
-    }
-
-    .emin-history-top-table tbody td:nth-child(3),
-    .emin-history-top-table tbody td:nth-child(4) {
-        grid-column: 1 / -1;
-    }
-
-    .emin-history-top-table td[data-label]::before {
-        display: block;
-        color: var(--bs-secondary-color, #53636c);
-        font-size: 0.72rem;
-        content: attr(data-label);
-    }
-}
 .emin-history-milestone + .emin-history-milestone {
     border-top: 1px solid var(--bs-border-color, #e7ebee);
 }
@@ -1227,10 +1178,18 @@
     overflow: auto;
 }
 @media (max-width: 575px) {
-    #emin-history-movement .xtick text,
-    #emin-history-movement .xtitle,
     #emin-history-groups .xtick text,
     #emin-history-groups .xtitle {
+        display: none;
+    }
+    #emin-history-movement-trend .xtick text {
+        font-size: 8px !important;
+    }
+    #emin-history-movement-trend .legend text {
+        font-size: 9px !important;
+    }
+    #emin-history-movement-trend .xtitle,
+    #emin-history-movement-trend .ytitle {
         display: none;
     }
 }

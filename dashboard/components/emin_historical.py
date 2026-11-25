@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
-from dash import html
+from dash import dcc, html
 
 from src.charts.theme import BRAND_ACCENT, BRAND_MUTED, apply_dashboard_theme
 from src.data.emin_historical import EminHistoricalBundle
@@ -30,13 +30,19 @@ def filter_options(bundle: EminHistoricalBundle) -> dict:
     days = catalog.get("cutoffs", [])
     groups = catalog.get("groups", [])
     units = catalog.get("units", [])
+    fleet = bundle.dashboard.get("fleet", {}).get(days[0], {}) if days else {}
+    movements = fleet.get("movements", {})
+    default_unit = next((
+        row["unit"] for row in fleet.get("rows", [])
+        if movements.get(row["unit"], {}).get("status") in {"improved", "worsened", "stable"}
+    ), units[0] if units else None)
     return {
         "days": [{"label": _day_label(day), "value": day} for day in days],
         "groups": [{"label": t("emin_history.all_groups"), "value": "__all__"}]
         + [{"label": group, "value": group} for group in groups],
         "units": [{"label": unit, "value": unit} for unit in units],
         "default_day": days[0] if days else None,
-        "default_unit": units[0] if units else None,
+        "default_unit": default_unit,
     }
 
 
@@ -50,6 +56,8 @@ def build_historical_view(
     evidence_period: str | None = None,
     include_chronology: bool = True,
     require_high_signal: bool = False,
+    trend_window: str = "long",
+    fleet_window: str = "short",
 ) -> dict:
     """Build fleet overview and an evidence-backed individual equipment timeline."""
     all_days = bundle.dashboard["catalog"].get("cutoffs", [])
@@ -64,7 +72,13 @@ def build_historical_view(
     selected_unit = unit if unit in all_units else (daily_rows[0]["unit"] if daily_rows else None)
     unit_data = bundle.dashboard.get("units", {}).get(selected_unit, {})
     selected_unit_rows = unit_data.get("daily", [])
-    trend_rows = unit_data.get("by_cutoff", {}).get(selected_day, {}).get("trend", [])
+    selected_data = unit_data.get("by_cutoff", {}).get(selected_day, {})
+    available_trend = unit_data.get("by_cutoff", {}).get(selected_day, {}).get("trend", [])
+    if trend_window == "short" and selected_day:
+        trend_start = (date.fromisoformat(selected_day) - timedelta(days=6)).isoformat()
+        trend_rows = [row for row in available_trend if trend_start <= row.get("day", "") <= selected_day]
+    else:
+        trend_rows = available_trend
     movements = fleet_data.get("movements", {})
     query = (search or "").strip().casefold()
     high_counts = fleet_data.get("high_signal_counts") if require_high_signal else None
@@ -85,7 +99,6 @@ def build_historical_view(
         _top_unit_context(bundle, selected_day, evidence_period, selected_unit, trend_rows, evidence_rows)
         if period_start else None
     )
-    selected_data = unit_data.get("by_cutoff", {}).get(selected_day, {})
     movement_drivers = _movement_drivers_panel(status, selected_data.get("movement_drivers", []))
     contributors = _criticality_components_panel(selected_data.get("components", {}).get(evidence_period or "short", {}))
     fleet_highlights = {
@@ -106,11 +119,14 @@ def build_historical_view(
         "daily_rows": daily_rows,
         "fleet_highlights": fleet_highlights,
         "movements": movements,
-        "kpis": _movement_kpis(fleet_data.get("movement_counts", {})),
+        "kpis": _fleet_movement_trend(bundle, selected_day, fleet_window),
         "groups": _groups_panel_from_items(fleet_data.get("groups_summary", []), group),
         "ranking": _ranking_table(filtered_rows, movements, high_counts),
         "status": html.Div([top_context, _status_panel(selected_unit, status), movement_drivers, contributors]),
-        "trend": _trend_figure(trend_rows, selected_unit),
+        "trend": _period_delta_figure(
+            selected_data.get("period_variations", {}).get(trend_window, []), selected_unit, trend_window
+        ) if trend_window in {"week", "month", "quarter", "history"} and selected_data.get("period_variations")
+        else _trend_figure(trend_rows, selected_unit, status.get("status", "insufficient")),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
     }
 
@@ -154,39 +170,6 @@ def section_header(title: str, icon: str):
     )
 
 
-def _kpi_card(label: str, value: str | int, icon: str, detail: str = "", status: str | None = None):
-    color = _MOVEMENT_COLORS.get(status, BRAND_ACCENT)
-    return dbc.Col(
-        dbc.Card(
-            dbc.CardBody(
-                [
-                    html.Div(
-                        [
-                            html.Span(label, className="emin-history-kpi-label"),
-                            html.I(className=f"{icon} emin-history-kpi-icon", style={"color": color}),
-                        ],
-                        className="emin-history-kpi-top",
-                    ),
-                    html.Div(str(value), className="emin-history-kpi-value"),
-                    html.Div(detail or "\u00a0", className="emin-history-kpi-detail"),
-                    html.Button(
-                        t("emin_history.movement_view_units"), type="button",
-                        className="btn btn-link btn-sm p-0 mt-2",
-                        **{"data-emin-movement-filter": status,
-                           "aria-label": t("emin_history.movement_view_category", category=label)},
-                    ) if status and value else None,
-                ]
-            ),
-            class_name="emin-history-card h-100",
-            style={"borderTop": f"3px solid {color}"},
-        ),
-        xs=12,
-        sm=6,
-        xl=3,
-        class_name="mb-3",
-    )
-
-
 def _movement_label(status: str) -> str:
     return t({
         "improved": "emin_history.movement_improved",
@@ -194,6 +177,12 @@ def _movement_label(status: str) -> str:
         "stable": "emin_history.movement_stable",
         "insufficient": "emin_history.movement_insufficient",
     }[status])
+
+
+def _movement_chart_label(status: str) -> str:
+    if status == "insufficient":
+        return t("emin_history.movement_insufficient_chart_label")
+    return _movement_label(status)
 
 
 def _movement_date_notes(movement):
@@ -215,16 +204,109 @@ def _number(value) -> float | None:
         return None
 
 
-def _movement_kpis(counts: dict[str, int]):
-    return dbc.Row(
-        [
-            _kpi_card(t("emin_history.movement_improved"), counts.get("improved", 0), "fas fa-arrow-down", t("emin_history.movement_improved_detail"), "improved"),
-            _kpi_card(t("emin_history.movement_worsened"), counts.get("worsened", 0), "fas fa-arrow-up", t("emin_history.movement_worsened_detail"), "worsened"),
-            _kpi_card(t("emin_history.movement_stable"), counts.get("stable", 0), "fas fa-equals", t("emin_history.movement_stable_detail"), "stable"),
-            _kpi_card(t("emin_history.movement_insufficient"), counts.get("insufficient", 0), "fas fa-minus-circle", t("emin_history.movement_insufficient_detail"), "insufficient"),
-        ],
-        className="g-3",
-    )
+def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, period: str):
+    """Render producer-calculated variation for the whole fleet, prioritizing critical units."""
+    all_days = bundle.dashboard.get("catalog", {}).get("cutoffs", [])
+    selected_day = cutoff if cutoff in all_days else (all_days[0] if all_days else None)
+    fleet = bundle.dashboard.get("fleet", {}).get(selected_day, {}) if selected_day else {}
+    variations = fleet.get("period_variations", {}).get(period, {})
+    units = bundle.dashboard.get("catalog", {}).get("units", [])
+    if not variations:
+        note = t("emin_history.period_data_pending")
+        return dcc.Graph(
+            id="emin-history-movement-trend",
+            figure=_empty_figure(t("emin_history.variation_title"), note, 390),
+            config={"displayModeBar": False}, responsive=True,
+            style={"height": "390px", "width": "100%"},
+        )
+
+    priority = set(fleet.get("critical_units", [])) | set(fleet.get("score_priority_units", []))
+    top_units = {
+        row.get("unit") for row in bundle.dashboard.get("tops", {}).get(selected_day, {}).get(
+            {"week": "short", "month": "medium", "quarter": "long", "history": "history"}.get(period, "short"), {}
+        ).get("entries", [])
+    }
+    priority |= top_units
+    figure = go.Figure()
+    valid = [item for item in variations.values()
+             if _number(item.get("previous_average")) is not None and _number(item.get("current_average")) is not None]
+    if valid:
+        extent = max(max(item["previous_average"], item["current_average"]) for item in valid) or 1
+        figure.add_trace(go.Scatter(x=[0, extent], y=[0, extent], mode="lines", name=t("emin_history.no_change_line"),
+                                    line={"color": "#8b95a1", "dash": "dash", "width": 1.4}, hoverinfo="skip"))
+    plotted = 0
+    for state in ("worsened", "stable", "improved", "insufficient"):
+        entries = [(unit, variations.get(unit, {})) for unit in units]
+        entries = [(unit, item) for unit, item in entries if item.get("status") == state
+                   and _number(item.get("previous_average")) is not None
+                   and _number(item.get("current_average")) is not None]
+        if not entries:
+            continue
+        plotted += len(entries)
+        figure.add_trace(go.Scatter(
+            x=[item["previous_average"] for _, item in entries],
+            y=[item["current_average"] for _, item in entries],
+            customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0)]
+                        for unit, item in entries],
+            text=[unit if unit in priority else "" for unit, _ in entries],
+            textposition="top center", mode="markers+text",
+            name=_movement_chart_label(state),
+            marker={"color": _MOVEMENT_COLORS[state],
+                    "size": [17 if unit in priority else 10 for unit, _ in entries],
+                    "line": {"color": "white", "width": 1.5}, "opacity": 0.9},
+            hovertemplate=("<b>%{customdata[0]}</b><br>"
+                           + t("emin_history.previous_period_hover") + ": %{x:.2f}<br>"
+                           + t("emin_history.current_period_hover") + ": %{y:.2f}<br>"
+                           + t("emin_history.delta_hover") + ": %{customdata[1]:+.2f}<br>"
+                           + t("emin_history.coverage_hover") + ": %{customdata[2]}<br>"
+                           + t("emin_history.major_events_hover") + ": %{customdata[3]}<extra></extra>"),
+        ))
+    unavailable = max(0, len(units) - plotted)
+    figure.update_xaxes(title_text=t("emin_history.previous_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
+    figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True, scaleanchor="x", scaleratio=1)
+    figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=430)
+    figure.update_layout(hovermode="closest", margin={"l": 62, "r": 28, "t": 54, "b": 82},
+                         legend={"orientation": "h", "y": -0.23}, clickmode="event+select")
+    figure.add_annotation(x=0.99, y=0.99, xref="paper", yref="paper", xanchor="right", yanchor="top",
+                          text=t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable),
+                          showarrow=False, bgcolor="rgba(255,255,255,.88)", font={"size": 11, "color": BRAND_MUTED})
+    return dcc.Graph(id="emin-history-movement-trend", figure=figure,
+                     config={"displayModeBar": False}, responsive=True,
+                     style={"height": "430px", "width": "100%"})
+
+
+def _period_delta_figure(rows: list[dict], unit: str | None, period: str) -> dcc.Graph:
+    """Plot only producer-supplied period deltas; zero marks no directional movement."""
+    usable = [row for row in rows if _number(row.get("delta")) is not None]
+    if not usable:
+        return dcc.Graph(
+            id="emin-history-trend",
+            figure=_empty_figure(t("emin_history.trend_title", unit=unit or t("emin_history.no_unit")),
+                                 t("emin_history.period_comparison_insufficient"), 340),
+            config={"displayModeBar": False}, responsive=True,
+            style={"height": "340px", "width": "100%"},
+        )
+    colors = [_MOVEMENT_COLORS.get(row.get("status"), _MOVEMENT_COLORS["insufficient"]) for row in usable]
+    figure = go.Figure(go.Bar(
+        x=[row.get("bucket") for row in usable], y=[row["delta"] for row in usable],
+        marker={"color": colors, "line": {"color": "white", "width": 1}},
+        customdata=[[row.get("previous_average"), row.get("current_average"), row.get("current_days"), row.get("major_event_count", 0)] for row in usable],
+        hovertemplate=("%{x}<br>" + t("emin_history.delta_hover") + ": %{y:+.2f}<br>"
+                       + t("emin_history.previous_period_hover") + ": %{customdata[0]:.2f}<br>"
+                       + t("emin_history.current_period_hover") + ": %{customdata[1]:.2f}<br>"
+                       + t("emin_history.coverage_hover") + ": %{customdata[2]}<br>"
+                       + t("emin_history.major_events_hover") + ": %{customdata[3]}<extra></extra>"),
+    ))
+    figure.add_hline(y=0, line={"color": "#64748b", "width": 1.5})
+    figure.update_xaxes(title_text=t("emin_history.period_axis", period=t(f"emin_history.period_{period}")),
+                        gridcolor="#ecf0f1", automargin=True)
+    figure.update_yaxes(title_text=t("emin_history.delta_hover"), zeroline=False,
+                        gridcolor="#ecf0f1", automargin=True)
+    figure = apply_dashboard_theme(figure, title=t("emin_history.trend_title", unit=unit or t("emin_history.no_unit")), height=340)
+    figure.update_layout(showlegend=False, margin={"l": 58, "r": 24, "t": 54, "b": 68})
+    return dcc.Graph(id="emin-history-trend", figure=figure,
+                     config={"displayModeBar": False}, responsive=True,
+                     style={"height": "340px", "width": "100%"})
 
 
 def _open_unit(unit: str, origin: str, period: str = ""):
@@ -250,11 +332,6 @@ def fleet_criticality_top(bundle: EminHistoricalBundle, day, period):
     available = bundle.dashboard.get("catalog", {}).get("cutoffs", [])
     cutoff = day if day in bundle.dashboard.get("tops", {}) else (available[0] if available else None)
     return bundle.dashboard.get("tops", {}).get(cutoff, {}).get(period, {})
-
-
-def _component_label(key):
-    kind, label = key
-    return label if kind == "group" else t(f"emin_history.drivers_{label}")
 
 
 def _movement_drivers_panel(movement, changes):
@@ -285,7 +362,7 @@ def _movement_drivers_panel(movement, changes):
                 html.Thead(html.Tr(headings)),
                 html.Tbody(rows),
             ], responsive=True, size="sm", class_name="emin-history-table emin-history-drivers-table mb-0"),
-        ], open=True)),
+        ], open=False)),
     ], class_name="shadow-sm unit-card mb-3")
 
 
@@ -302,44 +379,60 @@ def _criticality_components_panel(data):
         else:
             total = sum(item["points"] for item in components)
             attributed = data.get("attributed_points", 0)
+            special_keys = {"alert_points", "oil_points", "unattributed"}
+            labels_by_key = {
+                item["key"]: t(f"emin_history.drivers_{item['key']}")
+                if item["key"] in special_keys else item["key"]
+                for item in components
+            }
             body.append(html.P(
                 t("emin_history.drivers_attribution", points=f"{attributed:.2f}", total=f"{total:.2f}"),
                 className="mb-2 fw-semibold",
             ))
-            body.append(dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th(t("emin_history.drivers_category"), scope="col"),
-                    html.Th(t("emin_history.drivers_points_share"), scope="col", className="text-end"),
-                ])),
-                html.Tbody([
-                    html.Tr([
-                        html.Td(_component_evidence(item), className="emin-history-driver-label"),
-                        html.Td([
-                            html.Strong(f"{item['points']:.2f}"),
-                            html.Small(f"{item['share']:.1%}", className="d-block text-muted"),
-                        ], className="text-end text-nowrap"),
+            labels = [labels_by_key[item["key"]] for item in components]
+            figure = go.Figure(go.Bar(
+                x=[item["points"] for item in components],
+                y=labels,
+                orientation="h",
+                marker={"color": BRAND_ACCENT},
+                text=[f"{item['points']:.2f} · {item['share']:.0%}" for item in components],
+                textposition="outside",
+                cliponaxis=False,
+                customdata=[item["share"] for item in components],
+                hovertemplate="%{y}<br>%{x:.2f} · %{customdata:.1%}<extra></extra>",
+            ))
+            height = max(230, min(420, 80 + len(components) * 44))
+            figure = apply_dashboard_theme(figure, title=t("emin_history.drivers_chart_title"), height=height)
+            figure.update_layout(
+                showlegend=False,
+                margin={"l": 150, "r": 45, "t": 52, "b": 35},
+                xaxis={"title": None, "rangemode": "tozero", "gridcolor": "#ecf0f1", "zeroline": False},
+                yaxis={"title": None, "categoryorder": "array", "categoryarray": labels[::-1]},
+            )
+            body.append(dcc.Graph(
+                figure=figure,
+                config={"displayModeBar": False},
+                responsive=True,
+                style={"height": f"{height}px", "width": "100%"},
+            ))
+            body.append(html.Details([
+                html.Summary(t("emin_history.drivers_show_events")),
+                html.Ul([
+                    html.Li([
+                        html.Strong(f"{labels_by_key[item['key']]} · {item['points']:.2f} ({item['share']:.0%})"),
+                        html.Ul([
+                            html.Li(f"{_day_label(event['day'])} · {event['event'] or t('emin_history.drivers_event_unavailable')} · {event['points']:.2f}")
+                            for event in item.get("events", [])[:12]
+                        ]) if item.get("events") else None,
                     ])
                     for item in components
-                ]),
-            ], responsive=True, size="sm", class_name="emin-history-table emin-history-drivers-table mb-2"))
+                ], className="mb-0"),
+            ], className="emin-history-driver-evidence mb-2"))
             body.append(html.P(t("emin_history.drivers_note"), className="small text-muted mb-0"))
     return dbc.Card([
         section_header(t("emin_history.drivers_title"), "fas fa-cogs"),
         dbc.CardBody(body),
     ], class_name="shadow-sm unit-card mb-3")
-
-
-def _component_evidence(item):
-    key = item["key"]
-    label = t(f"emin_history.drivers_{key}") if key in {"alert_points", "oil_points", "unattributed"} else key
-    examples = [html.Li([html.Strong(_day_label(row["day"])), f" · {row['event'] or t('emin_history.drivers_event_unavailable')} · {row['points']:.2f}"]) for row in item.get("events", [])[:12]]
-    return html.Div([
-        html.Strong(label),
-        html.Details([
-            html.Summary(t("emin_history.drivers_show_events")),
-            html.Ul(examples, className="mb-0"),
-        ], className="emin-history-driver-evidence") if examples else None,
-    ])
 
 
 def fleet_criticality_panel(bundle, day, period):
@@ -351,8 +444,7 @@ def fleet_criticality_panel(bundle, day, period):
     insufficient = payload.get("insufficient_units", 0)
     if not start:
         return html.P(t("emin_history.top_empty"), className="text-muted mb-0")
-    headers = ("col_rank", "col_unit", "top_reason", "col_movement", "top_last_milestone", "top_coverage")
-    rows = []
+    cards = []
     for rank, entry in enumerate(entries, 1):
         unit = entry["unit"]
         reason_data = entry.get("reason", {})
@@ -367,20 +459,33 @@ def fleet_criticality_panel(bundle, day, period):
             average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
             reason = f"{average_label} · {signal}" if period == "short" else f"{signal} · {average_label}"
         main_group = entry.get("main_component")
-        rows.append(html.Tr([
-            html.Td(rank),
-            html.Td(_open_unit(unit, "criticality", period)),
-            html.Td([
-                dbc.Badge(reason, color="danger") if critical_days else reason,
+        card_body = [
+            html.Div([
+                dbc.Badge(f"#{rank}", color="danger" if critical_days else "primary"),
+                _open_unit(unit, "criticality", period),
+            ], className="d-flex align-items-center gap-2 mb-2"),
+            html.Div([
+                dbc.Badge(reason, color="danger", class_name="text-wrap text-start") if critical_days else html.Strong(reason),
                 html.Small(t("emin_history.top_main_component", component=main_group), className="d-block text-muted")
                 if main_group else None,
-            ], **{"data-label": t("emin_history.top_reason")}),
-            html.Td(_movement_summary(payload.get("movement_by_unit", {}).get(unit, {"status": "insufficient"})),
-                    **{"data-label": t("emin_history.col_movement")}),
-            html.Td(_day_label(entry.get("latest_milestone")) if entry.get("latest_milestone") else "—",
-                    **{"data-label": t("emin_history.top_last_milestone")}),
-            html.Td(f"{entry.get('observed_days', 0)}/{span}", **{"data-label": t("emin_history.top_coverage")}),
-        ]))
+            ], className="mb-2"),
+            _movement_summary(payload.get("movement_by_unit", {}).get(unit, {"status": "insufficient"})),
+            html.Small([
+                t("emin_history.top_last_milestone"), ": ",
+                _day_label(entry["latest_milestone"]) if entry.get("latest_milestone") else "—",
+            ], className="d-block text-muted mt-2"),
+            html.Small([
+                t("emin_history.top_coverage"), ": ",
+                html.Strong(f"{entry.get('observed_days', 0)}/{span}"),
+            ], className="d-block text-muted"),
+        ]
+        cards.append(dbc.Col(
+            dbc.Card(dbc.CardBody(card_body), class_name=(
+                "emin-history-top-unit-card h-100 "
+                + ("emin-history-top-unit-card--critical" if critical_days else "")
+            )),
+            xs=12, sm=6, xl=4,
+        ))
     coverage = payload.get("covered_days", 0)
     same_scores = payload.get("overlaps_short", False)
     history_uses_signal = payload.get("history_signal_only", False)
@@ -391,11 +496,8 @@ def fleet_criticality_panel(bundle, day, period):
         html.P(t("emin_history.top_overlap"), className="small text-muted mb-2") if same_scores else None,
         html.P(t("emin_history.top_history_coverage"), className="small text-muted mb-2") if period == "history" else None,
         html.P(t("emin_history.top_history_signal_only"), className="small text-muted mb-2") if history_uses_signal else None,
-        dbc.Table([
-            html.Thead(html.Tr([html.Th(t(f"emin_history.{key}"), scope="col") for key in headers])),
-            html.Tbody(rows),
-        ], responsive=True, hover=True, size="sm", class_name="emin-history-table emin-history-top-table mb-2")
-        if rows else html.P(t("emin_history.top_empty"), className="text-muted mb-2"),
+        dbc.Row(cards, class_name="g-2 mb-2")
+        if cards else html.P(t("emin_history.top_empty"), className="text-muted mb-2"),
         html.Small(t("emin_history.top_low_coverage", count=insufficient), className="text-muted"),
     ])
 
@@ -457,26 +559,39 @@ def _movement_summary(movement: dict):
 def fleet_highlights_panel(highlights: dict, daily_rows: list[dict], movements: dict[str, dict]):
     scores = highlights.get("scores", {})
     has_history = highlights["has_history"]
+    healthy_units = highlights.get("healthiest", [])
     lower_note = "distinct_scores_required"
     if highlights["can_distinguish"]:
         lower_note = "lower_signal_note" if has_history else "lower_signal_partial"
-    return dbc.Card(dbc.CardBody(html.Details([
-        html.Summary(t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title")),
-        html.P(t(f"emin_history.{lower_note}"), className="text-muted small mb-1"),
-        html.Ul([
-            html.Li([
-                html.Div([
-                    _open_unit(unit, "lowest_observed_score"),
-                    html.Small(
-                        t("emin_history.score_on_cut", score=f"{scores[unit]:.3f}", day=_day_label(highlights["coverage_end"])),
-                        className="d-block text-muted",
-                    ),
-                ]),
-                _movement_summary(movements[unit]),
-            ], className="emin-history-unit-item")
-            for unit in highlights["healthiest"]
-        ], className="list-unstyled mb-0"),
-    ])), class_name="shadow-sm unit-card mb-3")
+    unit_list = html.Ul([
+        html.Li([
+            html.Div([
+                _open_unit(unit, "lowest_observed_score"),
+                html.Small(
+                    t("emin_history.score_on_cut", score=f"{scores[unit]:.3f}", day=_day_label(highlights["coverage_end"]))
+                    if unit in scores else t("emin_history.no_observed_scores"),
+                    className="d-block text-muted",
+                ),
+            ]),
+            _movement_summary(movements.get(unit, {"status": "insufficient"})),
+        ], className="emin-history-unit-item")
+        for unit in healthy_units
+    ], className="list-unstyled mb-0") if healthy_units else html.P(
+        t("emin_history.no_highlights"), className="text-muted small mb-0",
+    )
+    return dbc.Card([
+        section_header(
+            t("emin_history.healthiest_title" if has_history else "emin_history.lowest_cut_title"),
+            "fas fa-heartbeat",
+        ),
+        dbc.CardBody([
+            html.Details([
+                html.Summary(t("emin_history.lower_criticality_expand")),
+                html.P(t(f"emin_history.{lower_note}"), className="text-muted small my-2"),
+                unit_list,
+            ]),
+        ]),
+    ], class_name="shadow-sm unit-card h-100")
 
 
 def _empty_figure(title: str, message: str, height: int = 340) -> go.Figure:
@@ -485,10 +600,14 @@ def _empty_figure(title: str, message: str, height: int = 340) -> go.Figure:
     return apply_dashboard_theme(figure, title=title, height=height)
 
 
-def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
-    title = t("emin_history.trend_title", unit=unit or t("emin_history.no_unit"))
+def _trend_figure(rows: list[dict], unit: str | None, movement_status: str = "insufficient") -> go.Figure:
+    title = t(
+        "emin_history.trend_title_status",
+        unit=unit or t("emin_history.no_unit"),
+        status=_movement_label(movement_status),
+    )
     if not rows:
-        return _empty_figure(title, t("emin_history.empty_trend"), 350)
+        return _empty_figure(title, t("emin_history.empty_trend"), 430)
     observed = [
         _number(row.get("points"))
         if row.get("has_observation") is True and not row.get("estimated") else None
@@ -500,14 +619,14 @@ def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
         if row.get("estimated") and (score := _number(row.get("points"))) is not None
     ]
     if all(score is None for score in observed) and not estimated:
-        return _empty_figure(title, t("emin_history.empty_trend"), 350)
+        return _empty_figure(title, t("emin_history.empty_trend"), 430)
     figure = go.Figure(go.Scatter(
         x=[row["day"] for row in rows],
         y=observed,
         name=t("emin_history.observed"),
         mode="lines+markers",
         line={"color": BRAND_ACCENT, "width": 2},
-        marker={"size": 7, "color": BRAND_ACCENT},
+        marker={"size": 4, "color": BRAND_ACCENT},
         hovertemplate="%{x|%d-%m-%Y}<br>%{y:.2f}<extra>%{fullData.name}</extra>",
         connectgaps=False,
     ))
@@ -528,7 +647,7 @@ def _trend_figure(rows: list[dict], unit: str | None) -> go.Figure:
     scores = [score for score in observed if score is not None] + [score for _, score in estimated]
     if max(scores) == 0:
         figure.update_yaxes(range=[-0.05, 1], tickvals=[0, 1])
-    figure = apply_dashboard_theme(figure, title=title, height=350)
+    figure = apply_dashboard_theme(figure, title=title, height=430)
     figure.update_layout(margin={"l": 62, "r": 22, "t": 52, "b": 70}, legend={"orientation": "h", "y": -0.28})
     return figure
 

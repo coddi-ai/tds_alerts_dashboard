@@ -53,6 +53,42 @@ def create_layout() -> html.Div:
             dcc.Store(id="emin-history-evidence-context"),
             html.Div(
                 [
+                    dbc.Row([
+                        dbc.Col(
+                            [
+                                dcc.Tabs(
+                                    id="emin-history-fleet-window",
+                                    value="week",
+                                    children=[
+                                        dcc.Tab(
+                                            label=t("emin_history.period_week"), value="week",
+                                            className="custom-tab pred-tab",
+                                            selected_className="custom-tab--selected pred-tab--selected",
+                                        ),
+                                        dcc.Tab(
+                                            label=t("emin_history.period_month"), value="month",
+                                            className="custom-tab pred-tab",
+                                            selected_className="custom-tab--selected pred-tab--selected",
+                                        ),
+                                        dcc.Tab(
+                                            label=t("emin_history.period_quarter"), value="quarter",
+                                            className="custom-tab pred-tab",
+                                            selected_className="custom-tab--selected pred-tab--selected",
+                                        ),
+                                        dcc.Tab(
+                                            label=t("emin_history.period_history"), value="history",
+                                            className="custom-tab pred-tab",
+                                            selected_className="custom-tab--selected pred-tab--selected",
+                                        ),
+                                    ],
+                                    className="mb-2",
+                                ),
+                                dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
+                                html.P(t("emin_history.variation_chart_note"), className="small text-muted mt-1 mb-0"),
+                            ],
+                            xs=12,
+                        ),
+                    ], class_name="g-3 mb-3"),
                     dbc.Card([
                         section_header(t("emin_history.top_title"), "fas fa-list-ol"),
                         dbc.CardBody([
@@ -69,7 +105,6 @@ def create_layout() -> html.Div:
                             dcc.Loading(html.Div(id="emin-history-criticality"), type="circle"),
                         ]),
                     ], class_name="shadow-sm unit-card mb-3"),
-                    dcc.Loading(html.Div(id="emin-history-kpis"), type="circle"),
                     dbc.Card(
                         [
                             html.Div(section_header(t("emin_history.ranking_title"), "fas fa-list-ol"), id="emin-history-ranking-heading", tabIndex=-1),
@@ -140,20 +175,51 @@ def create_layout() -> html.Div:
                         html.Label(t("emin_history.filter_unit"), htmlFor="emin-history-unit", className="fleet-search__label"),
                         dcc.Dropdown(id="emin-history-unit", clearable=False, searchable=True),
                     ], className="fleet-search"),
-                    dcc.Loading(html.Div(id="emin-history-status"), type="circle"),
                     dbc.Row(
                         [
                             dbc.Col(
                                 dbc.Card([
                                     section_header(t("emin_history.trend_section"), "fas fa-chart-line"),
                                     dbc.CardBody([
-                                        html.P(t("emin_history.trend_open_records"), className="small text-muted mb-1"),
+                                        html.P(
+                                            [t("emin_history.trend_open_records"), " ", t("emin_history.trend_direction_note")],
+                                            className="small text-muted mb-1",
+                                        ),
+                                        dcc.Tabs(
+                                            id="emin-history-trend-window",
+                                            value="week",
+                                            children=[
+                                                dcc.Tab(
+                                                    label=t("emin_history.period_week"),
+                                                    value="week",
+                                                    className="custom-tab pred-tab",
+                                                    selected_className="custom-tab--selected pred-tab--selected",
+                                                ),
+                                                dcc.Tab(
+                                                    label=t("emin_history.period_month"),
+                                                    value="month",
+                                                    className="custom-tab pred-tab",
+                                                    selected_className="custom-tab--selected pred-tab--selected",
+                                                ),
+                                                dcc.Tab(
+                                                    label=t("emin_history.period_quarter"), value="quarter",
+                                                    className="custom-tab pred-tab",
+                                                    selected_className="custom-tab--selected pred-tab--selected",
+                                                ),
+                                                dcc.Tab(
+                                                    label=t("emin_history.period_history"), value="history",
+                                                    className="custom-tab pred-tab",
+                                                    selected_className="custom-tab--selected pred-tab--selected",
+                                                ),
+                                            ],
+                                            className="mb-2",
+                                        ),
                                         dcc.Store(id="emin-history-trend-action"),
                                         dcc.Graph(
                                             id="emin-history-trend",
                                             config={"displayModeBar": False},
                                             responsive=True,
-                                            style={"height": "350px", "width": "100%"},
+                                            style={"height": "430px", "width": "100%"},
                                         ),
                                     ]),
                                 ], class_name="shadow-sm unit-card",
@@ -164,10 +230,12 @@ def create_layout() -> html.Div:
                         ],
                         className="g-3",
                     ),
+                    dcc.Loading(html.Div(id="emin-history-status"), type="circle"),
                     dcc.Loading(html.Div(id="emin-history-evidence"), type="circle"),
                     dbc.Card([
                         section_header(t("emin_history.full_chronology"), "fas fa-history"),
-                        dbc.CardBody([
+                        dbc.CardBody(html.Details([
+                            html.Summary(t("emin_history.chronology_expand")),
                             dbc.Row([
                                 dbc.Col([
                                     html.Label(t("emin_history.chronology_type"), htmlFor="emin-history-record-type", className="fleet-search__label"),
@@ -194,7 +262,7 @@ def create_layout() -> html.Div:
                                 dbc.Button(t("emin_history.chronology_previous"), id="emin-history-record-previous", color="secondary", outline=True, size="sm", disabled=True),
                                 dbc.Button(t("emin_history.chronology_next"), id="emin-history-record-next", color="secondary", outline=True, size="sm", disabled=True),
                             ], className="d-flex gap-2 mt-3"),
-                        ]),
+                        ], open=False)),
                     ], class_name="shadow-sm unit-card mb-3"),
                     dbc.Alert(
                         [html.I(className="fas fa-info-circle me-2"), t("emin_history.detail_note")],
