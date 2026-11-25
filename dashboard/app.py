@@ -36,6 +36,7 @@ from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
 from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 from dashboard.callbacks.overview_general_callbacks import register_overview_general_callbacks
+from dashboard.callbacks.emin_historical_callbacks import register_emin_historical_callbacks
 from dashboard.callbacks.unit_summary_callbacks import register_unit_summary_callbacks
 from dashboard.components.language_selector import register_language_callbacks
 
@@ -161,6 +162,7 @@ server = app.server
 # after the app is created since register_page() looks up the active app).
 import dashboard.pages.index
 import dashboard.pages.overview_general
+import dashboard.pages.overview_emin_historical
 import dashboard.pages.overview_unit_summary
 import dashboard.pages.monitoring_alerts
 import dashboard.pages.monitoring_telemetry
@@ -239,6 +241,7 @@ register_machines_callbacks(app)
 register_reports_callbacks(app)
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
+register_emin_historical_callbacks(app)
 register_unit_summary_callbacks(app)
 register_health_index_callbacks(app)
 register_predictive_callbacks(app)

@@ -44,11 +44,12 @@ def register_sidebar_callbacks(app: dash.Dash) -> None:
             if (!n_clicks) {
                 throw window.dash_clientside.PreventUpdate;
             }
-            const mobileEminReport =
+            const path = String(pathname || "");
+            const mobileEminFocusedView =
                 String(client || "").toUpperCase() === "EMIN" &&
-                String(pathname || "").startsWith("/monitoring/mantenciones") &&
+                (path.startsWith("/monitoring/mantenciones") || path === "/overview/emin-historical") &&
                 window.matchMedia("(max-width: 900px)").matches;
-            if (mobileEminReport) {
+            if (mobileEminFocusedView) {
                 return collapsed;
             }
             return !collapsed;
@@ -62,17 +63,18 @@ def register_sidebar_callbacks(app: dash.Dash) -> None:
     )
 
     # Apply the persisted flag to #dashboard-shell as a class. On narrow EMIN
-    # reliability screens the sidebar starts collapsed, while the same toggle
+    # focused views the sidebar starts collapsed, while the same toggle
     # remains available to open it as an overlay. Other routes/clients preserve
     # the stored desktop behavior.
     app.clientside_callback(
         """
         function(collapsed, n_clicks, client, pathname) {
-            const mobileEminReport =
+            const path = String(pathname || "");
+            const mobileEminFocusedView =
                 String(client || "").toUpperCase() === "EMIN" &&
-                String(pathname || "").startsWith("/monitoring/mantenciones") &&
+                (path.startsWith("/monitoring/mantenciones") || path === "/overview/emin-historical") &&
                 window.matchMedia("(max-width: 900px)").matches;
-            if (mobileEminReport) {
+            if (mobileEminFocusedView) {
                 return (n_clicks || 0) % 2 === 1 ? "mobile-nav-open" : "sidebar-collapsed";
             }
             return collapsed ? "sidebar-collapsed" : "";

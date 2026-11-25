@@ -51,6 +51,8 @@ def test_known_client_service_from_config():
 
     assert is_service_enabled("CDA", "predictive-motor") is True
     assert is_service_enabled("EMIN", "predictive-motor") is False
+    assert is_service_enabled("EMIN", "overview-emin-historical") is True
+    assert is_service_enabled("CDA", "overview-emin-historical") is False
     assert is_service_enabled("cda", "overview-general") is True  # case-insensitive client
 
     print("✅ CDA has predictive-motor, EMIN does not, client lookup is case-insensitive")

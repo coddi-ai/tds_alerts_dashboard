@@ -16,6 +16,7 @@
   },
   "EMIN": {
     "overview-general": {"display": true, "dummy": false},
+    "overview-emin-historical": {"display": true, "dummy": false},
     "monitoring-alerts": {"display": true, "dummy": false},
     "monitoring-telemetry": {"display": false, "dummy": false},
     "monitoring-oil": {"display": true, "dummy": false},

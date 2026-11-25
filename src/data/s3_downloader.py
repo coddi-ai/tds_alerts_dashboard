@@ -59,7 +59,7 @@ class S3Downloader:
             prefix: S3 prefix (folder path)
 
         Returns:
-            List of dicts with 'Key' and 'Size' for each object
+            List of dicts with the key, size and S3 modification time for each object
         """
         try:
             objects = []
@@ -70,7 +70,11 @@ class S3Downloader:
                     for obj in page['Contents']:
                         # Skip folders (objects ending with /)
                         if not obj['Key'].endswith('/'):
-                            objects.append({'Key': obj['Key'], 'Size': obj['Size']})
+                            objects.append({
+                                'Key': obj['Key'],
+                                'Size': obj['Size'],
+                                'LastModified': obj.get('LastModified'),
+                            })
 
             logger.info(f"Found {len(objects)} objects with prefix '{prefix}'")
             return objects
@@ -82,7 +86,7 @@ class S3Downloader:
             logger.error(f"Error listing objects: {e}")
             raise
     
-    def download_file(self, s3_key: str, local_path: Path) -> bool:
+    def download_file(self, s3_key: str, local_path: Path, modified_at=None) -> bool:
         """
         Download a single file from S3.
         
@@ -122,6 +126,13 @@ class S3Downloader:
                 s3_key, 
                 local_path_str
             )
+
+            # Preserve the source object's timestamp. The folder sync uses it
+            # alongside the size so same-size objects (such as latest.json
+            # pointers) are refreshed when S3 has a newer version.
+            if modified_at is not None:
+                modified_timestamp = modified_at.timestamp()
+                os.utime(local_path_str, (modified_timestamp, modified_timestamp))
             
             logger.debug(f"Downloaded: {s3_key} -> {local_path}")
             return True
@@ -143,7 +154,8 @@ class S3Downloader:
         preserve_structure: bool = True
     ) -> dict:
         """
-        Sync all files from an S3 folder to local directory, based on file size.
+        Sync all files from an S3 folder to local directory, based on file size
+        and the remote modification time when available.
 
         Downloads new files, re-downloads files whose size differs from the
         local copy, skips files whose size matches, and deletes local files
@@ -190,11 +202,14 @@ class S3Downloader:
 
             needs_download = True
             if local_path.exists():
-                if local_path.stat().st_size == s3_size:
-                    needs_download = False
+                local_stat = local_path.stat()
+                if local_stat.st_size == s3_size:
+                    modified_at = obj.get('LastModified')
+                    if modified_at is None or local_stat.st_mtime >= modified_at.timestamp():
+                        needs_download = False
 
             if needs_download:
-                if self.download_file(s3_key, local_path):
+                if self.download_file(s3_key, local_path, obj.get('LastModified')):
                     downloaded_count += 1
                 else:
                     failed_count += 1

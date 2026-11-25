@@ -993,3 +993,125 @@
     width: 320px;
     max-width: 100%;
 }
+
+/* EMIN historical review: reuse the dashboard's Bootstrap card language while
+   keeping the dense evidence table readable on smaller screens. */
+.emin-history-page {
+    color: #2c3e50;
+}
+.emin-history-card {
+    border: 1px solid #e7ebee;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(26, 37, 47, 0.045);
+    background: #fff;
+}
+.emin-history-card-header {
+    background: #fff;
+    border-bottom-color: #edf0f2;
+    color: #2c3e50;
+    font-weight: 600;
+}
+.emin-history-filter-title {
+    color: #2c3e50;
+    font-size: 0.95rem;
+    font-weight: 650;
+    margin-bottom: 12px;
+}
+.emin-history-meta-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+.emin-history-meta-pill {
+    background: #f3f6f8;
+    border: 1px solid #e7ebee;
+    border-radius: 999px;
+    color: #5d6d75;
+    font-size: 0.78rem;
+    padding: 4px 10px;
+}
+.emin-history-kpi-top {
+    align-items: center;
+    color: #687780;
+    display: flex;
+    font-size: 0.8rem;
+    justify-content: space-between;
+}
+.emin-history-kpi-label {
+    font-weight: 600;
+}
+.emin-history-kpi-icon {
+    color: #3498db;
+    font-size: 0.95rem;
+}
+.emin-history-kpi-value {
+    color: #2c3e50;
+    font-size: clamp(1.35rem, 2vw, 1.75rem);
+    font-weight: 700;
+    line-height: 1.2;
+    margin-top: 8px;
+}
+.emin-history-kpi-detail {
+    color: #7f8c8d;
+    font-size: 0.74rem;
+    margin-top: 5px;
+    min-height: 1.1em;
+}
+.emin-history-table-wrap,
+.emin-history-evidence-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+}
+.emin-history-table th,
+.emin-history-evidence-table th {
+    background: #f7f9fa;
+    color: #53636c;
+    font-size: 0.74rem;
+    font-weight: 650;
+    white-space: nowrap;
+}
+.emin-history-table td,
+.emin-history-evidence-table td {
+    font-size: 0.78rem;
+    vertical-align: top;
+}
+.emin-history-table td:last-child,
+.emin-history-evidence-table td:last-child {
+    min-width: 150px;
+    overflow-wrap: anywhere;
+}
+.emin-history-row-selected > td {
+    background: #eef7fc !important;
+}
+.emin-history-evidence-heading {
+    color: #2c3e50;
+    font-size: 0.95rem;
+}
+.emin-history-method-note {
+    border: 1px solid #e7ebee;
+    color: #5d6d75;
+    font-size: 0.82rem;
+}
+@media (max-width: 575px) {
+    .emin-history-page {
+        padding: 14px !important;
+    }
+    #emin-history-trend .xtick text,
+    #emin-history-trend .ytitle,
+    #emin-history-groups .xtick text,
+    #emin-history-groups .xtitle {
+        display: none;
+    }
+    #emin-history-groups .ytick text {
+        font-size: 9px !important;
+    }
+    .emin-history-meta-list {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 5px;
+    }
+    .emin-history-meta-pill {
+        max-width: 100%;
+        white-space: normal;
+    }
+}

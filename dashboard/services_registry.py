@@ -28,7 +28,7 @@ SERVICE_SECTIONS = [
         "section": "overview",
         "label": "Resumen",
         "icon": "fas fa-tachometer-alt",
-        "services": ["overview-general"],
+        "services": ["overview-general", "overview-emin-historical"],
     },
     {
         "section": "monitoring",
@@ -58,6 +58,7 @@ SERVICE_SECTIONS = [
 
 SERVICE_LABELS = {
     "overview-general": "General",
+    "overview-emin-historical": "Histórico de flota",
     "monitoring-alerts": "Alertas",
     "monitoring-telemetry": "Telemetría",
     "monitoring-oil": "Aceite",
@@ -75,6 +76,7 @@ SERVICE_LABELS = {
 # service id / admin nav id -> URL path.
 NAV_PATHS = {
     "overview-general": "/overview/general",
+    "overview-emin-historical": "/overview/emin-historical",
     "monitoring-alerts": "/monitoring/alerts",
     "monitoring-telemetry": "/monitoring/telemetry",
     "monitoring-oil": "/monitoring/oil",
@@ -97,6 +99,7 @@ NAV_PATHS = {
 # dashboard/layout.py), so a link is never mistaken for its own section in the rail.
 NAV_ICONS = {
     "overview-general": "fas fa-th-large",
+    "overview-emin-historical": "fas fa-history",
     "monitoring-alerts": "fas fa-bell",
     "monitoring-telemetry": "fas fa-wave-square",
     "monitoring-oil": "fas fa-oil-can",
@@ -118,6 +121,7 @@ NAV_ICONS = {
 # no leading/trailing slash) -> service id.
 SERVICE_EXACT_ROUTES = {
     "overview/general": "overview-general",
+    "overview/emin-historical": "overview-emin-historical",
     "monitoring/alerts": "monitoring-alerts",
     "monitoring/telemetry": "monitoring-telemetry",
     "monitoring/oil": "monitoring-oil",

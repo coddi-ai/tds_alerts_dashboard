@@ -30,6 +30,7 @@ Dashboard multi-técnica que consolida **análisis de aceite**, **alertas operac
 | 🕐 **Update Data** | Frescura de datos | Hora de última actualización por fuente |
 | 🚨 **Alerts** | Alertas enriquecidas | Telemetría + aceite + GPS + diagnóstico |
 | 🧪 **Oil** | Análisis tribológico | Muestras, límites Stewart, clasificación AI |
+| 🕘 **Histórico de flota EMIN** | Vista exclusiva en Resumen para el ranking y la evolución histórica de los equipos con evidencia fuente | Paquete EMIN versionado y sincronizado con datos del dashboard ([contrato](documentation/emin_historical_dashboard.md)) |
 | 🔮 **Predictive** | Modelos predictivos por componente | Ranking 0-100 por modo de falla (motor, transmisión) |
 | 🤖 **Campbell AI** v1.1.3 | Asistente de mantenimiento basado en agentes | Consulta las mismas fuentes y permisos; gráficos interactivos, historial por usuario respaldado en S3 |
 
