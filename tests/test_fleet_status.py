@@ -616,3 +616,89 @@ def test_the_failure_report_unit_list_comes_from_the_golden_file(monkeypatch):
     monkeypatch.setattr(callbacks, "is_service_dummy", lambda client, sid: False)
     units, notice = callbacks.load_units("TESTCO", ["TESTCO"])
     assert notice is None and units == ["T-9", "T-10"]
+
+
+# ---------------------------------------------------------------------------
+# S3: the file is published whole, never deleted, only when asked
+# ---------------------------------------------------------------------------
+
+class _StubS3:
+    def __init__(self, existing=None):
+        self.objects = dict(existing or {})
+        self.puts = []
+
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            from botocore.exceptions import ClientError
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        body = self.objects[Key]
+        import hashlib
+        return {"ETag": f'"{hashlib.md5(body).hexdigest()}"', "ContentLength": len(body)}
+
+    def put_object(self, Bucket, Key, Body, **kwargs):
+        self.objects[Key] = Body
+        self.puts.append((Bucket, Key, kwargs))
+
+
+def test_the_s3_key_mirrors_the_local_layout_under_the_prefix_the_app_downloads():
+    from src.data.fleet_status_s3 import FleetS3Config
+
+    key = FleetS3Config(bucket="b").key("CAPSTONE")
+    assert key == "MultiTechnique Alerts/general/golden/capstone/fleet_status.parquet"
+    assert key.startswith("MultiTechnique Alerts/")  # what src/data/s3_downloader mirrors into data/
+    assert key.replace("MultiTechnique Alerts/", "", 1) == "general/golden/capstone/fleet_status.parquet"
+
+
+def test_upload_puts_the_file_once_and_skips_it_when_s3_already_has_it(monkeypatch):
+    from src.data.fleet_status_s3 import FleetS3Config, upload_client
+
+    _canned(monkeypatch)
+    path = fs.refresh_client("TESTCO")
+    s3, config = _StubS3(), FleetS3Config(bucket="bucket")
+    assert upload_client("TESTCO", s3=s3, config=config) == "uploaded"
+    assert s3.objects[config.key("TESTCO")] == path.read_bytes()
+    assert upload_client("TESTCO", s3=s3, config=config) == "unchanged" and len(s3.puts) == 1
+    _canned(monkeypatch, units=("U1", "U2", "U3"))
+    fs.refresh_client("TESTCO")
+    assert upload_client("TESTCO", s3=s3, config=config) == "uploaded" and len(s3.puts) == 2  # changed: overwritten
+
+
+def test_upload_without_a_local_file_fails_and_without_a_bucket_is_refused(monkeypatch):
+    from src.data.alert_partition_s3 import S3SyncError
+    from src.data.fleet_status_s3 import FleetS3Config, upload_client
+
+    _isolated_data_root(monkeypatch)
+    with pytest.raises(S3SyncError, match="no local fleet status file"):
+        upload_client("TESTCO", s3=_StubS3(), config=FleetS3Config(bucket="b"))
+    monkeypatch.delenv("FLEET_STATUS_S3_BUCKET", raising=False)
+    monkeypatch.delenv("BUCKET_NAME", raising=False)
+    with pytest.raises(S3SyncError, match="No S3 bucket"):
+        FleetS3Config.from_env()
+
+
+def test_the_script_uploads_only_when_asked_and_a_failed_upload_keeps_the_local_file(monkeypatch):
+    from src.data import fleet_status_s3
+
+    _canned(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fleet_status_s3, "upload_client", lambda client, root=None, **kw: calls.append(client) or "uploaded")
+    assert _script().run(["testco"]) == 0 and calls == []            # by hand: local only
+    assert _script().run(["testco"], sync_s3=True) == 0 and calls == ["testco"]
+
+    before = fs.golden_path("TESTCO").read_bytes()
+
+    def refused(client, root=None, **kw):
+        raise OSError("AccessDenied")
+
+    monkeypatch.setattr(fleet_status_s3, "upload_client", refused)
+    assert _script().run(["testco"], sync_s3=True) == 2               # built fine, not published
+    assert fs.golden_path("TESTCO").read_bytes() == before
+
+
+def test_a_client_that_failed_to_build_is_not_uploaded(monkeypatch):
+    from src.data import fleet_status_s3
+
+    _canned(monkeypatch, units=())
+    calls = []
+    monkeypatch.setattr(fleet_status_s3, "upload_client", lambda client, root=None, **kw: calls.append(client))
+    assert _script().run(["testco"], sync_s3=True) == 1 and calls == []

@@ -31,6 +31,19 @@ def text_of(node) -> str:
     return " ".join(parts)
 
 
+def label_text(label) -> str:
+    """The words of a tab label (a string or a component), in reading order, spaces collapsed."""
+    def strings(node):
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, Component):
+            yield from strings(getattr(node, "children", None))
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                yield from strings(child)
+    return " ".join("".join(strings(label)).split())
+
+
 def buttons(node):
     return [c for c in walk(node) if type(c).__name__ == "Button"]
 
@@ -505,9 +518,58 @@ def test_the_oil_tabs_and_copy():
     from dashboard.tabs.tab_oil import create_layout
 
     tabs = [c for c in walk(create_layout()) if type(c).__name__ == "Tab"]
-    assert [t.label for t in tabs] == ["Visión de Flota", "Detalle de Reporte", "Cumplimiento de Laboratorio",
-                                       "Panel de Frecuencia"]
+    assert [label_text(t.label) for t in tabs] == ["Visión de Flota", "Detalle de Reporte", "Cumplimiento de Laboratorio",
+                                                   "Panel de Frecuencia Preview", "Análisis por Componente Preview"]
     assert all("oil-tab" in t.className and "pred-tab--selected" in t.selected_className for t in tabs)
+
+
+def _pills(component):
+    return [c for c in walk(component) if getattr(c, "className", None) == "oil-preview-pill"]
+
+
+def test_only_a_preview_tab_carries_the_preview_pill_after_its_label():
+    from dashboard.tabs.tab_oil import create_layout
+
+    tabs = {t.value: t for t in walk(create_layout()) if type(t).__name__ == "Tab"}
+    assert {value: len(_pills(tab.label)) for value, tab in tabs.items()} == {
+        "fleet-overview": 0, "report-detail": 0, "lab-compliance": 0, "frequency": 1, "component-analysis": 1}
+    for value, text in (("frequency", "Panel de Frecuencia"), ("component-analysis", "Análisis por Componente")):
+        label = tabs[value].label
+        assert label.children[0] == text and _pills(label)[0].children == "Preview"   # the pill follows the text
+        assert label.children[-1] is _pills(label)[0]
+    # The tab bar is part of the page, not of one view: it is there whichever tab is open (also when a
+    # URL opens Detalle de Reporte straight away).
+    for page in (create_layout(), create_layout(unit="U1", component="motor")):
+        by_value = {t.value: t for t in walk(page) if type(t).__name__ == "Tab"}
+        assert all(len(_pills(by_value[value].label)) == 1 for value in ("frequency", "component-analysis"))
+        assert not any(_pills(t.label) for value, t in by_value.items() if value not in ("frequency", "component-analysis"))
+
+
+def test_the_preview_pill_follows_the_per_tab_flag_and_is_also_after_the_page_title(monkeypatch):
+    from dashboard.components import oil_ui
+    from dashboard.tabs.tab_frequency import create_frequency_tab
+    from dashboard.tabs.tab_oil import create_layout
+
+    heading = [c for c in walk(create_frequency_tab()) if type(c).__name__ == "H3"][0]
+    assert label_text(heading) == "Panel de Frecuencia Preview" and len(_pills(heading)) == 1
+    assert heading.children[0] == "Panel de Frecuencia"
+    # Taking the tab out of the preview set removes the pill from the tab bar and from the title.
+    monkeypatch.setattr(oil_ui, "PREVIEW_TABS", frozenset())
+    tab = [t for t in walk(create_layout()) if type(t).__name__ == "Tab" and t.value == "frequency"][0]
+    assert tab.label == "Panel de Frecuencia"
+    heading = [c for c in walk(create_frequency_tab()) if type(c).__name__ == "H3"][0]
+    assert label_text(heading) == "Panel de Frecuencia" and not _pills(heading)
+
+
+def test_the_preview_pill_is_styled_as_specified():
+    import pathlib
+
+    css = (pathlib.Path(__file__).resolve().parents[1] / "dashboard" / "assets" / "oil_monitor.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.oil-preview-pill\s*\{([^}]*)\}", css).group(1)
+    declared = dict(re.findall(r"([\w-]+)\s*:\s*([^;]+);", rule))
+    assert declared["font-size"] == "10px" and declared["font-weight"] == "700"
+    assert declared["letter-spacing"] == ".06em" and declared["text-transform"] == "uppercase"
+    assert declared["background"] == "#ede9fe" and declared["color"] == "#5b21b6"
 
 
 def test_no_oil_module_draws_a_left_border_accent():

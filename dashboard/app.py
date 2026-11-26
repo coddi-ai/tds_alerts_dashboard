@@ -36,6 +36,7 @@ from dashboard.callbacks.machines_callbacks import register_machines_callbacks
 from dashboard.callbacks.reports_callbacks import register_reports_callbacks
 from dashboard.callbacks.oil_report_pdf_callbacks import register_oil_report_pdf_callbacks
 from dashboard.callbacks.frequency_callbacks import register_frequency_callbacks
+from dashboard.callbacks.component_analysis_callbacks import register_component_analysis_callbacks
 from dashboard.callbacks.mantenciones_general_callbacks import register_mantenciones_general_callbacks
 from dashboard.callbacks.overview_general_callbacks import register_overview_general_callbacks
 from dashboard.callbacks.unit_summary_callbacks import register_unit_summary_callbacks
@@ -241,6 +242,7 @@ register_machines_callbacks(app)
 register_reports_callbacks(app)
 register_oil_report_pdf_callbacks(app)
 register_frequency_callbacks(app)
+register_component_analysis_callbacks(app)
 register_mantenciones_general_callbacks(app)
 register_overview_general_callbacks(app)
 register_unit_summary_callbacks(app)

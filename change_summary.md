@@ -776,7 +776,11 @@ Requirement: *Unit status dashboard (criteria visibility, "Sin Datos" fix, unit 
 2. **The S3 start-up sync deletes any local file S3 does not have**, so a file written by the script disappears on every
    start until the next 10:30 (it happened on the first local run: the tab was empty). Hence the build at app start, which runs
    *after* the mirror (`__main__` of `dashboard/app.py`, not at import), in every environment, on every start that finds a file
-   missing (no once-a-day marker). Pushing the file to S3 (as the partitions are) was not done.
+   missing (no once-a-day marker). The file is also published to S3 (next point).
+2b. **S3 publish** (added after the first version): `scripts/build_fleet_status.py --sync-s3` puts each file under
+   `MultiTechnique Alerts/general/golden/{client}/fleet_status.parquet` (`src/data/fleet_status_s3.py`; no deletes, unchanged files
+   skipped). The scheduled 10:30 run passes it; a run by hand does not. On 2026-11-26 the four local files (capstone, cda, emin,
+   enex) were uploaded once by hand; they were built from the local data mirror. The app task needs `s3:PutObject` on that prefix.
 3. **EMIN's alert partitions are refreshed at 11:30** (its CSV arrives ~11:10), after this 10:30 run: EMIN's file carries the
    previous day's alerts until the next day's run. Other clients' alerts are partitioned weekly (Wednesday 08:00).
 4. **A stale alert feed now also degrades units with no alerts** (they are Normal-with-old-data, and the age rule applies as for any

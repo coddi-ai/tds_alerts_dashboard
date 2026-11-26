@@ -151,4 +151,10 @@ The General tab does not evaluate the rule when you open it. `scripts/build_flee
   files S3 does not have - the golden files included - so after every start there is no file until the next 10:30. To avoid
   an empty tab, `dashboard/app.py` builds the missing ones (`--only-missing`) right after the mirror, in every environment
   (not only production); `FLEET_STATUS_SCHEDULER_ENABLED=false` turns that and the 10:30 job off. By hand:
-  `python scripts/build_fleet_status.py [--client capstone] [--only-missing]`.
+  `python scripts/build_fleet_status.py [--client capstone] [--only-missing] [--sync-s3]`.
+* **S3.** The scheduled 10:30 run passes `--sync-s3`: each file is put whole under
+  `s3://{bucket}/MultiTechnique Alerts/general/golden/{client}/fleet_status.parquet` (`src/data/fleet_status_s3.py`), the prefix the
+  app's start-up download mirrors into `data/`, so every instance receives the file instead of losing it. An unchanged file is
+  not re-uploaded, nothing is deleted, a failed upload leaves the local file valid and exits 2. A run by hand does **not**
+  upload unless `--sync-s3` is given, so a development machine cannot overwrite the shared bucket by accident. Bucket:
+  `FLEET_STATUS_S3_BUCKET` (else `BUCKET_NAME`); prefix: `FLEET_STATUS_S3_PREFIX`. The app task needs `s3:PutObject` there.

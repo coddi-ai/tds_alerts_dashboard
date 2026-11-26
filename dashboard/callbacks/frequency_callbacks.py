@@ -24,6 +24,7 @@ from dashboard.components.oil_frequency import (
 )
 from dashboard.components.oil_table import register_view_controller
 from src.i18n import t
+from src.utils.dash_ids import from_id_text
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -121,4 +122,4 @@ def register_frequency_callbacks(app):
         clicked = ctx.triggered_id
         if not isinstance(clicked, dict) or not ctx.triggered or not ctx.triggered[0].get('value') or not client:
             raise PreventUpdate
-        return report_navigation(client, clicked.get('unit'), clicked.get('component'))
+        return report_navigation(client, from_id_text(clicked.get('unit', '')), from_id_text(clicked.get('component', '')))

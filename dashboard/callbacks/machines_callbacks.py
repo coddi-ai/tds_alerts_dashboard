@@ -20,6 +20,7 @@ from dashboard.components.oil_fleet_matrix import (
 )
 from dashboard.components.oil_table import register_view_controller
 from src.data.loaders import load_oil_classified, load_machine_status_for_client
+from src.utils.dash_ids import from_id_text
 from src.utils.logger import get_logger
 from dashboard.components.oil_machine_detail import build_machine_detail
 from shared.severity import STATUS_TIER_BY_ESTADO
@@ -283,7 +284,7 @@ def register_machines_callbacks(app):
         clicked = _clicked()
         if not clicked or not clicked.get('unit'):
             raise PreventUpdate
-        uid = clicked['unit']
+        uid = from_id_text(clicked['unit'])
         return uid, uid, {'unit_id': uid}
 
     # ========================================
@@ -302,7 +303,7 @@ def register_machines_callbacks(app):
         clicked = _clicked()
         if not clicked or not client:
             raise PreventUpdate
-        return report_navigation(client, clicked.get('unit'), clicked.get('component'))
+        return report_navigation(client, from_id_text(clicked.get('unit', '')), from_id_text(clicked.get('component', '')))
 
     # ========================================
     # Compat: component grouping toggle

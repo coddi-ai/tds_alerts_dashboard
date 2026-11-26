@@ -260,8 +260,9 @@ def build_command(job: str, settings: Optional[Settings] = None) -> List[str]:
     (non ``--backfill``) run of the script: rebuild what changed, then sync to S3."""
     settings = settings or load_settings()
     if job in FLEET_JOBS:
-        # Every client; the start-up catch-up only builds the ones that have no file yet.
-        return [sys.executable, str(FLEET_SCRIPT_PATH)] + (["--only-missing"] if job == JOB_FLEET_STARTUP else [])
+        # Every client. The start-up catch-up only builds the ones that have no file yet and keeps them local; the
+        # daily job also publishes to S3, so the next start of every instance receives the file instead of losing it.
+        return [sys.executable, str(FLEET_SCRIPT_PATH)] + (["--only-missing"] if job == JOB_FLEET_STARTUP else ["--sync-s3"])
     command = [sys.executable, str(SCRIPT_PATH)]
     if job == JOB_DAILY:
         for client in settings.daily_clients:

@@ -1,5 +1,6 @@
 """
-Unified Oil Tab with Internal Tabs (Fleet Overview, Report Detail, Lab Compliance, Frequency Panel).
+Unified Oil Tab with Internal Tabs (Fleet Overview, Report Detail, Lab Compliance, Frequency Panel,
+Component Analysis).
 
 This tab combines the Fleet Overview (former overview > general) and
 Report Detail (former monitoring > oil) views into a single navigation
@@ -11,9 +12,19 @@ and assets/oil_tabs_a11y.js makes the tabs reachable with the keyboard.
 from src.i18n import t
 from dash import html, dcc
 import dash_bootstrap_components as dbc
+from dashboard.components.oil_ui import tab_label
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# The tab bar, left to right: (dcc.Tab value, i18n key of its label).
+OIL_TABS = (
+    ('fleet-overview', 'tab_oil.vision_de_flota'),
+    ('report-detail', 'tab_oil.detalle_de_reporte'),
+    ('lab-compliance', 'tab_oil.cumplimiento_laboratorio'),
+    ('frequency', 'tab_oil.panel_de_frecuencia'),
+    ('component-analysis', 'tab_oil.analisis_por_componente'),
+)
 
 
 def create_layout(unit: str | None = None, component: str | None = None) -> html.Div:
@@ -51,35 +62,19 @@ def create_layout(unit: str | None = None, component: str | None = None) -> html
             dbc.Col(html.Div(id="oil-source-status"), xs=12, sm="auto", className="ds-header-slot"),
         ], className="mb-4"),
 
-        # Internal Tabs
+        # Internal Tabs. A tab listed in oil_ui.PREVIEW_TABS gets the "Preview" pill after its label.
         dcc.Tabs(
             id='oil-internal-tabs',
             value='report-detail' if to_report else 'fleet-overview',
             children=[
                 dcc.Tab(
-                    label=t("tab_oil.vision_de_flota"),
-                    value='fleet-overview',
+                    label=tab_label(t(label_key), tab_value),
+                    value=tab_value,
                     className='custom-tab pred-tab oil-tab',
                     selected_className='custom-tab--selected pred-tab--selected'
-                ),
-                dcc.Tab(
-                    label=t("tab_oil.detalle_de_reporte"),
-                    value='report-detail',
-                    className='custom-tab pred-tab oil-tab',
-                    selected_className='custom-tab--selected pred-tab--selected'
-                ),
-                dcc.Tab(
-                    label=t("tab_oil.cumplimiento_laboratorio"),
-                    value='lab-compliance',
-                    className='custom-tab pred-tab oil-tab',
-                    selected_className='custom-tab--selected pred-tab--selected'
-                ),
-                dcc.Tab(
-                    label=t("tab_oil.panel_de_frecuencia"),
-                    value='frequency',
-                    className='custom-tab pred-tab oil-tab',
-                    selected_className='custom-tab--selected pred-tab--selected'
-                ),
+                )
+                for tab_value, label_key in OIL_TABS
+            ] + [
                 # dcc.Tab(
                 #     label='Horómetro de Componentes',
                 #     value='component-hours',

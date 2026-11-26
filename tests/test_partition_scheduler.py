@@ -520,7 +520,8 @@ def test_the_fleet_status_time_and_switch_are_configurable(monkeypatch):
 
 def test_the_fleet_status_job_runs_its_own_script_for_every_client():
     command = ps.build_command("fleet_status")
-    assert command == [sys.executable, str(ps.FLEET_SCRIPT_PATH)] and ps.FLEET_SCRIPT_PATH.name == "build_fleet_status.py"
+    assert command == [sys.executable, str(ps.FLEET_SCRIPT_PATH), "--sync-s3"]  # the daily run publishes to S3
+    assert ps.FLEET_SCRIPT_PATH.name == "build_fleet_status.py"
     assert ps.build_command("fleet_status_startup")[2:] == ["--only-missing"]
 
 

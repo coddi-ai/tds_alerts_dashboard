@@ -11,7 +11,12 @@ Each client is built on its own. A client whose build fails keeps the file of it
 the file is written beside the target, checked, and swapped in with one atomic replace, so a failed run
 never leaves a partial or empty file - and the others are not held back by it.
 
-Exit status: 0 every client built (or had nothing to show), 1 at least one client failed.
+With ``--sync-s3`` each client built is then uploaded to S3 (``src/data/fleet_status_s3.py``: same layout under
+``MultiTechnique Alerts/general/golden/``, so the app's start-up download hands the file to every instance). The upload
+never touches the local file; a failed upload is logged and the local file stays valid.
+
+Exit status: 0 every client built (or had nothing to show), 1 at least one client failed to build,
+2 every build was fine but an S3 upload failed.
 
 The app runs this every day at 10:30 America/Santiago (``src/data/partition_scheduler.py``, 30 minutes after
 the 10:00 source update; ``FLEET_STATUS_TIME`` / ``FLEET_STATUS_SCHEDULER_ENABLED``) and once at start-up for
@@ -21,6 +26,7 @@ removes files S3 does not have, so a freshly deployed container starts without t
     python scripts/build_fleet_status.py                  # every client
     python scripts/build_fleet_status.py --client capstone
     python scripts/build_fleet_status.py --only-missing
+    python scripts/build_fleet_status.py --sync-s3          # also publish to S3 (what the scheduled run does)
 
 Environment: ``DASHBOARD_DATA_ROOT`` (data root).
 """
@@ -53,12 +59,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--client", dest="clients", action="append", metavar="CLIENT",
                         help="build only this client (repeatable); default: every known client")
+    parser.add_argument("--sync-s3", action="store_true",
+                        help="after building, upload each client's file to S3 (the scheduled run does; by hand it is opt-in)")
     parser.add_argument("--only-missing", action="store_true",
                         help="build only the clients that have no file yet (start-up catch-up)")
     return parser.parse_args(argv)
 
 
-def run(clients=None, only_missing: bool = False, root=None) -> int:
+def run(clients=None, only_missing: bool = False, root=None, sync_s3: bool = False) -> int:
     """Build every client in `clients` (default: all the known ones). Returns the exit status."""
     from config.settings import get_settings
     from src.data import fleet_status
@@ -71,6 +79,7 @@ def run(clients=None, only_missing: bool = False, root=None) -> int:
             return 0
 
     failed = []
+    built = []
     for client in names:
         started = time.monotonic()
         try:
@@ -83,10 +92,27 @@ def run(clients=None, only_missing: bool = False, root=None) -> int:
             logger.info("%s: no technique to show, nothing written", client)
         else:
             logger.info("%s: fleet status written to %s in %.1fs", client, path, time.monotonic() - started)
+            built.append(client)
+
+    upload_failed = []
+    if sync_s3:
+        from src.data import fleet_status_s3
+
+        for client in built:
+            try:
+                outcome = fleet_status_s3.upload_client(client, root)
+            except Exception:  # noqa: BLE001 - the local file is valid whatever S3 says; the next run retries
+                logger.exception("ERROR %s: the fleet status was built but could not be uploaded to S3", client)
+                upload_failed.append(client)
+                continue
+            logger.info("%s: fleet status %s in S3", client, outcome)
 
     if failed:
         logger.error("ERROR fleet status failed for: %s", ", ".join(failed))
         return 1
+    if upload_failed:
+        logger.error("ERROR fleet status not uploaded to S3 for: %s", ", ".join(upload_failed))
+        return 2
     return 0
 
 
@@ -95,7 +121,7 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     _load_env()
     args = parse_args(argv)
-    return run(args.clients, args.only_missing)
+    return run(args.clients, args.only_missing, sync_s3=args.sync_s3)
 
 
 if __name__ == "__main__":

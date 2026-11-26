@@ -19,10 +19,36 @@ from shared.severity import (
     STATUS_TIER_BY_ESTADO,
     STATUS_TIERS,
 )
+from src.i18n import t
 from src.status_scale import get_status
 
 # The neutral tone of a KPI that has no severity threshold (and of "no data").
 NEUTRAL = {"bg": "#f1f5f9", "text": "#475569", "border": "#e2e8f0", "fill": "#64748b"}
+
+# Tabs of the Monitor de Aceite that are still a preview: their intervals, mapping and thresholds are
+# placeholders until they are validated with real data. A tab named here (by its `dcc.Tab` value)
+# carries the "Preview" pill after its label in the tab bar, whichever tab is open, and after its page
+# title. Take its value out of this set when the tab leaves preview and the pill disappears everywhere.
+PREVIEW_TABS = frozenset({"frequency", "component-analysis"})
+
+
+def is_preview_tab(tab_value: str) -> bool:
+    return tab_value in PREVIEW_TABS
+
+
+def preview_pill() -> html.Span:
+    """The "Preview" pill. Violet, a color no status uses (see assets/oil_monitor.css); the word
+    itself is on the pill, so the color is never the only signal."""
+    return html.Span(t("oil_ui.preview"), className="oil-preview-pill")
+
+
+def tab_label(text: str, tab_value: str):
+    """A tab's label: the text, and the Preview pill after it when the tab is a preview.
+
+    The pill goes inside one wrapper element: Dash 4.4's `dcc.Tabs` cannot draw a label given as a
+    list of text and components (the whole tab bar fails to render). The space keeps the accessible
+    name "Panel de Frecuencia Preview" rather than running the two words together."""
+    return html.Span([text, " ", preview_pill()]) if is_preview_tab(tab_value) else text
 
 
 def canonical_estado(value) -> Optional[str]:
@@ -182,10 +208,12 @@ def status_banner(
     return html.Div([identity, right], className="oil-banner", style=surface, **attrs)
 
 
-def page_header(title: str, subtitle: Optional[str] = None, caption=None, *, tag: str = "h3") -> html.Div:
-    """Page title, its subtitle and, below, a metadata caption (record counts, data freshness...):
-    metadata is a caption, never a tile competing for attention (§5)."""
-    heading = html.H3(title, className="mt-4 mb-1") if tag == "h3" else html.H4(title, className="mt-4 mb-1")
+def page_header(title: str, subtitle: Optional[str] = None, caption=None, *, tag: str = "h3", badge=None) -> html.Div:
+    """Page title (with an optional `badge` after it, e.g. the Preview pill), its subtitle and, below,
+    a metadata caption (record counts, data freshness...): metadata is a caption, never a tile
+    competing for attention (§5)."""
+    text = [title, " ", badge] if badge is not None else title
+    heading = html.H3(text, className="mt-4 mb-1") if tag == "h3" else html.H4(text, className="mt-4 mb-1")
     return html.Div(
         [
             heading,

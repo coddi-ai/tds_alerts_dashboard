@@ -1,7 +1,7 @@
 """
 Callbacks for the unified Oil Tab.
 
-Handles switching between internal tabs (Fleet Overview / Report Detail / Lab Compliance / Frequency Panel / Component Hours).
+Handles switching between internal tabs (Fleet Overview / Report Detail / Lab Compliance / Frequency Panel / Component Analysis / Component Hours).
 """
 
 from src.i18n import t
@@ -12,6 +12,7 @@ from dashboard.tabs.tab_reports import create_reports_tab
 from dashboard.tabs.tab_component_hours import create_component_hours_tab
 from dashboard.tabs.tab_lab_compliance import create_lab_compliance_tab
 from dashboard.tabs.tab_frequency import create_frequency_tab
+from dashboard.tabs.tab_component_analysis import create_component_analysis_tab
 from config.settings import get_settings
 from src.data.loaders import load_oil_classified
 from dash import html
@@ -69,7 +70,8 @@ def render_oil_tab_content(active_tab, client):
     Render content for the selected oil internal tab.
 
     Args:
-        active_tab: 'fleet-overview', 'report-detail', 'lab-compliance', 'frequency', or 'component-hours'
+        active_tab: 'fleet-overview', 'report-detail', 'lab-compliance', 'frequency', 'component-analysis',
+            or 'component-hours'
         client: Selected client
 
     Returns:
@@ -85,6 +87,9 @@ def render_oil_tab_content(active_tab, client):
 
     if active_tab == 'frequency':
         return create_frequency_tab()
+
+    if active_tab == 'component-analysis':
+        return create_component_analysis_tab()
 
     if active_tab == 'component-hours':
         # Check if client has access to component hours

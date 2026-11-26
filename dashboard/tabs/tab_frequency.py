@@ -12,9 +12,11 @@ import dash_bootstrap_components as dbc
 
 from dashboard.components.oil_frequency import UNITS_ID, group_label, status_text
 from dashboard.components.oil_table import stores
-from dashboard.components.oil_ui import filter_field, page_header
+from dashboard.components.oil_ui import filter_field, is_preview_tab, page_header, preview_pill
 from src.data import sampling_frequency as sf
 from src.i18n import t
+
+TAB_VALUE = "frequency"      # the value of this tab in the Monitor de Aceite tab bar (tab_oil.py)
 
 
 def _dropdown(control_id: str, placeholder: str, **kwargs):
@@ -62,6 +64,7 @@ def create_frequency_tab() -> dbc.Container:
             subtitle=t("frequency.subtitulo"),
             # "Datos al <fecha> (último reporte validado)", filled from the client's latest reportDate.
             caption=html.Span(id="freq-data-as-of", children=""),
+            badge=preview_pill() if is_preview_tab(TAB_VALUE) else None,
         ),
         html.Hr(),
 

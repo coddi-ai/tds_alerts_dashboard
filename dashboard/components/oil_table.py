@@ -24,6 +24,7 @@ from dash import ALL, Input, Output, State, ctx, dcc, html
 from dash.exceptions import PreventUpdate
 
 from src.i18n import t
+from src.utils.dash_ids import from_id_text, id_text
 
 PAGE_SIZE = 30
 
@@ -93,7 +94,7 @@ def sort_button(table: str, col_id: str, label: str, view: Optional[dict]) -> ht
     arrow = ("▲" if sort.get("dir") == ASC else "▼") if active else "↕"
     return html.Button(
         [html.Span(label), html.Span(arrow, className="oil-sort__arrow", **{"aria-hidden": "true"})],
-        id={"type": f"{table}-sort", "col": col_id},
+        id={"type": f"{table}-sort", "col": id_text(col_id)},          # read back with from_id_text (see the controller)
         className="oil-sort",
         type="button",
         n_clicks=0,
@@ -181,7 +182,7 @@ def register_view_controller(app, table: str, first_dirs: Dict[str, str],
         if not ctx.triggered or not ctx.triggered[0].get("value"):
             raise PreventUpdate
         if trigger_id.get("type") == f"{table}-sort":
-            return next_view(view, {"kind": "sort", "col": trigger_id["col"]},
+            return next_view(view, {"kind": "sort", "col": from_id_text(trigger_id["col"])},
                              total_rows=rows_of(data), first_dirs=first_dirs)
         if trigger_id.get("type") == f"{table}-group":
             return next_view(view, {"kind": "group", "columns": (data or {}).get("grouped", [])},

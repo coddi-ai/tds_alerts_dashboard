@@ -35,6 +35,7 @@ from shared.severity import SEVERITY_TIERS
 from src.data import sampling_frequency as sf
 from src.data.loaders import load_oil_classified
 from src.i18n import t
+from src.utils.dash_ids import id_text
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -311,7 +312,8 @@ def _component_cells(row: dict) -> list:
     unit and component come from the button's own id, never from the position of the row."""
     missing = row["status"] == sf.SIN_MUESTRA
     last = (_dash() if missing else html.Button(
-        row["last_sample"], id={"type": f"{TABLE}-open", "unit": row["unit_id"], "component": row["component"]},
+        row["last_sample"],
+        id={"type": f"{TABLE}-open", "unit": id_text(row["unit_id"]), "component": id_text(row["component"])},
         className="oil-link-btn", type="button", n_clicks=0,
         title=t("frequency.abrir_reporte", unidad=row["unit_id"], componente=component_label(row["component"]))))
     return [

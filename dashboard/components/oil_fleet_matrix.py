@@ -43,6 +43,7 @@ from dashboard.components.oil_ui import (
 from src.data.loaders import load_machine_status_for_client, load_oil_classified
 from src.i18n import t
 from src.i18n.data_text import localized_series
+from src.utils.dash_ids import id_text
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -265,7 +266,7 @@ def _cell(unit: str, component: str, cell: Optional[dict], tip: Optional[str]):
     return html.Td(
         html.Button(
             text,
-            id={"type": f"{TABLE}-cell", "unit": unit, "component": component},
+            id={"type": f"{TABLE}-cell", "unit": id_text(unit), "component": id_text(component)},
             className="oil-cell-btn",
             type="button",
             n_clicks=0,
@@ -371,12 +372,12 @@ def render_fleet_matrix(data: Optional[dict], view: Optional[dict], selected_uni
         body.append(html.Tr(
             [
                 html.Td(html.Button(
-                    id={"type": f"{TABLE}-select", "unit": unit}, className="oil-select", type="button", n_clicks=0,
+                    id={"type": f"{TABLE}-select", "unit": id_text(unit)}, className="oil-select", type="button", n_clicks=0,
                     title=t("oil_fleet.seleccionar_unidad", unidad=unit),
                     **{"aria-pressed": "true" if selected else "false",
                        "aria-label": t("oil_fleet.seleccionar_unidad", unidad=unit)},
                 ), className="oil-col-center oil-frozen oil-frozen--select"),
-                html.Th(html.Button(unit, id={"type": f"{TABLE}-unit", "unit": unit}, className="oil-unit-btn",
+                html.Th(html.Button(unit, id={"type": f"{TABLE}-unit", "unit": id_text(unit)}, className="oil-unit-btn",
                                     type="button", n_clicks=0,
                                     title=t("oil_fleet.abrir_detalle_maquina", unidad=unit)),
                         scope="row", className="oil-col-left oil-frozen oil-frozen--unit"),
