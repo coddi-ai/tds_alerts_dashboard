@@ -36,3 +36,30 @@ El acumulado suma el promedio semanal de los equipos observados con igual peso p
 Commit local de implementación: `22d4f71 feat: show EMIN fleet cumulative score`, rama `ai/codex/emin-historico-flota`. El handoff queda en un commit documental posterior. Push: no solicitado.
 
 Siguiente acción: confirmar el gráfico en el panorama de flota en la sesión autenticada y, si la presentación se ve bien, integrar los commits locales de ambos repos por el flujo habitual.
+
+## Comparación de acumulados por unidad contra la media de flota
+
+### Objetivo y resultado
+
+Se amplió la tarjeta del panorama a una curva por unidad, usando las series acumuladas ya publicadas por el productor, y una línea negra discontinua con el acumulado medio de flota. Los colores de las curvas reutilizan los estados de cambio reciente de Predictivo/EMIN. Las unidades críticas/prioritarias se dibujan con más peso y cinco reciben etiqueta al final de su curva. El hover identifica la unidad y sus puntajes; al hacer clic se abre su detalle histórico. Las brechas semanales siguen sin conectarse.
+
+No se cambió ni recalculó el contrato del productor: el dashboard consume los acumulados individuales y de flota del paquete v3 existente. El promedio de flota permanece como referencia, no se interpreta como umbral de falla.
+
+### Archivos
+
+- `dashboard/components/emin_historical.py`: gráfica con 50 trazas unitarias y la media de flota.
+- `dashboard/callbacks/emin_historical_callbacks.py`: navegación de una curva al detalle del equipo.
+- `src/i18n/locales/es.json`, `src/i18n/locales/en.json`: leyenda y explicación del comparativo.
+- `tests/test_emin_historical.py`: regresión para las líneas unitarias, la media discontinua, los cortes y la navegación.
+- Commit local: `f71744e feat: compare EMIN cumulative unit curves`, rama `ai/codex/emin-historico-flota`.
+
+### Validaciones
+
+- Perfil offline exacto: `docker run --rm --network none --mount "type=bind,source=C:\Users\panch\Desktop\Coddi\.worktrees\tds-alerts-dashboard\codex-emin-historico-flota,target=/app,readonly" --workdir /app --env PYTHONDONTWRITEBYTECODE=1 --entrypoint python tds-alerts-dashboard-emin-test:latest -m pytest -q -p no:cacheprovider tests/test_emin_historical.py`: **11 passed**, 1 advertencia deprecada de pytest/dash.
+- Paquete real v3 `20261126T0000-0300-d34c89f02d3415ceca32d8e1aad334e1f6eb51d46826e6e7687db459d1e6b5e6`: la figura contiene 50 curvas por unidad, una media de flota y 53 semanas; cinco equipos prioritarios quedan rotulados.
+- El contenedor local se reinició; quedó `healthy` y `/overview/emin-historical` devolvió HTTP 200. La ruta requiere login y no se validó visualmente con una sesión autenticada.
+- `git diff --check` y parseo de los dos archivos de idioma: OK.
+
+### Riesgos y siguiente acción
+
+Los huecos de cobertura generan tramos discontinuos; la media semanal incluye las unidades observadas esa semana. Por ello los cambios de cobertura pueden modificar la media, y una trayectoria inferior a ella no certifica salud mecánica. El paquete abarca 53 semanas disponibles. Siguiente acción: revisar el comparativo en la ruta local con sesión iniciada y confirmar la lectura de colores/etiquetas.
