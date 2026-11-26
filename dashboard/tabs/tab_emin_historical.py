@@ -97,7 +97,7 @@ def create_layout() -> html.Div:
                                 id="emin-history-fleet-cumulative-score",
                                 config={"displayModeBar": False},
                                 responsive=True,
-                                style={"height": "380px", "width": "100%"},
+                                style={"height": "460px", "width": "100%"},
                             ),
                         ]),
                     ], class_name="shadow-sm unit-card mb-3"),

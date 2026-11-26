@@ -263,6 +263,14 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
         {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 12, "cumulative_score": 20, "observed_days": 2,
          "available_days": 2, "complete": False},
     ]
+    bundle.dashboard["units"]["EMIN-002"] = {"cumulative_weekly_score": [
+        {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 10, "cumulative_score": 10,
+         "observed_days": 2, "available_days": 7, "complete": True},
+        {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None,
+         "observed_days": 0, "available_days": 7, "complete": True},
+        {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 14, "cumulative_score": 24,
+         "observed_days": 2, "available_days": 2, "complete": False},
+    ]}
     bundle.dashboard["fleet"]["2026-11-24"]["cumulative_weekly_score"] = [
         {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 9, "cumulative_score": 9,
          "observed_units": 2, "fleet_units": 2, "complete": True},
@@ -303,15 +311,23 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert list(cumulative.data[0].y) == [8, None, 20]
     assert cumulative.data[0].connectgaps is False
     fleet_cumulative = view["fleet_cumulative_score"].figure
-    assert list(fleet_cumulative.data[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
-    assert list(fleet_cumulative.data[0].y) == [9, None, 22]
+    unit_traces = [trace for trace in fleet_cumulative.data if trace.legendgroup != "fleet-mean"]
+    mean_trace = fleet_cumulative.data[-1]
+    assert len(unit_traces) == 2
+    assert {trace.customdata[0][0] for trace in unit_traces} == {"EMIN-001", "EMIN-002"}
+    assert list(unit_traces[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
+    assert list(mean_trace.x) == ["2026-W46", "2026-W47", "2026-W48"]
+    assert list(mean_trace.y) == [9, None, 22]
+    assert mean_trace.name == t("emin_history.fleet_cumulative_mean")
+    assert mean_trace.line.dash == "dash"
     assert "flota EMIN" in fleet_cumulative.layout.title.text
-    assert "Equipos observados" in fleet_cumulative.data[0].hovertemplate
+    assert "Equipos observados" in mean_trace.hovertemplate
+    assert unit_traces[0].customdata[0][4] == "history"
     earlier_view = build_historical_view(bundle, "2026-11-23", "__all__", "EMIN-001")
     assert "Cambio histórico de motor" in _visible(earlier_view["evidence"])
     assert "Cambio de motor tras una explosión" not in _visible(earlier_view["evidence"])
     assert list(earlier_view["cumulative_score"].figure.data[0].x) == ["2026-W46", "2026-W47"]
-    assert list(earlier_view["fleet_cumulative_score"].figure.data[0].x) == ["2026-W46", "2026-W47"]
+    assert list(earlier_view["fleet_cumulative_score"].figure.data[-1].x) == ["2026-W46", "2026-W47"]
 
 
 def test_legacy_catalog_still_offers_one_cutoff_per_iso_week(tmp_path):

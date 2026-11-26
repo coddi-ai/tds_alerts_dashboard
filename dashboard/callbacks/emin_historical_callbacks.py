@@ -97,6 +97,16 @@ def register_emin_historical_callbacks(app):
         prevent_initial_call=True,
     )
     app.clientside_callback(
+        ClientsideFunction(namespace="eminHistory", function_name="openFleetUnit"),
+        [
+            Output("emin-history-unit", "value", allow_duplicate=True),
+            Output("emin-history-view-tabs", "value", allow_duplicate=True),
+            Output("emin-history-trend-window", "value", allow_duplicate=True),
+        ],
+        Input("emin-history-fleet-cumulative-score", "clickData"),
+        prevent_initial_call=True,
+    )
+    app.clientside_callback(
         ClientsideFunction(namespace="eminHistory", function_name="openTrendDay"),
         Output("emin-history-trend-action", "data"),
         Input("emin-history-trend", "clickData"),

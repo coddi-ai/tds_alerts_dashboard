@@ -150,11 +150,7 @@ def build_historical_view(
              if not selected_day or row.get("cutoff", "") <= selected_day],
             selected_unit,
         ),
-        "fleet_cumulative_score": _cumulative_score_figure(
-            [row for row in fleet_data.get("cumulative_weekly_score", [])
-             if not selected_day or row.get("cutoff", "") <= selected_day],
-            None, fleet=True,
-        ),
+        "fleet_cumulative_score": _fleet_cumulative_score_figure(bundle, selected_day),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
     }
 
@@ -449,6 +445,107 @@ def _cumulative_score_figure(rows: list[dict], unit: str | None, *, fleet: bool 
     return dcc.Graph(id=graph_id, figure=figure,
                      config={"displayModeBar": False}, responsive=True,
                      style={"height": "340px", "width": "100%"})
+
+
+def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | None) -> dcc.Graph:
+    """Draw producer-built cumulative paths for every unit against the fleet mean."""
+    dashboard = bundle.dashboard
+    fleet = dashboard.get("fleet", {}).get(cutoff, {}) if cutoff else {}
+    mean_rows = [row for row in fleet.get("cumulative_weekly_score", [])
+                 if not cutoff or row.get("cutoff", "") <= cutoff]
+    unit_views = dashboard.get("units", {})
+    movements = fleet.get("movements", {})
+    units = dashboard.get("catalog", {}).get("units", [])
+    priority = list(dict.fromkeys(fleet.get("critical_units", []) + fleet.get("score_priority_units", [])))
+    label_units = set(priority[:5])
+    figure = go.Figure()
+    plotted = 0
+    shown_status = set()
+    for unit in sorted(units, key=lambda item: item in priority):
+        rows = [row for row in unit_views.get(unit, {}).get("cumulative_weekly_score", [])
+                if not cutoff or row.get("cutoff", "") <= cutoff]
+        if not any(_number(row.get("cumulative_score")) is not None for row in rows):
+            continue
+        status = movements.get(unit, {}).get("status", "insufficient")
+        color = _MOVEMENT_COLORS.get(status, _MOVEMENT_COLORS["insufficient"])
+        last_observed = next((index for index in range(len(rows) - 1, -1, -1)
+                              if _number(rows[index].get("cumulative_score")) is not None), None)
+        important = unit in priority
+        marker_sizes = [0] * len(rows)
+        if last_observed is not None:
+            marker_sizes[last_observed] = 8 if important else 5
+        labels = [""] * len(rows)
+        if unit in label_units and last_observed is not None:
+            labels[last_observed] = unit
+        figure.add_trace(go.Scatter(
+            x=[row.get("week") for row in rows],
+            y=[row.get("cumulative_score") for row in rows],
+            customdata=[[unit, row.get("weekly_mean"), row.get("observed_days"), row.get("available_days"), "history"]
+                        for row in rows],
+            mode="lines+markers+text",
+            name=_movement_chart_label(status),
+            legendgroup=status,
+            showlegend=status not in shown_status,
+            text=labels,
+            textposition="middle right",
+            textfont={"size": 9},
+            line={"color": color, "width": 1.5 if important else 1.0},
+            marker={"color": color, "size": marker_sizes,
+                    "line": {"color": "white", "width": 1.1}},
+            opacity=0.92 if important else 0.38,
+            hovertemplate=("<b>%{customdata[0]}</b><br>%{x}<br>"
+                           + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
+                           + t("emin_history.cumulative_weekly_hover") + ": %{customdata[1]:.2f}<br>"
+                           + t("emin_history.cumulative_coverage_hover") + ": %{customdata[2]} / %{customdata[3]}<extra></extra>"),
+            cliponaxis=False,
+        ))
+        shown_status.add(status)
+        plotted += 1
+
+    figure.add_trace(go.Scatter(
+        x=[row.get("week") for row in mean_rows],
+        y=[row.get("cumulative_score") for row in mean_rows],
+        customdata=[[row.get("weekly_mean"), row.get("observed_units"), row.get("fleet_units")]
+                    for row in mean_rows],
+        mode="lines+markers",
+        name=t("emin_history.fleet_cumulative_mean"),
+        legendgroup="fleet-mean",
+        line={"color": "#111827", "width": 3.4, "dash": "dash"},
+        marker={"color": "#111827", "size": 6, "line": {"color": "white", "width": 1}},
+        hovertemplate=("<b>" + t("emin_history.fleet_cumulative_mean") + "</b><br>%{x}<br>"
+                       + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
+                       + t("emin_history.cumulative_weekly_hover") + ": %{customdata[0]:.2f}<br>"
+                       + t("emin_history.fleet_cumulative_coverage_hover") + ": %{customdata[1]} / %{customdata[2]}<extra></extra>"),
+    ))
+    figure = apply_dashboard_theme(
+        figure,
+        title=t("emin_history.fleet_cumulative_score_title"),
+        height=430,
+    )
+    ticks = [row["week"] for index, row in enumerate(mean_rows)
+             if index % 4 == 0 or index == len(mean_rows) - 1]
+    figure.update_layout(
+        hovermode="closest",
+        showlegend=True,
+        clickmode="event+select",
+        margin={"l": 62, "r": 26, "t": 54, "b": 84},
+        legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.28, "yanchor": "top"},
+    )
+    figure.update_xaxes(title_text=t("emin_history.iso_week_axis"), tickmode="array", tickvals=ticks,
+                        ticktext=ticks, tickangle=-35, gridcolor="#ecf0f1", automargin=True,
+                        tickfont={"size": 9})
+    figure.update_yaxes(title_text=t("emin_history.cumulative_score_axis"), rangemode="tozero",
+                        gridcolor="#ecf0f1", automargin=True)
+    if not plotted:
+        figure = _empty_figure(t("emin_history.fleet_cumulative_score_title"),
+                               t("emin_history.cumulative_score_empty"), 430)
+    return dcc.Graph(
+        id="emin-history-fleet-cumulative-score",
+        figure=figure,
+        config={"displayModeBar": False},
+        responsive=True,
+        style={"height": "430px", "width": "100%"},
+    )
 
 
 def _open_unit(unit: str, origin: str, period: str = ""):
