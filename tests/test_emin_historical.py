@@ -250,15 +250,19 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
 
     ranking = _visible(view["ranking"])
     timeline = _visible(view["evidence"])
+    meta = _visible(view["meta"])
     assert "EMIN-001" in ranking
     assert "EMIN-002" not in ranking
     assert "Mejoró" in ranking
     assert "Cambio de motor tras una explosión" in timeline
+    assert t("emin_history.evidence_title") in timeline
     assert "Temperatura elevada del sistema EGR" in timeline
     assert "Mantención preventiva" in timeline
     assert "Evento posterior al corte" not in timeline
     assert timeline.count("Coincidencia textual de cambio/falla mayor") == 2
     assert "señal heurística bajó" in _visible(view["status"]).lower()
+    assert "Semana ISO: 2026-W48 · datos hasta 24-11-2026 · parcial" in meta
+    assert "Semanas ISO en el paquete: 1" in meta
     assert list(view["trend"].data[0].x) == ["2026-11-23", "2026-11-24"]
     assert list(view["trend"].data[0].y) == [13.5, 12.0]
     assert "Puntaje heurístico" in view["trend"].layout.yaxis.title.text

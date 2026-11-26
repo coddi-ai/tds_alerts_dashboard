@@ -69,7 +69,9 @@ criticality card carries that period into the equipment detail.
 The fleet cutoff selector uses `catalog.iso_week_cutoffs` from the producer and shows one selection
 per ISO week, labeled with the last included date (for example, `2026-W48 · datos hasta 24-11-2026 · parcial`).
 That date is the latest package cutoff available within the week; the producer marks a cutoff as
-partial when it falls before Sunday. The variation map reuses Predictivo's red/yellow/green background palette for
+partial when it falls before Sunday. The page summary also reports the selected ISO week and the
+number of weeks available, while the evidence panel is labeled as history through that cutoff. The
+variation map reuses Predictivo's red/yellow/green background palette for
 worsening, stable, and improving areas around the no-change diagonal. Its stable band follows the
 producer's published `variation_stability_tolerance`; the dashboard only renders that value. A
 horizontal point-color legend remains visible below the plot, and the coverage count sits above the

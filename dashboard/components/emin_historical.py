@@ -158,11 +158,25 @@ def _format_timestamp(value: str | None) -> str:
 def _metadata(bundle: EminHistoricalBundle, selected_day: str | None):
     online = bundle.manifest.get("online") or {}
     evidence_as_of = online.get("evidence_as_of") or online.get("prepared_at")
+    catalog = bundle.dashboard.get("catalog", {})
+    week_cutoffs = catalog.get("iso_week_cutoffs", [])
+    selected_week = next((item for item in week_cutoffs if item.get("cutoff") == selected_day), None)
+    if selected_week:
+        cutoff_caption = t(
+            "emin_history.iso_week_meta",
+            week=selected_week.get("week", ""),
+            day=_day_label(selected_day),
+            status=t("emin_history.iso_week_partial") if not selected_week.get("complete", True) else "",
+        )
+        history_caption = t("emin_history.weeks_meta", count=len(week_cutoffs))
+    else:
+        cutoff_caption = t("emin_history.cutoff_meta", day=_day_label(selected_day))
+        history_caption = t("emin_history.days_meta", count=len(catalog.get("cutoffs", [])))
     captions = [
-        t("emin_history.cutoff_meta", day=_day_label(selected_day)),
+        cutoff_caption,
         t("emin_history.captured_meta", timestamp=_format_timestamp(evidence_as_of)),
-        t("emin_history.days_meta", count=len(bundle.dashboard.get("catalog", {}).get("cutoffs", []))),
-        t("emin_history.units_meta", count=len(bundle.dashboard.get("catalog", {}).get("units", []))),
+        history_caption,
+        t("emin_history.units_meta", count=len(catalog.get("units", []))),
     ]
     return html.Small(" · ".join(captions), className="text-muted")
 
@@ -1113,7 +1127,7 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
         _high_signals_panel(rows, period_start, cutoff),
         _replacements_panel(rows, cutoff),
         dbc.Card([
-            section_header(t("emin_history.full_chronology"), "fas fa-history"),
+            section_header(t("emin_history.evidence_title"), "fas fa-history"),
             dbc.CardBody([
                 heading, _chronology_table(rows[:CHRONOLOGY_PAGE_SIZE]),
                 html.Small(t("emin_history.timeline_note", count=len(rows)), className="text-muted d-block mt-2"),
