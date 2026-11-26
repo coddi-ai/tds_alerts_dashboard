@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from dashboard.components.emin_historical import _fleet_movement_trend, build_historical_view, filter_options, fleet_criticality_top
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
+from dashboard.components.predictive_state import STATE_ZONE_FILL
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -27,6 +28,7 @@ def test_trend_callback_value_accepts_legacy_figures_and_v2_graphs():
 
 def _fleet_view_bundle(variations):
     return SimpleNamespace(dashboard={
+        "metadata": {"variation_stability_tolerance": 1.0},
         "catalog": {"cutoffs": ["2026-11-24"], "units": ["EMIN-001", "EMIN-002"]},
         "fleet": {"2026-11-24": {
             "period_variations": {"week": variations},
@@ -50,8 +52,18 @@ def test_fleet_variation_plot_includes_every_comparable_unit():
     points = [trace for trace in graph.figure.data if trace.name != t("emin_history.no_change_line")]
     assert sum(len(trace.x) for trace in points) == 2
     assert all(row[4] == "week" for trace in points for row in trace.customdata)
-    assert graph.figure.layout.xaxis.range is None
+    assert graph.figure.layout.xaxis.range[0] == 0
+    assert graph.figure.layout.xaxis.range == graph.figure.layout.yaxis.range
     assert graph.figure.layout.yaxis.scaleanchor is None
+    assert graph.figure.layout.showlegend is True
+    assert graph.figure.layout.legend.orientation == "h"
+    zone_colors = {shape.fillcolor for shape in graph.figure.layout.shapes}
+    assert zone_colors == {STATE_ZONE_FILL["Normal"], STATE_ZONE_FILL["Alerta"], STATE_ZONE_FILL["Anormal"]}
+    assert all(shape.layer == "below" and shape.type == "path" for shape in graph.figure.layout.shapes)
+    assert len([annotation for annotation in graph.figure.layout.annotations
+                if annotation.text in {t("emin_history.zone_improving"), t("emin_history.zone_stable"),
+                                       t("emin_history.zone_worsening")}]) == 3
+    assert any(annotation.y > 1 for annotation in graph.figure.layout.annotations)
 
 
 def test_quarter_without_prior_comparison_shows_a_clear_empty_state():
@@ -145,7 +157,9 @@ def _make_package(root, *, synthetic=False, run=RUN, week="2026-W48", published_
     with gzip.open(package / files["dashboard.json.gz"], "wt", encoding="utf-8") as dashboard_file:
       json.dump({
         "contract": "coddi.emin.historical-dashboard.v1",
-        "catalog": {"cutoffs": ["2026-11-24", "2026-11-23"], "units": ["EMIN-001", "EMIN-002"],
+        "catalog": {"cutoffs": ["2026-11-24", "2026-11-23"],
+                    "iso_week_cutoffs": [{"week": "2026-W48", "cutoff": "2026-11-24", "complete": False}],
+                    "units": ["EMIN-001", "EMIN-002"],
                     "groups": ["Motor / Emisiones"], "periods": ["short", "medium", "long", "history"]},
         "fleet": {
             "2026-11-23": {"rows": [daily[0], daily[2]], "movements": {"EMIN-001": movements["EMIN-001"], "EMIN-002": movements["EMIN-002"]},
@@ -230,6 +244,7 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     options = filter_options(bundle)
 
     assert options["default_day"] == "2026-11-24"
+    assert options["days"] == [{"label": "2026-W48 · datos hasta 24-11-2026 · parcial", "value": "2026-11-24"}]
     assert {item["value"] for item in options["groups"]} == {"__all__", "Motor / Emisiones"}
     view = build_historical_view(bundle, "2026-11-24", "Motor / Emisiones", "EMIN-001")
 

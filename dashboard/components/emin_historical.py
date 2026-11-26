@@ -13,6 +13,7 @@ import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 from src.charts.theme import BRAND_ACCENT, BRAND_MUTED, apply_dashboard_theme
+from dashboard.components.predictive_state import STATE_ZONE_FILL, STATE_ZONE_TEXT
 from src.data.emin_historical import EminHistoricalBundle
 from src.i18n import t
 
@@ -27,7 +28,9 @@ _MOVEMENT_COLORS = {
 def filter_options(bundle: EminHistoricalBundle) -> dict:
     """Read the prebuilt dashboard catalog; only display labels are formatted here."""
     catalog = bundle.dashboard["catalog"]
-    days = catalog.get("cutoffs", [])
+    weekly_cutoffs = catalog.get("iso_week_cutoffs", [])
+    days = [item.get("cutoff") for item in weekly_cutoffs if item.get("cutoff")] or catalog.get("cutoffs", [])
+    week_by_cutoff = {item.get("cutoff"): item for item in weekly_cutoffs}
     groups = catalog.get("groups", [])
     units = catalog.get("units", [])
     fleet = bundle.dashboard.get("fleet", {}).get(days[0], {}) if days else {}
@@ -37,7 +40,10 @@ def filter_options(bundle: EminHistoricalBundle) -> dict:
         if movements.get(row["unit"], {}).get("status") in {"improved", "worsened", "stable"}
     ), units[0] if units else None)
     return {
-        "days": [{"label": _day_label(day), "value": day} for day in days],
+        "days": [{"label": (t("emin_history.iso_week_cutoff", week=week_by_cutoff[day]["week"],
+                                date=_day_label(day),
+                                status=t("emin_history.iso_week_partial") if not week_by_cutoff[day].get("complete", True) else "")
+                            if day in week_by_cutoff else _day_label(day)), "value": day} for day in days],
         "groups": [{"label": t("emin_history.all_groups"), "value": "__all__"}]
         + [{"label": group, "value": group} for group in groups],
         "units": [{"label": unit, "value": unit} for unit in units],
@@ -238,9 +244,38 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
                          config={"displayModeBar": False}, responsive=True,
                          style={"height": "430px", "width": "100%"})
     if valid:
+        metadata = bundle.dashboard.get("metadata", {})
+        tolerance = _number(metadata.get("variation_stability_tolerance"))
+        if tolerance is None or tolerance < 0:
+            # Older v2 captures used an effectively exact comparison.
+            tolerance = 0.001
         extent = max(max(item["previous_average"], item["current_average"]) for item in valid) or 1
+        extent = max(extent + tolerance, 1)
+        band = min(tolerance, extent * 0.45)
+        # Match the Predictivo background palette. The producer publishes the
+        # stability tolerance so the colored zones agree with point status.
+        zones = (
+            ("Normal", [(0, 0), (extent, 0), (extent, extent - band), (band, 0), (0, 0)]),
+            ("Alerta", [(0, band), (extent - band, extent), (extent, extent),
+                        (extent, extent - band), (band, 0), (0, 0), (0, band)]),
+            ("Anormal", [(0, band), (0, extent), (extent, extent), (extent - band, extent), (0, band)]),
+        )
+        for state, points in zones:
+            path = "M " + " L ".join(f"{x},{y}" for x, y in points) + " Z"
+            figure.add_shape(type="path", xref="x", yref="y", path=path,
+                             fillcolor=STATE_ZONE_FILL[state], line={"width": 0}, layer="below")
+        for label, x, y, color in (
+            (t("emin_history.zone_improving"), 0.20, 0.12, STATE_ZONE_TEXT["Normal"]),
+            (t("emin_history.zone_stable"), 0.53, 0.50, STATE_ZONE_TEXT["Alerta"]),
+            (t("emin_history.zone_worsening"), 0.82, 0.86, STATE_ZONE_TEXT["Anormal"]),
+        ):
+            figure.add_annotation(x=x, y=y, xref="paper", yref="paper", text=label,
+                                  showarrow=False, font={"size": 11, "color": color},
+                                  bgcolor="rgba(255,255,255,0.58)", borderpad=3)
         figure.add_trace(go.Scatter(x=[0, extent], y=[0, extent], mode="lines", name=t("emin_history.no_change_line"),
                                     line={"color": "#8b95a1", "dash": "dash", "width": 1.4}, hoverinfo="skip"))
+        figure.update_xaxes(range=[0, extent], rangemode="tozero")
+        figure.update_yaxes(range=[0, extent], rangemode="tozero")
     plotted = 0
     for state in ("worsened", "stable", "improved", "insufficient"):
         entries = [(unit, variations.get(unit, {})) for unit in units]
@@ -271,18 +306,20 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
     unavailable = max(0, len(units) - plotted)
     figure.update_xaxes(title_text=t("emin_history.previous_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
     figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
-    figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=430)
-    figure.update_layout(hovermode="closest", margin={"l": 62, "r": 28, "t": 54, "b": 82},
-                         legend={"orientation": "h", "y": -0.23}, clickmode="event+select")
+    figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=470)
+    figure.update_layout(hovermode="closest", showlegend=True,
+                         margin={"l": 62, "r": 28, "t": 66, "b": 112},
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.32, "yanchor": "top"},
+                         clickmode="event+select")
     coverage_note = t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable)
     if period == "quarter" and plotted == 0:
         coverage_note += "<br>" + t("emin_history.quarter_comparison_unavailable")
-    figure.add_annotation(x=0.99, y=0.99, xref="paper", yref="paper", xanchor="right", yanchor="top",
+    figure.add_annotation(x=0.99, y=1.09, xref="paper", yref="paper", xanchor="right", yanchor="bottom",
                           text=coverage_note,
                           showarrow=False, bgcolor="rgba(255,255,255,.88)", font={"size": 11, "color": BRAND_MUTED})
     return dcc.Graph(id="emin-history-movement-trend", figure=figure,
                      config={"displayModeBar": False}, responsive=True,
-                     style={"height": "430px", "width": "100%"})
+                     style={"height": "470px", "width": "100%"})
 
 
 def _period_delta_figure(rows: list[dict], unit: str | None, period: str) -> dcc.Graph:
