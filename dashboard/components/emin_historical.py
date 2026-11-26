@@ -25,6 +25,18 @@ _MOVEMENT_COLORS = {
     "stable": "#3498db",
     "insufficient": "#7f8c8d",
 }
+_FLEET_RELATIVE_COLORS = {
+    "above": "#dc3545",
+    "below": "#28a745",
+    "at": "#e0a800",
+    "unavailable": "#7f8c8d",
+}
+_FLEET_RELATIVE_LABELS = {
+    "above": "fleet_relative_above",
+    "below": "fleet_relative_below",
+    "at": "fleet_relative_at",
+    "unavailable": "fleet_relative_unavailable",
+}
 def filter_options(bundle: EminHistoricalBundle) -> dict:
     """Read the prebuilt dashboard catalog; only display labels are formatted here."""
     catalog = bundle.dashboard["catalog"]
@@ -448,26 +460,68 @@ def _cumulative_score_figure(rows: list[dict], unit: str | None, *, fleet: bool 
 
 
 def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | None) -> dcc.Graph:
-    """Draw producer-built cumulative paths for every unit against the fleet mean."""
+    """Draw producer-built unit scores against the fleet mean and its colored zones."""
     dashboard = bundle.dashboard
     fleet = dashboard.get("fleet", {}).get(cutoff, {}) if cutoff else {}
     mean_rows = [row for row in fleet.get("cumulative_weekly_score", [])
                  if not cutoff or row.get("cutoff", "") <= cutoff]
     unit_views = dashboard.get("units", {})
-    movements = fleet.get("movements", {})
+    comparisons = fleet.get("cumulative_comparison_by_unit", {})
     units = dashboard.get("catalog", {}).get("units", [])
     priority = list(dict.fromkeys(fleet.get("critical_units", []) + fleet.get("score_priority_units", [])))
     label_units = set(priority[:5])
+    unit_series = {
+        unit: [row for row in unit_views.get(unit, {}).get("cumulative_weekly_score", [])
+               if not cutoff or row.get("cutoff", "") <= cutoff]
+        for unit in units
+    }
+    all_scores = [
+        _number(row.get("cumulative_score"))
+        for rows in unit_series.values() for row in rows
+    ] + [_number(row.get("cumulative_score")) for row in mean_rows]
+    y_top = max([score for score in all_scores if score is not None] or [0]) * 1.08
+    y_top = max(y_top, 1.0)
     figure = go.Figure()
     plotted = 0
-    shown_status = set()
+
+    segments = []
+    segment = []
+    for row in mean_rows:
+        value = _number(row.get("cumulative_score"))
+        if value is None:
+            if segment:
+                segments.append(segment)
+                segment = []
+        else:
+            segment.append((row.get("week"), value))
+    if segment:
+        segments.append(segment)
+    for points in segments:
+        if len(points) < 2:
+            continue
+        weeks = [item[0] for item in points]
+        mean = [item[1] for item in points]
+        figure.add_trace(go.Scatter(
+            x=weeks + weeks[::-1], y=mean + [0] * len(mean), mode="lines",
+            fill="toself", fillcolor="rgba(40,167,69,0.10)", line={"width": 0},
+            name=t("emin_history.fleet_relative_zone_below"), legendgroup="relative-zones",
+            showlegend=False, hoverinfo="skip",
+        ))
+        figure.add_trace(go.Scatter(
+            x=weeks + weeks[::-1], y=mean + [y_top] * len(mean), mode="lines",
+            fill="toself", fillcolor="rgba(220,53,69,0.10)", line={"width": 0},
+            name=t("emin_history.fleet_relative_zone_above"), legendgroup="relative-zones",
+            showlegend=False, hoverinfo="skip",
+        ))
+
     for unit in sorted(units, key=lambda item: item in priority):
-        rows = [row for row in unit_views.get(unit, {}).get("cumulative_weekly_score", [])
-                if not cutoff or row.get("cutoff", "") <= cutoff]
+        rows = unit_series[unit]
         if not any(_number(row.get("cumulative_score")) is not None for row in rows):
             continue
-        status = movements.get(unit, {}).get("status", "insufficient")
-        color = _MOVEMENT_COLORS.get(status, _MOVEMENT_COLORS["insufficient"])
+        comparison = comparisons.get(unit, {})
+        position = comparison.get("position", "unavailable")
+        position = position if position in _FLEET_RELATIVE_COLORS else "unavailable"
+        color = _FLEET_RELATIVE_COLORS[position]
         last_observed = next((index for index in range(len(rows) - 1, -1, -1)
                               if _number(rows[index].get("cumulative_score")) is not None), None)
         important = unit in priority
@@ -480,12 +534,14 @@ def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | N
         figure.add_trace(go.Scatter(
             x=[row.get("week") for row in rows],
             y=[row.get("cumulative_score") for row in rows],
-            customdata=[[unit, row.get("weekly_mean"), row.get("observed_days"), row.get("available_days"), "history"]
+            customdata=[[unit, row.get("weekly_mean"), row.get("observed_days"), row.get("available_days"), "history",
+                         row.get("fleet_mean_cumulative_score"), row.get("difference_from_fleet_mean"),
+                         row.get("observed_weeks"), row.get("fleet_observed_weeks")]
                         for row in rows],
             mode="lines+markers+text",
-            name=_movement_chart_label(status),
-            legendgroup=status,
-            showlegend=status not in shown_status,
+            name=t(f"emin_history.{_FLEET_RELATIVE_LABELS[position]}"),
+            legendgroup=f"fleet-relative-{position}",
+            showlegend=not any(trace.legendgroup == f"fleet-relative-{position}" for trace in figure.data),
             text=labels,
             textposition="middle right",
             textfont={"size": 9},
@@ -496,10 +552,14 @@ def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | N
             hovertemplate=("<b>%{customdata[0]}</b><br>%{x}<br>"
                            + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
                            + t("emin_history.cumulative_weekly_hover") + ": %{customdata[1]:.2f}<br>"
-                           + t("emin_history.cumulative_coverage_hover") + ": %{customdata[2]} / %{customdata[3]}<extra></extra>"),
+                           + t("emin_history.fleet_cumulative_mean") + ": %{customdata[5]:.2f}<br>"
+                           + t("emin_history.fleet_cumulative_difference") + ": %{customdata[6]:+.2f}<br>"
+                           + t("emin_history.unit_observed_weeks_hover") + ": %{customdata[7]}<br>"
+                           + t("emin_history.fleet_observed_weeks_hover") + ": %{customdata[8]}<br>"
+                           + t("emin_history.fleet_relative_position_hover") + ": "
+                           + t(f"emin_history.{_FLEET_RELATIVE_LABELS[position]}") + "<extra></extra>"),
             cliponaxis=False,
         ))
-        shown_status.add(status)
         plotted += 1
 
     figure.add_trace(go.Scatter(
@@ -536,6 +596,8 @@ def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | N
                         tickfont={"size": 9})
     figure.update_yaxes(title_text=t("emin_history.cumulative_score_axis"), rangemode="tozero",
                         gridcolor="#ecf0f1", automargin=True)
+    if mean_rows:
+        figure.update_yaxes(range=[0, y_top])
     if not plotted:
         figure = _empty_figure(t("emin_history.fleet_cumulative_score_title"),
                                t("emin_history.cumulative_score_empty"), 430)

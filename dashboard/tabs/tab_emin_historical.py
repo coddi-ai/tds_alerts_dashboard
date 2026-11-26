@@ -71,11 +71,6 @@ def create_layout() -> html.Div:
                                             selected_className="custom-tab--selected pred-tab--selected",
                                         ),
                                         dcc.Tab(
-                                            label=t("emin_history.period_quarter"), value="quarter",
-                                            className="custom-tab pred-tab",
-                                            selected_className="custom-tab--selected pred-tab--selected",
-                                        ),
-                                        dcc.Tab(
                                             label=t("emin_history.period_history"), value="history",
                                             className="custom-tab pred-tab",
                                             selected_className="custom-tab--selected pred-tab--selected",

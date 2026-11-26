@@ -116,6 +116,7 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
         "coddi.emin.historical-dashboard.v1",
         "coddi.emin.historical-dashboard.v2",
         "coddi.emin.historical-dashboard.v3",
+        "coddi.emin.historical-dashboard.v4",
     }
     contract = manifest.get("dashboard_contract") if isinstance(manifest, dict) else None
     if contract not in supported_contracts or not isinstance(dashboard, dict) or dashboard.get("contract") != contract:

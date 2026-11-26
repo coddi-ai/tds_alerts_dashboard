@@ -12,6 +12,7 @@ from dashboard.components.emin_historical import _fleet_movement_trend, _fleet_p
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
 from dashboard.components.predictive_state import STATE_ZONE_FILL
+from dashboard.tabs.tab_emin_historical import create_layout as create_emin_historical_layout
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -203,6 +204,27 @@ def _visible(component):
     return _visible(getattr(component, "children", []))
 
 
+def _walk_components(component):
+    if component is None:
+        return
+    if isinstance(component, (list, tuple)):
+        for child in component:
+            yield from _walk_components(child)
+        return
+    yield component
+    yield from _walk_components(getattr(component, "children", None))
+
+
+def test_fleet_overview_omits_quarter_period_but_unit_detail_keeps_it():
+    components = list(_walk_components(create_emin_historical_layout()))
+    tabs = {component.id: component for component in components if isinstance(component, dcc.Tabs)}
+
+    assert [tab.value for tab in tabs["emin-history-fleet-window"].children] == ["week", "month", "history"]
+    assert [tab.value for tab in tabs["emin-history-trend-window"].children] == [
+        "week", "month", "quarter", "history",
+    ]
+
+
 def test_loads_current_package_and_resolves_only_inside_data_root(tmp_path):
     root = _make_package(tmp_path)
 
@@ -257,28 +279,37 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     options = filter_options(bundle)
     bundle.dashboard["units"]["EMIN-001"]["cumulative_weekly_score"] = [
         {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 8, "cumulative_score": 8, "observed_days": 3,
-         "available_days": 7, "complete": True},
+         "available_days": 7, "complete": True, "fleet_mean_cumulative_score": 9,
+         "difference_from_fleet_mean": -1, "fleet_relative_position": "below", "observed_weeks": 1, "fleet_observed_weeks": 1},
         {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None, "observed_days": 0,
-         "available_days": 7, "complete": True},
+         "available_days": 7, "complete": True, "fleet_mean_cumulative_score": None,
+         "difference_from_fleet_mean": None, "fleet_relative_position": None, "observed_weeks": 1, "fleet_observed_weeks": 1},
         {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 12, "cumulative_score": 20, "observed_days": 2,
-         "available_days": 2, "complete": False},
+         "available_days": 2, "complete": False, "fleet_mean_cumulative_score": 22,
+         "difference_from_fleet_mean": -2, "fleet_relative_position": "below", "observed_weeks": 2, "fleet_observed_weeks": 2},
     ]
     bundle.dashboard["units"]["EMIN-002"] = {"cumulative_weekly_score": [
         {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 10, "cumulative_score": 10,
-         "observed_days": 2, "available_days": 7, "complete": True},
+         "observed_days": 2, "available_days": 7, "complete": True, "fleet_mean_cumulative_score": 9,
+         "difference_from_fleet_mean": 1, "fleet_relative_position": "above", "observed_weeks": 1, "fleet_observed_weeks": 1},
         {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None,
-         "observed_days": 0, "available_days": 7, "complete": True},
+         "observed_days": 0, "available_days": 7, "complete": True, "fleet_mean_cumulative_score": None,
+         "difference_from_fleet_mean": None, "fleet_relative_position": None, "observed_weeks": 1, "fleet_observed_weeks": 1},
         {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 14, "cumulative_score": 24,
-         "observed_days": 2, "available_days": 2, "complete": False},
+         "observed_days": 2, "available_days": 2, "complete": False, "fleet_mean_cumulative_score": 22,
+         "difference_from_fleet_mean": 2, "fleet_relative_position": "above", "observed_weeks": 2, "fleet_observed_weeks": 2},
     ]}
     bundle.dashboard["fleet"]["2026-11-24"]["cumulative_weekly_score"] = [
         {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 9, "cumulative_score": 9,
-         "observed_units": 2, "fleet_units": 2, "complete": True},
-        {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None,
-         "observed_units": 0, "fleet_units": 2, "complete": True},
+         "observed_units": 2, "fleet_units": 2, "complete": True, "observed_weeks": 1},
+        {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": 0, "cumulative_score": 9,
+         "observed_units": 1, "fleet_units": 2, "complete": True, "observed_weeks": 2},
         {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 13, "cumulative_score": 22,
-         "observed_units": 1, "fleet_units": 2, "complete": False},
+         "observed_units": 1, "fleet_units": 2, "complete": False, "observed_weeks": 2},
     ]
+    bundle.dashboard["fleet"]["2026-11-24"]["cumulative_comparison_by_unit"] = {
+        "EMIN-001": {"position": "below"}, "EMIN-002": {"position": "above"},
+    }
     bundle.dashboard["fleet"]["2026-11-23"]["cumulative_weekly_score"] = bundle.dashboard["fleet"]["2026-11-24"]["cumulative_weekly_score"][:2]
 
     assert options["default_day"] == "2026-11-24"
@@ -311,18 +342,26 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert list(cumulative.data[0].y) == [8, None, 20]
     assert cumulative.data[0].connectgaps is False
     fleet_cumulative = view["fleet_cumulative_score"].figure
-    unit_traces = [trace for trace in fleet_cumulative.data if trace.legendgroup != "fleet-mean"]
+    unit_traces = [trace for trace in fleet_cumulative.data
+                   if str(trace.legendgroup).startswith("fleet-relative-")]
     mean_trace = fleet_cumulative.data[-1]
     assert len(unit_traces) == 2
     assert {trace.customdata[0][0] for trace in unit_traces} == {"EMIN-001", "EMIN-002"}
     assert list(unit_traces[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
     assert list(mean_trace.x) == ["2026-W46", "2026-W47", "2026-W48"]
-    assert list(mean_trace.y) == [9, None, 22]
+    assert list(mean_trace.y) == [9, 9, 22]
     assert mean_trace.name == t("emin_history.fleet_cumulative_mean")
     assert mean_trace.line.dash == "dash"
     assert "flota EMIN" in fleet_cumulative.layout.title.text
     assert "Equipos observados" in mean_trace.hovertemplate
     assert unit_traces[0].customdata[0][4] == "history"
+    assert {trace.name for trace in unit_traces} == {
+        t("emin_history.fleet_relative_above"), t("emin_history.fleet_relative_below"),
+    }
+    zone_traces = [trace for trace in fleet_cumulative.data if trace.legendgroup == "relative-zones"]
+    assert len(zone_traces) == 2
+    assert all(trace.fill == "toself" for trace in zone_traces)
+    assert any(t("emin_history.fleet_cumulative_difference") in trace.hovertemplate for trace in unit_traces)
     earlier_view = build_historical_view(bundle, "2026-11-23", "__all__", "EMIN-001")
     assert "Cambio histórico de motor" in _visible(earlier_view["evidence"])
     assert "Cambio de motor tras una explosión" not in _visible(earlier_view["evidence"])
