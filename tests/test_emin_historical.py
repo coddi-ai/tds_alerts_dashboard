@@ -276,6 +276,16 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert "Puntaje heurístico" in view["trend"].layout.yaxis.title.text
 
 
+def test_legacy_catalog_still_offers_one_cutoff_per_iso_week(tmp_path):
+    root = _make_package(tmp_path)
+    bundle = load_emin_historical_bundle(root)
+    bundle.dashboard["catalog"].pop("iso_week_cutoffs")
+
+    options = filter_options(bundle)
+
+    assert options["days"] == [{"label": "2026-W48 · datos hasta 24-11-2026 · parcial", "value": "2026-11-24"}]
+
+
 def test_page_callbacks_require_server_authorization_for_emin(monkeypatch):
     monkeypatch.setattr(emin_historical_callbacks, "allowed_clients", lambda user: ["CDA"])
     assert not emin_historical_callbacks._authorized_emin("EMIN", {"username": "cda-user"})

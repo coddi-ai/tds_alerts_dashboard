@@ -29,7 +29,20 @@ def filter_options(bundle: EminHistoricalBundle) -> dict:
     """Read the prebuilt dashboard catalog; only display labels are formatted here."""
     catalog = bundle.dashboard["catalog"]
     weekly_cutoffs = catalog.get("iso_week_cutoffs", [])
-    days = [item.get("cutoff") for item in weekly_cutoffs if item.get("cutoff")] or catalog.get("cutoffs", [])
+    if not weekly_cutoffs:
+        # Older packages expose only daily cutoffs. Keep the selector weekly by
+        # choosing the latest available cutoff in each ISO week; completeness
+        # cannot be asserted without the producer's explicit weekly catalog.
+        by_week = {}
+        for cutoff in sorted(catalog.get("cutoffs", []), reverse=True):
+            try:
+                iso = date.fromisoformat(cutoff).isocalendar()
+            except (TypeError, ValueError):
+                continue
+            week = f"{iso.year}-W{iso.week:02d}"
+            by_week.setdefault(week, {"week": week, "cutoff": cutoff, "complete": False})
+        weekly_cutoffs = list(by_week.values())
+    days = [item.get("cutoff") for item in weekly_cutoffs if item.get("cutoff")]
     week_by_cutoff = {item.get("cutoff"): item for item in weekly_cutoffs}
     groups = catalog.get("groups", [])
     units = catalog.get("units", [])
