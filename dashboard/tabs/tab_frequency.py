@@ -1,6 +1,6 @@
 """
-Panel de Frecuencia (Monitor de Aceite): for each unit and component, when it was last sampled and
-whether a new sample must be requested.
+Panel de Frecuencia (Monitor de Aceite): for each unit, how many of its components need a new oil
+sample, with the detail of each component one click away.
 
 The interval of each criticality group (15 / 30 / 60 days) and the machine/component mapping are
 read from config/sampling_frequency.yaml; the rules live in src/data/sampling_frequency.py. The panel
@@ -10,7 +10,7 @@ is read-only: it does not create or send sample requests.
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
-from dashboard.components.oil_frequency import group_label, status_text
+from dashboard.components.oil_frequency import UNITS_ID, group_label, status_text
 from dashboard.components.oil_table import stores
 from dashboard.components.oil_ui import filter_field, page_header
 from src.data import sampling_frequency as sf
@@ -36,6 +36,22 @@ def _status_options() -> list:
         {"label": status_text(status), "value": status}
         for status in (sf.SOLICITAR, sf.PROXIMA, sf.AL_DIA, sf.SIN_MUESTRA)
     ]
+
+
+def _expand_all_button() -> html.Button:
+    """"Expandir todas" / "Contraer todas": opens or closes the detail of every unit on the current page.
+
+    The browser script (assets/oil_expandable_rows.js) does the work and keeps the label, and the
+    disabled state when the list is empty, in step with the rows. Both words are handed over as data
+    attributes so no text lives in the script."""
+    return html.Button(
+        [html.I(className="fas fa-angle-double-down", **{"aria-hidden": "true"}),
+         html.Span(t("frequency.expandir_todas"), className="oil-expand-all__label")],
+        id="freq-expand-all", className="oil-expand-all", type="button", disabled=True,
+        **{"data-oil-expand-all": UNITS_ID, "aria-controls": UNITS_ID,
+           "data-label-expand": t("frequency.expandir_todas"),
+           "data-label-collapse": t("frequency.contraer_todas")},
+    )
 
 
 def create_frequency_tab() -> dbc.Container:
@@ -69,21 +85,21 @@ def create_frequency_tab() -> dbc.Container:
         # KPI tiles (follow the filters)
         html.Div(id="freq-kpis", className="mb-2"),
 
-        # Grupos de Criticidad
+        # Criterios de Criticidad
         html.Div(id="freq-groups"),
 
-        # Main table
+        # Estado de Muestreo por Unidad
         dbc.Card([
             dbc.CardHeader(dbc.Row([
                 dbc.Col([
                     html.H5(t("frequency.estado_de_muestreo"), className="fw-bold d-inline mb-0"),
                     html.Span(id="freq-count-chip", className="ms-2"),
-                ], md=8),
-                dbc.Col(html.Span(id="freq-sort-note", className="oil-caption"), md=4,
-                        className="text-md-end"),
+                ], md=5),
+                dbc.Col(html.Span(id="freq-sort-note", className="oil-caption"), md=4),
+                dbc.Col(_expand_all_button(), md=3, className="text-md-end"),
             ], align="center")),
             dbc.CardBody([
-                dcc.Loading(html.Div(id="freq-table-container"), type="circle", delay_show=250),
+                dcc.Loading(html.Div(id=UNITS_ID), type="circle", delay_show=250),
                 html.P(t("frequency.nota_al_pie"), className="oil-footnote mb-0"),
             ]),
         ], className="shadow-sm mb-4"),

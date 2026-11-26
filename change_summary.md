@@ -746,3 +746,69 @@ day with a failing partitioner → no e-mail. The real script also ran through t
 from an empty data root) and the app boots with both schedulers reporting "not started: not production" locally. The alerts-generated rule is tested for zero alerts (not built, not sent, error, marker, no retry), alerts present (sent), unreadable
 data, order against the partitioner check, and EMIN never blocked for an empty day. Existing
 mailing/partition tests were updated for the 08:30 time and the removed `--schedule`.
+
+
+---
+
+# General tab: criteria on the page, "Sin Datos" fix, unit merge, golden layer (2026-11-26)
+
+Requirement: *Unit status dashboard (criteria visibility, "Sin Datos" fix, unit merge, golden-layer reads)*. Not committed
+(branch `dev`).
+
+## What changed
+
+| Change | Where |
+|---|---|
+| Golden layer: one script builds `data/general/golden/{client}/fleet_status.parquet`; the tab only reads it. The old on-the-fly processing is **removed** from `fleet_overview.py` (moved to the builder, not kept in parallel) | `src/data/fleet_status.py` (new), `scripts/build_fleet_status.py` (new), `dashboard/components/fleet_overview.py` (read + render only) |
+| Scheduled at **10:30 America/Santiago**, daily, by the app's own scheduler; plus a build at app start, after the S3 mirror, for clients with no file (any environment) | `src/data/partition_scheduler.py` (job `fleet_status`, `catch_up_fleet_status`), `dashboard/app.py` |
+| Alertas: a unit with no alerts is **Normal**; Sin Datos only when the feed cannot be read | `src/data/fleet_status.py` |
+| `CT-184` / `CT_184` are one row; Estado computed after the merge; `T_09` / `T_9` too | `src/data/unit_ids.py` (new), builder |
+| Criteria visible: collapsed "Cómo se asignan los estados" panel built from the constants the run uses | `dashboard/components/fleet_criteria.py` (new), `config/estado_rules.py` (Alertas / Tribología constants), `dashboard/assets/custom_layout.css`, 22 catalog keys (es/en) |
+| Unit Detail still finds a merged unit's data in each source and links to each page with that page's own spelling | `unit_summary_content.py`, `oil_machine_detail.py`, `unit_horometer.py` |
+| Informe preliminar de falla lists the General tab's names, so its unit matching (`report_health.unit_key`) now treats `-` and `_` as one separator (`T-10` finds `T_10` in the Predictivo / oil / maintenance sources) | `src/data/report_health.py` |
+
+## Findings that shaped it (please read)
+
+1. **Tribología's documented limits are wrong for the published data.** `oil_data_contracts.md` says Normal < 6 <= Alerta < 10 <=
+   Anormal on the machine score; the published `overall_status` does not follow it (score 4 with one component in Alerta is Alerta;
+   score 2 with an Anormal component is Anormal). What reproduces all 392 local machines: worst component status, Anormal when
+   the score reaches 10. The page prints that rule; the contract document still says otherwise and should be corrected upstream.
+2. **The S3 start-up sync deletes any local file S3 does not have**, so a file written by the script disappears on every
+   start until the next 10:30 (it happened on the first local run: the tab was empty). Hence the build at app start, which runs
+   *after* the mirror (`__main__` of `dashboard/app.py`, not at import), in every environment, on every start that finds a file
+   missing (no once-a-day marker). Pushing the file to S3 (as the partitions are) was not done.
+3. **EMIN's alert partitions are refreshed at 11:30** (its CSV arrives ~11:10), after this 10:30 run: EMIN's file carries the
+   previous day's alerts until the next day's run. Other clients' alerts are partitioned weekly (Wednesday 08:00).
+4. **A stale alert feed now also degrades units with no alerts** (they are Normal-with-old-data, and the age rule applies as for any
+   cell). Local mirror: CDA's newest alert is from July, so its 11 units read Anormal in Alertas (their overall Estado was
+   already Anormal, from Telemetría's age). Capstone and EMIN (feed 4-5 days old) are unaffected.
+5. **Ids**: normalising to hyphens renames CDA (`T_10` -> `T-10`) and ENEX (`21_CRU_001` -> `21-CRU-001`) in the General tab and in
+   the Unit Detail address; only EMIN had a real duplicate. Old links (`/overview/unit/T_10`) still resolve.
+6. The "Última actualización" line under the title still shows the render time, not the file's run time (the file stores
+   `generated_at`; showing it was optional in the requirement and is not done).
+
+## Verification
+
+* Before/after of the whole fleet (local mirror): Capstone 50 units, bands 9 / 11 / 30 unchanged (34 Alertas cells Sin Datos ->
+  Normal); EMIN 58 -> 50 rows (8 merged: `CT-184`, `CT-185`, `CT-187`, `CT-190`...), bands Anormal 38 / Alerta 16 -> 8 / Normal 4;
+  ENEX 281 unchanged; CDA 11 unchanged (Alertas Sin Datos -> Anormal, finding 4).
+* `tests/test_fleet_status.py` (new, 56): ids, "no alerts" = Normal, merge, one row per unit, atomic write, failed run keeps the
+  file, one client failing does not stop the others, the view never touches a raw source (and says "not available"), the criteria
+  follow the constants, Alertas limits at the boundary, the Tribología sentence against every published machine; the failure report finds a hyphenated unit.
+  `tests/test_partition_scheduler.py` (+10): due at 10:30, DST, env overrides, command, markers, start-up catch-up.
+  `tests/test_fleet_overview.py` and `test_alert_partition_consumers.py` retargeted to the builder / golden file.
+* Browser (Playwright on the local server): Capstone shows "UNIDADES ANORMAL (9)", the panel opens, search and links work, no
+  console errors; EMIN `CT-184` is one row whose detail shows alerts and the oil components (5, last sample 09/11); CDA `T-10`
+  shows horómetro, telemetry, alerts, oil and predictive.
+
+* Full suite: every failure left is one that also fails on a clean copy of HEAD or depends on the data on disk (informe de falla AI
+  schema / real-data counts, mantenciones, `test_report_health` x2, Campbell schema vs `oil_classified`, a page-views test that
+  passes alone). The one test this work broke (`test_general_lee_sin_datos_como_sin_datos`, which patched a function that moved)
+  was retargeted.
+
+## Deploy
+
+1. Nothing to configure: the app's scheduler runs it (production only, like the partitioner). `FLEET_STATUS_TIME=HH:MM` and
+   `FLEET_STATUS_SCHEDULER_ENABLED=false` override. The app task needs write access to its `data/general` folder.
+2. First start builds the missing files by itself; by hand: `python scripts/build_fleet_status.py`.
+3. Watch `fleet status:` / `build_fleet_status:` lines in the app log; a failed run logs an error and the tab keeps the last file.

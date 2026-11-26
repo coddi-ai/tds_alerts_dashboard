@@ -41,7 +41,7 @@ Anormal (and those without a reading) are always visible, worst first; Normal on
 below and collapse behind a toggle only when there are more than `MAX_VISIBLE_NORMAL`.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Sequence
 
 from src.i18n import t as _t
@@ -61,7 +61,7 @@ from dashboard.components.fleet_overview import (
     status_badge,
     technique_label,
 )
-from dashboard.components.labels import display_component_name, display_system_name, status_label
+from dashboard.components.labels import age_text as _age_text, display_component_name, display_system_name, status_label
 from dashboard.components.oil_machine_detail import OilComponentRow, unit_oil_components
 from dashboard.components.predictive_state import STATE_COLORS
 from dashboard.components.status_chip import canonical_status, status_chip
@@ -78,12 +78,14 @@ from dashboard.tabs.tab_predictive_overview import (
     load_status_frame,
     short_view_chart,
 )
+from src.data.fleet_status import source_units
 from src.data.loaders import (
     latest_alert_timestamp,
     load_alerts_since,
     load_machine_status_for_client,
     load_telemetry_system_health,
 )
+from src.data.unit_ids import unit_key, unit_matches
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -392,7 +394,7 @@ def _alerts_window(client: str, unit: str) -> tuple:
         if "UnitId" in df.columns:
             timestamps = pd.to_datetime(df["Timestamp"], errors="coerce")
             in_window = (timestamps >= first_week) & (timestamps < last_week + pd.Timedelta(weeks=1))
-            unit_df = df[(df["UnitId"].astype(str) == unit) & in_window]
+            unit_df = df[unit_matches(df["UnitId"], unit) & in_window]
     return unit_df, first_week, last_week, reference, is_fallback
 
 
@@ -461,20 +463,12 @@ def _alerts_section(client: str, unit: str, status: str = None) -> dbc.Card:
     return _section_card(
         _t("unit_summary_content.section_alerts"), period_label, body, note=note, status=status,
         section_id=SECTION_IDS["alerts"], freshness=_freshness_caption(_alerts_data_date(client)),
-        action=_redirect_button(_t("unit_summary_content.ver_en_alertas"), alerts_unit_path(unit)),
+        action=_redirect_button(_t("unit_summary_content.ver_en_alertas"),
+                                alerts_unit_path(source_units(client, unit).get("alerts", unit))),
     )
 
 
 # ── Telemetry ────────────────────────────────────────────────────────────────
-
-def _age_text(age: timedelta) -> str:
-    """"2 h", "24 h", "40 días", "3 semanas": a threshold age the way a person says it."""
-    if age >= timedelta(weeks=2) and age % timedelta(weeks=1) == timedelta(0):
-        return _t("unit_summary_content.age_weeks", count=age // timedelta(weeks=1))
-    if age >= timedelta(days=2):
-        return _t("unit_summary_content.age_days", count=age.days)
-    return _t("unit_summary_content.age_hours", count=int(age.total_seconds() // 3600))
-
 
 def _telemetry_rule_note() -> html.Div:
     """Why a technique can read Anormal while none of its systems does. The thresholds in
@@ -496,7 +490,7 @@ def _telemetry_data_date(client: str, unit: str) -> Optional[pd.Timestamp]:
     unit_col = "unit" if "unit" in df.columns else ("unit_id" if "unit_id" in df.columns else None)
     if df.empty or not unit_col or "evaluation_timestamp" not in df.columns:
         return None
-    stamps = pd.to_datetime(df.loc[df[unit_col].astype(str) == unit, "evaluation_timestamp"], errors="coerce").dropna()
+    stamps = pd.to_datetime(df.loc[unit_matches(df[unit_col], unit), "evaluation_timestamp"], errors="coerce").dropna()
     return None if stamps.empty else stamps.max()
 
 
@@ -505,7 +499,7 @@ def _telemetry_section(client: str, unit: str, status: str = None) -> dbc.Card:
     unit_col = "unit" if "unit" in df.columns else ("unit_id" if "unit_id" in df.columns else None)
     unit_df = pd.DataFrame()
     if not df.empty and unit_col:
-        unit_df = df[df[unit_col].astype(str) == unit]
+        unit_df = df[unit_matches(df[unit_col], unit)]
 
     period_label = _t("unit_summary_content.semana_mas_reciente")
     if not unit_df.empty and {"week", "year"}.issubset(unit_df.columns):
@@ -568,6 +562,7 @@ def _oil_link(unit: str, row: OilComponentRow):
 
 def _oil_section(client: str, unit: str, status: str = None) -> dbc.Card:
     components = unit_oil_components(client, unit)
+    oil_unit = source_units(client, unit).get("oil", unit)  # how the oil report spells it
 
     period_label = _t("unit_summary_content.muestra_mas_reciente")
     latest = _oil_data_date(components)
@@ -577,7 +572,7 @@ def _oil_section(client: str, unit: str, status: str = None) -> dbc.Card:
         body = _empty_body(_t("unit_summary_content.sin_muestras_de_aceite_registradas_para"))
     else:
         rows = [
-            (c.status, [c.component, status_chip(c.status), c.anomaly or "—", _diagnosis_toggle(c), _oil_link(unit, c)])
+            (c.status, [c.component, status_chip(c.status), c.anomaly or "—", _diagnosis_toggle(c), _oil_link(oil_unit, c)])
             for c in components
         ]
         body = _rows_by_severity(
@@ -620,11 +615,9 @@ def _fleet_position_title(client: str, component: str) -> str:
 
 def _unit_row_in(latest: pd.DataFrame, unit: str) -> Optional[pd.Series]:
     """The unit's row of the Predictivo tab's per-unit frame (zero-padded ids match too)."""
-    from dashboard.tabs.tab_predictive_overview import _normalize_unit_id
-
     rows = latest[latest["Unit"] == unit]
     if rows.empty:
-        rows = latest[latest["Unit"].map(_normalize_unit_id) == _normalize_unit_id(unit)]
+        rows = latest[latest["Unit"].map(unit_key) == unit_key(unit)]
     return None if rows.empty else rows.iloc[0]
 
 
@@ -857,7 +850,7 @@ def monitored_components(client: str, unit: str) -> list:
     df_oil = load_machine_status_for_client(client)
     unit_col = "unit_id" if "unit_id" in df_oil.columns else ("equipo" if "equipo" in df_oil.columns else None)
     if not df_oil.empty and unit_col:
-        match = df_oil[df_oil[unit_col].astype(str) == unit]
+        match = df_oil[unit_matches(df_oil[unit_col], unit)]
         for _, row in match.iterrows():
             for detail in _oil_component_details(row):
                 comp = str(detail.get("component", "")).strip()

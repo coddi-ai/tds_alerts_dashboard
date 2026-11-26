@@ -72,3 +72,7 @@ services:
   # Las variables ALERT_PARTITIONS_* (zona, dia, hora, clientes diarios, bucket/prefijo S3) se leen del
   # entorno de la app. scripts/partition_alerts.py sigue siendo la herramienta manual (--backfill,
   # --validate, --sync-s3, --verify-s3); ya no esta agendado.
+  # Tampoco hay servicio para el estado de flota de la pestana General: la propia app corre
+  # scripts/build_fleet_status.py todos los dias a las 10:30 (FLEET_STATUS_TIME, FLEET_STATUS_SCHEDULER_ENABLED)
+  # y escribe data/general/golden/{cliente}/fleet_status.parquet; al arrancar construye el de los clientes que no lo
+  # tengan (la sincronizacion de S3 borra los archivos que S3 no tiene). Ver src/data/fleet_status.py.

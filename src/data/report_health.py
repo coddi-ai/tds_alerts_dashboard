@@ -72,8 +72,10 @@ _History = Dict[str, Tuple[List[date], List[Tuple[date, str, Optional[str]]]]]
 
 
 def unit_key(unit) -> str:
-    """`T_09`, `t_9` y `T_9` son la misma unidad."""
-    return re.sub(r"\d+", lambda m: str(int(m.group())), str(unit or "").strip().upper())
+    """`T_09`, `t_9`, `T_9` y `T-9` son la misma unidad. El separador no distingue unidades: la pestana General
+    nombra las unidades con guion (`CT-184`) aunque su fuente las escriba `CT_184`."""
+    padded = re.sub(r"\d+", lambda m: str(int(m.group())), str(unit or "").strip().upper())
+    return re.sub(r"[-_]+", "-", padded)
 
 
 def normalize_state(value) -> Optional[str]:

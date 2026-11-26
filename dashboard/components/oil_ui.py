@@ -42,21 +42,31 @@ def estado_surface(estado) -> dict:
     return {"background": tier["bg"], "color": tier["text"], "border": f"1px solid {tier['border']}"}
 
 
-def estado_badge(estado, label: Optional[str] = None) -> html.Span:
+def estado_badge(estado, label: Optional[str] = None, *, solid: bool = False) -> html.Span:
     """The status word with its shape (circle / triangle / diamond), colored from the same status tier
-    as the surface it sits on, so a banner and its badge cannot drift apart."""
+    as the surface it sits on, so a banner and its badge cannot drift apart.
+
+    By default the badge is drawn for a surface that already carries the status fill (a banner): Alerta
+    and Anormal then get a translucent chip. `solid=True` is the pill for a neutral surface (the white
+    "Estado Máquina" cell of the matrix): Normal is the light green tint, Alerta and Anormal take the
+    tier's own solid fill with white text, so the pill alone carries the color.
+    """
     canonical = canonical_estado(estado)
     if canonical is None:
         return html.Span(label or status_label(estado) or "—", className="kpi-chip oil-neutral-chip")
     tier = STATUS_TIERS[STATUS_TIER_BY_ESTADO[canonical]]
     border = tier["badge_text"] if canonical == "Normal" else "rgba(255,255,255,.7)"
+    if solid and canonical != "Normal":
+        background, text = tier["bg"], tier["text"]
+    else:
+        background, text = tier["badge_bg"], tier["badge_text"]
     return html.Span(
         [
             html.Span(className="status-chip__shape", **{"aria-hidden": "true"}),
             html.Span(label if label is not None else status_label(canonical), className="status-chip__text"),
         ],
         className=f"status-chip status-chip--{get_status(canonical).css}",
-        style={"background": tier["badge_bg"], "color": tier["badge_text"], "borderColor": border, "fontWeight": 700},
+        style={"background": background, "color": text, "borderColor": border, "fontWeight": 700},
         **{"data-status": canonical},
     )
 

@@ -16,38 +16,91 @@ card-specific items 08 supersedes; their data-correctness rules are asserted
 here in table form.
 """
 
+import atexit
+import os
+import shutil
+import tempfile
+
 import pytest
 from dash import dcc, html
 
 import dashboard.components.fleet_overview as fo
+import src.data.fleet_status as fs
+from config.estado_rules import STATUS_PRIORITY, band_for_priority
+
+# Clients the tests below build; every one is published from the same patched sources.
+_CLIENTS = ("TESTCO", "FULLCO", "OILONLYCO")
+
+
+@pytest.fixture(autouse=True)
+def _golden_root(tmp_path, monkeypatch):
+    """Each test gets its own empty data root: the view reads only what `_patch_all_sources` publishes."""
+    monkeypatch.setenv("DASHBOARD_DATA_ROOT", str(tmp_path))
+    fo._ENTRIES.clear()
+    fs._read_cached.cache_clear()
+    yield
+    fo._ENTRIES.clear()
+    fs._read_cached.cache_clear()
+
+
+_TEMP_ROOTS: list = []
+atexit.register(lambda: [shutil.rmtree(root, ignore_errors=True) for root in _TEMP_ROOTS])
+
+
+def _isolated_data_root(monkeypatch) -> str:
+    """Point the data root at a fresh empty folder, so a test that publishes (here or through another
+    test module's import of `_patch_all_sources`) never writes into the real `data/`."""
+    root = os.environ.get("DASHBOARD_DATA_ROOT")
+    if root not in _TEMP_ROOTS:  # a test that patches its sources twice keeps what it published in between
+        root = tempfile.mkdtemp(prefix="fleet_golden_")
+        _TEMP_ROOTS.append(root)
+        monkeypatch.setenv("DASHBOARD_DATA_ROOT", root)
+    fo._ENTRIES.clear()
+    fs._read_cached.cache_clear()
+    return root
+
+
+def _publish(clients=_CLIENTS):
+    """Run the scheduled job's build for each client over the patched sources, exactly as
+    `scripts/build_fleet_status.py` does: what the view then reads is the golden file."""
+    for client in clients:
+        try:
+            fs.refresh_client(client)
+        except fs.EmptyFleetError:
+            pass  # a client with no unit publishes nothing, as in production
 
 
 def _patch_all_sources(monkeypatch, *, enabled, alerts=None, telemetry=None, oil=None,
                         maintenance=None, predictive_components=None, predictive=None,
-                        freshness=None, alert_counts=None):
-    """Wire every per-technique data source to canned values so
-    `build_fleet_overview` can run end-to-end without touching real data
-    files. `enabled` gates monitoring-alerts/telemetry/oil/mantenciones via
-    is_service_enabled; predictive is gated by `predictive_components`.
+                        freshness=None, alert_counts=None, publish=True):
+    """Wire every per-technique data source of the golden build to canned values and publish the
+    result, so `build_fleet_overview` runs end-to-end over a real golden file without touching real
+    data files. `enabled` gates monitoring-alerts/telemetry/oil/mantenciones via is_service_enabled;
+    predictive is gated by `predictive_components`.
 
     `telemetry`/`oil` take a plain {unit: status} dict (no severity value -
     tests that need one patch `_telemetry_status_map`/`_oil_status_map`
     directly) and `freshness` the {(technique, unit): (label, elapsed)} map
     they share. `alert_counts` is {unit: (last week, 4 weeks, 8 weeks)}. `alerts`/`predictive` take the full
     ({unit: status}, {unit: value}, freshness_label, freshness_elapsed)
-    tuple since freshness is central to what most of these tests assert."""
+    tuple since freshness is central to what most of these tests assert. `publish=False` leaves the
+    publishing to the test (`_publish()`), for those that patch something else first."""
+    _isolated_data_root(monkeypatch)
     monkeypatch.setattr(
-        fo, "is_service_enabled",
+        fs, "is_service_enabled",
         lambda client, service_id: enabled.get(service_id, False),
     )
-    monkeypatch.setattr(fo, "_alerts_status_map", lambda client: alerts or ({}, {}, "Sin Datos", "N/A"))
-    monkeypatch.setattr(fo, "_alerts_window_counts", lambda client: alert_counts or {})
-    monkeypatch.setattr(fo, "_telemetry_status_map", lambda client: (telemetry or {}, {}))
-    monkeypatch.setattr(fo, "_oil_status_map", lambda client: (oil or {}, {}))
-    monkeypatch.setattr(fo, "_maintenance_status_map", lambda client: maintenance or ({}, "Sin Datos", "N/A"))
-    monkeypatch.setattr(fo, "_enabled_predictive_components", lambda client: predictive_components or [])
-    monkeypatch.setattr(fo, "_predictive_status_map", lambda client, components: predictive or ({}, {}, "Sin Datos", "N/A"))
-    monkeypatch.setattr(fo, "_telemetry_tribologia_freshness_map", lambda client: freshness or {})
+    monkeypatch.setattr(fs, "_alerts_status_map", lambda client: alerts or ({}, {}, "Sin Datos", "N/A"))
+    monkeypatch.setattr(fs, "_alerts_window_counts", lambda client: alert_counts or {})
+    monkeypatch.setattr(fs, "_alerts_source_units", lambda client: {})
+    monkeypatch.setattr(fs, "_telemetry_status_map", lambda client: (telemetry or {}, {}))
+    monkeypatch.setattr(fs, "_oil_status_map", lambda client: (oil or {}, {}))
+    monkeypatch.setattr(fs, "_maintenance_status_map", lambda client: maintenance or ({}, "Sin Datos", "N/A"))
+    monkeypatch.setattr(fs, "enabled_predictive_components", lambda client: predictive_components or [])
+    monkeypatch.setattr(fs, "_predictive_status_map", lambda client, components: predictive or ({}, {}, "Sin Datos", "N/A"))
+    monkeypatch.setattr(fs, "_telemetry_tribologia_freshness_map", lambda client: freshness or {})
+    if publish:
+        _publish()
 
 
 # ── Structural helpers: read the rendered component tree, not its repr ──────
@@ -401,7 +454,6 @@ def _patch_search_fleet(monkeypatch):
         alerts=({"CA-9": "Normal", "CA-90": "Anormal", "CA-93": "Alerta", "CA-2": "Normal", "CA-10": "Anormal"},
                 {}, "Ok", "1h"),
     )
-    fo._SNAPSHOTS.clear()
 
 
 def test_search_lists_only_matching_units_and_opens_their_sections(monkeypatch):
@@ -416,13 +468,13 @@ def test_search_lists_only_matching_units_and_opens_their_sections(monkeypatch):
 def test_search_does_not_change_the_counts_in_the_headers(monkeypatch):
     _patch_search_fleet(monkeypatch)
     plain = _band_titles(fo.build_fleet_overview("TESTCO"))
-    assert _band_titles(fo.build_fleet_overview("TESTCO", "CA-9", refresh=False)) == plain
+    assert _band_titles(fo.build_fleet_overview("TESTCO", "CA-9")) == plain
     assert plain == ["UNIDADES ANORMAL (2)", "UNIDADES ALERTA (1)", "UNIDADES NORMAL (2)"]
 
 
 def test_search_is_case_insensitive_and_a_band_without_matches_stays_closed(monkeypatch):
     _patch_search_fleet(monkeypatch)
-    result = fo.build_fleet_overview("TESTCO", "ca-93", refresh=False)
+    result = fo.build_fleet_overview("TESTCO", "ca-93")
     assert list(_all_rows(result)) == ["CA-93"]
     states = {_text(b.children[1]): getattr(b, "aria-expanded") for b in _toggles(result)}
     assert states == {"UNIDADES ANORMAL": "false", "UNIDADES ALERTA": "true", "UNIDADES NORMAL": "false"}
@@ -430,7 +482,7 @@ def test_search_is_case_insensitive_and_a_band_without_matches_stays_closed(monk
 
 def test_search_without_results_says_so(monkeypatch):
     _patch_search_fleet(monkeypatch)
-    result = fo.build_fleet_overview("TESTCO", "ZZ", refresh=False)
+    result = fo.build_fleet_overview("TESTCO", "ZZ")
     assert _all_rows(result) == {}
     assert "Ninguna unidad coincide" in _text(result)
 
@@ -462,9 +514,9 @@ def test_band_for_priority_maps_resolved_priorities_to_severity_bands():
     - priority 0 ("every applicable technique is Sin Datos/Sin Fuente") is
     special-cased by the caller into its own "Sin Datos" band instead
     (06_fleet_overview_revision_2.md, Required Changes #4)."""
-    assert fo._band_for_priority(3) == "Anormal"
-    assert fo._band_for_priority(2) == "Alerta"
-    assert fo._band_for_priority(1) == "Normal"
+    assert band_for_priority(3) == "Anormal"
+    assert band_for_priority(2) == "Alerta"
+    assert band_for_priority(1) == "Normal"
 
 
 def test_unit_with_every_technique_sin_datos_is_not_labeled_normal(monkeypatch):
@@ -539,7 +591,7 @@ def test_unit_known_only_to_maintenance_is_dropped(monkeypatch):
 
 
 def test_alerts_critico_is_a_synonym_for_anormal_in_priority():
-    assert fo.STATUS_PRIORITY["Crítico"] == fo.STATUS_PRIORITY["Anormal"]
+    assert STATUS_PRIORITY["Crítico"] == STATUS_PRIORITY["Anormal"]
 
 
 def test_unit_anormal_in_one_technique_lands_in_anormal_band(monkeypatch):
@@ -629,7 +681,7 @@ def test_count_alerts_by_window_uses_nested_trailing_windows():
 
     import pandas as pd
 
-    from dashboard.callbacks.overview_general_callbacks import count_alerts_by_window
+    from src.data.fleet_status import count_alerts_by_window
 
     now = datetime.now()
     ago = lambda days: now - timedelta(days=days, hours=1)  # noqa: E731 - just inside the window edge
@@ -714,8 +766,8 @@ def test_predictive_submodel_status_follows_the_same_rule(monkeypatch):
     import src.data.loaders as loaders
     from datetime import datetime, timedelta
 
-    monkeypatch.setattr(fo, "_component_predictive_status_maps",
-                        lambda client, component: ({"T_1": "Normal"}, {"T_1": 12.0}))
+    monkeypatch.setattr(fs, "_component_predictive_status_maps",
+                        lambda client, component: ({"T-1": "Normal"}, {"T-1": 12.0}))
 
     def status_for(age_days):
         monkeypatch.setattr(loaders, "get_model_run_date",
@@ -736,7 +788,6 @@ def _many_units(monkeypatch, n=120):
         monkeypatch, enabled={"monitoring-alerts": True},
         alerts=(units, {}, "Ok", "1h"),
     )
-    fo._SNAPSHOTS.clear()
     return sorted(units)
 
 
@@ -781,14 +832,13 @@ def test_small_band_has_no_button_and_unknown_band_is_empty(monkeypatch):
         monkeypatch, enabled={"monitoring-alerts": True},
         alerts=({"U1": "Normal"}, {}, "Ok", "1h"),
     )
-    fo._SNAPSHOTS.clear()
     assert _buttons(fo.build_fleet_overview("TESTCO")) == []
     assert fo.get_band_rows_chunk("TESTCO", "Anormal", 1) == ([], 0)
 
 
-def test_load_more_recomputes_when_this_worker_never_built_the_page(monkeypatch):
+def test_load_more_reads_the_file_when_this_worker_never_built_the_page(monkeypatch):
     names = _many_units(monkeypatch)
-    fo._SNAPSHOTS.clear()  # e.g. the click lands on another gunicorn worker
+    fo._ENTRIES.clear()  # e.g. the click lands on another gunicorn worker
     rows, remaining = fo.get_band_rows_chunk("TESTCO", "Normal", 1)
     assert [_text(_cells(r)[0]) for r in rows] == names[50:100]
     assert remaining == 20

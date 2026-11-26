@@ -487,3 +487,126 @@ def test_emin_is_never_blocked_for_a_day_without_alerts(mail, monkeypatch):
     monkeypatch.setattr(config, "MAILING_REQUIRE_ALERTS", frozenset({"capstone"}))  # as shipped
     ps.run_job("daily", WEDNESDAY, runner=fake_runner(0))
     assert run_scheduled("emin", WEDNESDAY) == "sent" and len(mail["sent"]) == 1
+
+
+# --------------------------------------------------------------------------- fleet status (General tab, 10:30)
+
+
+def test_the_fleet_status_job_is_due_every_day_at_1030_santiago_and_only_then():
+    """30 minutes after the 10:00 source update; every weekday, not only Wednesday."""
+    for offset in range(7):
+        day = WEDNESDAY + timedelta(days=offset)
+        assert ps.due_job_dates(at(day, 10, 29)) == []
+        assert ("fleet_status", day) in ps.due_job_dates(at(day, 10, 30))
+        assert ("fleet_status", day) in ps.due_job_dates(at(day, 10, 44))
+        assert ("fleet_status", day) not in ps.due_job_dates(at(day, 10, 45))  # past the grace window: missed, not caught up
+    assert ps.due_job_dates(at(WEDNESDAY, 10, 30)) == [("fleet_status", WEDNESDAY)]  # the weekly job is at 08:00, not here
+
+
+def test_the_fleet_status_time_follows_the_santiago_clock_across_daylight_saving():
+    before, after = date(2026, 9, 2), date(2026, 9, 9)
+    assert at(before, 10, 30).utcoffset() != at(after, 10, 30).utcoffset()
+    assert ps.due_job_dates(at(before, 10, 30).astimezone(ZoneInfo("UTC"))) == [("fleet_status", before)]
+    assert ps.due_job_dates(at(after, 10, 30).astimezone(ZoneInfo("UTC"))) == [("fleet_status", after)]
+
+
+def test_the_fleet_status_time_and_switch_are_configurable(monkeypatch):
+    monkeypatch.setenv("FLEET_STATUS_TIME", "11:15")
+    assert ps.due_job_dates(at(WEDNESDAY, 10, 30)) == []
+    assert ps.due_job_dates(at(WEDNESDAY, 11, 15)) == [("fleet_status", WEDNESDAY)]
+    monkeypatch.setenv("FLEET_STATUS_SCHEDULER_ENABLED", "false")
+    assert ps.due_job_dates(at(WEDNESDAY, 11, 15)) == []
+
+
+def test_the_fleet_status_job_runs_its_own_script_for_every_client():
+    command = ps.build_command("fleet_status")
+    assert command == [sys.executable, str(ps.FLEET_SCRIPT_PATH)] and ps.FLEET_SCRIPT_PATH.name == "build_fleet_status.py"
+    assert ps.build_command("fleet_status_startup")[2:] == ["--only-missing"]
+
+
+def test_the_fleet_status_run_is_recorded_once_per_day_and_a_failure_says_the_last_file_stays(caplog):
+    calls = []
+    assert ps.run_job("fleet_status", WEDNESDAY, runner=fake_runner(1, calls)) == "failed"
+    assert ps.read("fleet_status", WEDNESDAY)["status"] == "failed"
+    assert ps.run_job("fleet_status", WEDNESDAY, runner=fake_runner(0, calls)) == "skipped" and len(calls) == 1
+    with caplog.at_level(logging.ERROR):
+        ps.run_job("fleet_status", WEDNESDAY + timedelta(days=1), runner=fake_runner(1))
+    assert any("keeps showing the file of the last successful run" in r.getMessage() for r in caplog.records)
+    assert ps.run_job("fleet_status", WEDNESDAY + timedelta(days=2), runner=fake_runner(0)) == "ok"
+
+
+def test_the_fleet_status_job_does_not_change_the_partitioner_or_its_email_gate():
+    """The partitioner e-mail gate looks at weekly/daily markers only: a failed fleet run must not block it."""
+    ps.run_job("fleet_status", WEDNESDAY, runner=fake_runner(1))
+    assert ps.partition_run_problem("weekly", WEDNESDAY) is not None  # the weekly run never ran: still "did not run"
+    ps.run_job("weekly", WEDNESDAY, runner=fake_runner(0))
+    assert ps.partition_run_problem("weekly", WEDNESDAY) is None
+
+
+def test_at_start_up_the_missing_fleet_files_are_built_in_any_environment(monkeypatch):
+    """Not only in production: a development run that mirrors S3 loses the files exactly as a deployment does."""
+    calls = []
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", lambda clients, root=None: ["capstone"])
+    worker = ps.catch_up_fleet_status(runner=lambda command, timeout: calls.append((command, timeout)) or 0)
+    worker.join(2)
+    (command, timeout), = calls
+    assert command == [sys.executable, str(ps.FLEET_SCRIPT_PATH), "--only-missing"]
+    assert timeout == ps.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_start_up_builds_nothing_when_every_client_has_its_file(monkeypatch):
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", lambda clients, root=None: [])
+    assert ps.catch_up_fleet_status(runner=lambda command, timeout: pytest.fail("nothing is missing")) is None
+
+
+def test_every_start_that_finds_the_file_missing_builds_it_again(monkeypatch):
+    """The mirror removes the files on every start: a once-a-day marker would leave the second start of the day empty."""
+    calls = []
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", lambda clients, root=None: ["capstone"])
+    for _ in range(3):
+        ps.catch_up_fleet_status(runner=lambda command, timeout: calls.append(command) or 0).join(2)
+    assert len(calls) == 3
+
+
+def test_start_up_catch_up_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", lambda clients, root=None: ["capstone"])
+    monkeypatch.setenv("FLEET_STATUS_SCHEDULER_ENABLED", "false")
+    assert ps.catch_up_fleet_status(runner=lambda command, timeout: pytest.fail("switched off")) is None
+
+
+def test_a_failed_or_crashing_start_up_build_is_logged_and_never_stops_the_app(monkeypatch, caplog):
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", lambda clients, root=None: ["capstone"])
+    with caplog.at_level(logging.ERROR):
+        ps.catch_up_fleet_status(runner=lambda command, timeout: 1).join(2)
+
+        def boom(command, timeout):
+            raise OSError("no python")
+
+        ps.catch_up_fleet_status(runner=boom).join(2)
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("FAILED with exit status 1" in m for m in messages) and any("crashed" in m for m in messages)
+
+
+def test_a_catch_up_that_cannot_tell_what_is_missing_never_stops_the_app(monkeypatch):
+    def broken(clients, root=None):
+        raise OSError("data volume not mounted")
+
+    monkeypatch.setattr("src.data.fleet_status.missing_clients", broken)
+    assert ps.catch_up_fleet_status(runner=lambda command, timeout: pytest.fail("unreachable")) is None
+
+
+def test_the_app_builds_the_missing_files_after_the_s3_mirror_not_before():
+    """`dashboard/app.py`: the mirror deletes the golden files, so the build must come after it."""
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "app.py").read_text(encoding="utf-8")
+    body = ast.parse(source).body
+    main = next(n for n in body if isinstance(n, ast.If) and "__main__" in ast.unparse(n.test))
+    calls = [(n.lineno, ast.unparse(n.func)) for n in ast.walk(main) if isinstance(n, ast.Call)]
+    sync_line = next(line for line, name in calls if name == "s3_sync")
+    catch_up_line = next(line for line, name in calls if name == "catch_up_fleet_status")
+    run_line = next(line for line, name in calls if name == "app.run")
+    assert sync_line < catch_up_line < run_line
+    elsewhere = [ast.unparse(n.func) for node in body if node is not main for n in ast.walk(node) if isinstance(n, ast.Call)]
+    assert "catch_up_fleet_status" not in elsewhere  # not at import time: that runs before the mirror

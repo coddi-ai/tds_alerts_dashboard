@@ -7,9 +7,12 @@ page 2, a re-sorted table or a filtered one open the right unit (Requirement 3).
 
 State lives in two stores per table:
   * `<table>-data`: what the filters produced (server computed, one entry per row);
-  * `<table>-view`: `{sort: {col, dir} | None, page, rev}` - how that data is shown.
-A controller callback turns header clicks, pager clicks and new data into the next view; the
-render callback only reads the two stores.
+  * `<table>-view`: `{sort: {col, dir} | None, page, rev, expanded}` - how that data is shown.
+A controller callback turns header clicks, pager clicks, the group toggle and new data into the
+next view; the render callback only reads the two stores.
+
+`expanded` is whether the table's collapsed group of columns (the fleet matrix's "Otros componentes")
+is open. It lives in the view, so it survives paging, sorting and even a change of filters.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ def new_revision() -> str:
 
 
 def initial_view() -> dict:
-    return {"sort": None, "page": 0, "rev": None}
+    return {"sort": None, "page": 0, "rev": None, "expanded": False}
 
 
 def total_pages(total_rows: int, page_size: int = PAGE_SIZE) -> int:
@@ -50,7 +53,9 @@ def next_view(view: Optional[dict], trigger: dict, *, total_rows: int, first_dir
 
     `trigger` is one of: `{"kind": "data", "rev": ...}` (new rows: back to page 1, same sort),
     `{"kind": "sort", "col": ...}` (a header: first click uses the column's natural direction - `first_dirs[col]`,
-    else `first_dirs["*"]`, else ascending - and the next ones flip it; back to page 1), `{"kind": "page", "dir": "prev" | "next"}`.
+    else `first_dirs["*"]`, else ascending - and the next ones flip it; back to page 1), `{"kind": "page", "dir": "prev" | "next"}`
+    and `{"kind": "group", "columns": [...]}` (open / close the group of those columns: the page and the sort stay, except
+    that closing a group takes away a sort on a column that is no longer there).
     """
     view = dict(view or initial_view())
     kind = trigger.get("kind")
@@ -67,6 +72,10 @@ def next_view(view: Optional[dict], trigger: dict, *, total_rows: int, first_dir
     elif kind == "page":
         step = -1 if trigger.get("dir") == "prev" else 1
         view["page"] = clamp_page(int(view.get("page") or 0) + step, total_rows, page_size)
+    elif kind == "group":
+        view["expanded"] = not view.get("expanded")
+        if not view["expanded"] and (view.get("sort") or {}).get("col") in set(trigger.get("columns") or ()):
+            view["sort"] = None
     return view
 
 
@@ -94,8 +103,9 @@ def sort_button(table: str, col_id: str, label: str, view: Optional[dict]) -> ht
 
 
 def sortable_th(table: str, col_id: str, label: str, view: Optional[dict], *, align: str = "center",
-                scope: str = "col") -> html.Th:
-    """`<th aria-sort>` holding the sort button of one column."""
+                scope: str = "col", extra_class: str = "", **attrs) -> html.Th:
+    """`<th aria-sort>` holding the sort button of one column. `extra_class` and `attrs` (e.g. `rowSpan`)
+    go on the `<th>`."""
     sort = (view or {}).get("sort") or {}
     if sort.get("col") == col_id:
         aria_sort = "ascending" if sort.get("dir") == ASC else "descending"
@@ -104,8 +114,9 @@ def sortable_th(table: str, col_id: str, label: str, view: Optional[dict], *, al
     return html.Th(
         sort_button(table, col_id, label, view),
         scope=scope,
-        className="oil-col-left" if align == "left" else "oil-col-center",
+        className=" ".join(filter(None, ["oil-col-left" if align == "left" else "oil-col-center", extra_class])),
         **{"aria-sort": aria_sort},
+        **attrs,
     )
 
 
@@ -143,28 +154,37 @@ def stores(table: str, data=None) -> list:
 
 def register_view_controller(app, table: str, first_dirs: Dict[str, str],
                              rows_of: Callable[[dict], int] = lambda data: len((data or {}).get("rows", []))) -> None:
-    """Wire `<table>-data`, the header buttons and the pager buttons to `<table>-view`."""
+    """Wire `<table>-data`, the header buttons, the pager buttons and the group toggle to `<table>-view`.
+
+    A table with no group of columns simply never renders a toggle: the pattern then matches nothing.
+    The toggle needs the columns of the group (`data["grouped"]`) to drop a sort on a column that
+    closing the group hides.
+    """
 
     @app.callback(
         Output(f"{table}-view", "data"),
         Input(f"{table}-data", "data"),
         Input({"type": f"{table}-sort", "col": ALL}, "n_clicks"),
         Input({"type": f"{table}-page", "dir": ALL}, "n_clicks"),
+        Input({"type": f"{table}-group", "name": ALL}, "n_clicks"),
         State(f"{table}-view", "data"),
         prevent_initial_call=True,
     )
-    def _update_view(data, _sort_clicks, _page_clicks, view):
+    def _update_view(data, _sort_clicks, _page_clicks, _group_clicks, view):
         trigger_id = ctx.triggered_id
         if trigger_id is None:
             raise PreventUpdate
         if trigger_id == f"{table}-data":
             return next_view(view, {"kind": "data", "rev": (data or {}).get("rev")},
                              total_rows=rows_of(data), first_dirs=first_dirs)
-        # A header or pager button. Re-rendered buttons arrive with a zero click count: not a click.
+        # A header, pager or group button. Re-rendered buttons arrive with a zero click count: not a click.
         if not ctx.triggered or not ctx.triggered[0].get("value"):
             raise PreventUpdate
         if trigger_id.get("type") == f"{table}-sort":
             return next_view(view, {"kind": "sort", "col": trigger_id["col"]},
+                             total_rows=rows_of(data), first_dirs=first_dirs)
+        if trigger_id.get("type") == f"{table}-group":
+            return next_view(view, {"kind": "group", "columns": (data or {}).get("grouped", [])},
                              total_rows=rows_of(data), first_dirs=first_dirs)
         return next_view(view, {"kind": "page", "dir": trigger_id["dir"]},
                          total_rows=rows_of(data), first_dirs=first_dirs)

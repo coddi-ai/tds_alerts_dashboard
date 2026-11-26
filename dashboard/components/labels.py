@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from typing import Any
 
 from src.i18n import current_language, t, t_or, vocab, DEFAULT_LANGUAGE
@@ -159,6 +160,15 @@ def status_label(value: Any) -> str:
     if key is None:
         return raw
     return t_or(f"status.{key}", raw)
+
+
+def age_text(age: timedelta) -> str:
+    """"2 h", "24 h", "40 días", "3 semanas": a threshold age the way a person says it."""
+    if age >= timedelta(weeks=2) and age % timedelta(weeks=1) == timedelta(0):
+        return t("unit_summary_content.age_weeks", count=age // timedelta(weeks=1))
+    if age >= timedelta(days=2):
+        return t("unit_summary_content.age_days", count=age.days)
+    return t("unit_summary_content.age_hours", count=int(age.total_seconds() // 3600))
 
 
 def localize_elapsed(text: Any) -> str:

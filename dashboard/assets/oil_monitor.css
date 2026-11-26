@@ -59,6 +59,7 @@
     background: var(--oil-soft);
     color: var(--oil-muted);
 }
+.oil-kpis--aligned .oil-kpi-title { min-height: 36px; }       /* room for a two-line label, so a row of tiles stays level */
 .oil-neutral-chip {
     background: var(--oil-soft);
     color: var(--oil-muted);
@@ -199,9 +200,12 @@
     border-color: var(--oil-focus);
     background: radial-gradient(circle, var(--oil-focus) 0 4px, #fff 5px);
 }
-.oil-row--selected > * { background-color: #eff6ff; }
+.oil-table .oil-row--selected > * { background-color: #eff6ff; }
+.oil-unit-btn { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 
-.oil-cell-btn {
+/* A component cell is a tinted pill: a button when it opens a report, plain text for the group's summary. */
+.oil-cell-btn,
+.oil-cell-pill {
     display: block;
     width: 100%;
     padding: 5px 10px;
@@ -210,13 +214,68 @@
     font: inherit;
     font-weight: 600;
     text-align: center;
-    cursor: pointer;
 }
+.oil-cell-btn { cursor: pointer; }
 .oil-cell-btn:hover { filter: brightness(.96); }
-.oil-cell-empty { color: var(--oil-muted); font-style: italic; font-weight: 400; }
+.oil-cell-empty { color: var(--oil-muted); font-weight: 400; }
 
+/* "Estado Máquina": a white cell, only the pill carries the color. */
 .oil-estado-cell { text-align: center; }
 .oil-estado-cell .status-chip { font-size: 12px; }
+
+/* ---- Frozen columns: the selector, Unidad and Estado Máquina stay put while the table scrolls ------
+   Opaque backgrounds (what scrolls underneath must not show through) and a thin separator on the right
+   edge of the last one. The widths are fixed so each column can offset the next one. */
+.oil-table--frozen {
+    --oil-w-select: 44px;
+    --oil-w-unit: 150px;
+    --oil-w-estado: 132px;
+}
+.oil-table--frozen .oil-frozen {
+    position: sticky;
+    z-index: 2;
+    box-sizing: border-box;
+    background: #fff;
+}
+.oil-table--frozen thead .oil-frozen { z-index: 4; background: #343a40; }
+.oil-table--frozen .oil-row--selected > .oil-frozen { background-color: #eff6ff; }
+.oil-table--frozen .oil-frozen--select {
+    left: 0;
+    width: var(--oil-w-select); min-width: var(--oil-w-select); max-width: var(--oil-w-select);
+}
+.oil-table--frozen .oil-frozen--unit {
+    left: var(--oil-w-select);
+    width: var(--oil-w-unit); min-width: var(--oil-w-unit); max-width: var(--oil-w-unit);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.oil-table--frozen .oil-frozen--estado {
+    left: calc(var(--oil-w-select) + var(--oil-w-unit));
+    width: var(--oil-w-estado); min-width: var(--oil-w-estado); max-width: var(--oil-w-estado);
+    border-right: 1px solid #94a3b8;
+}
+
+/* ---- "Otros componentes (N)": collapsed column header / expanded group bar ----------------------- */
+.oil-table thead th.oil-group__th { min-width: 200px; }
+.oil-table thead th.oil-group__bar { border-bottom: 1px solid rgba(255, 255, 255, .35); }
+.oil-group__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid rgba(255, 255, 255, .55);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.oil-group__toggle:hover { background: rgba(255, 255, 255, .14); }
+.oil-group__toggle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.oil-group__chevron { font-size: 11px; }
+.oil-group__hint { margin-left: 10px; font-size: 11px; font-weight: 400; }
+.oil-group__caption { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; }
 
 /* ---- Pager ------------------------------------------------------------------------------------ */
 .oil-pager {
@@ -243,22 +302,83 @@
 .oil-pager button:disabled { opacity: .5; cursor: default; }
 
 /* ---- Panel de Frecuencia ---------------------------------------------------------------------- */
+/* "Criterios de Criticidad": compact, one block per group. */
 .oil-group-card {
     height: 100%;
-    padding: 14px 16px;
+    padding: 10px 14px;
     border: 1px solid var(--oil-line);
-    border-radius: 12px;
+    border-radius: 10px;
     background: #fff;
 }
-.oil-group-card__title { font-size: 15px; font-weight: 700; color: var(--oil-ink); }
-.oil-group-card__stat  { font-size: 13px; color: var(--oil-muted); }
-.oil-group-card__label { margin-top: 10px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--oil-muted); }
-.oil-group-card__value { font-size: 14px; color: var(--oil-ink); }
+.oil-group-card__title      { font-size: 14px; font-weight: 700; color: var(--oil-ink); }
+.oil-group-card__components { margin: 2px 0 6px; font-size: 13px; color: var(--oil-muted); }
+.oil-group-card__stats      { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; color: var(--oil-ink); }
+.oil-group-card__figure     { white-space: nowrap; }
+.oil-group-card__figure:first-child { font-weight: 600; }
 
 .oil-bar-cell { display: flex; align-items: center; gap: 8px; min-width: 110px; }
 .oil-bar { flex: 1 1 auto; height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
 .oil-bar__fill { height: 100%; border-radius: 999px; }
 .oil-bar__pct { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* The unit list: one <tbody> per unit holding its row and, hidden under it, its component detail
+   (opened by assets/oil_expandable_rows.js). */
+.oil-expand {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: var(--oil-ink);
+    line-height: 1;
+    cursor: pointer;
+}
+.oil-expand:hover { background: var(--oil-soft); }
+.oil-expand:focus-visible,
+.oil-expand-all:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: 2px; }
+.oil-expand__icon { font-size: 11px; transition: transform .15s ease; }
+.oil-expand[aria-expanded="true"] .oil-expand__icon { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .oil-expand__icon { transition: none; } }
+
+.oil-expand-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--oil-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.oil-expand-all:hover:not(:disabled) { background: var(--oil-soft); }
+.oil-expand-all:disabled { opacity: .5; cursor: default; }
+
+/* "N de M" and the bar splitting the unit's components by status (vencidos, próximos, al día, sin muestra). */
+.oil-pending { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 170px; }
+.oil-pending__count { min-width: 52px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.oil-stack {
+    display: flex;
+    flex: 0 0 110px;
+    width: 110px;
+    height: 8px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    overflow: hidden;
+}
+.oil-stack__segment { display: block; height: 100%; border-right: 1px solid #fff; }
+.oil-stack__segment:last-child { border-right: 0; }
+
+/* The detail row spans the table; its own table lists the unit's components. */
+.oil-unit__detail > td { padding: 0; background: #f8fafc; }
+.oil-detail { padding: 8px 12px 12px 44px; overflow-x: auto; }
+.oil-table--detail { background: #fff; border: 1px solid var(--oil-line); border-radius: 8px; }
+.oil-table--detail thead th { position: static; background: var(--oil-soft); color: var(--oil-ink); }
+.oil-table--detail tbody tr:last-child > * { border-bottom: 0; }
 
 .oil-footnote { margin-top: 12px; font-size: 12px; color: var(--oil-muted); }
 

@@ -56,6 +56,29 @@ LABEL_TO_RISK = {
     "Anormal": "Anormal", "Crítico": "Anormal",
 }
 
+# ── Layer 1 criteria ─────────────────────────────────────────────────────────
+# What makes a technique Normal / Alerta / Anormal on its own. The General tab prints these
+# (dashboard/components/fleet_criteria.py) and the code that classifies reads the very same
+# constants, so the text on the page cannot say one thing while the unit is classified by another.
+
+# Alertas is the only technique classified by the dashboard itself
+# (src/data/fleet_status.py:calculate_alert_criticality_score). Over the last
+# ALERTS_WINDOW_DAYS days: score = alerts x (1 + ALERTS_COMPONENT_WEIGHT x components with alerts).
+# No alerts in the window is Normal; a score up to ALERTS_ALERTA_MAX_SCORE is Alerta; above it, Anormal.
+ALERTS_WINDOW_DAYS = 30
+ALERTS_COMPONENT_WEIGHT = 0.5
+ALERTS_ALERTA_MAX_SCORE = 15
+
+# Tribologia's machine status is computed upstream and published as `overall_status`; the dashboard
+# only reads it. Its rule is NOT the "Normal < 6 <= Alerta < 10 <= Anormal" of
+# documentation/oil/oil_data_contracts.md (that table does not reproduce the published statuses: a machine
+# with a single component in Alerta and score 4 is Alerta). What the published data does, checked against
+# every machine of the local mirror by tests/test_fleet_status.py: the machine takes the worst status of its
+# components, and is Anormal whenever its weighted score reaches OIL_SCORE_ANORMAL_FROM, where
+# score = sum(OIL_COMPONENT_POINTS[component status] x the component's criticality weight).
+OIL_COMPONENT_POINTS = {"Normal": 0, "Alerta": 2, "Anormal": 5}
+OIL_SCORE_ANORMAL_FROM = 10
+
 # ── Staleness rule ───────────────────────────────────────────────────────────
 
 # What each data-age tier forces as a floor on the technique's Estado. Age tiers come from

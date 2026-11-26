@@ -7,7 +7,7 @@
 # PLACEHOLDER VALUES. The 15 / 30 / 60 day groups, the 80 % / 100 % thresholds and the mapping
 # below are the proposal from the requirement ("Motor 15, Transmisión 30, Mando Final 60"), applied
 # to the machine types present in today's data. They are meant to be tuned empirically; use the
-# "Promedio histórico entre muestras" of each group in the panel to calibrate them.
+# "promedio histórico" of each group in the panel's "Criterios de Criticidad" card to calibrate them.
 # ----------------------------------------------------------------------------------------------
 
 # Criticality groups. The key is only an identifier used by the mapping below; the interval is what

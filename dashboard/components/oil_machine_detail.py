@@ -20,6 +20,7 @@ from dashboard.components.labels import display_component_name, status_label
 from dashboard.components.oil_ui import canonical_estado, status_banner
 from dashboard.components.tables import create_machine_detail_table
 from src.data.loaders import get_latest_component_hours, load_machine_status_for_client, load_oil_classified
+from src.data.unit_ids import unit_matches
 from src.i18n.data_text import localized_series, localized_value
 from src.utils.logger import get_logger
 
@@ -52,7 +53,7 @@ def unit_oil_components(client: str, unit_id: str) -> Optional[list]:
         return None
     try:
         df = load_oil_classified(client)
-        mdf = df[df['unitId'] == unit_id].copy()
+        mdf = df[unit_matches(df['unitId'], unit_id)].copy()
         if mdf.empty:
             return None
 

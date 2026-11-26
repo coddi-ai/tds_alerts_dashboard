@@ -284,37 +284,110 @@ def filter_rows(rows: pd.DataFrame, site=None, fleet=None, component=None, group
     return rows[mask]
 
 
-# Sortable columns of the main table (column id -> frame column). The status column sorts by urgency.
-SORT_COLUMNS = {
-    "unit_id": "unit_id", "component": "component", "group": "group_days", "last_sample": "last_sample",
-    "days_since": "days_since", "interval_pct": "interval_pct", "due_date": "due_date",
-    "days_to_due": "days_to_due", "avg_hist": "avg_hist", "status": "_urgency",
-}
+def sort_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    """The components in the order a unit's detail lists them.
 
-
-def sort_rows(rows: pd.DataFrame, column: Optional[str] = None, ascending: bool = True) -> pd.DataFrame:
-    """The rows in urgency order (no column given) or sorted by one column.
-
-    Default order: Solicitar muestra (most consumed first), Sin muestra, Próxima a vencer, Al día
-    (each most consumed first). Rows with nothing to sort on ("Sin muestra" has no date or
-    percentage) always go last for a column sort, whichever the direction. Ties fall back to the
-    unit and component so the order is deterministic.
+    Solicitar muestra first (highest Intervalo Consumido first), then Sin muestra, Próxima a vencer and
+    Al día (each by highest Intervalo Consumido). Ties fall back to the unit and component so the order
+    is deterministic.
     """
     if rows.empty:
         return rows
-    frame = rows.assign(_urgency=rows["status"].map(urgency_rank))
-    tiebreak = ["unit_id", "component"]
-    if column in (None, "") or column not in SORT_COLUMNS:
-        frame = frame.assign(_pct=-frame["interval_pct"].astype("float64"))
-        ordered = frame.sort_values(["_urgency", "_pct"] + tiebreak, na_position="last", kind="mergesort")
-        return ordered.drop(columns=["_urgency", "_pct"])
-    key = SORT_COLUMNS[column]
-    values = frame[key]
-    if str(values.dtype) in ("Int64", "Float64"):
-        values = values.astype("float64")
-    frame = frame.assign(_key=values)
-    ordered = frame.sort_values(["_key"] + tiebreak, ascending=[ascending, True, True], na_position="last", kind="mergesort")
-    return ordered.drop(columns=["_urgency", "_key"])
+    frame = rows.assign(_urgency=rows["status"].map(urgency_rank),
+                        _pct=-rows["interval_pct"].astype("float64"))
+    ordered = frame.sort_values(["_urgency", "_pct", "unit_id", "component"], na_position="last", kind="mergesort")
+    return ordered.drop(columns=["_urgency", "_pct"])
+
+
+# ---------------------------------------------------------------------------------------------
+# Units
+# ---------------------------------------------------------------------------------------------
+#
+# The unit is the primary row of the panel; its components are the detail. A unit summary is a
+# plain dict (JSON-safe, so it can sit in a dcc.Store as is) computed over the rows it is given:
+# with the filters applied, M is the number of *matching* components and every figure follows.
+
+def _text_date(value) -> Optional[str]:
+    return None if pd.isna(value) else pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def summarize_units(rows: pd.DataFrame) -> List[dict]:
+    """One summary per unit of `rows`, in the default order (see `sort_units`).
+
+    Keys: `unit_id`, `machine`, `site`; `status` (the worst component status, in the order Solicitar
+    muestra, Sin muestra, Próxima a vencer, Al día); `total` (components, Sin muestra included) and
+    one count per status (`solicitar`, `sin_muestra`, `proxima`, `al_dia`); `max_pct` (the highest
+    Intervalo Consumido); `late_component`, `late_days_to_due`, `late_pct` ("Más Atrasado": the
+    overdue component with the highest Intervalo Consumido or, with none overdue, the one nearest to
+    expire; None without a sampled component); `latest_sample` and `latest_days` (the most recent
+    Última Muestra of the unit and its age in days).
+    """
+    if rows is None or rows.empty:
+        return []
+    units: List[dict] = []
+    for unit_id, group in rows.groupby("unit_id", sort=False):
+        statuses = group["status"].tolist()
+        counts = {status: statuses.count(status) for status in STATUSES}
+        sampled = group[group["status"] != SIN_MUESTRA].assign(
+            _pct=lambda frame: frame["interval_pct"].astype("float64"),
+            _due=lambda frame: frame["days_to_due"].astype("float64"),
+        )
+        unit = {
+            "unit_id": unit_id, "machine": group["machine"].iloc[0],
+            "site": None if pd.isna(group["site"].iloc[0]) else group["site"].iloc[0],
+            "status": min(statuses, key=urgency_rank), "total": len(statuses),
+            "solicitar": counts[SOLICITAR], "sin_muestra": counts[SIN_MUESTRA],
+            "proxima": counts[PROXIMA], "al_dia": counts[AL_DIA],
+            "max_pct": None, "late_component": None, "late_days_to_due": None, "late_pct": None,
+            "latest_sample": None, "latest_days": None,
+        }
+        if not sampled.empty:
+            overdue = sampled[sampled["status"] == SOLICITAR]
+            if not overdue.empty:
+                late = overdue.sort_values(["_pct", "component"], ascending=[False, True], kind="mergesort").iloc[0]
+            else:
+                late = sampled.sort_values(["_due", "_pct", "component"], ascending=[True, False, True],
+                                           kind="mergesort").iloc[0]
+            unit.update(
+                max_pct=float(sampled["_pct"].max()),
+                late_component=late["component"], late_days_to_due=int(late["_due"]), late_pct=float(late["_pct"]),
+                latest_sample=_text_date(sampled["last_sample"].max()), latest_days=int(sampled["days_since"].min()),
+            )
+        units.append(unit)
+    return sort_units(units)
+
+
+def _default_order(unit: dict) -> tuple:
+    # Most components to request first; ties by the highest Intervalo Consumido (a unit with none sorts last).
+    pct = unit["max_pct"] if unit["max_pct"] is not None else -1.0
+    return (-unit["solicitar"], -pct, unit["unit_id"].casefold(), unit["unit_id"])
+
+
+# Sortable columns of the unit list (column id -> sort key; None sorts last in either direction).
+UNIT_SORT_KEYS = {
+    "unit_id": lambda unit: unit["unit_id"].casefold(),
+    "status": lambda unit: urgency_rank(unit["status"]),
+    "pending": lambda unit: (unit["solicitar"], unit["total"]),
+    "late": lambda unit: unit["late_days_to_due"],        # most overdue first when ascending
+    "latest": lambda unit: unit["latest_sample"],         # ISO dates sort as text
+}
+
+
+def sort_units(units: List[dict], column: Optional[str] = None, ascending: bool = True) -> List[dict]:
+    """The units in the default order (no column given) or sorted by one column.
+
+    Default order: most components in Solicitar muestra first, ties by the highest Intervalo Consumido.
+    A column sort keeps the default order among equal values, and units with nothing to sort on (no
+    sampled component) go last whichever the direction.
+    """
+    ordered = sorted(units, key=_default_order)
+    key = UNIT_SORT_KEYS.get(column or "")
+    if key is None:
+        return ordered
+    valued = [unit for unit in ordered if key(unit) is not None]
+    missing = [unit for unit in ordered if key(unit) is None]
+    valued.sort(key=key, reverse=not ascending)           # a reversed sort is still stable
+    return valued + missing
 
 
 def status_counts(rows: pd.DataFrame) -> Dict[str, int]:

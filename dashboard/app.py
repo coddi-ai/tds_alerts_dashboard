@@ -282,6 +282,9 @@ if "pytest" not in sys.modules:
 # ALERT_PARTITIONS_SCHEDULER_ENABLED=false turns it off. See src/data/partition_scheduler.py.
 if "pytest" not in sys.modules:
     from src.data.partition_scheduler import start_partition_scheduler
+    # The same scheduler also builds the General tab's golden file (scripts/build_fleet_status.py) every day
+    # at 10:30, half an hour after the 10:00 source update. (The build for a start that finds the file missing
+    # is below, after the S3 mirror.)
     start_partition_scheduler()
 
 
@@ -344,6 +347,13 @@ if __name__ == '__main__':
             logger.warning("Continuing without S3 sync. Some features may not work.")
     else:
         logger.info("SYNC_DATA is disabled. Skipping S3 sync.")
+
+    # The mirror above deletes every local file S3 does not have, the General tab's golden files included
+    # (src/data/fleet_status.py), so build the ones that are missing now - after it, never before - instead of
+    # showing "not available" until the next 10:30 run. Only builds what is missing; FLEET_STATUS_SCHEDULER_ENABLED=false
+    # turns it off.
+    from src.data.partition_scheduler import catch_up_fleet_status
+    catch_up_fleet_status()
     
     # Run server
     logger.info("Starting Multi-Technical-Alerts Dashboard...")

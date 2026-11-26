@@ -993,3 +993,39 @@
     width: 320px;
     max-width: 100%;
 }
+
+/* "Cómo se asignan los estados": collapsed criteria panel under the search. A native <details>, so it
+   opens with the keyboard and announces its state without any script. */
+.fleet-criteria {
+    margin: 8px 0 14px;
+    border: 1px solid var(--border-strong, #dee2e6);
+    border-radius: 8px;
+    background: #fff;
+}
+.fleet-criteria__summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    list-style: none;
+}
+.fleet-criteria__summary::-webkit-details-marker { display: none; }
+.fleet-criteria__summary::after {
+    content: "\25BE";
+    float: right;
+    transition: transform 0.15s ease;
+}
+.fleet-criteria[open] > .fleet-criteria__summary::after { transform: rotate(180deg); }
+.fleet-criteria__summary:focus-visible { outline: 2px solid var(--st-alerta-text, #9a3412); outline-offset: 2px; border-radius: 8px; }
+.fleet-criteria__body { padding: 0 14px 12px; font-size: 0.85rem; }
+.fleet-criteria__lead { margin: 4px 0 8px; }
+.fleet-criteria__heading { font-size: 0.9rem; font-weight: 700; margin: 14px 0 6px; }
+.fleet-criteria__text { margin: 6px 0; }
+.fleet-criteria__list { margin: 4px 0 6px; padding-left: 1.2rem; }
+.fleet-criteria__note { color: #6b7280; font-size: 0.78rem; font-weight: 400; margin-top: 2px; }
+.fleet-criteria__scroll { overflow-x: auto; }
+.fleet-criteria__table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.fleet-criteria__table th:first-child { width: 28%; }
+.fleet-criteria__table th,
+.fleet-criteria__table td { padding: 6px 8px; border-bottom: 1px solid #eef0f2; vertical-align: top; text-align: left; }
+.fleet-criteria__technique { font-weight: 600; }

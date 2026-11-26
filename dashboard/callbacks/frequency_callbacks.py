@@ -1,10 +1,11 @@
 """
 Callbacks of the Panel de Frecuencia (Monitor de Aceite).
 
-Filters -> `freq-data` (rows, KPI counts, group summaries) -> KPI tiles and criticality card;
-`freq-data` + `freq-view` (sort, page) -> main table. A click on "Última Muestra" opens that sample's
-Detalle de Reporte through the same navigation as a cell of Visión de Flota, resolved from the unit
-and component written in the clicked button's own id (never from the row's position in the page).
+Filters -> `freq-data` (components, units, KPI counts, group summaries) -> KPI tiles and criticality
+card; `freq-data` + `freq-view` (sort, page) -> unit list. Opening a unit's detail is done in the
+browser (assets/oil_expandable_rows.js). A click on "Última Muestra" opens that sample's Detalle de
+Reporte through the same navigation as a cell of Visión de Flota, resolved from the unit and component
+written in the clicked button's own id (never from the row's position in the page).
 """
 
 from dash import ALL, Input, Output, State, ctx, html
@@ -17,8 +18,8 @@ from dashboard.components.oil_frequency import (
     TABLE,
     build_frequency_data,
     filter_options,
+    render_criteria_card,
     render_frequency_table,
-    render_group_card,
     render_kpis,
 )
 from dashboard.components.oil_table import register_view_controller
@@ -93,10 +94,10 @@ def register_frequency_callbacks(app):
         as_of = t("frequency.datos_al", fecha=data["as_of"]) if data.get("as_of") else ""
         if data.get("counts") is None:       # nothing to summarize (no client / no fleet / error)
             return html.Div(), html.Div(), as_of
-        return render_kpis(data), render_group_card(data), as_of
+        return render_kpis(data), render_criteria_card(data), as_of
 
-    # Sort / page controller and table
-    register_view_controller(app, TABLE, FIRST_DIRS)
+    # Sort / page controller and unit list (the list pages by unit, not by component)
+    register_view_controller(app, TABLE, FIRST_DIRS, rows_of=lambda data: len((data or {}).get("units", [])))
 
     @app.callback(
         [Output('freq-table-container', 'children'),

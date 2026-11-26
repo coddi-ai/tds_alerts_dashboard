@@ -13,8 +13,18 @@ Jobs (``America/Santiago``; every value is an environment variable, defaults bel
     weekly  Wednesday 08:00   every client            ``ALERT_PARTITIONS_WEEKDAY`` / ``_TIME``
     daily   every day 11:30   the daily clients       ``ALERT_PARTITIONS_DAILY_CLIENTS`` (default
                               ``emin``; ``none`` = no daily job) / ``ALERT_PARTITIONS_DAILY_TIME``
+    fleet   every day 10:30   every client            ``FLEET_STATUS_TIME`` / ``FLEET_STATUS_SCHEDULER_ENABLED``
 The upstream alert creation runs at 07:00, so the weekly job leaves it an hour; the alert-summary
 e-mail of each client leaves the partitioner at least 30 minutes (``src/mailing/config.py``).
+
+The ``fleet`` job is not a partitioner: it runs ``scripts/build_fleet_status.py``, which builds the golden
+file of the General tab (``src/data/fleet_status.py``) 30 minutes after the 10:00 source update. It rides
+on this scheduler because it needs the same things (one clock, one marker per day shared by the workers,
+a subprocess that never blocks a request) and a second scheduler would be a second place to get wrong.
+Its run is a marker like the others (``partitions_fleet_status_<date>.json``), but nothing reads it: a
+failed run just leaves the previous file in place. :func:`catch_up_fleet_status` also runs the script when the app
+starts, once the S3 mirror is done, for the clients that have no file: the mirror removes every local file S3 does
+not have, so a fresh container - or any run that mirrors S3 - has none until the next 10:30.
 
 Why a subprocess. The job runs ``python scripts/partition_alerts.py`` in its own process: the
 existing logic is reused untouched, its exit status (0 ok, 1 build/validation error, 2 S3 error) is
@@ -51,9 +61,13 @@ logger = get_logger(__name__)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPOSITORY_ROOT / "scripts" / "partition_alerts.py"
+FLEET_SCRIPT_PATH = REPOSITORY_ROOT / "scripts" / "build_fleet_status.py"
 
 JOB_WEEKLY = "weekly"
 JOB_DAILY = "daily"
+JOB_FLEET = "fleet_status"
+JOB_FLEET_STARTUP = "fleet_status_startup"
+FLEET_JOBS = (JOB_FLEET, JOB_FLEET_STARTUP)
 
 STATUS_RUNNING = "running"
 STATUS_OK = "ok"
@@ -66,6 +80,8 @@ DEFAULT_DAILY_CLIENTS = "emin"
 # EMIN's CSV reaches S3 around 11:10 (24/11: 11:12 Chile), so the daily run waits until 11:30 and leaves the
 # 12:00 e-mail 30 minutes. A run at 10:30 always read the previous day's file.
 DEFAULT_DAILY_TIME = "11:30"
+# The sources of the General tab are updated at 10:00; the fleet status is built half an hour later.
+DEFAULT_FLEET_TIME = "10:30"
 DEFAULT_GRACE_MINUTES = 15
 DEFAULT_TIMEOUT_SECONDS = 3600.0
 POLL_SECONDS = 30.0
@@ -114,6 +130,8 @@ class Settings:
     daily_time: day_time
     grace_minutes: int
     timeout_seconds: float
+    fleet_time: day_time = day_time(10, 30)
+    fleet_enabled: bool = True
 
 
 def load_settings() -> Settings:
@@ -131,6 +149,8 @@ def load_settings() -> Settings:
         daily_time=parse_time(env_config.get_env("ALERT_PARTITIONS_DAILY_TIME", DEFAULT_DAILY_TIME)),
         grace_minutes=int(number("ALERT_PARTITIONS_GRACE_MINUTES", DEFAULT_GRACE_MINUTES)),
         timeout_seconds=number("ALERT_PARTITIONS_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        fleet_time=parse_time(env_config.get_env("FLEET_STATUS_TIME", DEFAULT_FLEET_TIME)),
+        fleet_enabled=env_config.env_flag("FLEET_STATUS_SCHEDULER_ENABLED", True),
     )
 
 
@@ -239,6 +259,9 @@ def build_command(job: str, settings: Optional[Settings] = None) -> List[str]:
     """The weekly job runs every client; the daily one only the daily clients. Both are the normal
     (non ``--backfill``) run of the script: rebuild what changed, then sync to S3."""
     settings = settings or load_settings()
+    if job in FLEET_JOBS:
+        # Every client; the start-up catch-up only builds the ones that have no file yet.
+        return [sys.executable, str(FLEET_SCRIPT_PATH)] + (["--only-missing"] if job == JOB_FLEET_STARTUP else [])
     command = [sys.executable, str(SCRIPT_PATH)]
     if job == JOB_DAILY:
         for client in settings.daily_clients:
@@ -249,6 +272,7 @@ def build_command(job: str, settings: Optional[Settings] = None) -> List[str]:
 def _run_subprocess(command: Sequence[str], timeout_seconds: float) -> int:
     """Run the script, stream its log lines into the app log, return its exit status."""
     env = dict(os.environ, PYTHONUNBUFFERED="1")
+    label = "fleet status" if str(FLEET_SCRIPT_PATH) in command else "partitioner"
     process = subprocess.Popen(
         list(command), cwd=str(REPOSITORY_ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
@@ -260,7 +284,7 @@ def _run_subprocess(command: Sequence[str], timeout_seconds: float) -> int:
         for line in process.stdout:  # type: ignore[union-attr]
             line = line.rstrip()
             if line:
-                (logger.error if " ERROR " in line or "Traceback" in line else logger.info)("partitioner | %s", line)
+                (logger.error if " ERROR " in line or "Traceback" in line else logger.info)("%s | %s", label, line)
         return process.wait()
     finally:
         if timer:
@@ -300,10 +324,16 @@ def run_job(job: str, day: Optional[date] = None, runner: Optional[Runner] = Non
         logger.info("partitioner: %s run finished OK in %.0fs (date=%s)", job, seconds, day)
         return "ok"
     finish(job, day, STATUS_FAILED, exit_code=code)
-    logger.error(
-        "partitioner: %s run FAILED with exit status %s after %.0fs (date=%s): 1 = build/validation error, "
-        "2 = S3 sync error; the e-mail that depends on it will not be sent", job, code, seconds, day,
-    )
+    if job in FLEET_JOBS:
+        logger.error(
+            "fleet status: %s run FAILED with exit status %s after %.0fs (date=%s): the General tab keeps showing "
+            "the file of the last successful run", job, code, seconds, day,
+        )
+    else:
+        logger.error(
+            "partitioner: %s run FAILED with exit status %s after %.0fs (date=%s): 1 = build/validation error, "
+            "2 = S3 sync error; the e-mail that depends on it will not be sent", job, code, seconds, day,
+        )
     return "failed"
 
 
@@ -322,7 +352,8 @@ def due_job_dates(now: datetime, settings: Optional[Settings] = None) -> List[Tu
     grace = timedelta(minutes=settings.grace_minutes)
     due: List[Tuple[str, date]] = []
     candidates = [(JOB_WEEKLY, day.weekday() == settings.weekday, settings.weekly_time),
-                  (JOB_DAILY, bool(settings.daily_clients), settings.daily_time)]
+                  (JOB_DAILY, bool(settings.daily_clients), settings.daily_time),
+                  (JOB_FLEET, settings.fleet_enabled, settings.fleet_time)]
     for job, on_day, at in candidates:
         if not on_day:
             continue
@@ -385,9 +416,11 @@ class PartitionScheduler:
         self._thread.start()
         settings = load_settings()
         logger.info(
-            "partitioner scheduler started (tz=%s, weekly: weekday=%d %s all clients; daily: %s %s)",
+            "partitioner scheduler started (tz=%s, weekly: weekday=%d %s all clients; daily: %s %s; "
+            "fleet status: %s)",
             settings.timezone, settings.weekday, settings.weekly_time.strftime("%H:%M"),
             list(settings.daily_clients) or "none", settings.daily_time.strftime("%H:%M"),
+            settings.fleet_time.strftime("%H:%M") if settings.fleet_enabled else "off",
         )
         return self
 
@@ -413,6 +446,60 @@ def start_partition_scheduler() -> Optional[PartitionScheduler]:
             return None
         _SCHEDULER = PartitionScheduler().start()
         return _SCHEDULER
+
+
+def catch_up_fleet_status(
+    runner: Optional[Runner] = None,
+    clients: Optional[Sequence[str]] = None,
+) -> Optional[threading.Thread]:
+    """After the S3 mirror, build the General tab's file for the clients that have none (see the module docstring).
+
+    Call it once the data folder has been mirrored (`dashboard/app.py` does, right after the sync): the mirror deletes
+    every local file S3 does not have, the golden files included, and the build reads that same folder. Runs in its own
+    thread, so the app does not wait for it, and in every environment - a development run that mirrors S3 loses the files
+    exactly as a deployment does. Unlike the scheduled jobs it takes no once-a-day marker: it is a repair of "the file is
+    not there", every start that finds it missing needs it, and the script itself only builds what is missing, so two
+    workers doing it at once just write the same file. Returns the thread, or None when the switch is off or nothing is
+    missing. A run that fails is logged; the scheduled job tries again at its time, and the tab says the data is not
+    available in the meantime - it never rebuilds it itself."""
+    settings = load_settings()
+    if not settings.fleet_enabled:
+        return None
+    try:
+        from config.settings import get_settings
+        from src.data import fleet_status
+
+        names = list(clients) if clients is not None else [c.lower() for c in get_settings().clients]
+        missing = fleet_status.missing_clients(names)
+    except Exception:  # noqa: BLE001 - the app must start whatever this finds
+        logger.exception("fleet status: could not check which clients have no file")
+        return None
+    if not missing:
+        return None
+    logger.info("fleet status: no file yet for %s: building them now", missing)
+    command = build_command(JOB_FLEET_STARTUP, settings)
+    run = runner or _run_subprocess
+
+    def work() -> None:
+        started = datetime.now(timezone.utc)
+        try:
+            with _RUN_LOCK:
+                code = run(command, settings.timeout_seconds)
+        except Exception:  # noqa: BLE001 - a background thread must survive anything
+            logger.exception("fleet status: the start-up run crashed")
+            return
+        seconds = (datetime.now(timezone.utc) - started).total_seconds()
+        if code == 0:
+            logger.info("fleet status: start-up run finished OK in %.0fs", seconds)
+        else:
+            logger.error(
+                "fleet status: start-up run FAILED with exit status %s after %.0fs: the General tab says its data is not "
+                "available until the next run", code, seconds,
+            )
+
+    worker = threading.Thread(target=work, name="fleet-status-catch-up", daemon=True)
+    worker.start()
+    return worker
 
 
 def stop_partition_scheduler() -> None:

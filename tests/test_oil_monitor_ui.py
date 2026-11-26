@@ -77,7 +77,23 @@ def test_component_cells_use_the_severity_tints():
         assert button.children == f"{estado} · 168 d"
         assert button.style["background"] == SEVERITY_TIERS[tier]["bg"]
         assert button.style["color"] == SEVERITY_TIERS[tier]["text"]
-    assert text_of(_cell("T_1", "motor", None, None)) == "Sin muestra"
+    # No sample: a dash that is named "Sin muestra" for assistive technology and is not clickable.
+    empty = _cell("T_1", "motor", None, None)
+    assert text_of(empty) == "—" and not buttons(empty)
+    label = [c for c in walk(empty) if getattr(c, "role", None) == "img"][0]
+    assert label.to_plotly_json()["props"]["aria-label"] == "Sin muestra"
+
+
+def test_estado_maquina_cell_is_white_and_only_its_pill_is_colored():
+    from dashboard.components.oil_fleet_matrix import _estado_cell
+
+    expected = {"Normal": ("#dcfce7", "#15803d"), "Alerta": ("#c2410c", "#ffffff"), "Anormal": ("#b91c1c", "#ffffff")}
+    for estado, (background, text) in expected.items():
+        cell = _estado_cell(estado)
+        assert getattr(cell, "style", None) is None                 # no fill on the cell itself
+        pill = [c for c in walk(cell) if "status-chip " in (getattr(c, "className", "") or "") + " "][0]
+        assert (pill.style["background"], pill.style["color"]) == (background, text)
+        assert estado in text_of(cell)                              # the word is always there
 
 
 # ---- fleet matrix: column order ----------------------------------------------------------------
@@ -146,10 +162,11 @@ def test_matrix_columns_follow_coverage_and_machine_status_comes_with_each_row(f
 
 
 def test_filters_recompute_the_column_order(fleet):
-    # Only the Normal machines (U3, U4): `motor` is the only one with data left; the empty columns stay
-    # (the Componentes filter alone decides which columns exist) and tie alphabetically at the end.
+    # Only the Normal machines (U3, U4): `motor` is the only component with data left. `cubo` and `freno`
+    # have none, which is below the threshold (at least one unit), so they fall into the group, in
+    # coverage order (a tie: alphabetical).
     data = fleet.build_fleet_matrix_data("cda", None, "camion", ["Normal"], None, today="2026-11-23")
-    assert data["columns"] == ["motor", "cubo", "freno"]
+    assert data["columns"] == ["motor"] and data["grouped"] == ["cubo", "freno"]
     # Only Anormal / Alerta machines (U1, U2): motor 2, freno 2 (alphabetical tie), cubo 1
     data = fleet.build_fleet_matrix_data("cda", None, "camion", ["Anormal", "Alerta"], None, today="2026-11-23")
     assert data["columns"] == ["freno", "motor", "cubo"]
@@ -219,6 +236,158 @@ def test_estado_maquina_is_the_first_column_after_unidad(fleet, monkeypatch):
     header = [th for th in walk(block) if type(th).__name__ == "Th"][:4]
     labels = [text_of(th) for th in header]
     assert labels[1].startswith("Unidad") and labels[2].startswith("Estado Máquina") and labels[3].startswith("Motor")
+
+
+# ---- fleet matrix: "Otros componentes (N)" group and frozen columns -----------------------------------
+
+def test_group_threshold_is_exact_integer_arithmetic():
+    from dashboard.components.oil_fleet_matrix import group_threshold
+
+    # ceil(0.20 * 35) is 8 in floating point (7.000000000000001); 20 % of 35 units is exactly 7.
+    assert [group_threshold(n) for n in (0, 1, 5, 10, 11, 35, 100)] == [0, 1, 1, 2, 3, 7, 20]
+
+
+def _grouped_classified():
+    """Ten units. `motor` on all, `freno` on half, `borde` on exactly 20 % (keeps its own column), and
+    `cubo`, `tapa`, `rueda` on one unit each (below the threshold of 2 units: grouped)."""
+    layout = {
+        "motor": {f"U{i:02d}": "Anormal" if i == 9 else "Normal" for i in range(10)},
+        "freno": {f"U{i:02d}": "Normal" for i in range(5)},
+        "borde": {"U05": "Normal", "U06": "Normal"},
+        "cubo": {"U00": "Normal"},
+        "tapa": {"U00": "Alerta"},
+        "rueda": {"U03": "Normal"},
+    }
+    rows = [{"unitId": unit, "machineName": "camion", "componentName": component, "site": "Mina",
+             "sampleDate": pd.Timestamp("2026-11-10"), "report_status": status, "ai_recommendation": ""}
+            for component, units in layout.items() for unit, status in units.items()]
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def grouped_fleet(fleet, monkeypatch):
+    classified = _grouped_classified()
+    monkeypatch.setattr(fleet, "load_oil_classified", lambda client: classified.copy())
+    monkeypatch.setattr(fleet, "recommendations", lambda data, units: {})
+    return fleet
+
+
+def _group_data(fleet):
+    return fleet.build_fleet_matrix_data("cda", None, "camion", None, None, today="2026-11-23")
+
+
+def _row_of(block, unit):
+    for tr in walk(block):
+        if type(tr).__name__ == "Tr" and any(
+                isinstance(b.id, dict) and b.id.get("type") == "fleet-unit" and b.id["unit"] == unit
+                for b in buttons(tr)):
+            return tr
+    raise AssertionError(f"no row for {unit}")
+
+
+def _prop(component, name):
+    return component.to_plotly_json()["props"].get(name)
+
+
+def test_components_below_the_threshold_go_to_the_group_in_coverage_order(grouped_fleet):
+    data = _group_data(grouped_fleet)
+    assert data["columns"] == ["motor", "freno", "borde"]              # 10, 5 and exactly 20 % of the units
+    assert data["grouped"] == ["cubo", "rueda", "tapa"]                # 1 unit each: a tie, alphabetical
+    assert set(data["rows"][0]["cells"]) <= {"motor", "freno", "borde", "cubo", "rueda", "tapa"}
+
+
+def test_without_components_below_the_threshold_there_is_no_group(fleet, monkeypatch):
+    monkeypatch.setattr(fleet, "recommendations", lambda data, units: {})
+    data = fleet.build_fleet_matrix_data("cda", None, "camion", None, None, today="2026-11-23")
+    assert data["grouped"] == []
+    block, _ = fleet.render_fleet_matrix(data, {"expanded": True}, None)
+    assert not [b for b in buttons(block) if isinstance(b.id, dict) and b.id["type"] == "fleet-group"]
+
+
+def test_group_summary_is_the_worst_status_and_how_many_have_data():
+    from dashboard.components.oil_fleet_matrix import group_summary
+
+    cells = {"a": {"s": "Normal", "d": 3}, "b": {"s": "Alerta", "d": 9}, "c": {"s": "Normal", "d": 1}}
+    assert group_summary(cells, ["a", "b"]) == ("Alerta", 2)
+    assert group_summary(cells, ["a", "c", "z"]) == ("Normal", 2)       # "z" has no data: not counted
+    assert group_summary({**cells, "d": {"s": "Anormal", "d": 5}}, ["a", "b", "d"]) == ("Anormal", 3)
+    assert group_summary(cells, ["z"]) is None and group_summary({}, []) is None
+
+
+def test_collapsed_group_is_one_column_with_a_toggle_and_a_summary_per_unit(grouped_fleet):
+    data = _group_data(grouped_fleet)
+    block, _ = grouped_fleet.render_fleet_matrix(data, {"sort": None, "page": 0, "expanded": False}, None)
+
+    toggles = [b for b in buttons(block) if isinstance(b.id, dict) and b.id["type"] == "fleet-group"]
+    assert len(toggles) == 1
+    assert _prop(toggles[0], "aria-expanded") == "false"
+    assert "Otros componentes (3)" in text_of(toggles[0])
+    assert "datos en menos del 20 % de las unidades" in text_of(block)
+    # not sortable, and the grouped components have no column of their own
+    sorts = [b.id["col"] for b in buttons(block) if isinstance(b.id, dict) and b.id["type"] == "fleet-sort"]
+    assert sorts == ["unit_id", "machine_status", "motor", "freno", "borde"]
+    assert not [b for b in buttons(block) if isinstance(b.id, dict) and b.id["type"] == "fleet-cell"
+                and b.id["component"] in data["grouped"]]
+    # the group cell: worst status + components with data; a dash with none; never a button
+    for unit, text in (("U00", "Alerta · 2 comp."), ("U03", "Normal · 1 comp."), ("U01", "—")):
+        last_cell = [td for td in _row_of(block, unit).children if type(td).__name__ == "Td"][-1]
+        assert text_of(last_cell) == text and not buttons(last_cell)
+
+
+def test_expanding_the_group_swaps_it_for_its_components_under_a_bar(grouped_fleet):
+    data = _group_data(grouped_fleet)
+    block, _ = grouped_fleet.render_fleet_matrix(data, {"sort": None, "page": 0, "expanded": True}, None)
+
+    header_rows = [c for c in walk(block) if type(c).__name__ == "Thead"][0].children
+    assert len(header_rows) == 2
+    bar = [th for th in header_rows[0].children if _prop(th, "scope") == "colgroup"][0]
+    assert _prop(bar, "colSpan") == 3 and "Otros componentes (3)" in text_of(bar)
+    assert _prop(buttons(bar)[0], "aria-expanded") == "true"
+    assert all(_prop(th, "rowSpan") == 2 for th in header_rows[0].children if th is not bar)
+    second = [b.id["col"] for b in buttons(header_rows[1])]
+    assert second == data["grouped"]                                    # coverage order, each sortable
+    # the components are ordinary pill cells now, and the summary column is gone
+    cells = [b.id["component"] for b in buttons(_row_of(block, "U00")) if b.id["type"] == "fleet-cell"]
+    assert cells == ["motor", "freno", "cubo", "tapa"]                  # U00 has no sample for borde / rueda
+    assert "comp." not in text_of(block)
+
+
+def test_the_first_three_columns_are_frozen(grouped_fleet):
+    data = _group_data(grouped_fleet)
+    block, _ = grouped_fleet.render_fleet_matrix(data, {"sort": None, "page": 0, "expanded": False}, None)
+    table = [c for c in walk(block) if type(c).__name__ == "Table"][0]
+    assert "oil-table--frozen" in table.className
+    header = [c for c in walk(block) if type(c).__name__ == "Tr"][0]
+    row = _row_of(block, "U00")
+    for line in (header, row):
+        first_three = [c for c in line.children if type(c).__name__ in ("Th", "Td")][:3]
+        assert [c.className.split()[-1] for c in first_three] == [
+            "oil-frozen--select", "oil-frozen--unit", "oil-frozen--estado"]
+        assert all("oil-frozen" in c.className.split() for c in first_three)
+    # the cell behind the machine's pill is neutral
+    assert getattr([c for c in row.children if "oil-frozen--estado" in c.className][0], "style", None) is None
+
+
+def test_group_state_persists_while_paging_and_sorting_and_closing_drops_a_hidden_sort():
+    from dashboard.components.oil_table import initial_view, next_view
+
+    first = {"unit_id": "asc", "*": "desc"}
+    assert initial_view()["expanded"] is False                         # starts collapsed
+    grouped = ["cubo", "rueda", "tapa"]
+    view = next_view(initial_view(), {"kind": "group", "columns": grouped}, total_rows=70, first_dirs=first)
+    assert view["expanded"] is True
+    view = next_view(view, {"kind": "page", "dir": "next"}, total_rows=70, first_dirs=first)
+    view = next_view(view, {"kind": "sort", "col": "motor"}, total_rows=70, first_dirs=first)
+    view = next_view(view, {"kind": "data", "rev": "x"}, total_rows=70, first_dirs=first)
+    assert view["expanded"] is True and view["sort"]["col"] == "motor"
+    # closing keeps the sort on a visible column and the page ...
+    paged = {**view, "page": 1}
+    closed = next_view(paged, {"kind": "group", "columns": grouped}, total_rows=70, first_dirs=first)
+    assert closed["expanded"] is False and closed["sort"] == view["sort"] and closed["page"] == 1
+    # ... but drops a sort on a column the closed group no longer shows
+    hidden = next_view({**view, "sort": {"col": "tapa", "dir": "desc"}}, {"kind": "group", "columns": grouped},
+                       total_rows=70, first_dirs=first)
+    assert hidden["expanded"] is False and hidden["sort"] is None
 
 
 # ---- shared table state (sort / page) -----------------------------------------------------------------
@@ -379,6 +548,13 @@ def _frequency_classified():
     return pd.DataFrame(rows)
 
 
+def _sample_row(unit, component, days_ago, normalized=None):
+    return {"unitId": unit, "machineName": "camion", "componentName": component,
+            "componentNameNormalized": normalized or component, "site": "Mina",
+            "sampleDate": pd.Timestamp("2026-11-23") - pd.Timedelta(days=days_ago),
+            "reportDate": pd.Timestamp("2026-11-22"), "daysSincePrevious": 20}
+
+
 @pytest.fixture
 def frequency(monkeypatch):
     from dashboard.components import oil_frequency as f
@@ -397,44 +573,176 @@ def frequency(monkeypatch):
     return f
 
 
+TODAY = date(2026, 11, 23)
+
+
+def _unit_bodies(block):
+    return [c for c in walk(block) if type(c).__name__ == "Tbody" and getattr(c, "className", "") == "oil-unit"]
+
+
+def _cells(row):
+    """The text of each cell of a table row (not of the tables nested in it)."""
+    return [text_of(c) for c in row.children if type(c).__name__ in ("Th", "Td")]
+
+
+def _unit_row_and_detail(body):
+    row, detail = body.children
+    return row, detail
+
+
+def _detail_rows(detail):
+    table = [c for c in walk(detail) if type(c).__name__ == "Table"][0]
+    tbody = [c for c in table.children if type(c).__name__ == "Tbody"][0]
+    return tbody.children
+
+
 def test_nothing_is_displayed_without_a_fleet_but_the_data_date_is(frequency):
     data = frequency.build_frequency_data("cda")
-    assert data["message"] == "frequency.seleccione_una_flota" and data["rows"] == []
+    assert data["message"] == "frequency.seleccione_una_flota" and data["rows"] == [] and data["units"] == []
     assert data["as_of"] == "2026-11-22"                      # latest reportDate of the client
 
 
-def test_kpis_groups_and_table_react_to_the_filters(frequency):
-    today = date(2026, 11, 23)
-    data = frequency.build_frequency_data("cda", None, "camion", today=today)
+def test_kpis_groups_and_units_react_to_the_filters(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
     assert data["total"] == 80                                 # 40 motor + 1 transmision + 39 "Sin muestra"
     assert data["counts"] == {"solicitar": 40, "sin_muestra": 39, "proxima": 0, "al_dia": 1}
-    only_motor = frequency.build_frequency_data("cda", None, "camion", component="motor", today=today)
-    assert only_motor["total"] == 40
-    overdue_group_a = frequency.build_frequency_data("cda", None, "camion", group="A", status="solicitar", today=today)
+    assert (data["n_units"], data["pending_units"]) == (40, 40)
+    only_motor = frequency.build_frequency_data("cda", None, "camion", component="motor", today=TODAY)
+    assert (only_motor["total"], only_motor["n_units"]) == (40, 40)
+    overdue_group_a = frequency.build_frequency_data("cda", None, "camion", group="A", status="solicitar", today=TODAY)
     assert overdue_group_a["total"] == 40 and overdue_group_a["groups"][1]["total"] == 0
-    assert frequency.build_frequency_data("cda", "Otra", "camion", today=today)["total"] == 0
+    up_to_date = frequency.build_frequency_data("cda", None, "camion", status="al_dia", today=TODAY)
+    assert (up_to_date["n_units"], up_to_date["pending_units"]) == (1, 0)       # only U00's transmision
+    assert [u["unit_id"] for u in up_to_date["units"]] == ["U00"] and up_to_date["units"][0]["total"] == 1
+    assert frequency.build_frequency_data("cda", "Otra", "camion", today=TODAY)["total"] == 0
 
 
-def test_table_page_two_rows_open_their_own_unit_and_component(frequency):
-    data = frequency.build_frequency_data("cda", None, "camion", component="motor", today=date(2026, 11, 23))
+def test_units_come_in_default_order_most_overdue_first(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    # one overdue component each, so the oldest sample (U39) leads
+    assert [u["unit_id"] for u in data["units"]] == [f"U{i:02d}" for i in range(39, -1, -1)]
+
+
+def test_the_list_is_one_row_per_unit_with_its_columns(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    block, note, chip = frequency.render_frequency_table(data, None)
+    header = [c for c in walk(block) if type(c).__name__ == "Thead"][0]
+    headers = [text_of(th).replace("↕", "").strip() for th in walk(header) if type(th).__name__ == "Th"]
+    assert headers == ["Detalle", "Unidad", "Estado", "Componentes por Solicitar", "Más Atrasado", "Muestra Más Reciente"]
+    bodies = _unit_bodies(block)
+    assert len(bodies) == 30                                   # 30 units per page, not 30 components
+    row, _ = _unit_row_and_detail(bodies[0])
+    unit, estado, pending, late, latest = _cells(row)[1:]
+    assert (unit, estado) == ("U39", "Solicitar muestra")
+    assert pending.startswith("1 de 2")                        # motor overdue, transmision "Sin muestra"
+    assert late == "Motor · vencida hace 40 d"                 # 55 days in a 15-day group
+    assert latest == "2026-09-29 · hace 55 d"
+    assert "Ordenado por urgencia: más componentes vencidos primero" in note
+    assert "40 unidades · 80 componentes" in text_of(chip)
+
+
+def test_the_acceptance_examples_in_a_units_detail(frequency, monkeypatch):
+    classified = pd.DataFrame([
+        _sample_row("ACC1", "motor", 36),                                              # 15-day group
+        _sample_row("ACC1", "mando final izquierdo", 51, normalized="mando final"),    # 60-day group
+        _sample_row("ACC2", "motor", 2), _sample_row("ACC2", "transmision", 3),        # ACC1 lacks transmision
+    ])
+    monkeypatch.setattr(frequency, "load_oil_classified", lambda client: classified.copy())
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    block, _, _ = frequency.render_frequency_table(data, None)
+    by_unit = {c.children[0].children[1].children: c for c in _unit_bodies(block)}     # unit id -> its <tbody>
+    row, detail = _unit_row_and_detail(by_unit["ACC1"])
+
+    assert _cells(row)[1] == "ACC1" and _cells(row)[2] == "Solicitar muestra" and _cells(row)[3].startswith("1 de 3")
+    motor, sin_muestra, mando = [_cells(r) for r in _detail_rows(detail)]    # Solicitar, Sin muestra, Próxima
+    # Componente, Criticidad, Última Muestra, Días, Intervalo Consumido, Fecha Límite, Vencimiento, Promedio, Estado
+    assert motor[:2] == ["Motor", "15 días"] and motor[3] == "36" and "240 %" in motor[4]
+    assert motor[6:] == ["Vencida hace 21 d", "20 d", "Solicitar muestra"]
+    assert mando[:2] == ["Mando Final Izquierdo", "60 días"] and mando[3] == "51" and "85 %" in mando[4]
+    assert mando[6] == "Vence en 9 d" and mando[8] == "Próxima a vencer" and mando[5] == "2026-12-02"
+    # a mapped component without a sample: "—" in every calculated column, and it counts in the unit's total
+    assert sin_muestra[0] == "Transmisión" and sin_muestra[8] == "Sin muestra"
+    assert sin_muestra[2:8] == ["—"] * 6
+    # components are ordered Solicitar muestra, then Sin muestra, then Próxima a vencer, then Al día
+    assert [c[8] for c in (motor, sin_muestra, mando)] == ["Solicitar muestra", "Sin muestra", "Próxima a vencer"]
+
+
+def test_a_units_detail_lists_overdue_first_then_sin_muestra_proxima_and_al_dia(frequency, monkeypatch):
+    classified = pd.DataFrame([
+        _sample_row("T1", "motor", 36), _sample_row("T1", "transmision", 29),                    # 240 % / 97 %
+        _sample_row("T1", "mando final", 3),                                                      # al día
+        _sample_row("T2", "motor", 1), _sample_row("T2", "transmision", 1),
+        _sample_row("T2", "mando final", 1),
+    ])
+    monkeypatch.setattr(frequency, "load_oil_classified", lambda client: classified.copy())
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    unit = [u for u in data["units"] if u["unit_id"] == "T1"][0]
+    assert (unit["status"], unit["solicitar"], unit["proxima"], unit["al_dia"], unit["sin_muestra"]) == (
+        "solicitar", 1, 1, 1, 0)
+    ordered = [r["status"] for r in data["rows"] if r["unit_id"] == "T1"]
+    assert ordered == ["solicitar", "proxima", "al_dia"]
+
+
+def test_the_stacked_bar_splits_the_components_by_status_and_says_so_in_words(frequency, monkeypatch):
+    classified = pd.DataFrame([
+        _sample_row("T1", "motor", 36), _sample_row("T1", "transmision", 29), _sample_row("T1", "mando final", 3),
+        _sample_row("T2", "motor", 1), _sample_row("T2", "transmision", 1),
+    ])
+    monkeypatch.setattr(frequency, "load_oil_classified", lambda client: classified.copy())
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    unit = [u for u in data["units"] if u["unit_id"] == "T1"][0]
+    bar = frequency._stack(unit)
+    segments = [c for c in walk(bar) if getattr(c, "className", "") == "oil-stack__segment"]
+    assert [s.style["width"] for s in segments] == ["33.33%"] * 3
+    assert [s.style["background"] for s in segments] == [
+        SEVERITY_TIERS["alto"]["fill"], SEVERITY_TIERS["atencion"]["fill"], SEVERITY_TIERS["bajo"]["fill"]]
+    label = "Vencidos: 1 · Próximos a vencer: 1 · Al día: 1 · Sin muestra: 0"
+    assert bar.role == "img" and bar.title == label
+    assert bar.to_plotly_json()["props"]["aria-label"] == label   # color is never the only signal
+
+
+def test_expand_buttons_are_real_buttons_that_name_their_unit_and_their_detail(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    block, _, _ = frequency.render_frequency_table(data, None)
+    toggles = [b for b in buttons(block) if "data-oil-expand" in b.to_plotly_json()["props"]]
+    assert len(toggles) == 30
+    props = [b.to_plotly_json()["props"] for b in toggles]
+    assert all(p["aria-expanded"] == "false" and p["type"] == "button" for p in props)    # rows start collapsed
+    assert props[0]["aria-label"] == "Detalle de U39"
+    details = {c.id: c for c in walk(block) if type(c).__name__ == "Tr" and getattr(c, "className", "") == "oil-unit__detail"}
+    assert len(details) == 30 and all(d.hidden for d in details.values())
+    assert [p["aria-controls"] for p in props] == [
+        _unit_row_and_detail(body)[1].id for body in _unit_bodies(block)]                 # each controls its own detail
+
+
+def test_page_two_opens_its_own_unit_and_component_also_after_sorting(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", component="motor", today=TODAY)
+    ordered = [u["unit_id"] for u in data["units"]]
     block, note, chip = frequency.render_frequency_table(data, {"sort": None, "page": 1, "rev": "x"})
-    ordered = [r["unit_id"] for r in data["rows"]]
-    links = [b.id for b in buttons(block) if isinstance(b.id, dict) and b.id["type"] == "freq-open"]
+    links = [b.id for b in buttons(block) if isinstance(getattr(b, "id", None), dict) and b.id["type"] == "freq-open"]
     assert [i["unit"] for i in links] == ordered[30:]
     assert all(i["component"] == "motor" for i in links)
-    assert "Ordenado por urgencia" in note and "40 filas" in text_of(chip)
+    # the unit list pages by unit: "Mostrando 31-40 de 40"
+    assert "31" in text_of(block) and "40" in text_of(block)
+
+    # re-sorted by Unidad, page 2: the unit and component come from the row, not from its position
+    view = {"sort": {"col": "unit_id", "dir": "asc"}, "page": 1, "rev": "x"}
+    block, note, _ = frequency.render_frequency_table(data, view)
+    links = [b.id for b in buttons(block) if isinstance(getattr(b, "id", None), dict) and b.id["type"] == "freq-open"]
+    assert [i["unit"] for i in links] == [f"U{i:02d}" for i in range(30, 40)]
+    assert [_cells(_unit_row_and_detail(b)[0])[1] for b in _unit_bodies(block)] == [i["unit"] for i in links]
+    assert "Ordenado por Unidad" in note
 
 
-def test_table_columns_and_cells(frequency):
-    data = frequency.build_frequency_data("cda", None, "camion", today=date(2026, 11, 23))
-    block, _, _ = frequency.render_frequency_table(data, None)
-    headers = [text_of(th).replace("↕", "").strip() for th in walk(block) if type(th).__name__ == "Th"
-               and getattr(th, "scope", None) == "col"]
-    assert headers == ["Unidad", "Componente", "Criticidad", "Última Muestra", "Días Desde Última Muestra",
-                       "Intervalo Consumido", "Fecha Límite", "Vencimiento", "Promedio Histórico", "Estado"]
-    first = [r for r in walk(block) if type(r).__name__ == "Tr"][1]
-    cells = [text_of(c) for c in walk(first) if type(c).__name__ in ("Th", "Td")]
-    assert "15 días" in cells and "Solicitar muestra" in cells and any(c.startswith("Vencida hace") for c in cells)
+def test_every_list_column_can_be_re_sorted(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    for col in frequency.FIRST_DIRS:
+        for direction in ("asc", "desc"):
+            block, _, _ = frequency.render_frequency_table(data, {"sort": {"col": col, "dir": direction}, "page": 0})
+            assert len(_unit_bodies(block)) == 30
+    sortable = [b.id["col"] for b in buttons(frequency.render_frequency_table(data, None)[0])
+                if isinstance(getattr(b, "id", None), dict) and b.id["type"] == "freq-sort"]
+    assert sortable == list(frequency.FIRST_DIRS)
 
 
 def test_percentage_is_capped_in_the_bar_and_999_plus_in_the_text(frequency):
@@ -446,26 +754,33 @@ def test_percentage_is_capped_in_the_bar_and_999_plus_in_the_text(frequency):
     assert fill.style["width"] == "100.0%"
 
 
-def test_kpi_tiles_show_count_chip_gauge_and_total(frequency):
-    data = frequency.build_frequency_data("cda", None, "camion", today=date(2026, 11, 23))
+def test_kpi_tiles_count_units_then_components(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
     row = frequency.render_kpis(data)
     tiles = [c for c in walk(row) if type(c).__name__ == "Card"]
-    assert len(tiles) == 4
-    rendered = text_of(row)
-    for expected in ("Vencidas", "Próximas a vencer", "Al día", "Sin historial", "Solicitar muestra", "Atención",
-                     "Sin acción", "Revisar", "de 80 componentes"):
+    assert len(tiles) == 5
+    labels = [text_of(c) for c in walk(row) if getattr(c, "className", "") == "kpi-label"]
+    assert labels == ["Unidades con pendientes", "Componentes vencidos", "Próximos a vencer", "Al día", "Sin historial"]
+    values = [text_of(c) for c in walk(row) if getattr(c, "className", "") == "kpi-value"]
+    assert values == ["40", "40", "0", "1", "39"]               # units with pending / then components
+    chips = [text_of(c) for c in walk(row) if getattr(c, "className", "") == "kpi-chip"]
+    assert chips == ["Solicitar muestra", "Solicitar muestra", "Atención", "Sin acción", "Revisar"]
+    captions = [text_of(c) for c in walk(row) if getattr(c, "className", "") == "kpi-caption"]
+    assert captions == ["de 40 unidades"] + ["de 80 componentes"] * 4
+    gauges = [c for c in walk(row) if getattr(c, "role", None) == "progressbar"]
+    assert len(gauges) == 5 and gauges[0].to_plotly_json()["props"]["aria-valuenow"] == "100"
+
+
+def test_criteria_card_lists_every_group(frequency):
+    data = frequency.build_frequency_data("cda", None, "camion", today=TODAY)
+    rendered = text_of(frequency.render_criteria_card(data))
+    for expected in ("Criterios de Criticidad", "Cada 15 días", "Cada 30 días", "Cada 60 días", "de 40 vencidas",
+                     "promedio histórico", "Motor", "Intervalo por componente; ajustable con el promedio histórico real "
+                     "entre muestras."):
         assert expected in rendered
-    assert len([c for c in walk(row) if getattr(c, "role", None) == "progressbar"]) == 4
 
 
-def test_group_card_lists_every_group(frequency):
-    data = frequency.build_frequency_data("cda", None, "camion", today=date(2026, 11, 23))
-    rendered = text_of(frequency.render_group_card(data))
-    for expected in ("Cada 15 días", "Cada 30 días", "Cada 60 días", "de 40 vencidas", "Promedio histórico entre muestras"):
-        assert expected in rendered
-
-
-def test_the_panel_layout_has_the_five_labelled_filters_and_a_footnote():
+def test_the_panel_layout_has_the_five_labelled_filters_the_expand_all_button_and_a_footnote():
     from dashboard.tabs.tab_frequency import create_frequency_tab
 
     layout = create_frequency_tab()
@@ -479,7 +794,27 @@ def test_the_panel_layout_has_the_five_labelled_filters_and_a_footnote():
         "Todos los estados", "Solicitar muestra", "Próxima a vencer", "Al día", "Sin muestra"]
     group = [c for c in walk(layout) if getattr(c, "id", None) == "freq-group-filter"][0]
     assert [o["label"] for o in group.options] == ["Todas", "Cada 15 días", "Cada 30 días", "Cada 60 días"]
-    assert "Intervalo Consumido" in text_of(layout) and "Sin muestra" in text_of(layout)
+    rendered = text_of(layout)
+    for expected in ("Componentes por Solicitar", "Intervalo Consumido", "Sin muestra", "Estado de Muestreo por Unidad"):
+        assert expected in rendered
+
+    expand_all = [c for c in walk(layout) if getattr(c, "id", None) == "freq-expand-all"][0]
+    props = expand_all.to_plotly_json()["props"]
+    assert type(expand_all).__name__ == "Button" and props["type"] == "button"
+    assert props["data-label-expand"] == "Expandir todas" and props["data-label-collapse"] == "Contraer todas"
+    assert props["data-oil-expand-all"] == "freq-table-container"
+    assert [c for c in walk(layout) if getattr(c, "id", None) == "freq-table-container"]   # the element it targets
+
+
+def test_the_expand_script_speaks_the_markup_the_panel_writes():
+    import pathlib
+
+    script = (pathlib.Path(__file__).resolve().parents[1] / "dashboard" / "assets" / "oil_expandable_rows.js").read_text(
+        encoding="utf-8")
+    for attribute in ("data-oil-expand", "data-oil-expand-all", "aria-expanded", "aria-controls",
+                      "data-label-expand", "data-label-collapse"):
+        assert attribute in script
+    assert "Expandir" not in script and "Contraer" not in script            # the words come from the page
 
 
 def test_every_filter_of_the_oil_tabs_has_a_label_for_it():

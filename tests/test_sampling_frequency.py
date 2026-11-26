@@ -192,23 +192,6 @@ def test_default_order_is_urgency_then_most_consumed():
     assert order == [sf.SOLICITAR, sf.SIN_MUESTRA, sf.PROXIMA, sf.AL_DIA]
 
 
-def test_column_sort_puts_rows_without_a_value_last_in_either_direction():
-    rows = _mixed()
-    for ascending in (True, False):
-        flags = list(sf.sort_rows(rows, "interval_pct", ascending)["interval_pct"].isna())
-        assert flags == sorted(flags) and flags[-1]          # values first, "Sin muestra" rows last
-    asc = sf.sort_rows(rows, "interval_pct", True)["interval_pct"].dropna().tolist()
-    assert asc == sorted(asc)
-    desc = sf.sort_rows(rows, "interval_pct", False)["interval_pct"].dropna().tolist()
-    assert desc == sorted(desc, reverse=True)
-
-
-def test_every_displayed_column_can_be_sorted():
-    rows = _mixed()
-    for column in sf.SORT_COLUMNS:
-        assert len(sf.sort_rows(rows, column, True)) == len(rows)
-
-
 def test_filters_and_counts():
     rows = _mixed()
     assert set(sf.filter_rows(rows, status=sf.SOLICITAR)["status"]) == {sf.SOLICITAR}
@@ -232,6 +215,114 @@ def test_group_summary_is_over_the_rows_it_is_given():
         _sample("T1", "motor", _days_ago(5), days_prev=10), _sample("T2", "motor", _days_ago(5), days_prev=20)]),
         _config())
     assert averages[0].avg_between_samples == 15
+
+
+# ---- units: the primary row of the panel -------------------------------------------------------------
+
+def _units(rows):
+    return {unit["unit_id"]: unit for unit in sf.summarize_units(rows)}
+
+
+def test_a_unit_with_four_mapped_components_three_overdue_reads_3_de_4():
+    config = _config(mapping={"camion": {"motor": "A", "transmision": "B", "mando final": "C", "cubo": "A"}})
+    rows = _rows([
+        _sample("T1", "motor", _days_ago(36)),               # 240 %  solicitar
+        _sample("T1", "transmision", _days_ago(40)),         # 133 %  solicitar
+        _sample("T1", "mando final", _days_ago(100)),        # 167 %  solicitar
+        _sample("T1", "cubo", _days_ago(3)),                 # 20 %   al día
+    ], config)
+    unit = _units(rows)["T1"]
+    assert (unit["solicitar"], unit["total"]) == (3, 4)
+    assert (unit["proxima"], unit["al_dia"], unit["sin_muestra"]) == (0, 1, 0)
+    assert unit["status"] == sf.SOLICITAR
+
+
+def test_unit_status_is_the_worst_component_status_in_the_documented_order():
+    units = _units(_mixed())
+    assert units["T1"]["status"] == sf.SOLICITAR          # beats everything
+    assert units["T2"]["status"] == sf.SOLICITAR          # one overdue, one "Sin muestra"
+    assert units["T3"]["status"] == sf.SIN_MUESTRA        # "Sin muestra" beats "Próxima a vencer"
+    assert units["T4"]["status"] == sf.SIN_MUESTRA
+    only_ok = _units(_rows([_sample("T9", "motor", _days_ago(2))]))
+    assert only_ok["T9"]["status"] == sf.AL_DIA and only_ok["T9"]["total"] == 1
+
+
+def test_mas_atrasado_is_the_overdue_component_with_the_highest_interval_consumed():
+    unit = _units(_mixed())["T1"]
+    assert unit["late_component"] == "motor"              # 240 % beats transmision's 133 %
+    assert unit["late_days_to_due"] == -21 and unit["late_pct"] == 240
+
+
+def test_mas_atrasado_without_overdue_is_the_component_nearest_to_expire_and_none_without_samples():
+    rows = _rows([
+        _sample("T1", "motor", _days_ago(13)),             # 2 days left (86 %)
+        _sample("T1", "transmision", _days_ago(20)),       # 10 days left (67 %)
+        _sample("T2", "motor", _days_ago(1)),
+        _sample("T3", "cubo", _days_ago(1)),               # unmapped: T3 only has "Sin muestra" rows
+    ])
+    units = _units(rows)
+    assert (units["T1"]["late_component"], units["T1"]["late_days_to_due"]) == ("motor", 2)
+    assert units["T3"]["status"] == sf.SIN_MUESTRA and units["T3"]["total"] == 2   # motor and transmision, both missing
+    assert units["T3"]["late_component"] is None and units["T3"]["late_days_to_due"] is None
+    assert units["T3"]["latest_sample"] is None and units["T3"]["max_pct"] is None
+
+
+def test_the_limit_day_is_the_most_overdue_component_and_reads_zero_days_to_due():
+    unit = _units(_rows([_sample("T1", "motor", _days_ago(15))]))["T1"]
+    assert unit["status"] == sf.SOLICITAR and unit["late_days_to_due"] == 0
+
+
+def test_the_most_recent_sample_of_a_unit_and_its_age():
+    unit = _units(_mixed())["T1"]
+    assert unit["latest_sample"] == _days_ago(36).strftime("%Y-%m-%d") and unit["latest_days"] == 36
+    left_right = _units(_rows([
+        _sample("T1", "mando final izquierdo", _days_ago(30), normalized="mando final"),
+        _sample("T1", "mando final derecho", _days_ago(10), normalized="mando final"),
+    ]))["T1"]
+    assert left_right["latest_days"] == 10 and left_right["total"] == 2
+
+
+def test_default_unit_order_is_most_components_to_request_then_highest_interval_consumed():
+    ordered = [unit["unit_id"] for unit in sf.summarize_units(_mixed())]
+    assert ordered == ["T1", "T2", "T3", "T4", "T5", "T6"]   # 2, 1, then 86 %, 13 %, 3 % (T5 before T6)
+    tie = sf.summarize_units(_rows([
+        _sample("A", "motor", _days_ago(20)), _sample("B", "motor", _days_ago(40)), _sample("C", "motor", _days_ago(40))]))
+    assert [u["unit_id"] for u in tie] == ["B", "C", "A"]     # all one overdue: 267 % = 267 % > 133 %; B before C
+
+
+def test_unit_figures_follow_the_rows_they_are_given():
+    rows = _mixed()
+    overdue_only = _units(sf.filter_rows(rows, status=sf.SOLICITAR))
+    assert set(overdue_only) == {"T1", "T2"}                  # a unit is listed when a component matches
+    assert (overdue_only["T2"]["total"], overdue_only["T2"]["solicitar"]) == (1, 1)    # its Sin muestra row is out
+    motor_only = _units(sf.filter_rows(rows, component="motor"))
+    assert motor_only["T1"]["total"] == 1                       # its transmision rows are out ...
+    assert motor_only["T5"]["status"] == sf.SIN_MUESTRA         # ... and T5's missing motor sample is a match
+    assert sf.summarize_units(rows.iloc[0:0]) == []
+
+
+def test_unit_column_sorts_keep_default_order_among_ties_and_units_without_a_value_last():
+    rows = _rows([
+        _sample("T1", "motor", _days_ago(36)), _sample("T2", "motor", _days_ago(13)),
+        _sample("T3", "motor", _days_ago(2)), _sample("T4", "cubo", _days_ago(1)),    # T4: only "Sin muestra"
+    ])
+    units = sf.summarize_units(rows)
+    ids = lambda column, ascending: [u["unit_id"] for u in sf.sort_units(units, column, ascending)]
+    assert ids("unit_id", True) == ["T1", "T2", "T3", "T4"] and ids("unit_id", False) == ["T4", "T3", "T2", "T1"]
+    assert ids("late", True) == ["T1", "T2", "T3", "T4"]      # most overdue first; the unit with none last ...
+    assert ids("late", False) == ["T3", "T2", "T1", "T4"]     # ... in either direction
+    assert ids("latest", False)[-1] == "T4" and ids("latest", True)[-1] == "T4"
+    assert ids("latest", False)[:3] == ["T3", "T2", "T1"]     # most recent first
+    assert ids("pending", False)[0] == "T1" and ids("pending", True)[-1] == "T1"
+    assert ids("status", True)[0] == "T1"                      # urgency: Solicitar first
+    assert ids("nonsense", False) == ids(None, True)           # an unknown column is the default order
+
+
+def test_every_unit_column_can_be_sorted():
+    units = sf.summarize_units(_mixed())
+    for column in sf.UNIT_SORT_KEYS:
+        for ascending in (True, False):
+            assert len(sf.sort_units(units, column, ascending)) == len(units)
 
 
 def test_data_as_of_is_the_latest_report_date():

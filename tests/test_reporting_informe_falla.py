@@ -80,7 +80,7 @@ def test_request_carries_the_form_and_summary_drops_image_data():
 def test_units_are_deduplicated_and_sorted_naturally(units):
     loaded, notice = rc.load_units("cda", ["CDA"])
     assert notice is None
-    assert loaded == ["T_2", "T_9", "T_10"]
+    assert loaded == ["T-2", "T-9", "T-10"]  # the General tab names units with hyphens (CDA's sources say T_10)
 
 
 def test_units_require_access_and_the_service(units):
