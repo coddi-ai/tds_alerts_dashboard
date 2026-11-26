@@ -63,3 +63,26 @@ No se cambió ni recalculó el contrato del productor: el dashboard consume los 
 ### Riesgos y siguiente acción
 
 Los huecos de cobertura generan tramos discontinuos; la media semanal incluye las unidades observadas esa semana. Por ello los cambios de cobertura pueden modificar la media, y una trayectoria inferior a ella no certifica salud mecánica. El paquete abarca 53 semanas disponibles. Siguiente acción: revisar el comparativo en la ruta local con sesión iniciada y confirmar la lectura de colores/etiquetas.
+
+## Zonas de comparación acumulada y período del panorama
+
+### Resultado
+
+El fondo ahora se divide alrededor de la media acumulada: verde bajo la media y rojo sobre ella. Cada unidad recibe su color según la última posición comparable en el corte elegido; en hover se ven la diferencia respecto a la media y las semanas observadas del equipo y de la flota. Las unidades prioritarias siguen destacadas y cinco quedan rotuladas. La referencia negra discontinua y las curvas individuales conservan todas las semanas y brechas. Se retiró Trimestral de los períodos del panorama y de sus tops; el período trimestral sigue disponible en el detalle individual.
+
+La posición y diferencia ya vienen materializadas por el productor en el contrato v4; el dashboard solo selecciona series y las dibuja. La explicación visual advierte que la cobertura afecta la comparación.
+
+### Paquete, validaciones y archivos
+
+- Run real: `20261126T0000-0300-75bb60dba7c6a547875f0e90a96f4139c491852896ca50852c7995b7ff60e93b`, contrato v4, `synthetic=false`, 50 equipos y 53 semanas. Al último corte: 31 bajo la media y 19 sobre ella; 43/50 unidades observadas en la semana más reciente. El paquete está espejado en `data/fleet_history/golden/emin/2026-W48/` y la carpeta no se versiona.
+- Perfil offline: `docker run --rm --network none --mount "type=bind,source=C:\Users\panch\Desktop\Coddi\.worktrees\tds-alerts-dashboard\codex-emin-historico-flota,target=/app,readonly" --workdir /app --env PYTHONDONTWRITEBYTECODE=1 --entrypoint python tds-alerts-dashboard-emin-test:latest -m pytest -q -p no:cacheprovider tests/test_emin_historical.py`: **12 passed**, 1 advertencia deprecada de pytest/dash.
+- Figura real desde el paquete v4: 50 curvas, 53 puntos para la media, bandas verdes/rojas, 31 líneas bajo la media y 19 sobre ella; cinco etiquetas prioritarias.
+- Contenedor `emin-dashboard-local-iter` reiniciado, saludable; `/overview/emin-historical` devolvió HTTP 200. No hubo inspección autenticada en navegador.
+- Archivos: `dashboard/components/emin_historical.py`, `dashboard/tabs/tab_emin_historical.py`, `dashboard/callbacks/emin_historical_callbacks.py`, `src/data/emin_historical.py`, locales ES/EN y `tests/test_emin_historical.py`.
+- Commit local de implementación: `6cc6da8 feat: shade EMIN fleet mean comparisons`, rama `ai/codex/emin-historico-flota`.
+- Productor del contrato v4: `f3e1029 feat: compare fleet cumulative scores`, rama `ai/codex/emin-periodic-variations`.
+- Push no solicitado y no realizado.
+
+### Riesgo y siguiente acción
+
+La media de cada semana promedia las unidades observadas; una cobertura distinta puede cambiar la comparación, así que “bajo la media” no equivale a un diagnóstico saludable. Siguiente acción: revisar las zonas y leyendas desde una sesión autenticada. El contrato v4 tiene retrospectiva de las 53 semanas disponibles.
