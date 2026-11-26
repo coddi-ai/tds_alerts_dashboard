@@ -249,6 +249,11 @@ def test_rejects_invalid_pointer_and_incomplete_daily_schema(tmp_path):
 def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     root = _make_package(tmp_path)
     bundle = load_emin_historical_bundle(root)
+    bundle.dashboard["units"]["EMIN-001"]["evidence"].append({
+        "unit": "EMIN-001", "day": "2026-07-10", "event_at": "2026-07-10T08:00:00-03:00",
+        "kind": "maintenance_action", "details": {"Evento": "Cambio histórico de motor"},
+        "analysis": {"major_event": "text", "high_signal": False, "replacement_day": None},
+    })
     options = filter_options(bundle)
     bundle.dashboard["units"]["EMIN-001"]["cumulative_weekly_score"] = [
         {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 8, "cumulative_score": 8, "observed_days": 3,
@@ -258,6 +263,15 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
         {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 12, "cumulative_score": 20, "observed_days": 2,
          "available_days": 2, "complete": False},
     ]
+    bundle.dashboard["fleet"]["2026-11-24"]["cumulative_weekly_score"] = [
+        {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 9, "cumulative_score": 9,
+         "observed_units": 2, "fleet_units": 2, "complete": True},
+        {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None,
+         "observed_units": 0, "fleet_units": 2, "complete": True},
+        {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 13, "cumulative_score": 22,
+         "observed_units": 1, "fleet_units": 2, "complete": False},
+    ]
+    bundle.dashboard["fleet"]["2026-11-23"]["cumulative_weekly_score"] = bundle.dashboard["fleet"]["2026-11-24"]["cumulative_weekly_score"][:2]
 
     assert options["default_day"] == "2026-11-24"
     assert options["days"] == [{"label": "2026-W48 · datos hasta 24-11-2026 · parcial", "value": "2026-11-24"}]
@@ -271,11 +285,13 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert "EMIN-002" not in ranking
     assert "Mejoró" in ranking
     assert "Cambio de motor tras una explosión" in timeline
+    assert "Cambio histórico de motor" in timeline
+    assert t("emin_history.milestones_history_note", start="24-11-2026") in timeline
     assert t("emin_history.evidence_title") in timeline
     assert "Temperatura elevada del sistema EGR" in timeline
     assert "Mantención preventiva" in timeline
     assert "Evento posterior al corte" not in timeline
-    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 2
+    assert timeline.count("Coincidencia textual de cambio/falla mayor") == 4
     assert "señal heurística bajó" in _visible(view["status"]).lower()
     assert "Semana ISO: 2026-W48 · datos hasta 24-11-2026 · parcial" in meta
     assert "Semanas ISO en el paquete: 1" in meta
@@ -286,8 +302,16 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert list(cumulative.data[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
     assert list(cumulative.data[0].y) == [8, None, 20]
     assert cumulative.data[0].connectgaps is False
+    fleet_cumulative = view["fleet_cumulative_score"].figure
+    assert list(fleet_cumulative.data[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
+    assert list(fleet_cumulative.data[0].y) == [9, None, 22]
+    assert "flota EMIN" in fleet_cumulative.layout.title.text
+    assert "Equipos observados" in fleet_cumulative.data[0].hovertemplate
     earlier_view = build_historical_view(bundle, "2026-11-23", "__all__", "EMIN-001")
+    assert "Cambio histórico de motor" in _visible(earlier_view["evidence"])
+    assert "Cambio de motor tras una explosión" not in _visible(earlier_view["evidence"])
     assert list(earlier_view["cumulative_score"].figure.data[0].x) == ["2026-W46", "2026-W47"]
+    assert list(earlier_view["fleet_cumulative_score"].figure.data[0].x) == ["2026-W46", "2026-W47"]
 
 
 def test_legacy_catalog_still_offers_one_cutoff_per_iso_week(tmp_path):

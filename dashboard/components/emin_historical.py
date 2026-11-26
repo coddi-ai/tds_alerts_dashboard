@@ -150,6 +150,11 @@ def build_historical_view(
              if not selected_day or row.get("cutoff", "") <= selected_day],
             selected_unit,
         ),
+        "fleet_cumulative_score": _cumulative_score_figure(
+            [row for row in fleet_data.get("cumulative_weekly_score", [])
+             if not selected_day or row.get("cutoff", "") <= selected_day],
+            None, fleet=True,
+        ),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
     }
 
@@ -400,17 +405,22 @@ def _period_delta_figure(rows: list[dict], unit: str | None, period: str) -> dcc
                      style={"height": "340px", "width": "100%"})
 
 
-def _cumulative_score_figure(rows: list[dict], unit: str | None) -> dcc.Graph:
+def _cumulative_score_figure(rows: list[dict], unit: str | None, *, fleet: bool = False) -> dcc.Graph:
     """Render producer-calculated cumulative weekly means without filling data gaps."""
+    graph_id = "emin-history-fleet-cumulative-score" if fleet else "emin-history-cumulative-score"
+    title = (t("emin_history.fleet_cumulative_score_title") if fleet else
+             t("emin_history.cumulative_score_title", unit=unit or t("emin_history.no_unit")))
     usable = [row for row in rows if _number(row.get("cumulative_score")) is not None]
     if not usable:
-        figure = _empty_figure(t("emin_history.cumulative_score_title", unit=unit or t("emin_history.no_unit")),
+        figure = _empty_figure(title,
                                t("emin_history.cumulative_score_empty"), 340)
     else:
         figure = go.Figure(go.Scatter(
             x=[row.get("week") for row in rows],
             y=[row.get("cumulative_score") for row in rows],
-            customdata=[[row.get("weekly_mean"), row.get("observed_days"), row.get("available_days"),
+            customdata=[[row.get("weekly_mean"),
+                         row.get("observed_units") if fleet else row.get("observed_days"),
+                         row.get("fleet_units") if fleet else row.get("available_days"),
                          t("emin_history.iso_week_partial") if not row.get("complete", False)
                          else t("emin_history.iso_week_complete")] for row in rows],
             mode="lines+markers",
@@ -420,7 +430,8 @@ def _cumulative_score_figure(rows: list[dict], unit: str | None) -> dcc.Graph:
             connectgaps=False,
             hovertemplate=("%{x}<br>" + t("emin_history.cumulative_weekly_hover") + ": %{customdata[0]:.2f}<br>"
                            + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
-                           + t("emin_history.cumulative_coverage_hover") + ": %{customdata[1]} / %{customdata[2]}<br>"
+                           + t("emin_history.fleet_cumulative_coverage_hover" if fleet else "emin_history.cumulative_coverage_hover")
+                           + ": %{customdata[1]} / %{customdata[2]}<br>"
                            + "%{customdata[3]}<extra></extra>"),
         ))
         ticks = [row["week"] for index, row in enumerate(rows) if index % 4 == 0 or index == len(rows) - 1]
@@ -431,11 +442,11 @@ def _cumulative_score_figure(rows: list[dict], unit: str | None) -> dcc.Graph:
                             gridcolor="#ecf0f1", automargin=True)
         figure = apply_dashboard_theme(
             figure,
-            title=t("emin_history.cumulative_score_title", unit=unit or t("emin_history.no_unit")),
+            title=title,
             height=340,
         )
         figure.update_layout(showlegend=False, hovermode="x unified", margin={"l": 62, "r": 22, "t": 52, "b": 74})
-    return dcc.Graph(id="emin-history-cumulative-score", figure=figure,
+    return dcc.Graph(id=graph_id, figure=figure,
                      config={"displayModeBar": False}, responsive=True,
                      style={"height": "340px", "width": "100%"})
 
@@ -1157,12 +1168,8 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
         if major:
             detail = _source_detail(row.get("details") or row.get("summary") or row.get("description") or {})
             highlights.append((major, str(row.get("event_at") or row.get("day") or ""), row, detail))
-    highlights.sort(key=lambda item: item[1], reverse=True)
     priority = {"source": 0, "intervention": 1, "text": 2}
-    highlights.sort(key=lambda item: (
-        bool(period_start and str(item[2].get("day") or "") < period_start),
-        priority[item[0]],
-    ))
+    highlights.sort(key=lambda item: (item[1], -priority[item[0]]), reverse=True)
 
     def event_row(item):
         level, _, row, detail = item
@@ -1189,8 +1196,7 @@ def _timeline_panel(unit: str | None, rows: list[dict], period_start=None, cutof
         dbc.Card([
             section_header(t("emin_history.highlights_title"), "fas fa-flag"),
             dbc.CardBody([
-                html.P(t("emin_history.top_detail_window", start=_day_label(period_start), end=_day_label(cutoff)), className="small text-muted")
-                if period_start else None,
+                html.P(t("emin_history.milestones_history_note", start=_day_label(cutoff)), className="small text-muted"),
                 *highlight_body,
             ]),
         ], id="emin-history-milestones", class_name="shadow-sm unit-card mb-3"),

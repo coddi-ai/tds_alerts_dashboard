@@ -90,6 +90,18 @@ def create_layout() -> html.Div:
                         ),
                     ], class_name="g-3 mb-3"),
                     dbc.Card([
+                        section_header(t("emin_history.fleet_cumulative_score_heading"), "fas fa-chart-area"),
+                        dbc.CardBody([
+                            html.P(t("emin_history.fleet_cumulative_score_note"), className="small text-muted mb-1"),
+                            dcc.Graph(
+                                id="emin-history-fleet-cumulative-score",
+                                config={"displayModeBar": False},
+                                responsive=True,
+                                style={"height": "380px", "width": "100%"},
+                            ),
+                        ]),
+                    ], class_name="shadow-sm unit-card mb-3"),
+                    dbc.Card([
                         section_header(t("emin_history.top_title"), "fas fa-list-ol"),
                         dbc.CardBody([
                             html.P(t("emin_history.top_period_follow"), className="small text-muted mb-2"),

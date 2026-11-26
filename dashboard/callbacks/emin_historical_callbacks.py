@@ -34,6 +34,7 @@ def _empty_outputs(note: str):
         _empty_figure(t("emin_history.trend_title", unit=t("emin_history.no_unit")), note),
         _empty_figure(t("emin_history.cumulative_score_title", unit=t("emin_history.no_unit")), note),
         dbc.Alert(note, color="light", class_name="mb-0"),
+        _empty_figure(t("emin_history.fleet_cumulative_score_title"), note),
     )
 
 
@@ -131,6 +132,7 @@ def register_emin_historical_callbacks(app):
             Output("emin-history-trend", "figure"),
             Output("emin-history-cumulative-score", "figure"),
             Output("emin-history-evidence", "children"),
+            Output("emin-history-fleet-cumulative-score", "figure"),
         ],
         [
             Input("client-selector", "value"),
@@ -166,7 +168,7 @@ def register_emin_historical_callbacks(app):
         cumulative_score_figure = view["cumulative_score"].figure
         triggers = set(ctx.triggered_prop_ids)
         if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
-            return (no_update,) * 5 + (view["status"], trend_figure, cumulative_score_figure, view["evidence"])
+            return (no_update,) * 5 + (view["status"], trend_figure, cumulative_score_figure, view["evidence"], no_update)
         return (
             view["meta"],
             fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
@@ -177,6 +179,7 @@ def register_emin_historical_callbacks(app):
             trend_figure,
             cumulative_score_figure,
             view["evidence"],
+            view["fleet_cumulative_score"].figure,
         )
 
 

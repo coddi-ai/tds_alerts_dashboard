@@ -112,7 +112,11 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
 
     if not isinstance(manifest, dict) or manifest.get("synthetic") is not False:
         raise InvalidHistoricalBundle("El dashboard solo muestra paquetes EMIN observados")
-    supported_contracts = {"coddi.emin.historical-dashboard.v1", "coddi.emin.historical-dashboard.v2"}
+    supported_contracts = {
+        "coddi.emin.historical-dashboard.v1",
+        "coddi.emin.historical-dashboard.v2",
+        "coddi.emin.historical-dashboard.v3",
+    }
     contract = manifest.get("dashboard_contract") if isinstance(manifest, dict) else None
     if contract not in supported_contracts or not isinstance(dashboard, dict) or dashboard.get("contract") != contract:
         raise InvalidHistoricalBundle("Las vistas precalculadas del dashboard no coinciden con el contrato EMIN")
