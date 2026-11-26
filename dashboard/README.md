@@ -75,7 +75,8 @@ variation map reuses Predictivo's red/yellow/green background palette for
 worsening, stable, and improving areas around the no-change diagonal. Its stable band follows the
 producer's published `variation_stability_tolerance`; the dashboard only renders that value. A
 horizontal point-color legend remains visible below the plot, and the coverage count sits above the
-data area so it does not hide units.
+data area so it does not hide units. On narrow screens, labels are limited to the selected period's
+five highest-priority units and edge labels move inward; all comparable points remain selectable.
 
 ### 4. Start Dashboard
 

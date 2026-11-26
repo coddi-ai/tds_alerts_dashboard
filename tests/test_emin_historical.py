@@ -8,7 +8,7 @@ import pytest
 from dash import dcc
 import plotly.graph_objects as go
 
-from dashboard.components.emin_historical import _fleet_movement_trend, build_historical_view, filter_options, fleet_criticality_top
+from dashboard.components.emin_historical import _fleet_movement_trend, _fleet_point_label_position, build_historical_view, filter_options, fleet_criticality_top
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
 from dashboard.components.predictive_state import STATE_ZONE_FILL
@@ -46,11 +46,15 @@ def test_fleet_variation_plot_includes_every_comparable_unit():
         "EMIN-002": {"status": "improved", "previous_average": 9.0, "current_average": 3.0,
                      "delta": -6.0, "current_days": 7},
     })
+    bundle.dashboard["period_tops"] = {
+        "2026-11-24": {"week": {"entries": [{"unit": "EMIN-002"}]}}
+    }
 
     graph = _fleet_movement_trend(bundle, "2026-11-24", "week")
 
     points = [trace for trace in graph.figure.data if trace.name != t("emin_history.no_change_line")]
     assert sum(len(trace.x) for trace in points) == 2
+    assert {label for trace in points for label in (trace.text or []) if label} == {"EMIN-002"}
     assert all(row[4] == "week" for trace in points for row in trace.customdata)
     assert graph.figure.layout.xaxis.range[0] == 0
     assert graph.figure.layout.xaxis.range == graph.figure.layout.yaxis.range
@@ -64,6 +68,10 @@ def test_fleet_variation_plot_includes_every_comparable_unit():
                 if annotation.text in {t("emin_history.zone_improving"), t("emin_history.zone_stable"),
                                        t("emin_history.zone_worsening")}]) == 3
     assert any(annotation.y > 1 for annotation in graph.figure.layout.annotations)
+    coverage = next(annotation for annotation in graph.figure.layout.annotations if annotation.y > 1)
+    assert coverage.x == 0.5
+    assert _fleet_point_label_position(21, 21, 0, 24) == "middle left"
+    assert _fleet_point_label_position(12, 21, 0, 24) == "bottom center"
 
 
 def test_quarter_without_prior_comparison_shows_a_clear_empty_state():

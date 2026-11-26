@@ -223,6 +223,15 @@ def _number(value) -> float | None:
         return None
 
 
+def _fleet_point_label_position(previous: float, current: float, index: int, extent: float) -> str:
+    """Keep priority labels inside the plot and offset dense mobile clusters."""
+    if previous >= extent * 0.72:
+        return "middle left"
+    if current >= extent * 0.82:
+        return "bottom center"
+    return "top center" if index % 2 == 0 else "bottom center"
+
+
 def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, period: str):
     """Render producer-calculated variation for the whole fleet, prioritizing critical units."""
     all_days = bundle.dashboard.get("catalog", {}).get("cutoffs", [])
@@ -243,6 +252,7 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
     top_units = {
         row.get("unit") for row in bundle.dashboard.get("period_tops", {}).get(selected_day, {}).get(period, {}).get("entries", [])
     }
+    label_units = top_units or set(fleet.get("critical_units", [])[:5])
     priority |= top_units
     figure = go.Figure()
     valid = [item for item in variations.values()
@@ -264,7 +274,7 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
             # Older v2 captures used an effectively exact comparison.
             tolerance = 0.001
         extent = max(max(item["previous_average"], item["current_average"]) for item in valid) or 1
-        extent = max(extent + tolerance, 1)
+        extent = max((extent + tolerance) * 1.12, 1)
         band = min(tolerance, extent * 0.45)
         # Match the Predictivo background palette. The producer publishes the
         # stability tolerance so the colored zones agree with point status.
@@ -304,8 +314,10 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
             y=[item["current_average"] for _, item in entries],
             customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0), period]
                         for unit, item in entries],
-            text=[unit if unit in priority else "" for unit, _ in entries],
-            textposition="top center", mode="markers+text",
+            text=[unit if unit in label_units else "" for unit, _ in entries],
+            textposition=[_fleet_point_label_position(item["previous_average"], item["current_average"], index, extent)
+                          for index, (_, item) in enumerate(entries)],
+            textfont={"size": 10}, mode="markers+text",
             name=_movement_chart_label(state),
             marker={"color": _MOVEMENT_COLORS[state],
                     "size": [17 if unit in priority else 10 for unit, _ in entries],
@@ -320,20 +332,20 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
     unavailable = max(0, len(units) - plotted)
     figure.update_xaxes(title_text=t("emin_history.previous_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
     figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
-    figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=470)
+    figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=485)
     figure.update_layout(hovermode="closest", showlegend=True,
-                         margin={"l": 62, "r": 28, "t": 66, "b": 112},
+                         margin={"l": 62, "r": 28, "t": 82, "b": 112},
                          legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.32, "yanchor": "top"},
                          clickmode="event+select")
     coverage_note = t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable)
     if period == "quarter" and plotted == 0:
         coverage_note += "<br>" + t("emin_history.quarter_comparison_unavailable")
-    figure.add_annotation(x=0.99, y=1.09, xref="paper", yref="paper", xanchor="right", yanchor="bottom",
+    figure.add_annotation(x=0.5, y=1.06, xref="paper", yref="paper", xanchor="center", yanchor="bottom",
                           text=coverage_note,
                           showarrow=False, bgcolor="rgba(255,255,255,.88)", font={"size": 11, "color": BRAND_MUTED})
     return dcc.Graph(id="emin-history-movement-trend", figure=figure,
                      config={"displayModeBar": False}, responsive=True,
-                     style={"height": "470px", "width": "100%"})
+                     style={"height": "485px", "width": "100%"})
 
 
 def _period_delta_figure(rows: list[dict], unit: str | None, period: str) -> dcc.Graph:
