@@ -145,6 +145,11 @@ def build_historical_view(
             selected_data.get("period_variations", {}).get(trend_window, []), selected_unit, trend_window
         ) if trend_window in {"week", "month", "quarter", "history"} and selected_data.get("period_variations")
         else _trend_figure(trend_rows, selected_unit, status.get("status", "insufficient")),
+        "cumulative_score": _cumulative_score_figure(
+            [row for row in unit_data.get("cumulative_weekly_score", [])
+             if not selected_day or row.get("cutoff", "") <= selected_day],
+            selected_unit,
+        ),
         "evidence": _timeline_panel(selected_unit, evidence_rows, period_start, selected_day, include_chronology),
     }
 
@@ -391,6 +396,46 @@ def _period_delta_figure(rows: list[dict], unit: str | None, period: str) -> dcc
     figure = apply_dashboard_theme(figure, title=t("emin_history.trend_title", unit=unit or t("emin_history.no_unit")), height=340)
     figure.update_layout(showlegend=False, margin={"l": 58, "r": 24, "t": 54, "b": 68})
     return dcc.Graph(id="emin-history-trend", figure=figure,
+                     config={"displayModeBar": False}, responsive=True,
+                     style={"height": "340px", "width": "100%"})
+
+
+def _cumulative_score_figure(rows: list[dict], unit: str | None) -> dcc.Graph:
+    """Render producer-calculated cumulative weekly means without filling data gaps."""
+    usable = [row for row in rows if _number(row.get("cumulative_score")) is not None]
+    if not usable:
+        figure = _empty_figure(t("emin_history.cumulative_score_title", unit=unit or t("emin_history.no_unit")),
+                               t("emin_history.cumulative_score_empty"), 340)
+    else:
+        figure = go.Figure(go.Scatter(
+            x=[row.get("week") for row in rows],
+            y=[row.get("cumulative_score") for row in rows],
+            customdata=[[row.get("weekly_mean"), row.get("observed_days"), row.get("available_days"),
+                         t("emin_history.iso_week_partial") if not row.get("complete", False)
+                         else t("emin_history.iso_week_complete")] for row in rows],
+            mode="lines+markers",
+            line={"color": BRAND_ACCENT, "width": 3},
+            marker={"size": 6, "color": BRAND_ACCENT, "line": {"color": "white", "width": 1}},
+            fill="tozeroy", fillcolor="rgba(93, 123, 170, 0.12)",
+            connectgaps=False,
+            hovertemplate=("%{x}<br>" + t("emin_history.cumulative_weekly_hover") + ": %{customdata[0]:.2f}<br>"
+                           + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
+                           + t("emin_history.cumulative_coverage_hover") + ": %{customdata[1]} / %{customdata[2]}<br>"
+                           + "%{customdata[3]}<extra></extra>"),
+        ))
+        ticks = [row["week"] for index, row in enumerate(rows) if index % 4 == 0 or index == len(rows) - 1]
+        figure.update_xaxes(title_text=t("emin_history.iso_week_axis"), tickmode="array", tickvals=ticks,
+                            ticktext=ticks, tickangle=-35, gridcolor="#ecf0f1", automargin=True,
+                            tickfont={"size": 9})
+        figure.update_yaxes(title_text=t("emin_history.cumulative_score_axis"), rangemode="tozero",
+                            gridcolor="#ecf0f1", automargin=True)
+        figure = apply_dashboard_theme(
+            figure,
+            title=t("emin_history.cumulative_score_title", unit=unit or t("emin_history.no_unit")),
+            height=340,
+        )
+        figure.update_layout(showlegend=False, hovermode="x unified", margin={"l": 62, "r": 22, "t": 52, "b": 74})
+    return dcc.Graph(id="emin-history-cumulative-score", figure=figure,
                      config={"displayModeBar": False}, responsive=True,
                      style={"height": "340px", "width": "100%"})
 

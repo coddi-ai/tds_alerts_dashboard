@@ -216,6 +216,24 @@ def create_layout() -> html.Div:
                                 ], class_name="shadow-sm unit-card",
                                 ),
                                 xs=12,
+                                lg=6,
+                                className="mb-3",
+                            ),
+                            dbc.Col(
+                                dbc.Card([
+                                    section_header(t("emin_history.cumulative_score_heading"), "fas fa-chart-area"),
+                                    dbc.CardBody([
+                                        html.P(t("emin_history.cumulative_score_note"), className="small text-muted mb-1"),
+                                        dcc.Graph(
+                                            id="emin-history-cumulative-score",
+                                            config={"displayModeBar": False},
+                                            responsive=True,
+                                            style={"height": "340px", "width": "100%"},
+                                        ),
+                                    ]),
+                                ], class_name="shadow-sm unit-card"),
+                                xs=12,
+                                lg=6,
                                 className="mb-3",
                             ),
                         ],

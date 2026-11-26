@@ -67,7 +67,7 @@ The criticality cards use the same selected calendar period as the fleet map. Op
 criticality card carries that period into the equipment detail.
 
 The fleet cutoff selector uses `catalog.iso_week_cutoffs` from the producer and shows one selection
-per ISO week, labeled with the last included date (for example, `2026-W48 · datos hasta 24-11-2026 · parcial`).
+per ISO week, labeled with the last included date (for example, `2026-W48 · datos hasta 25-11-2026 · parcial`).
 That date is the latest package cutoff available within the week; the producer marks a cutoff as
 partial when it falls before Sunday. The page summary also reports the selected ISO week and the
 number of weeks available, while the evidence panel is labeled as history through that cutoff. The
@@ -77,6 +77,11 @@ producer's published `variation_stability_tolerance`; the dashboard only renders
 horizontal point-color legend remains visible below the plot, and the coverage count sits above the
 data area so it does not hide units. On narrow screens, labels are limited to the selected period's
 five highest-priority units and edge labels move inward; all comparable points remain selectable.
+
+Equipment detail also shows the producer's cumulative weekly heuristic score. Each increment is the
+mean observed score for one ISO week, so persistent daily snapshots are not counted seven times.
+Weeks without observations appear as gaps and are never treated as zero; the total is an explanatory
+heuristic, not a failure probability.
 
 ### 4. Start Dashboard
 

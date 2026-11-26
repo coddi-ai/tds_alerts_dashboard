@@ -250,6 +250,14 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     root = _make_package(tmp_path)
     bundle = load_emin_historical_bundle(root)
     options = filter_options(bundle)
+    bundle.dashboard["units"]["EMIN-001"]["cumulative_weekly_score"] = [
+        {"week": "2026-W46", "cutoff": "2026-11-15", "weekly_mean": 8, "cumulative_score": 8, "observed_days": 3,
+         "available_days": 7, "complete": True},
+        {"week": "2026-W47", "cutoff": "2026-11-22", "weekly_mean": None, "cumulative_score": None, "observed_days": 0,
+         "available_days": 7, "complete": True},
+        {"week": "2026-W48", "cutoff": "2026-11-24", "weekly_mean": 12, "cumulative_score": 20, "observed_days": 2,
+         "available_days": 2, "complete": False},
+    ]
 
     assert options["default_day"] == "2026-11-24"
     assert options["days"] == [{"label": "2026-W48 · datos hasta 24-11-2026 · parcial", "value": "2026-11-24"}]
@@ -274,6 +282,12 @@ def test_fleet_and_unit_views_keep_evidence_and_heuristic_language(tmp_path):
     assert list(view["trend"].data[0].x) == ["2026-11-23", "2026-11-24"]
     assert list(view["trend"].data[0].y) == [13.5, 12.0]
     assert "Puntaje heurístico" in view["trend"].layout.yaxis.title.text
+    cumulative = view["cumulative_score"].figure
+    assert list(cumulative.data[0].x) == ["2026-W46", "2026-W47", "2026-W48"]
+    assert list(cumulative.data[0].y) == [8, None, 20]
+    assert cumulative.data[0].connectgaps is False
+    earlier_view = build_historical_view(bundle, "2026-11-23", "__all__", "EMIN-001")
+    assert list(earlier_view["cumulative_score"].figure.data[0].x) == ["2026-W46", "2026-W47"]
 
 
 def test_legacy_catalog_still_offers_one_cutoff_per_iso_week(tmp_path):
