@@ -44,6 +44,92 @@ TIME_SERIES_CHARTS = [
     {'title': 'Hollín & Oxidación', 'essays': ['Hollín', 'Oxidación']},
 ]
 
+# Default range of the time-series section for an examined sample. It always ends on the sample's
+# date and starts at the earlier of two candidates, i.e. at whichever window holds more samples:
+#   A  the sample's date minus TIME_SERIES_DEFAULT_MONTHS calendar months, or
+#   B  the date of the TIME_SERIES_DEFAULT_SAMPLES-th most recent sample (the examined one counts first).
+# A fixed window leaves a rarely sampled unit with a couple of points; this one never does.
+# Shared by the dashboard grid and the PDF report so the two cannot disagree.
+TIME_SERIES_DEFAULT_MONTHS = 6
+TIME_SERIES_DEFAULT_SAMPLES = 3
+
+
+def _as_day(value):
+    """A date-like value (picker string, sample timestamp) as a midnight Timestamp; None when it is
+    empty or not a date. Sample timestamps may carry a time of day (EMIN does), which the window
+    must ignore: a sample taken at 14:00 on the last day is inside a window that ends that day."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    stamp = pd.to_datetime(value, errors='coerce')
+    if pd.isna(stamp):
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.tz_localize(None)
+    return stamp.normalize()
+
+
+def unit_history(df: pd.DataFrame, equipo, component) -> pd.DataFrame:
+    """Every report of one equipo and componente, oldest first, `sampleDate` as datetimes: the
+    samples the time-series range counts and the series it plots (dashboard and PDF alike)."""
+    history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
+    history['sampleDate'] = pd.to_datetime(history['sampleDate'])
+    return history.sort_values('sampleDate')
+
+
+def default_time_series_window(sample_date, sample_dates=()):
+    """(start, end) of the default time-series range for an examined sample.
+
+    `sample_dates` are the dates of the unit's reports (see `unit_history`); only those on or before
+    the examined sample count, so an older sample is judged on the history it had. The end is the
+    sample's date. The start is the earlier of A (sample date minus 6 calendar months, clamping to
+    the month's last day: 2026-08-31 -> 2026-02-28) and B (the 3rd most recent sample, the examined
+    one being the first): both windows end on the same date, so the earlier start is the one with
+    more samples. With fewer than 3 samples the range starts at the oldest one. Both bounds are
+    inclusive.
+
+    Example (6 months back from 2026-11-14 is 2026-05-14; the window holds 5 samples against 3 for
+    the last-3 rule): the range is 2026-05-14 -> 2026-11-14.
+    """
+    end = _as_day(sample_date)
+    if end is None:
+        return None, None
+    days = sorted(day for day in (_as_day(value) for value in sample_dates) if day is not None and day <= end)
+    if not days or days[-1] != end:
+        days.append(end)                              # the examined sample is always the first one counted
+    if len(days) < TIME_SERIES_DEFAULT_SAMPLES:
+        return days[0], end
+    by_samples = days[-TIME_SERIES_DEFAULT_SAMPLES]
+    by_months = end - pd.DateOffset(months=TIME_SERIES_DEFAULT_MONTHS)
+    return min(by_months, by_samples), end
+
+
+def resolve_time_series_window(sample_date, start_date=None, end_date=None, sample_dates=()):
+    """The range the time-series section may show for an examined sample.
+
+    A missing end defaults to the sample date and an end later than it is pulled back to it, so
+    nothing dated after the examined sample is ever drawn (an older sample must not show the newer
+    ones); a missing start defaults to `default_time_series_window`. Without a sample date there is
+    nothing to cap against and the given range is returned as is.
+    """
+    start, end = _as_day(start_date), _as_day(end_date)
+    sample = _as_day(sample_date)
+    if sample is None:
+        return start, end
+    default_start, _ = default_time_series_window(sample, sample_dates)
+    end = sample if end is None else min(end, sample)
+    return (default_start if start is None else start), end
+
+
+def clip_history_to_window(history: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
+    """Rows of `history` whose sample day lies in [start, end] (either bound may be None)."""
+    days = pd.to_datetime(history['sampleDate']).dt.normalize()
+    keep = pd.Series(True, index=history.index)
+    if start is not None:
+        keep &= days >= start
+    if end is not None:
+        keep &= days <= end
+    return history[keep]
+
 # Colorblind-safe palette for the "Paquete de Aditivos" chart, which can plot
 # more essays than the 2-color palette used by the other paired charts.
 ADITIVOS_PALETTE = [
@@ -290,6 +376,43 @@ def classify_four_limit_value(value: float, LIC, LIM, LSM: float, LSC: float) ->
     return classify_four_limit(value, LIC, LIM, LSM, LSC)
 
 
+def collect_chart_series(history: pd.DataFrame, essays, comp_limits_four: dict, oil_hour_range: str) -> dict:
+    """What one chart of the time-series grid plots: the essays that have data in `history`, and
+    their consolidated critical-limit lines. The one place that decides it, so the dashboard grid
+    and the PDF report draw the same series and the same limits.
+
+    Returns ``{'series': [{'essay', 'dates', 'values'}], 'upper': [...], 'lower': [...]}``; an
+    empty ``series`` means the chart has no data. ``upper``/``lower`` are the lines of
+    `consolidate_limit_entries` ({'value', 'label', 'tiers', 'features'}): the upper critical
+    limit (LSC) is always drawn, the lower (LIC) only when both LIC and LIM exist, so essay groups
+    whose contract nulls the lower limits (Desgaste, Aditivo) never get one.
+    """
+    series, upper_entries, lower_entries = [], [], []
+    for essay in essays:
+        if essay not in history.columns:
+            continue
+        essay_values = history[essay].dropna()
+        if essay_values.empty:
+            continue
+        series.append({
+            'essay': essay,
+            'dates': history.loc[essay_values.index, 'sampleDate'],
+            'values': essay_values,
+        })
+
+        essay_limits = get_essay_limits_four(comp_limits_four, essay, oil_hour_range)
+        if essay_limits and essay_limits.get('LSC') is not None:
+            upper_entries.append({'value': essay_limits['LSC'], 'tier': 'LSC', 'feature': essay})
+        if essay_limits and essay_limits.get('LIC') is not None and essay_limits.get('LIM') is not None:
+            lower_entries.append({'value': essay_limits['LIC'], 'tier': 'LIC', 'feature': essay})
+
+    return {
+        'series': series,
+        'upper': consolidate_limit_entries(upper_entries),
+        'lower': consolidate_limit_entries(lower_entries),
+    }
+
+
 def build_limit_legend(has_lower_limit: bool) -> html.Div:
     """Key to the dashed limit lines drawn over the Tendencia charts.
 
@@ -383,9 +506,10 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         is_full_width = chart_config.get('full_width', False)
         col_width = 12 if is_full_width else 6
 
-        # Check if any essay has data
-        available_essays = [e for e in essays if e in history.columns and history[e].notna().any()]
-        if not available_essays:
+        # The essays with data and their consolidated critical limits (equal/near-equal values
+        # across the essays sharing this chart render as one line, not duplicates).
+        chart_data = collect_chart_series(history, essays, comp_limits_four, oil_hour_range)
+        if not chart_data['series']:
             # Show empty placeholder
             chart_elements.append(_empty_chart_card(title, col_width))
             continue
@@ -394,39 +518,17 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
         fig = go.Figure()
         colors = chart_config.get('palette', ['#1f77b4', '#ff7f0e'])
 
-        # Collect limits for consolidation (equal/near-equal values across
-        # essays sharing this chart must render as one line, not duplicates).
-        upper_entries = []  # [{'value', 'tier': 'LSC', 'feature': essay}, ...]
-        lower_entries = []  # [{'value', 'tier': 'LIC', 'feature': essay}, ...] - only when available
-
-        for idx, essay in enumerate(available_essays):
-            essay_values = history[essay].dropna()
-            if essay_values.empty:
-                continue
-            essay_dates = history.loc[essay_values.index, 'sampleDate']
-
+        for idx, serie in enumerate(chart_data['series']):
             fig.add_trace(go.Scatter(
-                x=essay_dates,
-                y=essay_values,
+                x=serie['dates'],
+                y=serie['values'],
                 mode='lines+markers',
-                name=essay_label(vocab(essay)),
+                name=essay_label(vocab(serie['essay'])),
                 line=dict(color=colors[idx % len(colors)], width=2),
                 marker=dict(size=4),
             ))
 
-            # Collect upper condemnation limit (LSC) - always available
-            essay_limits = get_essay_limits_four(comp_limits_four, essay, oil_hour_range)
-            if essay_limits and essay_limits.get('LSC') is not None:
-                upper_entries.append({'value': essay_limits['LSC'], 'tier': 'LSC', 'feature': essay})
-
-            # Collect lower condemnation limit (LIC) - only draw when BOTH LIC
-            # and LIM are available; never render a lower-limit trace for
-            # essay groups where the contract nulls out lower limits
-            # (Desgaste, Aditivo) or where min_value <= 0.
-            if essay_limits and essay_limits.get('LIC') is not None and essay_limits.get('LIM') is not None:
-                lower_entries.append({'value': essay_limits['LIC'], 'tier': 'LIC', 'feature': essay})
-
-        for line in consolidate_limit_entries(upper_entries):
+        for line in chart_data['upper']:
             fig.add_hline(
                 y=line['value'],
                 line=dict(color=UPPER_LIMIT_COLOR, width=1.5, dash='dash'),
@@ -435,7 +537,7 @@ def build_oil_time_series_grid(history: pd.DataFrame, comp_limits_four: dict, oi
                 annotation_font=dict(size=8, color=UPPER_LIMIT_COLOR),
             )
 
-        for line in consolidate_limit_entries(lower_entries):
+        for line in chart_data['lower']:
             lower_limit_drawn = True
             fig.add_hline(
                 y=line['value'],

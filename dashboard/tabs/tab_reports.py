@@ -48,6 +48,24 @@ def create_reports_tab() -> dbc.Container:
                                          placeholder=t("tab_reports.fecha"), className="mb-2")
                         ], width=3)
                     ]),
+                    # PDF export of the selected report: enabled once Familia, Equipo, Componente and
+                    # Fecha Muestra are all chosen (reports_callbacks / oil_report_pdf_callbacks).
+                    html.Div([
+                        html.Span(
+                            [html.Span(className="spinner-border spinner-border-sm me-2", **{"aria-hidden": "true"}),
+                             t("tab_reports.generando_pdf")],
+                            id='reports-pdf-loading', role="status", className="small text-muted",
+                            style={'display': 'none'}
+                        ),
+                        dbc.Button(
+                            [html.I(className="fas fa-file-pdf me-2", **{"aria-hidden": "true"}),
+                             t("tab_reports.descargar_reporte_en_pdf")],
+                            id='reports-pdf-button', color="primary", outline=True, size="sm", disabled=True,
+                            n_clicks=0,
+                        ),
+                    ], className="d-flex justify-content-end align-items-center gap-3 mb-2"),
+                    html.Div(id='reports-pdf-feedback'),
+                    dcc.Download(id='reports-pdf-download'),
                     html.Div(id='reports-identity-display')
                 ])
             ], className="mb-2")
@@ -111,6 +129,9 @@ def create_reports_tab() -> dbc.Container:
                         dbc.Row([
                             dbc.Col([
                                 html.Label(t("tab_reports.rango_de_fechas"), htmlFor='reports-date-range-picker', className="fw-bold small mb-1 d-block"),
+                                # start/end/max are set by reports_callbacks.reset_time_series_range:
+                                # the last 6 months or 3 samples (whichever holds more) up to the selected
+                                # sample, never past its date.
                                 dcc.DatePickerRange(
                                     id='reports-date-range-picker',
                                     display_format=t("tab_lab_compliance.yyyy_mm_dd"),

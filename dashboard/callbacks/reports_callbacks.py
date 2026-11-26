@@ -19,6 +19,10 @@ from dashboard.components.oil_charts import (
     get_essay_limits_four,
     build_oil_time_series_grid,
     build_oil_radar_view,
+    clip_history_to_window,
+    default_time_series_window,
+    resolve_time_series_window,
+    unit_history,
     classify_four_limit_value,
     consolidate_limit_entries,
     limit_line_color,
@@ -78,6 +82,30 @@ def normalize_breached_essays(breached_value):
             return breached_value
     
     return []
+
+
+def parse_breached_entries(breached_value) -> list:
+    """The stored `breached_essays` as dicts, one per test that is outside its limits:
+    ``{'essay', 'threshold' ('Marginal' / 'Critico' / 'Condenatorio'), 'direction' ('upper' / 'lower'),
+    'limit', 'value', ...}``. The legacy format (a list of names) gives ``{'essay': name}`` only. The
+    one place the per-test severity of a report is stored, so every view reads it from here."""
+    if breached_value is None or (isinstance(breached_value, float) and pd.isna(breached_value)):
+        return []
+    parsed = breached_value
+    if isinstance(breached_value, str):
+        try:
+            parsed = json.loads(breached_value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not isinstance(parsed, (list, tuple)):
+        return []
+    entries = []
+    for item in parsed:
+        if isinstance(item, dict) and item.get('essay'):
+            entries.append(dict(item))
+        elif isinstance(item, str) and item:
+            entries.append({'essay': item})
+    return entries
 
 
 def _format_anomaly_type(anomaly_val):
@@ -657,20 +685,60 @@ def register_reports_callbacks(app):
     # ========================================
 
     @app.callback(
+        [Output('reports-date-range-picker', 'start_date'),
+         Output('reports-date-range-picker', 'end_date'),
+         Output('reports-date-range-picker', 'max_date_allowed'),
+         Output('reports-date-range-picker', 'initial_visible_month')],
+        [Input('reports-date-selector', 'value', allow_optional=True),
+         Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True)],
+        [State('client-selector', 'value', allow_optional=True)],
+        prevent_initial_call=True
+    )
+    def reset_time_series_range(sample_date, component, equipo, client):
+        """Re-evaluate the time-series range for the examined sample.
+
+        Whenever the sample changes (Fecha Muestra, another component or unit, the first load) the
+        range goes back to the default for that sample - the last 6 months or the last 3 samples,
+        whichever holds more, counting only the unit's reports up to that sample - ending on its
+        date, and the picker cannot reach past that date: an older sample must not show the newer
+        ones. A range the user typed in for the previous sample is deliberately dropped. The same
+        rule, on the same history, draws the PDF's charts (oil_report_pdf_callbacks).
+        """
+        empty = (None, None, None, None)
+        if not all([sample_date, component, equipo, client]):
+            return empty
+        try:
+            reports_file = get_settings().get_classified_reports_path(client)
+            if not reports_file.exists():
+                return empty
+            history = unit_history(load_oil_classified(client), equipo, component)
+        except Exception:
+            logger.exception("Could not resolve the time-series range for %s / %s / %s", client, equipo, component)
+            return empty
+        start, end = default_time_series_window(sample_date, history['sampleDate'])
+        if end is None:
+            return empty
+        end_text = end.strftime('%Y-%m-%d')
+        return start.strftime('%Y-%m-%d'), end_text, end_text, end_text
+
+    @app.callback(
         Output('reports-time-series-grid', 'children'),
         [Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-date-range-picker', 'start_date', allow_optional=True),
          Input('reports-date-range-picker', 'end_date', allow_optional=True),
          Input('client-selector', 'value', allow_optional=True)],
+        # Not an Input: a new sample resets the picker (above), and that is what refreshes the grid.
+        [State('reports-date-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
-    def update_time_series_grid(component, equipo, start_date, end_date, client):
+    def update_time_series_grid(component, equipo, start_date, end_date, client, sample_date):
         """
         Generate 9-chart time series grid for oil analysis trends.
 
-        Uses DatePickerRange for filtering. Shows LSC (upper) always, and
-        LIC (lower) only for essays where the four-limit contract provides it.
+        Uses DatePickerRange for filtering, never past the examined sample's date. Shows LSC
+        (upper) always, and LIC (lower) only for essays where the four-limit contract provides it.
         """
         if not all([component, equipo, client]):
             return html.P(t("reports_callbacks.seleccione_equipo_y_componente_para_ver"), className="text-muted")
@@ -687,18 +755,17 @@ def register_reports_callbacks(app):
             limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
 
             # Filter to equipment + component
-            history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
+            history = unit_history(df, equipo, component)
             if history.empty:
                 return html.P(t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
 
-            history['sampleDate'] = pd.to_datetime(history['sampleDate'])
-            history = history.sort_values('sampleDate')
-
-            # Apply date range filter
-            if start_date:
-                history = history[history['sampleDate'] >= pd.to_datetime(start_date)]
-            if end_date:
-                history = history[history['sampleDate'] <= pd.to_datetime(end_date)]
+            # Apply date range filter. The end is capped at the examined sample (the picker already
+            # refuses later dates; this also covers the moment between a sample change and the
+            # picker's reset), a missing start is the default range of that sample (computed on the
+            # unit's full history), and the whole day counts: a sample taken at 14:00 on the last
+            # day is in.
+            start, end = resolve_time_series_window(sample_date, start_date, end_date, history['sampleDate'])
+            history = clip_history_to_window(history, start, end)
 
             if history.empty:
                 return html.P(t("reports_callbacks.sin_datos_en_el_rango_seleccionado"), className="text-muted")
@@ -1239,6 +1306,25 @@ def get_essay_options(df):
 # NEW HELPER FUNCTIONS FOLLOWING OIL-R REQUIREMENTS
 # ============================================================================
 
+def format_component_hours(sample) -> str:
+    """The component hour meter as the report header shows it ("27,275 hrs"); 'N/A' without one."""
+    value = sample.get('componentHours')
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 'N/A'
+    try:
+        return f"{float(value):,.0f} hrs"
+    except (ValueError, TypeError):
+        return 'N/A'
+
+
+def format_oil_hours(sample) -> str:
+    """The oil hour meter as the decision summary shows it ("512.0 hrs"); 'N/A' without one."""
+    value = sample.get('oilMeter')
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 'N/A'
+    return f"{float(value):.1f} hrs"
+
+
 def create_report_identity_display(sample):
     """
     Create the report header (OIL-R-01) as a status banner (ui_notes_improved.md §4).
@@ -1250,14 +1336,7 @@ def create_report_identity_display(sample):
     if sample is None or sample.empty:
         return html.Div()
 
-    # Build component hours display
-    comp_hours_display = 'N/A'
-    comp_hours_val = sample.get('componentHours')
-    if comp_hours_val is not None and not (isinstance(comp_hours_val, float) and pd.isna(comp_hours_val)):
-        try:
-            comp_hours_display = f"{float(comp_hours_val):,.0f} hrs"
-        except (ValueError, TypeError):
-            comp_hours_display = 'N/A'
+    comp_hours_display = format_component_hours(sample)
 
     sample_date = pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'
     return html.Div(status_banner(
@@ -1273,6 +1352,29 @@ def create_report_identity_display(sample):
     ), className="mt-2")
 
 
+def resolve_breached_essays(sample, limits, client, machine, component):
+    """The essays a report lists as "Ensayos críticos", and how many it counts as out of limit.
+
+    Returns ``(breached_essays, essays_broken_count, data_quality_warning)``: the stored
+    `breached_essays` unless it is empty while the limits say otherwise (then the ones calculated
+    from the sample's values), the stored `essays_broken` count, and whether that count is above
+    zero with no essay to show for it. The decision summary and the PDF report both read it here.
+    """
+    # Parse stored breached essays
+    stored_breached_essays = normalize_breached_essays(sample.get('breached_essays'))
+
+    # Calculate breached essays from actual data
+    calculated_breached_essays = calculate_breached_essays_from_data(sample, limits, client, machine, component) if limits else []
+
+    # Use calculated if stored is empty or inconsistent
+    essays_broken_count = int(sample.get('essays_broken', 0))
+    if not stored_breached_essays and calculated_breached_essays:
+        # Successfully filled missing data with calculated values - no warning needed
+        return calculated_breached_essays, essays_broken_count, False
+    # Only warn if we have essays_broken > 0 but can't show any breached essays at all
+    return stored_breached_essays, essays_broken_count, (essays_broken_count > 0 and len(stored_breached_essays) == 0)
+
+
 def create_decision_summary(sample, limits, client, machine, component):
     """
     Create decision summary section (OIL-R-02).
@@ -1282,23 +1384,9 @@ def create_decision_summary(sample, limits, client, machine, component):
     if sample is None or len(sample) == 0:
         return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
     
-    # Parse stored breached essays
-    stored_breached_essays = normalize_breached_essays(sample.get('breached_essays'))
-    
-    # Calculate breached essays from actual data
-    calculated_breached_essays = calculate_breached_essays_from_data(sample, limits, client, machine, component) if limits else []
-    
-    # Use calculated if stored is empty or inconsistent
-    essays_broken_count = int(sample.get('essays_broken', 0))
-    if not stored_breached_essays and calculated_breached_essays:
-        # Successfully filled missing data with calculated values - no warning needed
-        breached_essays = calculated_breached_essays
-        data_quality_warning = False
-    else:
-        breached_essays = stored_breached_essays
-        # Only warn if we have essays_broken > 0 but can't show any breached essays at all
-        data_quality_warning = (essays_broken_count > 0 and len(breached_essays) == 0)
-    
+    breached_essays, essays_broken_count, data_quality_warning = resolve_breached_essays(
+        sample, limits, client, machine, component)
+
     breached_text = ", ".join(breached_essays) if breached_essays else t("tab_alerts_detail.ninguno")
     
     # Previous sample context
@@ -1326,7 +1414,7 @@ def create_decision_summary(sample, limits, client, machine, component):
                             html.Small(t("reports_callbacks.id_reporte_2"), className="text-muted me-1"),
                             html.Strong(str(sample.get('sampleNumber', 'N/A')), className="me-3"),
                             html.Small(t("reports_callbacks.horometro_aceite"), className="text-muted me-1"),
-                            html.Strong(f"{float(sample.get('oilMeter', 0)):.1f} hrs" if sample.get('oilMeter') is not None and not (isinstance(sample.get('oilMeter'), float) and pd.isna(sample.get('oilMeter'))) else 'N/A')
+                            html.Strong(format_oil_hours(sample))
                         ], className="d-inline-block float-end", style={'fontSize': '0.85rem'})
                     ], className="mb-3 clearfix"),
                     dbc.Row([
@@ -1635,6 +1723,28 @@ def create_ai_diagnosis_and_action(sample):
     return recommendation, html.Div()
 
 
+def compare_reports(current, previous, limits, client, machine, component) -> dict:
+    """What changed between two consecutive reports of one unit/component (OIL-R-06).
+
+    Breached essays are calculated from each report's values against the limits (more reliable
+    than the stored lists). `new_breaches` are critical in `current` and not in `previous`,
+    `resolved_breaches` the reverse, `unchanged_critical` critical in both. The delta panel
+    compares the two most recent reports; the PDF compares the examined one with its predecessor.
+    """
+    current_breached = calculate_breached_essays_from_data(current, limits, client, machine, component) if limits else []
+    previous_breached = calculate_breached_essays_from_data(previous, limits, client, machine, component) if limits else []
+
+    return {
+        'new_breaches': [e for e in current_breached if e not in previous_breached],
+        'resolved_breaches': [e for e in previous_breached if e not in current_breached],
+        'unchanged_critical': [e for e in current_breached if e in previous_breached],
+        'current_status': current.get('report_status', 'N/A'),
+        'previous_status': previous.get('report_status', 'N/A'),
+        'current_date': pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d'),
+        'previous_date': pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d'),
+    }
+
+
 def create_delta_summary(sample, df, equipo, component, limits, client, machine):
     """
     Create delta summary showing changes from previous report (OIL-R-06).
@@ -1658,25 +1768,13 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
     # Get current and previous report
     current = history.iloc[0]
     previous = history.iloc[1]
-    
-    # Calculate breached essays dynamically for both (more reliable than stored values)
-    current_breached = calculate_breached_essays_from_data(current, limits, client, machine, component) if limits else []
-    previous_breached = calculate_breached_essays_from_data(previous, limits, client, machine, component) if limits else []
-    
-    # Identify worsening, improving, unchanged critical
-    new_breaches = [e for e in current_breached if e not in previous_breached]
-    resolved_breaches = [e for e in previous_breached if e not in current_breached]
-    unchanged_critical = [e for e in current_breached if e in previous_breached]
-    
-    # Status change
-    current_status = current.get('report_status', 'N/A')
-    previous_status = previous.get('report_status', 'N/A')
-    status_changed = current_status != previous_status
-    
-    # Date context
-    current_date = pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d')
-    previous_date = pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d')
-    
+
+    delta = compare_reports(current, previous, limits, client, machine, component)
+    new_breaches = delta['new_breaches']
+    resolved_breaches = delta['resolved_breaches']
+    current_status, previous_status = delta['current_status'], delta['previous_status']
+    current_date, previous_date = delta['current_date'], delta['previous_date']
+
     # Build summary
     return dbc.Row([
         # Left - Overview
