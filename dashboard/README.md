@@ -56,6 +56,22 @@ is available after the data repo publishes and syncs v2. The tab resolves packag
 renders the selected view; scoring, ordering, aggregation, and event classification belong to the
 producer. A package from before v1 must be republished by the data repo.
 
+The EMIN `condition_model` v2 is an optional, separately marked Beta read model inside the producer's
+precomputed report. It carries the source alert run ID and SHA-256 digests for the alert CSV, its
+manifest, source columns, and the base package files. The reader checks the model version, unit roster,
+cutoff, dates, and digest shapes before exposing it; older packages without this block continue to use
+the existing historical page. The dashboard renders the producer's score, levels, weekly changes,
+group scopes, evidence, and source-date markers. It never scores or joins source records itself.
+
+The Beta score sums active conditions at 1, 2, or 3 points. It accepts health, safety, operational
+condition, and fluid alerts; it excludes connectivity, operator-conduct, administrative-compliance,
+scheduled-maintenance, and unclassified severity rows. Confirmed alert-to-oil links contribute the
+greater of the two signals. A quiet week carries known conditions forward. An executed replacement with
+a specific component and reference can close older conditions for that component. Source dates describe
+the newest located record and do not certify full reporting coverage. See the producer's
+`METODOLOGIA_EMIN.md` for the complete rule set and examples. This Beta is for verification and must
+not be read as a probability of failure or an adopted operational priority without maintenance review.
+
 The fleet overview plots every unit with comparable observations: previous-period average on the
 horizontal axis, selected-period average on the vertical axis, and color for improved, worsened, or
 stable. Priority units receive larger markers and labels; units without a valid comparison are counted,

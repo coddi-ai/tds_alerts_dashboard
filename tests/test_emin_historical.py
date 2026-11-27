@@ -14,7 +14,7 @@ from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_vie
 from dashboard.components.emin_beta import _weekly_facts, evidence_page, fleet_figure, fleet_table, unit_records_page, unit_story
 from dashboard.components.predictive_state import STATE_ZONE_FILL
 from dashboard.tabs.tab_emin_historical import create_layout as create_emin_historical_layout
-from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
+from src.data.emin_historical import InvalidHistoricalBundle, _validate_condition_model, load_emin_historical_bundle
 from src.i18n import t
 
 
@@ -466,3 +466,66 @@ def test_page_callbacks_require_server_authorization_for_emin(monkeypatch):
 
     monkeypatch.setattr(emin_historical_callbacks, "allowed_clients", lambda user: ["eMin"])
     assert emin_historical_callbacks._authorized_emin("EMIN", {"username": "emin-user"})
+
+def test_source_condition_preview_shows_known_and_unevaluated_units():
+    from dashboard.components.emin_beta import fleet_intro
+    model = {"version": 2, "threshold": 3, "review_order": ["CT-1"],
+             "provenance": {"preview": True, "coverage_limitations": ["maintenance_classification"]},
+             "rows": [
+                 {"unit": "CT-1", "historical_points": 2, "previous_average": 2, "quadrant": "recent_worsening",
+                  "current": {"points": 4, "level": "critical", "movement": "worsened", "changes": [], "active": []}},
+                 {"unit": "CT-2", "historical_points": None, "previous_average": None, "current": None},
+             ]}
+    report = {"condition_model": model, "rows": [{"unit": "CT-1", "groups": []}, {"unit": "CT-2", "groups": []}],
+              "methodology": "", "cutoff": {"cutoff": "2026-11-25", "week": "2026-W48"}}
+    visible = _visible(fleet_intro(report))
+    assert "Vista previa" in visible
+    assert "Sin hallazgos graves nuevos registrados hasta el corte." in visible
+    assert "probabilidad de falla" in visible
+    assert "Críticos sostenidos" in visible
+    assert "aparece en Empeoraron" in visible
+    assert "Sin evaluación" in _visible(fleet_table(report, "__all__"))
+    assert "Tasa no disponible" in _visible(fleet_table(report, "__all__"))
+
+
+def test_condition_source_dates_distinguish_old_recent_and_missing():
+    from datetime import date
+    from dashboard.components.emin_beta import _condition_source_dates
+
+    visible = _visible(_condition_source_dates({"alerts": "2026-11-01", "oil": "2026-11-23", "events": None},
+                                               date(2026, 11, 25)))
+    assert "Antiguo · hace 24 días" in visible
+    assert "hace 2 días" in visible
+    assert "Sin registro" in visible
+
+
+def test_condition_rank_group_column_keeps_historical_groups_without_week_metadata():
+    from dashboard.components.emin_beta import _condition_table
+
+    row = {"unit": "CT-1", "rank": 1, "priority": None, "historical_points": 2,
+           "groups": ["Motor / Emisiones", "Eléctrico / Red de datos"],
+           "group_scopes": {"Motor / Emisiones": "histórico"},
+           "current": {"level": "monitor", "points": 2, "movement": "stable", "active": [], "rate": None}}
+    visible = _visible(_condition_table([row], "Eléctrico / Red de datos"))
+    assert "Eléctrico / Red de datos · historial sin semana" in visible
+
+
+def test_condition_model_contract_validates_hashes_units_and_cutoff_dates():
+    digest = "a" * 64
+    provenance = {
+        "run_id": "alert-run", "sha256": digest, "manifest_sha256": digest,
+        "base_package_run": RUN, "cutoff": "2026-11-25", "source_columns_sha256": digest,
+        "base_package_manifest_sha256": digest, "alerts_rows": 1,
+        "coverage_limitations": [], "preview": True,
+        "base_package_files_sha256": {key: digest for key in ("daily.json", "observed.json", "dashboard.json.gz")},
+    }
+    row = {"unit": "CT-1", "historical_points": 1.0, "current": {
+        "level": "monitor", "movement": "stable", "points": 1, "changes": [], "active": []},
+        "weeks": [{"week": "2026-W48", "points": 1}], "source_dates": {"alerts": "2026-11-25"}}
+    model = {"version": 2, "threshold": 29, "alert_threshold": 11, "rows": [row], "provenance": provenance}
+    report = {"rows": [{"unit": "CT-1"}], "cutoff": {"week": "2026-W48", "cutoff": "2026-11-25"}}
+    _validate_condition_model(model, dict(provenance), report)
+
+    row["source_dates"]["alerts"] = "2026-11-26"
+    with pytest.raises(InvalidHistoricalBundle, match="contrato"):
+        _validate_condition_model(model, dict(provenance), report)

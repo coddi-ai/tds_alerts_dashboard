@@ -139,6 +139,11 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
     report = dashboard.get("beta_report")
     if report is not None:
         _validate_beta_report(report, dashboard.get("metadata", {}))
+        condition_model = report.get("condition_model")
+        if condition_model is not None:
+            _validate_condition_model(condition_model, manifest.get("condition_model"), report)
+        elif manifest.get("condition_model") is not None:
+            raise InvalidHistoricalBundle("El manifiesto declara un modelo de condición que no está en las vistas")
 
     # Resolve package row references only. Scoring, classification and aggregation are
     # already materialized by the producer and are never recomputed in the dashboard.
@@ -262,4 +267,78 @@ def _validate_beta_report(report, metadata):
             if zones is not None and not comparison["missing"] and comparison.get("quadrant") not in _BETA_QUADRANTS:
                 raise ValueError
     except (KeyError, ValueError, TypeError):
+        raise InvalidHistoricalBundle(error) from None
+
+
+def _validate_condition_model(model, manifest_model, report):
+    error = "El modelo de condición EMIN no coincide con su contrato"
+    try:
+        if (not isinstance(model, dict) or model.get("version") != 2
+                or type(model.get("threshold")) is not int or model["threshold"] < 2
+                or type(model.get("alert_threshold")) is not int
+                or not 1 <= model["alert_threshold"] < model["threshold"]
+                or not isinstance(model.get("rows"), list)
+                or not isinstance(model.get("provenance"), dict)
+                or not isinstance(manifest_model, dict)):
+            raise ValueError
+        provenance = model["provenance"]
+        for field in ("run_id", "sha256", "manifest_sha256", "base_package_run", "cutoff"):
+            if provenance.get(field) != manifest_model.get(field):
+                raise ValueError
+        for field in ("sha256", "manifest_sha256", "source_columns_sha256", "base_package_manifest_sha256"):
+            digest = provenance.get(field)
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError
+        if (type(provenance.get("alerts_rows")) is not int or provenance["alerts_rows"] < 0
+                or not isinstance(provenance.get("coverage_limitations"), list)
+                or not isinstance(provenance.get("preview"), bool)
+                or provenance.get("cutoff") != report["cutoff"]["cutoff"]):
+            raise ValueError
+        base_hashes = provenance.get("base_package_files_sha256")
+        if (not isinstance(base_hashes, dict)
+                or set(base_hashes) != {"daily.json", "observed.json", "dashboard.json.gz"}
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in base_hashes.values())):
+            raise ValueError
+        expected_units = {row["unit"] for row in report["rows"]}
+        rows = model["rows"]
+        units = [row.get("unit") for row in rows if isinstance(row, dict)]
+        if len(rows) != len(units) or len(set(units)) != len(units) or set(units) != expected_units:
+            raise ValueError
+        cutoff = date.fromisoformat(report["cutoff"]["cutoff"])
+        for row in rows:
+            current = row.get("current")
+            if current is not None:
+                if (not isinstance(current, dict)
+                        or current.get("level") not in {"clear", "monitor", "alert", "critical"}
+                        or current.get("movement") not in _BETA_STATUSES
+                        or (current.get("points") is not None and
+                            (not isinstance(current["points"], (int, float)) or current["points"] < 0))
+                        or not isinstance(current.get("changes"), list)
+                        or not isinstance(current.get("active"), list)):
+                    raise ValueError
+            if (row.get("historical_points") is not None
+                    and (not isinstance(row["historical_points"], (int, float)) or row["historical_points"] < 0)):
+                raise ValueError
+            if not isinstance(row.get("weeks"), list) or not isinstance(row.get("source_dates"), dict):
+                raise ValueError
+            for day in row["source_dates"].values():
+                if day is not None and date.fromisoformat(day) > cutoff:
+                    raise ValueError
+            for week in row["weeks"]:
+                if (not isinstance(week, dict) or not _WEEK_PATTERN.fullmatch(str(week.get("week")))
+                        or week["week"] > report["cutoff"]["week"]
+                        or (week.get("points") is not None and
+                            (not isinstance(week["points"], (int, float)) or week["points"] < 0))):
+                    raise ValueError
+        classification = model.get("classification")
+        if classification is not None:
+            if (not isinstance(classification, dict)
+                    or any(type(classification.get(key)) is not int or classification[key] < 0
+                           for key in ("alerts_scored", "alerts_not_scored", "other_source_signals"))
+                    or not isinstance(classification.get("alerts_by_domain_group"), dict)
+                    or any(type(value) is not int or value < 0
+                           for value in classification["alerts_by_domain_group"].values())):
+                raise ValueError
+    except (KeyError, ValueError, TypeError, OverflowError):
         raise InvalidHistoricalBundle(error) from None

@@ -74,7 +74,9 @@
         const panel = host.getBoundingClientRect();
         const left = bounds.left - panel.left;
         const top = bounds.top - panel.top;
-        const geometry = [bounds.width, bounds.height, left, top];
+        const toggle = host.parentElement.querySelector(".emin-beta-label-toggle input");
+        const showAll = !meta.priorityLabelsOnly || Boolean(toggle?.checked);
+        const geometry = [bounds.width, bounds.height, left, top, showAll];
         if (meta === state.meta && geometry.every((value, index) => value === state.geometry?.[index])) return;
         state.meta = meta;
         state.geometry = geometry;
@@ -82,7 +84,7 @@
                                       width: bounds.width + "px", height: bounds.height + "px"});
         overlay.setAttribute("viewBox", `0 0 ${bounds.width} ${bounds.height}`);
         overlay.setAttribute("aria-label", meta.labelTitle);
-        const positions = meta.fleetLabels.map(point => ({...point,
+        const positions = meta.fleetLabels.filter(point => showAll || point.priority).map(point => ({...point,
             px: point.x / meta.xLimit * bounds.width,
             py: (1 - point.y / meta.yLimit) * bounds.height,
         }));
@@ -93,7 +95,8 @@
         const zoneBoxes = (meta.zones || []).map(zone => {
             const zoneWidth = (zone.x1 - zone.x0) / meta.xLimit * bounds.width;
             const full = zone.index + " · " + zone.label;
-            const title = measure.measureText(full).width + 10 < zoneWidth ? full : String(zone.index);
+            const title = meta.priorityLabelsOnly ? zone.label
+                : measure.measureText(full).width + 10 < zoneWidth ? full : String(zone.index);
             return {...zone, title, half: (measure.measureText(title).width + 4) / 2,
                 x: (zone.x0 + zone.x1) / (2 * meta.xLimit) * bounds.width,
                 y: (1 - (zone.y0 + zone.y1) / (2 * meta.yLimit)) * bounds.height};
@@ -176,6 +179,9 @@
         schedule(state);
     }
 
+    document.addEventListener("change", event => {
+        if (active && event.target.matches(".emin-beta-label-toggle input")) schedule(active);
+    });
     new MutationObserver(connect).observe(document.documentElement, {subtree: true, childList: true});
     connect();
 })();

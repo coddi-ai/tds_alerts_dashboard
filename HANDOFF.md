@@ -279,3 +279,65 @@ Hitos y aceite permiten filtrar por semana desde un selector nativo junto a la t
 ## Auditoría de cierre del feedback
 
 Sobre el paquete real 7e3b200a, Playwright confirmó 50 unidades, 5 marcas de cada extremo, cuatro cuadrantes y 44 nombres a 320, 390 y 1440 px sin desplazamiento horizontal. Se abrió la metodología, se aplicó Frenos (13 señales en W48 y 19 históricas), se abrió CT-187 con seis muestras anormales y selector semanal disponible, se verificó la ausencia de acumulado y se volvió conservando el filtro. Perfil Docker offline anterior: 17 pruebas aprobadas. node --check dashboard/assets/emin_history.js, node --check dashboard/assets/emin_scatter_labels.js y git diff --check aprobaron. Cierre técnico local; publicación pendiente.
+
+## Vista previa del modelo de condición desde fuentes
+
+El panel de vista previa se habilita solo con un paquete que declara condition_model y preview. Incluye hallazgos, scatterplot, ranking histórico filtrable y detalle de evidencia. La vista vigente sigue siendo la disponible en el paquete real local. Docker offline con código montado: 18 pruebas aprobadas. El productor pasó 51. Falta la corrida detallada 27-11 para comprobar la vista con datos reales y evaluar los cambios de puestos.
+
+## Jackknife con la calibración de 29 puntos
+
+La vista previa reserva espacio por encima del umbral en ambos ejes, muestra los nombres y conteos de los cuatro cuadrantes fuera del gráfico y despliega el puntaje de corte y promedio histórico al pasar el cursor. Se comprobó visualmente el paquete real fb206bd4. Playwright Edge verificó 50 rótulos, cuatro zonas y cero solapamientos o recortes a 320, 390 y 1440 px, sin desplazamiento horizontal de página. El perfil Docker offline dio 18 pruebas aprobadas.
+
+## Reducir ruido en el Jackknife
+
+La vista inicial conserva los puntos de las 50 unidades y rotula solo los relevantes (nivel crítico o señal grave nueva). Los puntos restantes son más discretos y mantienen la identificación al pasar el cursor. Los números de los cuadrantes corresponden a la leyenda y el selector permite mostrar todos los nombres. Perfil offline: 18 pruebas aprobadas. En navegador a 390 y 1440 px se comprobaron 50 puntos, 10 rótulos iniciales, 50 al activar y 10 al desactivar. Ajuste visual sin recalcular el paquete W48.
+
+## Evidencia detrás de cada punto
+
+La vista previa agrupa los aportes de cada unidad con puntos, fecha, fuente y referencia desplegable. El detalle suma condiciones por el mayor aporte de sus registros vinculados. W48: 50 puntajes conciliados, 438 condiciones, 311 registros de alerta y 129 de aceite verificados contra sus fuentes, incluyendo unidad, severidad y referencias de muestra. Playwright comprobó los 36 puntos en 17 condiciones de CF-029, apertura del respaldo y ausencia de desbordamiento a 390 px. Suite offline: 18 aprobadas. Las bandas siguen en calibración piloto.
+
+## Cambios semanales trazables
+
+El detalle muestra el puntaje anterior, el del corte y el aporte firmado de las señales o reemplazos que explican la diferencia. Docker offline: 18 pruebas. Paquete real W48 bc53ebe1; ejemplo CT-249, W44 12 → 10 por OT 40143231.
+
+## Últimos registros por fuente
+
+En la vista previa se puede desplegar la fecha del último registro de cada fuente para flota y unidad. Los últimos registros no certifican reportabilidad completa. Paquete d780660b, 18 pruebas de dashboard aprobadas.
+
+## EMIN condition Beta · lector y auditoría visual · 27-11-2026
+
+### Objetivo
+
+Mostrar el nuevo modelo precomputado del productor en la pestaña Beta y dejar claro qué es hallazgo grave de la semana, qué nivel acumulado mantiene la flota y cuán recientes son las fuentes consultadas. El dashboard valida y representa el contrato; no calcula puntajes ni vuelve a clasificar registros.
+
+### Cambios
+
+- El lector valida `condition_model` v2, su procedencia, hashes, corte, roster de 50 equipos, semanas y fechas. Los paquetes anteriores que no incluyan el bloque conservan la lectura histórica previa.
+- La portada diferencia «grave nuevo/agravado esta semana» de la banda acumulada y muestra los cuatro cuadrantes completos. El cuarto cuadrante ahora dice «Críticos sostenidos»; un equipo crítico que cruza desde una media histórica menor se explica como empeoramiento, sin confundirlo con una alerta grave nueva.
+- La tabla permanece debajo de la gráfica, incluye el roster completo, ranking histórico/top 5/bottom 5 y filtro por grupo. La columna de grupos resume cantidad por alcance y deja explícita una semana no identificable.
+- El detalle presenta condición actual, suma trazable por condición, evolución semanal, referencia, fuente, fechas y tasa horométrica solo si la lectura es válida. La frescura de fuente diferencia dato antiguo (14+ días), registro reciente, sin registro y sin evaluación; el texto aclara que no certifica cobertura.
+- La guía del dashboard documenta que Beta es una lectura de verificación. Conserva el tratamiento visual común y el scatterplot rotula solo los equipos prioritarios por defecto.
+
+### Validaciones
+
+- Suite offline en Docker, red deshabilitada, repo montado en solo lectura:
+```powershell
+docker run --rm --network none --mount "type=bind,source=C:\Users\panch\Desktop\Coddi\.worktrees\tds-alerts-dashboard\codex-emin-historico-flota,target=/app,readonly" --workdir /app --env PYTHONDONTWRITEBYTECODE=1 --entrypoint python tds-alerts-dashboard-emin-test:latest -m pytest -q -p no:cacheprovider tests/test_emin_historical.py
+```
+Resultado al cierre: 21 aprobadas; una advertencia preexistente de deprecación de pytest/Dash.
+
+- `node --check dashboard/assets/emin_scatter_labels.js` y `git diff --check` pasan.
+- El dashboard de auditoría corrió localmente en `http://127.0.0.1:8051/` con el run `20261126T0000-0300-8a76e736219becb90e2b056f88397772b917473a4ec18fc5a5e55e1c6ca42aed` y corte `2026-11-25`. El lector devolvió 50 unidades.
+- Playwright Edge verificó panorama y detalle a 390 y 1440 px, sin desbordamiento horizontal de página; el contenedor de tabla ocupa su ancho móvil y permite desplazamiento interno. El panorama muestra las 50 unidades y el Jackknife 50 posiciones clasificables. Al filtrar `Eléctrico / Red de datos` quedaron 17 unidades; BULL-033 mostró que el grupo aparece en el historial sin semana asignable. Abrir EXC-055 y volver conservó el filtro. El detalle de CT-226/CF-029 mostró tablas de hitos y aceite y la ficha de condición con su procedencia.
+- Para CF-029, la ficha distinguió alertas (08-05-2026, antigua), eventos (02-11), aceite (04-11), mantención/detención (06-11) y horómetro (25-11). Es solo frescura observada, sin garantía de reportabilidad completa.
+- Portada W48: 10 críticos acumulados, cero señales graves nuevas; 40 estables, 0 mejorías, 10 empeoramientos y 0 críticos sostenidos en la comparación jackknife. La diferencia de etiquetas se explica en el gráfico.
+
+### Archivos y estado Git
+
+`dashboard/components/emin_beta.py`, `dashboard/assets/emin_scatter_labels.js`, `src/data/emin_historical.py`, `dashboard/README.md`, `tests/test_emin_historical.py`, `HANDOFF.md`.
+
+Commit(s): el HEAD local de esta rama registra esta implementación después de la validación. No push.
+
+### Riesgos, preguntas abiertas y siguiente acción
+
+Beta sigue sin certificación de cobertura por equipo/día. El paquete marca la limitación de clasificación de mantenciones/detenciones; el puntaje no es una probabilidad de falla y su adopción depende de revisión de mantenimiento. El corte consultado continúa en W48 al 25-11; la corrida de alertas publicada el 27-11 no implica que el corte de las fuentes base avanzara. El siguiente paso es confirmar reglas y cobertura con mantenimiento y responsables de datos antes de promover cualquier publicación.
