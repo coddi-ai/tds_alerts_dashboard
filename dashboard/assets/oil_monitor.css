@@ -1,0 +1,488 @@
+/* Monitor de Aceite: KPI tiles, status banners, the fleet matrix and the frequency panel.
+   Colors that depend on a value come from shared/severity.py (inline styles written by
+   dashboard/components/oil_ui.py); this file only holds the layout and the neutral tones, so the
+   severity palette lives in exactly one place (ui_notes_improved.md §1.1). */
+
+:root {
+    --oil-ink: #0f172a;
+    --oil-muted: #475569;          /* 7.6:1 on white, 7.1:1 on #f8fafc */
+    --oil-line: #e2e8f0;
+    --oil-soft: #f1f5f9;
+    --oil-focus: #2563eb;
+}
+
+/* ---- Tabs: the keyboard can reach and operate them (assets/oil_tabs_a11y.js) ---------------- */
+.oil-tab:focus-visible {
+    outline: 2px solid var(--oil-focus);
+    outline-offset: -2px;
+}
+
+/* ---- Preview pill: after the label of a preview tab and after its page title ----------------- */
+/* Violet, a hue no status uses (#5b21b6 on #ede9fe is 7.6:1). The word is on the pill. */
+.oil-preview-pill {
+    display: inline-block;
+    margin-left: 4px;               /* on top of the space the markup puts before it */
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #ede9fe;
+    color: #5b21b6;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    line-height: 1.4;
+    text-transform: uppercase;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+/* ---- Page header ---------------------------------------------------------------------------- */
+.oil-caption {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--oil-muted);
+}
+
+/* ---- KPI tiles (ui_notes_improved.md §3) ---------------------------------------------------- */
+.kpi-label   { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--oil-muted); }
+.kpi-value   { font-size: 30px; font-weight: 700; line-height: 1; margin: 10px 0; color: var(--oil-ink); }
+.kpi-caption { font-size: 12px; color: var(--oil-muted); }
+.kpi-chip    { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.kpi-gauge-track { height: 6px; border-radius: 999px; background: #e5e7eb; overflow: hidden; margin-bottom: 8px; }
+.kpi-gauge-fill  { height: 100%; border-radius: 999px; }
+
+.oil-kpi-valuerow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.oil-kpi-valuerow .kpi-value { margin: 10px 0; }
+.oil-kpi-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+/* A tinted rounded square behind the card's icon: the severity lives in a small, explicit element
+   rather than in a colored edge running the height of the card (§2). */
+.oil-icon-badge {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--oil-soft);
+    color: var(--oil-muted);
+}
+.oil-kpis--aligned .oil-kpi-title { min-height: 36px; }       /* room for a two-line label, so a row of tiles stays level */
+.oil-neutral-chip {
+    background: var(--oil-soft);
+    color: var(--oil-muted);
+    border: 1px solid var(--oil-line);
+}
+
+/* ---- Status banner (§4): one status value drives background, text and badge ------------------ */
+.oil-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    padding: 16px 20px;
+    border-radius: 16px;
+}
+.oil-banner__identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+}
+.oil-banner__icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    font-size: 18px;
+    background: rgba(148, 163, 184, .18);
+}
+.oil-banner__eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    opacity: .9;
+}
+.oil-banner__title {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+.oil-banner__subtitle { font-size: 13px; opacity: .92; }
+.oil-banner__fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 28px;
+}
+.oil-banner__field-label { display: block; font-size: 11px; opacity: .9; }
+.oil-banner__field-value { font-weight: 700; font-size: 14px; }
+
+/* ---- Tables ---------------------------------------------------------------------------------- */
+.oil-table-wrap { overflow-x: auto; }
+.oil-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+}
+.oil-table th,
+.oil-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--oil-line);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+.oil-table thead th {
+    position: sticky;
+    top: 0;
+    background: #343a40;
+    color: #fff;
+    font-weight: 700;
+    text-align: center;
+    white-space: normal;
+    z-index: 1;
+}
+.oil-table tbody tr:hover > * { background-color: #f8fafc; }
+.oil-table .oil-col-left { text-align: left; }
+.oil-table .oil-col-center { text-align: center; }
+
+.oil-sort {
+    display: inline-flex;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.oil-sort:hover { background: rgba(255, 255, 255, .14); }
+.oil-sort:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.oil-sort__arrow { font-size: 10px; opacity: .55; }
+.oil-sort[data-active="true"] .oil-sort__arrow { opacity: 1; }
+
+/* The unit and every component cell are real buttons (Tab / Enter). */
+.oil-unit-btn,
+.oil-link-btn {
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--oil-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: rgba(15, 23, 42, .25);
+    text-underline-offset: 3px;
+}
+.oil-unit-btn:hover,
+.oil-link-btn:hover { background: var(--oil-soft); text-decoration-color: currentColor; }
+.oil-unit-btn:focus-visible,
+.oil-link-btn:focus-visible,
+.oil-cell-btn:focus-visible,
+.oil-select:focus-visible,
+.oil-pager button:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: 2px; }
+
+.oil-select {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 2px solid #64748b;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+}
+.oil-select[aria-pressed="true"] {
+    border-color: var(--oil-focus);
+    background: radial-gradient(circle, var(--oil-focus) 0 4px, #fff 5px);
+}
+.oil-table .oil-row--selected > * { background-color: #eff6ff; }
+.oil-unit-btn { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+
+/* A component cell is a tinted pill: a button when it opens a report, plain text for the group's summary. */
+.oil-cell-btn,
+.oil-cell-pill {
+    display: block;
+    width: 100%;
+    padding: 5px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font: inherit;
+    font-weight: 600;
+    text-align: center;
+}
+.oil-cell-btn { cursor: pointer; }
+.oil-cell-btn:hover { filter: brightness(.96); }
+.oil-cell-empty { color: var(--oil-muted); font-weight: 400; }
+
+/* "Estado Máquina": a white cell, only the pill carries the color. */
+.oil-estado-cell { text-align: center; }
+.oil-estado-cell .status-chip { font-size: 12px; }
+
+/* ---- Frozen columns: the selector, Unidad and Estado Máquina stay put while the table scrolls ------
+   Opaque backgrounds (what scrolls underneath must not show through) and a thin separator on the right
+   edge of the last one. The widths are fixed so each column can offset the next one. */
+.oil-table--frozen {
+    --oil-w-select: 44px;
+    --oil-w-unit: 150px;
+    --oil-w-estado: 132px;
+}
+.oil-table--frozen .oil-frozen {
+    position: sticky;
+    z-index: 2;
+    box-sizing: border-box;
+    background: #fff;
+}
+.oil-table--frozen thead .oil-frozen { z-index: 4; background: #343a40; }
+.oil-table--frozen .oil-row--selected > .oil-frozen { background-color: #eff6ff; }
+.oil-table--frozen .oil-frozen--select {
+    left: 0;
+    width: var(--oil-w-select); min-width: var(--oil-w-select); max-width: var(--oil-w-select);
+}
+.oil-table--frozen .oil-frozen--unit {
+    left: var(--oil-w-select);
+    width: var(--oil-w-unit); min-width: var(--oil-w-unit); max-width: var(--oil-w-unit);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.oil-table--frozen .oil-frozen--estado {
+    left: calc(var(--oil-w-select) + var(--oil-w-unit));
+    width: var(--oil-w-estado); min-width: var(--oil-w-estado); max-width: var(--oil-w-estado);
+    border-right: 1px solid #94a3b8;
+}
+
+/* ---- "Otros componentes (N)": collapsed column header / expanded group bar ----------------------- */
+.oil-table thead th.oil-group__th { min-width: 200px; }
+.oil-table thead th.oil-group__bar { border-bottom: 1px solid rgba(255, 255, 255, .35); }
+.oil-group__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid rgba(255, 255, 255, .55);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.oil-group__toggle:hover { background: rgba(255, 255, 255, .14); }
+.oil-group__toggle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.oil-group__chevron { font-size: 11px; }
+.oil-group__hint { margin-left: 10px; font-size: 11px; font-weight: 400; }
+.oil-group__caption { display: block; margin-top: 4px; font-size: 11px; font-weight: 400; }
+
+/* ---- Pager ------------------------------------------------------------------------------------ */
+.oil-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--oil-muted);
+}
+.oil-pager__buttons { display: flex; gap: 8px; }
+.oil-pager button {
+    padding: 4px 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--oil-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+.oil-pager button:disabled { opacity: .5; cursor: default; }
+
+/* ---- Panel de Frecuencia ---------------------------------------------------------------------- */
+/* "Criterios de Criticidad": compact, one block per group. */
+.oil-group-card {
+    height: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--oil-line);
+    border-radius: 10px;
+    background: #fff;
+}
+.oil-group-card__title      { font-size: 14px; font-weight: 700; color: var(--oil-ink); }
+.oil-group-card__components { margin: 2px 0 6px; font-size: 13px; color: var(--oil-muted); }
+.oil-group-card__stats      { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; color: var(--oil-ink); }
+.oil-group-card__figure     { white-space: nowrap; }
+.oil-group-card__figure:first-child { font-weight: 600; }
+
+.oil-bar-cell { display: flex; align-items: center; gap: 8px; min-width: 110px; }
+.oil-bar { flex: 1 1 auto; height: 8px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+.oil-bar__fill { height: 100%; border-radius: 999px; }
+.oil-bar__pct { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+/* The unit list: one <tbody> per unit holding its row and, hidden under it, its component detail
+   (opened by assets/oil_expandable_rows.js). */
+.oil-expand {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: var(--oil-ink);
+    line-height: 1;
+    cursor: pointer;
+}
+.oil-expand:hover { background: var(--oil-soft); }
+.oil-expand:focus-visible,
+.oil-expand-all:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: 2px; }
+.oil-expand__icon { font-size: 11px; transition: transform .15s ease; }
+.oil-expand[aria-expanded="true"] .oil-expand__icon { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .oil-expand__icon { transition: none; } }
+
+.oil-expand-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: var(--oil-ink);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.oil-expand-all:hover:not(:disabled) { background: var(--oil-soft); }
+.oil-expand-all:disabled { opacity: .5; cursor: default; }
+
+/* "N de M" and the bar splitting the unit's components by status (vencidos, próximos, al día, sin muestra). */
+.oil-pending { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 170px; }
+.oil-pending__count { min-width: 52px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.oil-stack {
+    display: flex;
+    flex: 0 0 110px;
+    width: 110px;
+    height: 8px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    overflow: hidden;
+}
+.oil-stack__segment { display: block; height: 100%; border-right: 1px solid #fff; }
+.oil-stack__segment:last-child { border-right: 0; }
+
+/* The detail row spans the table; its own table lists the unit's components. */
+.oil-unit__detail > td { padding: 0; background: #f8fafc; }
+.oil-detail { padding: 8px 12px 12px 44px; overflow-x: auto; }
+.oil-table--detail { background: #fff; border: 1px solid var(--oil-line); border-radius: 8px; }
+.oil-table--detail thead th { position: static; background: var(--oil-soft); color: var(--oil-ink); }
+.oil-table--detail tbody tr:last-child > * { border-bottom: 0; }
+
+.oil-footnote { margin-top: 12px; font-size: 12px; color: var(--oil-muted); }
+
+/* ---- Filters / AI actions ---------------------------------------------------------------------- */
+.oil-filter-label { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 700; }
+.oil-actions .form-check { margin-bottom: 8px; }
+.oil-actions .form-check-label { line-height: 1.5; white-space: pre-wrap; }
+.oil-ai-box { height: 100%; padding: 16px; border-radius: 12px; background: #f8fafc; border: 1px solid var(--oil-line); }
+.oil-ai-box h6 { margin-bottom: 8px; color: var(--oil-ink); }
+.oil-ai-box p { margin: 0; line-height: 1.6; white-space: pre-wrap; color: #1e293b; }
+
+/* ---- Análisis por Componente -------------------------------------------------------------------- */
+/* "Componente" segmented control: one option pressed at a time (aria-pressed); the criticality chip sits beside it. */
+.oil-selector { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 8px; }
+.oil-segmented { display: inline-flex; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #fff; }
+.oil-segmented__btn {
+    padding: 6px 16px;
+    border: 0;
+    border-right: 1px solid #cbd5e1;
+    background: #fff;
+    color: var(--oil-ink);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+.oil-segmented__btn:last-child { border-right: 0; }
+.oil-segmented__btn:hover { background: var(--oil-soft); }
+.oil-segmented__btn[aria-pressed="true"] { background: var(--oil-focus); color: #fff; }   /* 5.2:1 */
+.oil-segmented__btn:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: -3px; box-shadow: inset 0 0 0 4px #fff; }
+
+/* Ranking bars (anomaly types, essays out of limit): the name and its figures in words, the stacked bar under them. */
+.oil-hbars { margin: 0 0 8px; padding: 0; list-style: none; }
+.oil-hbar { margin-bottom: 10px; }
+.oil-hbar__head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 2px 12px; font-size: 13px; }
+.oil-hbar__name { font-weight: 600; color: var(--oil-ink); overflow-wrap: anywhere; }
+.oil-hbar__figures { color: var(--oil-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.oil-hbar__track { display: flex; height: 10px; margin-top: 3px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+.oil-hbar__seg { display: block; height: 100%; border-right: 1px solid #fff; }
+.oil-hbar__seg:last-child { border-right: 0; }
+
+/* Color key under a card's bars */
+.oil-legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--oil-ink); }
+.oil-legend__item { display: inline-flex; align-items: center; gap: 6px; }
+.oil-legend__swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+
+/* "Antigüedad de la Última Muestra": every component in one bar, split by days since its last sample */
+.oil-agebar { display: flex; height: 18px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+.oil-agebar__seg { display: block; height: 100%; border-right: 2px solid #fff; }
+.oil-agebar__seg:last-child { border-right: 0; }
+
+/* The matrix: Unidad and Estado are frozen (the shared frozen-column rules, without the selector column) */
+.oil-table--frozen.oil-table--frozen-2 { --oil-w-select: 0px; --oil-w-unit: 220px; --oil-w-estado: 118px; }
+.oil-table--frozen-2 td { vertical-align: middle; }
+.oil-subline { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 400; color: var(--oil-muted); white-space: nowrap; }
+/* A two-line cell is one string with a line break: the first line is the value (ink, 12 px), the second one
+   a smaller note under it, and a line is never wrapped. The trend cells color their first line (the word) and keep the note muted. */
+.oil-table .oil-two-line { white-space: pre; font-size: 11px; line-height: 1.35; color: var(--oil-muted); }
+.oil-two-line::first-line { font-size: 12px; font-weight: 400; color: var(--oil-ink); }
+.oil-table .oil-two-line--stale { font-weight: 700; color: #92400e; }                     /* 7.7:1 on white */
+.oil-two-line--stale::first-line { font-weight: 400; color: var(--oil-ink); }
+.oil-trend--worsening::first-line { font-weight: 700; color: #b91c1c; }                  /* 6.5:1 on white */
+.oil-trend--improving::first-line { font-weight: 700; color: #15803d; }                  /* 5.0:1 on white */
+.oil-trend--unchanged::first-line { font-weight: 600; color: var(--oil-muted); }
+.oil-trend--none { font-weight: 600; color: var(--oil-muted); }
+
+/* Essay cell: "Marg." / "Cond." pill (its tint comes from the severity tiers, inline); a button when it opens a report */
+.oil-level-pill {
+    display: inline-block;
+    min-width: 52px;
+    padding: 3px 10px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+}
+button.oil-level-pill { cursor: pointer; }
+button.oil-level-pill:hover { filter: brightness(.96); }
+button.oil-level-pill:focus-visible { outline: 2px solid var(--oil-focus); outline-offset: 2px; }
+.oil-level-pill--legend { min-width: 0; padding: 1px 8px; }
+
+.oil-matrix-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 20px; }
+.oil-matrix-control { display: flex; align-items: center; gap: 8px; }
+.oil-matrix-show { min-width: 180px; }
+.oil-matrix-include { margin: 0; font-size: 13px; }
+.oil-level-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 12px; font-size: 12px; color: var(--oil-ink); }
+.oil-legend__title { font-weight: 700; }
+.oil-level-legend .oil-caption { margin: 0; }

@@ -50,9 +50,17 @@ def format_date(value: date) -> str:
     return value.strftime("%d/%m/%Y")
 
 
-def build_subject(send_date: date) -> str:
-    """`[CODDI] Monitoreo de Alertas DD/MM/YYYY`, dated with the SEND date."""
-    return f"[CODDI] Monitoreo de Alertas {format_date(send_date)}"
+ERRATUM_SUBJECT_PREFIX = "[FE DE ERRATA] "
+
+
+def build_subject(send_date: date, erratum: bool = False) -> str:
+    """`[CODDI] Monitoreo de Alertas DD/MM/YYYY`, dated with the SEND date.
+
+    `erratum` (one-time correction send only) prefixes `[FE DE ERRATA] `; the regular subject is
+    unchanged.
+    """
+    subject = f"[CODDI] Monitoreo de Alertas {format_date(send_date)}"
+    return ERRATUM_SUBJECT_PREFIX + subject if erratum else subject
 
 
 def compute_period(frequency: str, send_date: date) -> Period:

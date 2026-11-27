@@ -7,32 +7,61 @@ Default components: all with ≥1 sample for the selected fleet.
 """
 
 from src.i18n import t
-from dashboard.components.labels import status_label
-from dash import Input, Output, State, html, dcc, dash_table, ctx, no_update
+from dash import ALL, Input, Output, State, html, ctx, no_update
 from dash.exceptions import PreventUpdate
 import pandas as pd
 from config.settings import get_settings
+from dashboard.components.oil_fleet_matrix import (
+    FIRST_DIRS,
+    TABLE as FLEET_TABLE,
+    build_fleet_matrix_data,
+    infer_machine_status,
+    render_fleet_matrix,
+)
+from dashboard.components.oil_table import register_view_controller
 from src.data.loaders import load_oil_classified, load_machine_status_for_client
-from src.i18n.data_text import localized_series
+from src.utils.dash_ids import from_id_text
 from src.utils.logger import get_logger
 from dashboard.components.oil_machine_detail import build_machine_detail
-import dash_bootstrap_components as dbc
+from shared.severity import STATUS_TIER_BY_ESTADO
 
 logger = get_logger(__name__)
 
-_STATUS_BG = {'Normal': '#d4edda', 'Alerta': '#fff3cd', 'Anormal': '#f8d7da'}
-_STATUS_FG = {'Normal': '#155724', 'Alerta': '#856404', 'Anormal': '#721c24'}
-_MACHINE_STATUS_BG = {'Normal': '#28a745', 'Alerta': '#ffc107', 'Anormal': '#dc3545'}
-_MACHINE_STATUS_FG = {'Normal': '#ffffff', 'Alerta': '#000000', 'Anormal': '#ffffff'}
+
+def report_navigation(client, unit_id, component):
+    """What opens Detalle de Reporte on one unit's component (its latest sample): the internal tab and
+    the navigation state the report selectors read. The machine type ("familia") is looked up from the
+    unit's own rows. Raises PreventUpdate when the unit has no such component.
+
+    Shared by the fleet matrix cells and the frequency panel's "Última Muestra" links, so both open
+    the report the same way.
+    """
+    if not unit_id or not component or not client:
+        raise PreventUpdate
+    if not get_settings().get_classified_reports_path(client.lower()).exists():
+        raise PreventUpdate
+    try:
+        df = load_oil_classified(client)
+        unit_df = df[(df['unitId'] == unit_id) & (df['componentName'] == component)]
+    except Exception:
+        logger.exception("Could not open the report of %s / %s for %s", unit_id, component, client)
+        raise PreventUpdate
+    if unit_df.empty:
+        raise PreventUpdate
+    nav = {'equipo': unit_id, 'component': component}
+    familia = unit_df.iloc[0].get('machineName', None)
+    if familia:
+        nav['familia'] = familia
+    return 'report-detail', nav
 
 
-def _infer_machine_status(row):
-    vals = row.dropna().values
-    if 'Anormal' in vals:
-        return 'Anormal'
-    if 'Alerta' in vals:
-        return 'Alerta'
-    return 'Normal'
+def _clicked():
+    """The id of the button that was really clicked, or None. A table that was just re-rendered hands
+    the callback fresh buttons with no clicks: that is not a click."""
+    triggered = ctx.triggered_id
+    if not isinstance(triggered, dict) or not ctx.triggered or not ctx.triggered[0].get('value'):
+        return None
+    return triggered
 
 
 def register_machines_callbacks(app):
@@ -134,7 +163,9 @@ def register_machines_callbacks(app):
 
             pivot = latest.pivot_table(index='unitId', columns='componentName',
                                        values='report_status', aggfunc='first')
-            pivot['__ms__'] = pivot.index.map(lambda u: ms_map.get(u, _infer_machine_status(pivot.loc[u])))
+            pivot['__ms__'] = pivot.index.map(
+                lambda u: ms_map.get(u) if isinstance(ms_map.get(u), str)
+                else infer_machine_status(pivot.loc[u].drop('__ms__', errors='ignore')))
 
             if statuses:
                 pivot = pivot[pivot['__ms__'].isin(statuses)]
@@ -187,262 +218,92 @@ def register_machines_callbacks(app):
             return [], []
 
     # ========================================
-    # Heatmap Table (requires fleet)
+    # Fleet matrix: data (filters) -> view (sort, page) -> table
     # ========================================
     @app.callback(
-        [Output('fleet-heatmap-table-container', 'children'),
-         Output('table-filter-badge', 'children')],
+        Output(f'{FLEET_TABLE}-data', 'data'),
         [Input('client-selector', 'value'),
          Input('fleet-site-filter', 'value'),
          Input('fleet-machine-type-filter', 'value'),
          Input('fleet-status-filter', 'value'),
          Input('fleet-component-columns-selector', 'value')]
     )
-    def update_fleet_heatmap_table(client, site, fleet, statuses, selected_components):
-        if not client:
-            return html.P(t("fleet_overview.select_client"), className="text-muted"), ""
-        if not fleet:
-            return html.P(
-                t("machines_callbacks.seleccione_una_flota_para_ver_el"),
-                className="text-muted text-center py-4"
-            ), ""
+    def update_fleet_matrix_data(client, site, fleet, statuses, selected_components):
+        """Apply the filters. The component columns come back ordered by how many of the filtered
+        units have data for them (see oil_fleet_matrix.order_components_by_coverage)."""
+        return build_fleet_matrix_data(client, site, fleet, statuses, selected_components)
 
-        settings = get_settings()
-        path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
-            return html.P(t("lab_compliance_callbacks.sin_datos_disponibles"), className="text-muted"), ""
+    register_view_controller(app, FLEET_TABLE, FIRST_DIRS)
 
-        try:
-            df = load_oil_classified(client)
-            if site:
-                df = df[df['site'] == site]
-            df = df[df['machineName'] == fleet]
-            if df.empty:
-                return html.P(t("machines_callbacks.sin_datos_para_la_flota_seleccionada"), className="text-muted"), ""
-
-            df['sampleDate'] = pd.to_datetime(df['sampleDate'])
-            latest = df.loc[df.groupby(['unitId', 'componentName'])['sampleDate'].idxmax()]
-
-            # Also get ai_recommendation for tooltips (English text when that language is selected)
-            rec_col = 'ai_recommendation' if 'ai_recommendation' in latest.columns else None
-            if rec_col:
-                latest = latest.assign(ai_recommendation=localized_series(latest, 'ai_recommendation'))
-
-            machine_file = settings.get_machine_status_path(client.lower())
-            ms_map = {}
-            if machine_file.exists():
-                ms_df = load_machine_status_for_client(client)
-                ms_map = dict(zip(ms_df['unit_id'], ms_df['overall_status']))
-
-            pivot = latest.pivot_table(index='unitId', columns='componentName',
-                                       values='report_status', aggfunc='first')
-            pivot['__machine_status__'] = pivot.index.map(
-                lambda u: ms_map.get(u, _infer_machine_status(pivot.loc[u])))
-
-            if statuses:
-                pivot = pivot[pivot['__machine_status__'].isin(statuses)]
-            if pivot.empty:
-                return html.P(t("machines_callbacks.sin_datos_para_los_filtros_seleccionados"), className="text-muted"), ""
-
-            # Sort by criticality
-            order = {'Anormal': 0, 'Alerta': 1, 'Normal': 2}
-            pivot = pivot.assign(__s=pivot['__machine_status__'].map(order).fillna(3))
-            pivot = pivot.sort_values('__s').drop('__s', axis=1)
-
-            comp_cols = [c for c in pivot.columns if c != '__machine_status__']
-            display_cols = [c for c in (selected_components or []) if c in comp_cols] or comp_cols
-
-            # Calculate days since last sample per unit/component for tooltips
-            now = pd.Timestamp.now()
-            days_since_comp = latest.set_index(['unitId', 'componentName'])['sampleDate'].apply(
-                lambda d: (now - d).days
-            )
-
-            # Build table
-            columns = [{'name': t("alerts_general.filter_unit"), 'id': 'unit_id'}]
-            for col in display_cols:
-                columns.append({'name': col.title(), 'id': col})
-            columns.append({'name': t("machines_callbacks.estado_maquina"), 'id': 'machine_status'})
-
-            # Build recommendation pivot for tooltips
-            rec_pivot = None
-            if rec_col:
-                rec_pivot = latest.pivot_table(
-                    index='unitId', columns='componentName',
-                    values=rec_col, aggfunc='first'
-                ).reindex(index=pivot.index, columns=display_cols)
-
-            records = []
-            tooltip_data = []
-            for uid in pivot.index:
-                row = {'unit_id': uid}
-                tip_row = {'unit_id': {'value': '', 'type': 'text'}}
-                for col in display_cols:
-                    v = pivot.loc[uid, col]
-                    if pd.notna(v):
-                        # Format: "STATUS - (days)"
-                        try:
-                            days_val = int(days_since_comp.get((uid, col), 0))
-                            row[col] = f"{status_label(v)} - ({days_val})"
-                        except (KeyError, TypeError, ValueError):
-                            row[col] = status_label(v)
-                    else:
-                        row[col] = ''
-                    # Tooltip: recommendation only (days now shown in cell)
-                    tip_text = ''
-                    if rec_pivot is not None and col in rec_pivot.columns:
-                        rv = rec_pivot.loc[uid, col]
-                        if pd.notna(rv):
-                            tip_text = str(rv)[:300]
-                    tip_row[col] = {'value': tip_text, 'type': 'text'}
-                row['machine_status'] = status_label(pivot.loc[uid, '__machine_status__'])
-                tip_row['machine_status'] = {'value': '', 'type': 'text'}
-                records.append(row)
-                tooltip_data.append(tip_row)
-
-            style_cond = []
-            for col in display_cols:
-                for st, bg in _STATUS_BG.items():
-                    style_cond.append({
-                        'if': {'filter_query': '{' + col + '} contains "' + status_label(st) + '"', 'column_id': col},
-                        'backgroundColor': bg, 'color': _STATUS_FG[st],
-                        'fontWeight': 'bold', 'textAlign': 'center'
-                    })
-            for st in ['Normal', 'Alerta', 'Anormal']:
-                style_cond.append({
-                    'if': {'filter_query': '{machine_status} = "' + status_label(st) + '"', 'column_id': 'machine_status'},
-                    'backgroundColor': _MACHINE_STATUS_BG[st], 'color': _MACHINE_STATUS_FG[st],
-                    'fontWeight': 'bold', 'textAlign': 'center', 'fontSize': '13px',
-                    'borderLeft': '3px solid ' + _MACHINE_STATUS_BG[st],
-                })
-
-
-            table = dash_table.DataTable(
-                id='fleet-heatmap-table', columns=columns, data=records,
-                tooltip_data=tooltip_data,
-                tooltip_duration=None,
-                css=[{'selector': '.dash-table-tooltip', 'rule': 'max-width: 400px; white-space: normal;'}],
-                style_table={'overflowX': 'auto'},
-                style_cell={'textAlign': 'center', 'padding': '6px 10px', 'fontSize': '11px',
-                            'minWidth': '75px', 'whiteSpace': 'nowrap'},
-                style_header={'backgroundColor': '#343a40', 'color': 'white',
-                              'fontWeight': 'bold', 'textAlign': 'center', 'fontSize': '11px'},
-                style_cell_conditional=[
-                    {'if': {'column_id': 'unit_id'}, 'textAlign': 'left', 'fontWeight': '600', 'minWidth': '80px'},
-                    {'if': {'column_id': 'machine_status'}, 'minWidth': '110px'},
-                ],
-                style_data_conditional=style_cond,
-                row_selectable='single', selected_rows=[], sort_action='native', page_size=25
-            )
-            badge = dbc.Badge(t("machines_callbacks.maquinas", len_records=len(records)), color="secondary", className="ms-2")
-            return table, badge
-
-        except Exception as e:
-            logger.error(f"Heatmap table error: {e}")
-            return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger"), ""
+    @app.callback(
+        [Output('fleet-heatmap-table-container', 'children'),
+         Output('table-filter-badge', 'children')],
+        [Input(f'{FLEET_TABLE}-view', 'data'),
+         Input('machine-detail-selector', 'value')],
+        [State(f'{FLEET_TABLE}-data', 'data')]
+    )
+    def update_fleet_heatmap_table(view, selected_unit, data):
+        return render_fleet_matrix(data, view, selected_unit)
 
     # ========================================
     # Machine Detail
     # ========================================
     @app.callback(
         [Output('machine-selection-indicator', 'children'),
-         Output('machine-selection-indicator', 'color'),
          Output('machine-recommendation-container', 'children'),
          Output('machine-detail-table-container', 'children')],
-        [Input('fleet-heatmap-table', 'selected_rows'),
-         Input('machine-detail-selector', 'value'),
-         Input('client-selector', 'value')],
-        [State('fleet-heatmap-table', 'data')]
+        [Input('machine-detail-selector', 'value'),
+         Input('client-selector', 'value')]
     )
-    def update_machine_detail(selected_rows, manual_selection, client, table_data):
+    def update_machine_detail(unit_id, client):
+        """The unit comes from the selector, which the matrix's unit and row-select buttons fill from
+        the clicked row's own id (never from a row position)."""
         if not client:
-            return t("tab_machines.ninguna_maquina_seleccionada"), "light", html.Div(), t("fleet_overview.select_client")
-
-        unit_id = None
-        if selected_rows and len(selected_rows) > 0 and table_data:
-            unit_id = table_data[selected_rows[0]]['unit_id']
-        elif manual_selection:
-            unit_id = manual_selection
+            return t("tab_machines.ninguna_maquina_seleccionada"), html.Div(), t("fleet_overview.select_client")
 
         if not unit_id:
-            return t("tab_machines.ninguna_maquina_seleccionada"), "light", html.Div(), \
-                   t("machines_callbacks.seleccione_una_maquina_de_la_tabla")
+            return t("tab_machines.ninguna_maquina_seleccionada"), html.Div(),                    t("machines_callbacks.seleccione_una_maquina_de_la_tabla")
 
         # Shared with the Unit Summary's Tribología card (spec 09_...md).
-        return build_machine_detail(client, unit_id)
+        indicator, _color, recommendation, table = build_machine_detail(client, unit_id)
+        return indicator, recommendation, table
 
     # ========================================
-    # Sync table click → selectors
+    # Unit / row-select click -> machine detail
     # ========================================
     @app.callback(
         [Output('machine-detail-selector', 'value'),
          Output('nav-equipment-selector', 'value'),
          Output('heatmap-click-data', 'data')],
-        [Input('fleet-heatmap-table', 'selected_rows')],
-        [State('fleet-heatmap-table', 'data')],
+        [Input({'type': f'{FLEET_TABLE}-unit', 'unit': ALL}, 'n_clicks'),
+         Input({'type': f'{FLEET_TABLE}-select', 'unit': ALL}, 'n_clicks')],
         prevent_initial_call=True
     )
-    def handle_table_row_click(selected_rows, table_data):
-        if not selected_rows or not table_data:
+    def handle_unit_click(_unit_clicks, _select_clicks):
+        """Clicking a unit, or its row selector, opens that unit's Detalle de Máquina."""
+        clicked = _clicked()
+        if not clicked or not clicked.get('unit'):
             raise PreventUpdate
-        try:
-            uid = table_data[selected_rows[0]]['unit_id']
-            return uid, uid, {'unit_id': uid}
-        except (KeyError, IndexError):
-            raise PreventUpdate
+        uid = from_id_text(clicked['unit'])
+        return uid, uid, {'unit_id': uid}
 
     # ========================================
-    # Cell click → navigate to Report Detail
+    # Cell click -> navigate to Report Detail
     # ========================================
     @app.callback(
         [Output('oil-internal-tabs', 'value', allow_duplicate=True),
          Output('navigation-state', 'data', allow_duplicate=True)],
-        [Input('fleet-heatmap-table', 'active_cell')],
-        [State('fleet-heatmap-table', 'data'),
-         State('client-selector', 'value')],
+        [Input({'type': f'{FLEET_TABLE}-cell', 'unit': ALL, 'component': ALL}, 'n_clicks')],
+        [State('client-selector', 'value')],
         prevent_initial_call=True
     )
-    def handle_cell_click_to_report(active_cell, table_data, client):
-        """Click on a unit/component cell → redirect to Report Detail for that sample."""
-        if not active_cell or not table_data or not client:
+    def handle_cell_click_to_report(_n_clicks, client):
+        """Click on a unit/component cell -> Detalle de Reporte for that sample. Unit and component
+        are the clicked button's own id, so the right row opens on any page, sort or filter."""
+        clicked = _clicked()
+        if not clicked or not client:
             raise PreventUpdate
-
-        row_idx = active_cell.get('row')
-        col_id = active_cell.get('column_id')
-
-        # Only navigate for component cells (not unit_id or machine_status)
-        if col_id in ('unit_id', 'machine_status', None):
-            raise PreventUpdate
-
-        row_data = table_data[row_idx]
-        unit_id = row_data.get('unit_id')
-        status_val = row_data.get(col_id, '')
-
-        # Only navigate if cell has a status value (format: "STATUS - (days)")
-        if not status_val or not any(status_label(s) in status_val for s in ('Normal', 'Alerta', 'Anormal')):
-            raise PreventUpdate
-
-        # col_id is now componentName directly
-        component = col_id
-        settings = get_settings()
-        path = settings.get_classified_reports_path(client.lower())
-        if not path.exists():
-            raise PreventUpdate
-
-        try:
-            df = load_oil_classified(client)
-            unit_df = df[(df['unitId'] == unit_id) & (df['componentName'] == component)]
-            if unit_df.empty:
-                raise PreventUpdate
-
-            familia = unit_df.iloc[0].get('machineName', None)
-
-            nav = {'equipo': unit_id, 'component': component}
-            if familia:
-                nav['familia'] = familia
-            return 'report-detail', nav
-        except Exception:
-            raise PreventUpdate
+        return report_navigation(client, from_id_text(clicked.get('unit', '')), from_id_text(clicked.get('component', '')))
 
     # ========================================
     # Compat: component grouping toggle

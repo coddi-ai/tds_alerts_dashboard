@@ -51,6 +51,9 @@ def create_layout() -> html.Div:
                       placeholder=t("tab_overview_general.buscar_unidad_placeholder"), className="form-control form-control-sm"),
         ], className="fleet-search"),
 
+        # "Cómo se asignan los estados": collapsed panel filled by update_overview_criteria.
+        html.Div(id="overview-criteria"),
+
         dcc.Loading(
             id="loading-overview-fleet-cards",
             type="circle",

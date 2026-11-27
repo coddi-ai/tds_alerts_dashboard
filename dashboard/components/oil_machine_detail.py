@@ -16,9 +16,11 @@ import pandas as pd
 from dash import html
 
 from config.settings import get_settings
-from dashboard.components.labels import display_component_name
+from dashboard.components.labels import display_component_name, status_label
+from dashboard.components.oil_ui import canonical_estado, status_banner
 from dashboard.components.tables import create_machine_detail_table
 from src.data.loaders import get_latest_component_hours, load_machine_status_for_client, load_oil_classified
+from src.data.unit_ids import unit_matches
 from src.i18n.data_text import localized_series, localized_value
 from src.utils.logger import get_logger
 
@@ -51,7 +53,7 @@ def unit_oil_components(client: str, unit_id: str) -> Optional[list]:
         return None
     try:
         df = load_oil_classified(client)
-        mdf = df[df['unitId'] == unit_id].copy()
+        mdf = df[unit_matches(df['unitId'], unit_id)].copy()
         if mdf.empty:
             return None
 
@@ -131,26 +133,41 @@ def build_machine_detail(client: str, unit_id: str) -> tuple:
         al = (display_df['report_status'] == 'Alerta').sum()
         no = (display_df['report_status'] == 'Normal').sum()
 
-        indicator = html.Div([
-            html.Strong(f"📍 {unit_id} ({mt})", className="me-3"),
-            html.Span(f"🟢{no} 🟡{al} 🔴{an}", className="small")
-        ])
-
-        rec_card = html.Div()
+        # The machine's own status when the file has one, else the worst of its components.
+        machine_estado = None
+        ms_row = None
         if machine_file.exists():
             try:
                 ms_df = load_machine_status_for_client(client)
                 mr = ms_df[ms_df['unit_id'] == unit_id]
                 if not mr.empty:
-                    rec = localized_value(mr.iloc[0], 'machine_ai_recommendation')
-                    if rec and pd.notna(rec) and str(rec).strip():
-                        rec_card = dbc.Card([
-                            dbc.CardHeader(_t("oil_machine_detail.recomendacion_ia"), className="fw-bold bg-info text-white"),
-                            dbc.CardBody(html.P(str(rec), style={
-                                'whiteSpace': 'pre-wrap', 'fontSize': '0.9rem', 'lineHeight': '1.5'}))
-                        ], className="mb-3")
+                    ms_row = mr.iloc[0]
+                    machine_estado = canonical_estado(ms_row.get('overall_status'))
             except Exception as e:
-                logger.warning(f"Recommendation: {e}")
+                logger.warning(f"Machine status: {e}")
+        if machine_estado is None:
+            machine_estado = 'Anormal' if an else 'Alerta' if al else 'Normal'
+
+        # One status value drives the banner's background, text and badge (ui_notes_improved.md §4).
+        indicator = status_banner(
+            machine_estado,
+            eyebrow=_t("oil_machine_detail.maquina_eyebrow"),
+            title=unit_id,
+            subtitle=mt,
+            icon="fa-truck",
+            fields=[(status_label('Normal'), str(no)), (status_label('Alerta'), str(al)),
+                    (status_label('Anormal'), str(an))],
+        )
+
+        rec_card = html.Div()
+        if ms_row is not None:
+            rec = localized_value(ms_row, 'machine_ai_recommendation')
+            if rec and pd.notna(rec) and str(rec).strip():
+                rec_card = dbc.Card([
+                    dbc.CardHeader(_t("oil_machine_detail.recomendacion_ia"), className="fw-bold"),
+                    dbc.CardBody(html.P(str(rec), style={
+                        'whiteSpace': 'pre-wrap', 'fontSize': '0.9rem', 'lineHeight': '1.5'}))
+                ], className="mb-3")
 
         table = create_machine_detail_table(display_df)
         return indicator, "info", rec_card, table

@@ -321,7 +321,7 @@ def test_row_tags_carry_text(flask_app, production):
 def test_capstone_is_weekly(flask_app, production):
     state, _ = render(flask_app, "CAPSTONE")
     assert state["title"] == "Resumen Semanal de Alertas"
-    assert "los miércoles a las 12:00" in state["subtitle"]
+    assert "los miércoles a las 08:30" in state["subtitle"]
     assert "semana anterior, lunes a domingo" in state["period"] and len(checklist_state(state["s_client"])[0]) == 10
 
 

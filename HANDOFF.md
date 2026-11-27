@@ -336,7 +336,7 @@ Resultado al cierre: 21 aprobadas; una advertencia preexistente de deprecación 
 
 `dashboard/components/emin_beta.py`, `dashboard/assets/emin_scatter_labels.js`, `src/data/emin_historical.py`, `dashboard/README.md`, `tests/test_emin_historical.py`, `HANDOFF.md`.
 
-Commit(s): el HEAD local de esta rama registra esta implementación después de la validación. No push.
+Commit(s): implementación EMIN Beta registrada en esta rama. Para integrarla en el destino solicitado se incorporó `origin/dev` (base observada `e3b19c7`) mediante un commit de merge local. El único conflicto fue `dashboard/assets/custom_layout.css`; se conservaron los estilos EMIN y los estilos `fleet-criteria` de dev. Sin reescritura de historia. Suite offline posterior a la integración: 21 aprobadas; `node --check` y `git diff --check` OK.
 
 ### Riesgos, preguntas abiertas y siguiente acción
 

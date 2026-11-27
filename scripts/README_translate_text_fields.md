@@ -51,7 +51,7 @@ To see the demo in the dashboard, copy `scripts/output/translation/demo/` over y
 The dashboard no longer reads `consolidated_alerts.csv`: it reads the weekly Parquet partitions built from it. After
 copying the demo over `data/`, run `python scripts/partition_alerts.py --backfill` (local only, no S3) so the alerts
 partitions carry `mensaje_ia_eng`. The same applies to a full run (step 3): it replaces the CSV in S3, and the new
-translations reach the dashboard with the next partition run (daily for EMIN, Wednesday for the others).
+translations reach the dashboard with the next partition run (daily for EMIN, Wednesday 08:00 for the others).
 
 ### 3. Full run (translates and replaces the files in S3)
 

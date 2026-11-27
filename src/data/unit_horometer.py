@@ -26,6 +26,7 @@ import pandas as pd
 
 from config.settings import get_settings
 from src.data.loaders import get_latest_component_hours
+from src.data.unit_ids import unit_matches
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,7 +57,7 @@ def unit_horometer(client: str, unit: str) -> Optional[UnitHorometer]:
     if latest.empty or "componentHours_cleaned" not in latest.columns:
         return None
 
-    rows = latest[latest["unitId"].astype(str) == str(unit)]
+    rows = latest[unit_matches(latest["unitId"], unit)]
     rows = rows[pd.to_numeric(rows["componentHours_cleaned"], errors="coerce").notna()]
     if rows.empty:
         return None

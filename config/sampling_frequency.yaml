@@ -1,0 +1,94 @@
+# Panel de Frecuencia (Monitor de Aceite): when does a component need a new oil sample?
+#
+# Owned by the dashboard team. The panel re-reads this file whenever it changes, so editing an
+# interval, a threshold or the mapping needs NO pipeline run and no restart.
+#
+# ----------------------------------------------------------------------------------------------
+# PLACEHOLDER VALUES. The 15 / 30 / 60 day groups, the 80 % / 100 % thresholds and the mapping
+# below are the proposal from the requirement ("Motor 15, Transmisión 30, Mando Final 60"), applied
+# to the machine types present in today's data. They are meant to be tuned empirically; use the
+# "promedio histórico" of each group in the panel's "Criterios de Criticidad" card to calibrate them.
+# ----------------------------------------------------------------------------------------------
+
+# Criticality groups. The key is only an identifier used by the mapping below; the interval is what
+# counts. Change `days` to change the interval (the panel labels follow: "Cada 20 días", ...).
+groups:
+  A: { days: 15 }
+  B: { days: 30 }
+  C: { days: 60 }
+
+# Status thresholds on "Intervalo Consumido" = days since the last sample / group days * 100:
+#   below `proxima_pct`            -> Al día
+#   from `proxima_pct` up to       -> Próxima a vencer
+#        `vencida_pct`
+#   `vencida_pct` or more          -> Solicitar muestra
+thresholds:
+  proxima_pct: 80
+  vencida_pct: 100
+
+# machineName -> componentNameNormalized -> group. Names are matched ignoring case and accents.
+# The mapping works on the *normalized* component name, so "mando final" also covers the left and
+# the right side (rows are per unit + componentName). A component that is not listed here is not
+# shown in the panel.
+#
+# A listed component that a unit has never been sampled for shows as "Sin muestra", but only when
+# some other unit of the same machine type in that client has been sampled for it. That is what
+# keeps a name that one client spells "motor" and another "motor diesel" from flagging every unit.
+mapping:
+  bulldozer:
+    motor: A
+    transmision: B
+    mando final: C
+  camion:
+    motor: A
+    motor diesel: A
+    transmision: B
+    mando final: C
+  conveyor - other:
+    mando final: C
+  dozer:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  dump truck:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  excavadora:
+    motor: A
+    mando final: C
+  excavator:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  fork lift:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  grader:
+    motor diesel: A
+    transmision: B
+  loader:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  pala:
+    motor: A
+    transmision: B
+  rock drilling machine:
+    motor diesel: A
+    mando final: C
+  telehandlers:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  tractor:
+    motor diesel: A
+  truck - short haul:
+    motor diesel: A
+    transmision: B
+    mando final: C
+  unspecified:
+    motor diesel: A
+    transmision: B
+    mando final: C

@@ -20,14 +20,18 @@ from typing import Optional
 from . import config
 
 
-def _marker_path(client: str, scheduled_date: date) -> Path:
+KIND_SCHEDULED = "scheduled"
+KIND_ERRATUM = "erratum"  # the one-time correction send has its own marker: it never touches the scheduled one
+
+
+def _marker_path(client: str, scheduled_date: date, kind: str = KIND_SCHEDULED) -> Path:
     client = config.normalize_client(client)
-    return config.get_state_dir() / f"scheduled_{client}_{scheduled_date.isoformat()}.json"
+    return config.get_state_dir() / f"{kind}_{client}_{scheduled_date.isoformat()}.json"
 
 
-def claim(client: str, scheduled_date: date) -> bool:
+def claim(client: str, scheduled_date: date, kind: str = KIND_SCHEDULED) -> bool:
     """Atomically take ownership of a scheduled run. True for exactly one caller."""
-    path = _marker_path(client, scheduled_date)
+    path = _marker_path(client, scheduled_date, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -47,9 +51,11 @@ def claim(client: str, scheduled_date: date) -> bool:
     return True
 
 
-def finish(client: str, scheduled_date: date, status: str, detail: Optional[str] = None) -> None:
+def finish(
+    client: str, scheduled_date: date, status: str, detail: Optional[str] = None, kind: str = KIND_SCHEDULED
+) -> None:
     """Record the outcome (`sent` / `failed`) in the marker. Best effort: the claim holds."""
-    path = _marker_path(client, scheduled_date)
+    path = _marker_path(client, scheduled_date, kind)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -65,8 +71,8 @@ def finish(client: str, scheduled_date: date, status: str, detail: Optional[str]
         pass
 
 
-def read(client: str, scheduled_date: date) -> Optional[dict]:
+def read(client: str, scheduled_date: date, kind: str = KIND_SCHEDULED) -> Optional[dict]:
     try:
-        return json.loads(_marker_path(client, scheduled_date).read_text(encoding="utf-8"))
+        return json.loads(_marker_path(client, scheduled_date, kind).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None

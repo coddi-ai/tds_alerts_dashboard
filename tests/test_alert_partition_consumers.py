@@ -18,8 +18,8 @@ import pytest
 
 from dashboard.callbacks import hot_sheet_callbacks as hot
 from dashboard.callbacks import menace_control_callbacks as menace
-from dashboard.callbacks import overview_general_callbacks as overview
-from dashboard.components import fleet_overview as fleet
+from src.data import fleet_status as overview
+from src.data import fleet_status as fleet
 from dashboard.components import unit_summary_content as usc
 from src.data import alert_partitions as store
 from src.data import loaders

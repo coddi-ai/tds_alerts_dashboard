@@ -70,8 +70,29 @@ MAILING_TIMEZONE = "America/Santiago"
 # in tests/test_mailing.py guards these exact values).
 MAILING_SCHEDULES: Dict[str, dict] = {
     "emin": {"frequency": "daily", "time": "12:00"},
-    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
+    # 08:30: the weekly partitioner runs at 08:00, one hour after the 07:00 alert creation
+    # (src/data/partition_scheduler.py). The time leaves the partitioner time to finish; it is NOT what
+    # keeps the order: see MAILING_PARTITION_DEPENDENCY.
+    "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:30"},
 }
+
+# The partitioner job whose run each client's scheduled e-mail needs. Before building, the scheduled
+# send checks that this period's run finished OK (the status the partitioner records); if it failed,
+# is still running or never ran, the e-mail is NOT sent and the reason is logged as an error. No retry.
+#   weekly: the run of the week of the send date; daily: the run of the send date itself.
+# A client missing here has no dependency (the check is not made).
+MAILING_PARTITION_DEPENDENCY: Dict[str, str] = {
+    "emin": "daily",
+    "capstone": "weekly",
+}
+
+# Clients whose scheduled e-mail also needs ALERTS to exist: before building, the period's partitions must hold
+# at least one alert of the client, otherwise the e-mail is NOT sent (error logged, no retry): the weekly
+# alert creation (07:00) either did not run or did not reach the partitions, and an e-mail built on that
+# would be the incomplete one of 25/11. Capstone only. EMIN is NOT here on purpose: it generates alerts
+# daily and not every day has alerts, so an empty day is normal and still gets its (empty) e-mail.
+# The cost: a week in which capstone truly has zero alerts sends nothing (an error is logged instead).
+MAILING_REQUIRE_ALERTS: frozenset = frozenset({"capstone"})
 
 # >>> TEMPORARY, EMIN IN TEST: the SCHEDULED email of these clients goes ONLY to the Coddi technical
 # >>> contacts (CODDI_RECIPIENTS["technical"]); no client contact and no Gerencia. Capstone keeps the

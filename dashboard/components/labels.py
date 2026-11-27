@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from typing import Any
 
-from src.i18n import t, t_or
+from src.i18n import current_language, t, t_or, vocab, DEFAULT_LANGUAGE
 
 
 _COMPONENT_LABELS = {
@@ -161,6 +162,15 @@ def status_label(value: Any) -> str:
     return t_or(f"status.{key}", raw)
 
 
+def age_text(age: timedelta) -> str:
+    """"2 h", "24 h", "40 días", "3 semanas": a threshold age the way a person says it."""
+    if age >= timedelta(weeks=2) and age % timedelta(weeks=1) == timedelta(0):
+        return t("unit_summary_content.age_weeks", count=age // timedelta(weeks=1))
+    if age >= timedelta(days=2):
+        return t("unit_summary_content.age_days", count=age.days)
+    return t("unit_summary_content.age_hours", count=int(age.total_seconds() // 3600))
+
+
 def localize_elapsed(text: Any) -> str:
     """Translate an elapsed-time string produced by the freshness helpers ("3 días",
     "1 día", "5h", "12m", "N/A"). Those helpers emit Spanish text and their results are
@@ -262,3 +272,18 @@ def light_tint(hex_color: str, amount: float = 0.9) -> str:
 NO_DATA_ICON = "⚪"
 NO_DATA_BG = "var(--surface-2)"
 NO_DATA_TEXT = "var(--text-muted)"
+
+
+# The oil data spells this essay "Viscocidad" (the column every consumer indexes by); the label shown
+# to people is "Viscosidad". Display only: never pass the result back as a data key.
+_ESSAY_DISPLAY_FIXES = {"Viscocidad": "Viscosidad"}
+
+
+def essay_label(name: Any) -> Any:
+    """Display label of an oil essay (or a chart titled after one). Everything but the known
+    misspelling is returned unchanged, so a data name can be passed straight through."""
+    if not isinstance(name, str) or name not in _ESSAY_DISPLAY_FIXES:
+        return name
+    if current_language() != DEFAULT_LANGUAGE:
+        return vocab(name)
+    return _ESSAY_DISPLAY_FIXES[name]

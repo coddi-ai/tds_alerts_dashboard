@@ -1,0 +1,42 @@
+# Análisis por Componente (Monitor de Aceite): which components can be analysed and when a sample is stale.
+#
+# This tab is a PREVIEW: its criteria and calculations may change after validation with real data, so
+# everything that may change lives here. The tab re-reads this file whenever it changes, so editing a
+# threshold or the mapping needs NO pipeline run and no restart.
+#
+# ----------------------------------------------------------------------------------------------
+# TO CONFIRM with the data team: which `componentNameNormalized` values exist in each client's Gold
+# data. Today's data spells the engine "motor" (CDA, EMIN) or "motor diesel" (Capstone, ENEX), and the
+# other three components have a single spelling. ENEX also has "motor diesel delantero / trasero" and
+# "motor de giro": they are NOT listed under Motor, because it is not settled that they are "the" engine.
+# ----------------------------------------------------------------------------------------------
+
+# A last sample older than this many days no longer says much about the component: it is counted as
+# "Estado desactualizado" and falls in the last bucket of "Antigüedad de la Última Muestra".
+stale_days: 90
+
+# Inner edges of the age buckets, in days since the last sample. With [30, 60] and stale_days 90 the
+# buckets are: 30 days or less, 31 to 60, 61 to 90 and more than 90. The last edge is always stale_days,
+# so the card and the "Estado desactualizado" tile can never disagree.
+age_edges: [30, 60]
+
+# The options of the "Componente" selector, in this order (the first one is the default).
+#   criticality: the class the machine score already gives the component (critico | importante).
+#   names:       componentNameNormalized values that belong to it, matched ignoring case and accents.
+#                A unit may have several components under one option (e.g. a front and a rear
+#                differential): each one is analysed on its own.
+# The words shown for each option (Motor, motores...) are translated in the i18n catalogs under
+# `component_analysis.*`; a new option needs its words there.
+components:
+  motor:
+    criticality: critico
+    names: [motor, motor diesel]
+  transmision:
+    criticality: critico
+    names: [transmision]
+  convertidor:
+    criticality: importante
+    names: [convertidor]
+  diferencial:
+    criticality: importante
+    names: [diferencial]

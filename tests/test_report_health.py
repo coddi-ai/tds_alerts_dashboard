@@ -80,3 +80,9 @@ def test_historial_lee_todas_las_particiones(tmp_path, monkeypatch):
 
     monkeypatch.setattr(predictive_v2, "unit_failure_analisis_base_path", lambda c, s: tmp_path / "no-existe")
     assert predictive_v2.load_unit_state_history("cda", "motor").empty
+
+
+@pytest.mark.parametrize("a, b", [("T_10", "T-10"), ("CT_184", "CT-184"), ("21_CRU_001", "21-CRU-1")])
+def test_el_separador_no_distingue_unidades(a, b):
+    """La pestana General nombra las unidades con guion; el informe de falla las busca en fuentes que usan `_`."""
+    assert unit_key(a) == unit_key(b)

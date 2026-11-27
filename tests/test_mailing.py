@@ -35,6 +35,8 @@ SANTIAGO = ZoneInfo("America/Santiago")
 SECRET_ARN = "arn:aws:lambda:us-east-1:111122223333:function:abc123secret"
 TECH = "tds@coddi.ai"
 SHIPPED_TECHNICAL_ONLY = config.SCHEDULED_TECHNICAL_ONLY_CLIENTS  # what the code ships, before any fixture
+SHIPPED_PARTITION_DEPENDENCY = dict(config.MAILING_PARTITION_DEPENDENCY)
+SHIPPED_REQUIRE_ALERTS = frozenset(config.MAILING_REQUIRE_ALERTS)
 TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"]]  # every Coddi technical contact
 LOCKED_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if not r.get("optional")]  # always in a manual send
 OPTIONAL_TECHS = [r["email"] for r in config.CODDI_RECIPIENTS["technical"] if r.get("optional")]  # Warren
@@ -62,6 +64,8 @@ def hermetic(monkeypatch, tmp_path):
     monkeypatch.delenv("MAILING_SCHEDULER_ENABLED", raising=False)
     monkeypatch.setattr(config, "SCHEDULED_TECHNICAL_ONLY_CLIENTS", frozenset())  # general rule; see the shipped-value tests
     monkeypatch.setenv("SYNC_DATA", "false")  # never touch S3 from a test (the sync has its own tests)
+    monkeypatch.setattr(config, "MAILING_PARTITION_DEPENDENCY", {})  # general rule; tests/test_partition_scheduler.py covers it
+    monkeypatch.setattr(config, "MAILING_REQUIRE_ALERTS", frozenset())  # general rule; the alerts check has its own tests
     __import__("src.mailing.data_sync", fromlist=["x"])._DONE.clear()
     service_module = __import__("src.mailing.service", fromlist=["x"])
     service_module._manual_locks.clear()
@@ -270,9 +274,11 @@ def test_capstone_is_due_only_on_wednesday():
     schedule = config.MAILING_SCHEDULES["capstone"]
     wednesday = date(2026, 11, 11)
     assert wednesday.weekday() == 2
-    assert periods.due_scheduled_date(schedule, at(wednesday)) == wednesday
+    assert periods.due_scheduled_date(schedule, at(wednesday, 8, 30)) == wednesday
+    assert periods.due_scheduled_date(schedule, at(wednesday, 8, 29)) is None  # the partitioner (08:00) goes first
+    assert periods.due_scheduled_date(schedule, at(wednesday)) is None  # no longer at 12:00
     for offset in (1, 2, 3, 4, 5, 6):
-        assert periods.due_scheduled_date(schedule, at(wednesday + timedelta(days=offset))) is None
+        assert periods.due_scheduled_date(schedule, at(wednesday + timedelta(days=offset), 8, 30)) is None
 
 
 def test_not_due_before_1200_nor_after_the_grace_window():
@@ -302,8 +308,10 @@ def test_mailing_schedules_hold_exactly_the_intended_values():
     assert config.MAILING_TIMEZONE == "America/Santiago"
     assert config.MAILING_SCHEDULES == {
         "emin": {"frequency": "daily", "time": "12:00"},
-        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "12:00"},
+        "capstone": {"frequency": "weekly", "weekday": "wednesday", "time": "08:30"},
     }
+    assert SHIPPED_PARTITION_DEPENDENCY == {"emin": "daily", "capstone": "weekly"}
+    assert SHIPPED_REQUIRE_ALERTS == {"capstone"}  # EMIN has days without alerts: never blocked for that
 
 
 @pytest.mark.parametrize("zone", ["Asia/Tokyo", "America/New_York", "Europe/Madrid", "UTC", "Pacific/Auckland"])
@@ -333,15 +341,22 @@ def test_scheduler_tick_runs_each_due_client_once_per_day():
     started = []
     scheduler = MailingScheduler(runner=lambda c, d: started.append((c, d)) or "sent")
     wednesday = date(2026, 11, 11)
-    first = scheduler.tick(at(wednesday))
-    for w in list(scheduler._workers):
-        w.join(2)
-    assert sorted(c for c, _ in first) == ["capstone", "emin"]
-    assert scheduler.tick(at(wednesday, 12, 1)) == []  # mismo dia: no se relanza
+
+    def join():
+        for w in list(scheduler._workers):
+            w.join(2)
+
+    assert scheduler.tick(at(wednesday, 8, 29)) == []
+    morning = scheduler.tick(at(wednesday, 8, 30))
+    join()
+    assert [c for c, _ in morning] == ["capstone"]  # the weekly summary leaves 30 minutes after the partitioner
+    assert scheduler.tick(at(wednesday, 8, 31)) == []  # same day: not launched again
+    noon = scheduler.tick(at(wednesday, 12, 0))
+    join()
+    assert [c for c, _ in noon] == ["emin"]
     next_day = scheduler.tick(at(wednesday + timedelta(days=1)))
-    for w in list(scheduler._workers):
-        w.join(2)
-    assert [c for c, _ in next_day] == ["emin"]  # el jueves solo corre el diario
+    join()
+    assert [c for c, _ in next_day] == ["emin"]  # on Thursday only the daily one runs
     assert len(started) == 3
 
 
@@ -774,7 +789,7 @@ def test_context_for_capstone_in_production(flask_app, production):
     assert ctx["subject"] == "[CODDI] Monitoreo de Alertas 11/11/2026"
     assert ctx["period"]["text"] == "02/11/2026 – 08/11/2026 (semana anterior, lunes a domingo)"
     assert (ctx["period"]["start"], ctx["period"]["end"]) == ("2026-11-02", "2026-11-08")
-    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 12:00 (hora de Chile)"
+    assert ctx["schedule_description"] == "se envía automáticamente los miércoles a las 08:30 (hora de Chile)"
     assert ctx["environment"] == "production"
     groups = [r["group"] for r in ctx["recipients"]]
     assert groups == sorted(groups, key=config.GROUP_ORDER.index)
@@ -1169,3 +1184,58 @@ def test_send_attempts_are_logged_without_body_or_url(builder, flask_app, monkey
     host = config.get_hostname()
     for line in (manual, scheduled):
         assert "environment=production" in line and f"host={host}" in line
+
+
+# --------------------------------------------------------------------------- one-time erratum send
+
+
+def test_the_erratum_send_goes_to_the_scheduled_recipients_with_the_prefixed_subject(builder, sent):
+    from src.mailing import send_erratum
+
+    assert send_erratum("capstone", date(2026, 11, 25)) == "sent"
+    (call,) = sent["calls"]
+    assert call["subject"] == "[FE DE ERRATA] [CODDI] Monitoreo de Alertas 25/11/2026"
+    assert call["emails"] == recipients.scheduled_emails("capstone")  # same recipients as the regular e-mail
+    (request,) = builder.calls
+    assert request.erratum is True and request.client == "capstone"
+    assert (request.period_start, request.period_end) == (date(2026, 11, 16), date(2026, 11, 22))
+
+
+def test_the_erratum_send_is_at_most_once_and_leaves_the_scheduled_marker_alone(builder, sent):
+    from src.mailing import send_erratum
+
+    assert send_erratum("capstone", date(2026, 11, 25)) == "sent"
+    assert send_erratum("capstone", date(2026, 11, 25)) == "skipped"
+    assert len(sent["calls"]) == 1
+    assert state.read("capstone", date(2026, 11, 25)) is None  # the regular marker was never taken
+    assert state.read("capstone", date(2026, 11, 25), kind=state.KIND_ERRATUM)["status"] == "sent"
+    # ... so the regular scheduled send of that day is unaffected.
+    assert run_scheduled("capstone", date(2026, 11, 25)) == "sent"
+    assert [c["subject"] for c in sent["calls"]] == [
+        "[FE DE ERRATA] [CODDI] Monitoreo de Alertas 25/11/2026", "[CODDI] Monitoreo de Alertas 25/11/2026",
+    ]
+
+
+def test_a_failed_erratum_send_is_not_retried_nor_reopened(builder, sent):
+    from src.mailing import send_erratum
+
+    sent["results"] = [delivery.DeliveryResult(False, "boom")]
+    assert send_erratum("capstone", date(2026, 11, 25)) == "failed"
+    assert len(sent["calls"]) == 1
+    assert state.read("capstone", date(2026, 11, 25), kind=state.KIND_ERRATUM)["status"] == "failed"
+    assert send_erratum("capstone", date(2026, 11, 25)) == "skipped"  # a timed-out send may have gone out: no blind resend
+
+
+def test_the_erratum_preview_sends_nothing_and_claims_nothing(builder, sent):
+    from src.mailing import build_erratum_preview
+
+    preview = build_erratum_preview("capstone", date(2026, 11, 25))
+    assert preview["subject"].startswith("[FE DE ERRATA] ")
+    assert preview["recipients"] == recipients.scheduled_emails("capstone")
+    assert sent["calls"] == [] and state.read("capstone", date(2026, 11, 25), kind=state.KIND_ERRATUM) is None
+
+
+def test_a_regular_scheduled_send_never_asks_for_the_erratum(builder, sent):
+    run_scheduled("capstone", date(2026, 11, 11))
+    assert [r.erratum for r in builder.calls] == [False]
+    assert sent["calls"][0]["subject"] == "[CODDI] Monitoreo de Alertas 11/11/2026"

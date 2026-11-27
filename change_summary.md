@@ -580,3 +580,239 @@ with such rows (repair upstream, show them, discard them) — stays with the tea
    and now the telemetry build equally (exit 1, existing partitions untouched). Real data has none; out of scope.
 8. The chip's "last modified" for this source is now the index file's mtime (the last weekly run that changed
    anything), not the CSV's.
+
+
+# Change summary — 25/11/2026 incident: partitions built before the alerts existed; the partitioner moves into the app
+
+The upstream alert creation moved from 03:00 to 07:00. The `alerts-partitioner` container still ran
+**Wednesday 04:00**, so on 25/11 it partitioned `consolidated_alerts.csv` *before* the new alerts existed, and the
+alert-summary e-mail (Wednesday 12:00), which reads those partitions, went out with incomplete data. The partitioner was
+a separate container with no link to the mailing schedule, which is what allowed the ordering failure. This change fixes
+the data and the report (steps 1–2) and then puts the partitioner next to the mailer so the order is enforced (step 3).
+Order was mandatory: 1 → 2 → 3.
+
+## The incident
+
+- **Cause.** Alert creation 07:00 vs partitioner 04:00 (and e-mail 12:00, no dependency between them).
+- **Affected data.** The weekly Parquet partitions of **capstone, week of Monday 16/11** — the week the Wednesday e-mail
+  covers (period 16/11–22/11). The whole week's 43 alerts arrived in the 07:00 run (`consolidated_alerts.csv`
+  6,258 → 6,301 rows), so the 04:00 run produced no `2026-11-16` partition at all. The task text speaks of the week of
+  23/11 (the run's in-progress week): that week has **no alerts yet** (the newest is 22/11), so it has no partition and
+  there was nothing to correct there. EMIN's `2026-11-16` partition was also stale in S3 (3 rows vs 13 in the CSV); its
+  e-mail goes to the technical team only (test mode), so no client was affected. CDA had no change.
+- **Client impact.** `capstone` received the 25/11 summary built without that week's alerts (not compared against the
+  sent e-mail; the partitions it read had no rows for the period). Corrected by the erratum below. No other client was
+  sent anything.
+
+## Actions, in order, with their verification
+
+**1. Partitioner re-run (25/11, ~13:15 Chile) — done, verified.**
+- *Precondition* (before running): `consolidated_alerts.csv` in S3, last modified — **capstone 2026-11-25 10:34:55 UTC
+  (07:34:55 Chile, after the 07:00 run)**, same size as the local copy (7,748,044 B); emin 2026-11-24 14:12:48 UTC (11:12
+  Chile); cda 2026-10-27 19:42:22 UTC. Newest alert `Timestamp` (UTC): capstone 2026-11-22 06:35, emin 2026-11-21 08:40:09,
+  cda 2026-07-09 19:13. The wide telemetry CSVs match S3 too (capstone 314,327,216 B, written 10:35:09 UTC; cda
+  17,550,418 B). emin and cda were not touched by today's upstream run; they were included because the run is
+  idempotent and the task said all clients.
+- *Run:* normal weekly run (no `--backfill`), `python scripts/partition_alerts.py`, exit **0**. Uploads: capstone 2 alerts
+  + 2 telemetry objects (the new week and the indexes), cda 0, emin 51 (the stale `2026-11-16` week plus metadata-only
+  rewrites, see the note below). 0 stale deletions.
+- *Verification:* rows in partitions = rows in the CSV for every client (capstone 6,301, cda 152, emin 245); capstone
+  week `2026-11-16`: **43 in the partition = 43 in the CSV** (16/11…22/11 by Chile day); week `2026-11-23`: 0 = 0;
+  `--verify-s3` after the run: S3 matches local for alerts and telemetry of all three clients, exit 0.
+- *Note — run environment.* The run was made from a developer machine, not the container. A first read-only
+  `--verify-s3` with that machine's pyarrow 25.0.1 flagged almost every object as different from S3 although the data was
+  the same (the container's partitions were written by pyarrow 26.0.1; `requirements.txt` only says `pyarrow>=14`), and
+  running it would have rewritten most of S3 byte for byte. The run was therefore made in a throwaway environment with the
+  versions a fresh `pip install -r requirements.txt` resolves (pandas 3.1.1, pyarrow 26.0.1): cda matched S3 exactly and
+  capstone differed only by the missing week and the indexes. EMIN's older S3 partitions carry a different pandas version
+  string in their metadata (same data), hence its re-upload. **Suggestion (not done):** pin `pyarrow`/`pandas` so a manual
+  run and the app write identical bytes.
+
+**2. Erratum e-mail to `capstone` (25/11, 13:26 Chile) — done, after step 1 was verified and the preview approved.**
+- New one-time option `erratum` (default off) on the existing mailing path (`ReportRequest.erratum` →
+  `render_alert_summary` / `periods.build_subject`) and the entry points `service.build_erratum_preview` /
+  `service.send_erratum`. Regular e-mails are byte-identical to before (checked against the previous template with the same
+  data; a test pins it); they never carry the notice or the prefix.
+- Subject `[FE DE ERRATA] [CODDI] Monitoreo de Alertas 25/11/2026`; the approved notice (Spanish) is the first block;
+  everything else is the regular e-mail of that date. Recipients = those of the regular scheduled e-mail (10 Capstone
+  contacts, `tds@`, `warren@`, `eduardo@`, `pedro@` — 14 addresses). Figures: 43 alerts, 11 units, period 16/11–22/11 = the
+  CSV count. `send_erratum` has its own at-most-once marker (`logs/mailing/erratum_capstone_2026-11-25.json`, status
+  `sent`) and never touches the scheduled-run markers; no retry. Sent through the `emailSender` Lambda with the `LAMBDA_*`
+  keys of the project's `.env` (the default AWS chain had no credentials on that machine).
+
+**3. Partitioner moved into the app — implemented and tested; deployment pending (see below).**
+
+## New schedule (America/Santiago)
+
+| What | When | Notes |
+|---|---|---|
+| Alert creation (upstream, unchanged) | 07:00 | not ours |
+| **Partitioner, weekly** | **Wednesday 08:00** | every client; rebuild what changed (in-progress week included) + S3 sync |
+| **Alert-summary e-mail, capstone** | **Wednesday 08:30** (was 12:00) | only if this week's partitioner run finished OK |
+| Partitioner, daily clients | every day **11:30** (was 10:30) | `emin` only; EMIN's CSV reaches S3 ~11:10; see decision 1 |
+| Alert-summary e-mail, EMIN | every day 12:00 (unchanged) | only if today's 11:30 run finished OK |
+
+The partitioner values are environment variables of the app (`ALERT_PARTITIONS_TIMEZONE/WEEKDAY/TIME/DAILY_CLIENTS/
+DAILY_TIME/GRACE_MINUTES/TIMEOUT_SECONDS/STATE_DIR/SCHEDULER_ENABLED`; documented in `documentation/codebase_explaining.md`
+§5). The mailing schedules stay in code on purpose (`src/mailing/config.py`; a test pins them).
+
+## How it works
+
+- `src/data/partition_scheduler.py` (started from `dashboard/app.py` next to the mailing scheduler; production only, not
+  under pytest): a daemon thread polls every 30 s and starts the job that is due (scheduled moment + 15 min grace,
+  wall-clock in the zone, so DST does not move it). The job runs the **existing** `scripts/partition_alerts.py` in a
+  **subprocess** — logic reused, not duplicated; its exit status (0/1/2) is the outcome; log lines are streamed into the app
+  log (`partitioner | …`). The subprocess keeps a hundreds-of-MB CSV rebuild out of the web process's GIL and memory, so
+  **dashboard requests are never blocked** (a test shows a tick returning at once while the job runs).
+- `scripts/partition_alerts.py` is now **only the manual tool** (`--backfill`, `--validate`, `--sync-s3`, `--verify-s3`,
+  `--client`, `--dataset`, one run now). Its `--schedule` loop and the `--weekday/--time/--timezone/--daily-*` options were
+  removed so that only one scheduler exists; their tests moved to `tests/test_partition_scheduler.py`. Layout, atomic swaps,
+  S3 sync, backfill guard, idempotency and freshness are untouched.
+- **Dependency rule.** The scheduled e-mail, after claiming its marker and before building anything, reads the run status
+  the partitioner recorded (`config.MAILING_PARTITION_DEPENDENCY`: capstone → the weekly run of that ISO week, EMIN → the
+  daily run of that day; the newest run in the range decides). Not `ok` — failed (exit 1/2), still running/interrupted, or
+  never ran — means: **not built, not sent**, an `ERROR` log (`mailing: scheduled send NOT SENT, partitioner dependency not
+  met …`) and the reason in the mailer's marker. No retry or alternative path. It does not rely on the 30-minute gap.
+- **Alerts-generated rule (capstone only, team decision 25/11).** After the partitioner check and the pre-send S3 sync,
+  and before building, the e-mail counts the client's alerts of its own period in the partitions (same pipeline as the
+  e-mail, `alert_summary.load_period_records`). **Zero alerts = not built, not sent**, an `ERROR` (`… NOT SENT, no alerts
+  generated …`: the alert creation did not run or did not reach the partitions), reason in the marker, no retry; data that
+  cannot be read blocks it too. Configured in `config.MAILING_REQUIRE_ALERTS` (`{"capstone"}`). **EMIN is deliberately
+  not in it**: it generates alerts daily and not every day has alerts, so an empty day is normal and still gets its e-mail.
+  Cost to know: a week in which capstone truly has zero alerts sends nothing (an error is logged instead). Checked on the
+  real data: period 16–22/11 → 43 alerts, passes; period 23–29/11 → 0 today, so the 02/12 e-mail goes only if the 07:00
+  creation of that day delivers alerts for it.
+
+## How duplicate runs are prevented (and what it does not cover)
+
+Same mechanism as the mailer: an atomic marker file per `(job, date)` (`O_CREAT | O_EXCL`) in `logs/partitions/` (the mailer
+uses `logs/mailing/`), claimed **before** running, shared by every worker and kept across restarts. Whoever creates it runs
+the job; everyone else logs "already claimed" and skips. Tested with 12 threads on one marker and with 6 separate processes
+racing for it: exactly one wins. A restart inside the 15-minute window does not re-run it.
+- **Multiple workers on one host or volume (gunicorn today: 1 worker × 8 threads):** one run per schedule.
+- **Several app instances/tasks that do *not* share `logs/`:** each would claim its own marker, so each would run the job
+  (idempotent and S3-safe, but wasteful) — **and each would send the e-mail**: the mailer already has this limit, so running
+  more than one app task already needs a shared state directory (`MAILING_STATE_DIR`, `ALERT_PARTITIONS_STATE_DIR` on shared
+  storage). Nothing was added for it.
+- A run that dies mid-way leaves its marker `running`; it is not resumed (no catch-up) and the e-mail refuses to go until a
+  run finishes `ok` — re-run the script by hand, and send the e-mail from the Mailing admin page if needed.
+- The script keeps its own per-client lock file, so a manual run cannot overlap a scheduled one.
+
+## Removed / what must change outside the repo
+
+- `alerts-partitioner` service removed from `docker-compose.yml` (the Dockerfiles never had a partitioner entry point, so
+  there was nothing to remove there).
+- **AWS side (not in the repo, not touched):** delete the EventBridge rules `cron(0 4 ? * WED *)` and, if it exists,
+  `cron(30 10 ? * * *)` for the partitioner. Otherwise two schedulers would coexist.
+
+## Deployment (deadline: before Wednesday 02/12/2026 04:00) — NOT DONE YET
+
+Prerequisites on the app's ECS task, none of which the repo can verify:
+1. **S3 write access.** The app used to only *read* the bucket; the partitioner needs `List/Get/Put/DeleteObject` on
+   `MultiTechnique Alerts/alerts/golden/` with the credentials the app passes (`BUCKET_NAME`, `ACCESS_KEY`/`SECRET_KEY` or the
+   task role). Without it the run exits 2 and the e-mail is not sent.
+2. A **writable data volume** (the app already downloads into it) and **memory for the rebuild** (it reads the 314 MB capstone
+   telemetry CSV with pandas in a subprocess; ~14 s and fine on a developer machine, size not measured on the task).
+3. `DEPLOY_STATUS` = POC/production (already needed for the mailer); `ALERT_PARTITIONS_*` only to change defaults.
+4. Remove the old container's task/service and its EventBridge rules in the same deploy.
+
+First live check: Wednesday 02/12 — `partitioner | …` lines at 08:00, `logs/partitions/partitions_weekly_2026-12-02.json` with
+`"status": "ok"`, then the e-mail at 08:30.
+
+## Decisions and open points
+
+1. **EMIN's daily run was kept** (inside the app) **and moved from 10:30 to 11:30** (decision of the team, 25/11): EMIN's CSV reaches S3 around 11:10 (24/11: 11:12 Chile), so the 10:30 run always partitioned the previous day's file. The e-mail (12:00) waits for the 11:30 run. The old container ran it too, EMIN's 12:00 e-mail depends on it, and
+   the task text only mentions Wednesday. The weekly run now covers *all* clients (as specified; before, it excluded the daily
+   ones). EMIN's e-mail therefore also waits for its daily run. Say so if EMIN should not have a daily job.
+2. **Subprocess instead of an in-process call** (above): chosen so the web process is never blocked or enlarged.
+3. **Strict failure rule.** An S3-sync failure (exit 2) also blocks the e-mail even though the local partitions are valid,
+   because the S3 copy is what other instances download. No retry was added (not approved).
+4. EMIN's S3 `2026-11-16` partition was stale (3 rows vs 13) on 25/11 because the 10:30 daily run precedes the CSV's arrival
+   (~11:10): explained by the schedule, not a fault; the move to 11:30 removes the one-day lag. EMIN generates alerts daily
+   and not every day has alerts, so a day without new rows is normal for EMIN and is never treated as a failure.
+5. **Freshness guard** (refuse to send when the partitions are older than the CSV) is still **not included**; the
+   alerts-generated rule above is the narrower check the team asked for (would also have caught the 25/11 incident).
+6. `pyarrow`/`pandas` are unpinned (see the note in step 1).
+
+## Verification of step 3
+
+`tests/test_partition_scheduler.py` (46 tests): defaults and env overrides; due times (Wednesday 08:00, daily 11:30, grace
+window, any machine zone, DST); production-only start and the off switch; the command (weekly = every client, daily =
+`--client emin`, never `--backfill`); status ok / failed (1, 2) / crash, never retried; once per schedule across 12 threads, a
+restart and 6 real processes; a tick that returns while the job runs; the real subprocess runner (log streaming, exit status,
+timeout); the e-mail not built nor sent when the run failed / is running / never ran (error logged, marker says why, no later
+retry) and sent when it is `ok`; and a dry run of a Wednesday with one clock: 08:00 partitioner → 08:30 e-mail, and the same
+day with a failing partitioner → no e-mail. The real script also ran through the subprocess path (exit status 1 propagated
+from an empty data root) and the app boots with both schedulers reporting "not started: not production" locally. The alerts-generated rule is tested for zero alerts (not built, not sent, error, marker, no retry), alerts present (sent), unreadable
+data, order against the partitioner check, and EMIN never blocked for an empty day. Existing
+mailing/partition tests were updated for the 08:30 time and the removed `--schedule`.
+
+
+---
+
+# General tab: criteria on the page, "Sin Datos" fix, unit merge, golden layer (2026-11-26)
+
+Requirement: *Unit status dashboard (criteria visibility, "Sin Datos" fix, unit merge, golden-layer reads)*. Not committed
+(branch `dev`).
+
+## What changed
+
+| Change | Where |
+|---|---|
+| Golden layer: one script builds `data/general/golden/{client}/fleet_status.parquet`; the tab only reads it. The old on-the-fly processing is **removed** from `fleet_overview.py` (moved to the builder, not kept in parallel) | `src/data/fleet_status.py` (new), `scripts/build_fleet_status.py` (new), `dashboard/components/fleet_overview.py` (read + render only) |
+| Scheduled at **10:30 America/Santiago**, daily, by the app's own scheduler; plus a build at app start, after the S3 mirror, for clients with no file (any environment) | `src/data/partition_scheduler.py` (job `fleet_status`, `catch_up_fleet_status`), `dashboard/app.py` |
+| Alertas: a unit with no alerts is **Normal**; Sin Datos only when the feed cannot be read | `src/data/fleet_status.py` |
+| `CT-184` / `CT_184` are one row; Estado computed after the merge; `T_09` / `T_9` too | `src/data/unit_ids.py` (new), builder |
+| Criteria visible: collapsed "Cómo se asignan los estados" panel built from the constants the run uses | `dashboard/components/fleet_criteria.py` (new), `config/estado_rules.py` (Alertas / Tribología constants), `dashboard/assets/custom_layout.css`, 22 catalog keys (es/en) |
+| Unit Detail still finds a merged unit's data in each source and links to each page with that page's own spelling | `unit_summary_content.py`, `oil_machine_detail.py`, `unit_horometer.py` |
+| Informe preliminar de falla lists the General tab's names, so its unit matching (`report_health.unit_key`) now treats `-` and `_` as one separator (`T-10` finds `T_10` in the Predictivo / oil / maintenance sources) | `src/data/report_health.py` |
+
+## Findings that shaped it (please read)
+
+1. **Tribología's documented limits are wrong for the published data.** `oil_data_contracts.md` says Normal < 6 <= Alerta < 10 <=
+   Anormal on the machine score; the published `overall_status` does not follow it (score 4 with one component in Alerta is Alerta;
+   score 2 with an Anormal component is Anormal). What reproduces all 392 local machines: worst component status, Anormal when
+   the score reaches 10. The page prints that rule; the contract document still says otherwise and should be corrected upstream.
+2. **The S3 start-up sync deletes any local file S3 does not have**, so a file written by the script disappears on every
+   start until the next 10:30 (it happened on the first local run: the tab was empty). Hence the build at app start, which runs
+   *after* the mirror (`__main__` of `dashboard/app.py`, not at import), in every environment, on every start that finds a file
+   missing (no once-a-day marker). The file is also published to S3 (next point).
+2b. **S3 publish** (added after the first version): `scripts/build_fleet_status.py --sync-s3` puts each file under
+   `MultiTechnique Alerts/general/golden/{client}/fleet_status.parquet` (`src/data/fleet_status_s3.py`; no deletes, unchanged files
+   skipped). The scheduled 10:30 run passes it; a run by hand does not. On 2026-11-26 the four local files (capstone, cda, emin,
+   enex) were uploaded once by hand; they were built from the local data mirror. The app task needs `s3:PutObject` on that prefix.
+3. **EMIN's alert partitions are refreshed at 11:30** (its CSV arrives ~11:10), after this 10:30 run: EMIN's file carries the
+   previous day's alerts until the next day's run. Other clients' alerts are partitioned weekly (Wednesday 08:00).
+4. **A stale alert feed now also degrades units with no alerts** (they are Normal-with-old-data, and the age rule applies as for any
+   cell). Local mirror: CDA's newest alert is from July, so its 11 units read Anormal in Alertas (their overall Estado was
+   already Anormal, from Telemetría's age). Capstone and EMIN (feed 4-5 days old) are unaffected.
+5. **Ids**: normalising to hyphens renames CDA (`T_10` -> `T-10`) and ENEX (`21_CRU_001` -> `21-CRU-001`) in the General tab and in
+   the Unit Detail address; only EMIN had a real duplicate. Old links (`/overview/unit/T_10`) still resolve.
+6. The "Última actualización" line under the title still shows the render time, not the file's run time (the file stores
+   `generated_at`; showing it was optional in the requirement and is not done).
+
+## Verification
+
+* Before/after of the whole fleet (local mirror): Capstone 50 units, bands 9 / 11 / 30 unchanged (34 Alertas cells Sin Datos ->
+  Normal); EMIN 58 -> 50 rows (8 merged: `CT-184`, `CT-185`, `CT-187`, `CT-190`...), bands Anormal 38 / Alerta 16 -> 8 / Normal 4;
+  ENEX 281 unchanged; CDA 11 unchanged (Alertas Sin Datos -> Anormal, finding 4).
+* `tests/test_fleet_status.py` (new, 56): ids, "no alerts" = Normal, merge, one row per unit, atomic write, failed run keeps the
+  file, one client failing does not stop the others, the view never touches a raw source (and says "not available"), the criteria
+  follow the constants, Alertas limits at the boundary, the Tribología sentence against every published machine; the failure report finds a hyphenated unit.
+  `tests/test_partition_scheduler.py` (+10): due at 10:30, DST, env overrides, command, markers, start-up catch-up.
+  `tests/test_fleet_overview.py` and `test_alert_partition_consumers.py` retargeted to the builder / golden file.
+* Browser (Playwright on the local server): Capstone shows "UNIDADES ANORMAL (9)", the panel opens, search and links work, no
+  console errors; EMIN `CT-184` is one row whose detail shows alerts and the oil components (5, last sample 09/11); CDA `T-10`
+  shows horómetro, telemetry, alerts, oil and predictive.
+
+* Full suite: every failure left is one that also fails on a clean copy of HEAD or depends on the data on disk (informe de falla AI
+  schema / real-data counts, mantenciones, `test_report_health` x2, Campbell schema vs `oil_classified`, a page-views test that
+  passes alone). The one test this work broke (`test_general_lee_sin_datos_como_sin_datos`, which patched a function that moved)
+  was retargeted.
+
+## Deploy
+
+1. Nothing to configure: the app's scheduler runs it (production only, like the partitioner). `FLEET_STATUS_TIME=HH:MM` and
+   `FLEET_STATUS_SCHEDULER_ENABLED=false` override. The app task needs write access to its `data/general` folder.
+2. First start builds the missing files by itself; by hand: `python scripts/build_fleet_status.py`.
+3. Watch `fleet status:` / `build_fleet_status:` lines in the app log; a failed run logs an error and the tab keeps the last file.

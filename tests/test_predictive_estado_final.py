@@ -3,7 +3,8 @@
 import pandas as pd
 import pytest
 
-from dashboard.components import fleet_overview
+from src.data import fleet_status
+from src.data.unit_ids import unit_key
 from dashboard.components.predictive_state import (
     NO_DATA_STATE, combine_states, is_no_data_state, published_state,
 )
@@ -92,9 +93,9 @@ def test_unidad_ausente_del_resumen_sigue_tomando_la_curva(monkeypatch, latest, 
 def test_general_lee_sin_datos_como_sin_datos(monkeypatch):
     from src.data import predictive_v2
     monkeypatch.setattr(predictive_v2, "load_unit_status_summary", lambda c, comp: _resumen(True))
-    estados, _ = fleet_overview._component_predictive_status_maps("capstone", "motor")
-    assert estados[fleet_overview._normalize_unit_id("CA-46")] == NO_DATA_STATE
-    assert estados[fleet_overview._normalize_unit_id("CA-41")] == "Anormal"
+    estados, _ = fleet_status._component_predictive_status_maps("capstone", "motor")
+    assert estados[unit_key("CA-46")] == NO_DATA_STATE
+    assert estados[unit_key("CA-41")] == "Anormal"
 
 
 # ---------------------------------------------------------------- Reportabilidad

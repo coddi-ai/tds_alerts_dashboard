@@ -14,7 +14,14 @@ from .errors import (
 )
 from .report import ReportContent, ReportRequest, register_report_builder
 from .scheduler import start_mailing_scheduler, stop_mailing_scheduler
-from .service import build_preview, get_mailing_context, run_scheduled, send_manual
+from .service import (
+    build_erratum_preview,
+    build_preview,
+    get_mailing_context,
+    run_scheduled,
+    send_erratum,
+    send_manual,
+)
 
 __all__ = [
     "MailingBusyError",
@@ -23,10 +30,12 @@ __all__ = [
     "MailingValidationError",
     "ReportContent",
     "ReportRequest",
+    "build_erratum_preview",
     "build_preview",
     "get_mailing_context",
     "register_report_builder",
     "run_scheduled",
+    "send_erratum",
     "send_manual",
     "start_mailing_scheduler",
     "stop_mailing_scheduler",

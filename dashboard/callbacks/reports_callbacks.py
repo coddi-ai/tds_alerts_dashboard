@@ -19,6 +19,10 @@ from dashboard.components.oil_charts import (
     get_essay_limits_four,
     build_oil_time_series_grid,
     build_oil_radar_view,
+    clip_history_to_window,
+    default_time_series_window,
+    resolve_time_series_window,
+    unit_history,
     classify_four_limit_value,
     consolidate_limit_entries,
     limit_line_color,
@@ -28,6 +32,10 @@ from dashboard.components.oil_charts import (
 )
 import dash_bootstrap_components as dbc
 import logging
+from dashboard.components.labels import essay_label
+from dashboard.components.oil_ui import action_checklist, status_banner
+from dashboard.components.status_chip import status_chip
+from shared.severity import SEVERITY_TIERS
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +43,20 @@ logger = logging.getLogger(__name__)
 def normalize_breached_essays(breached_value):
     """
     Normalize breached_essays to a list of essay names (strings).
-    
+
     Handles both formats:
     - v2.6+: JSON string containing list of dicts: '[{"essay": "Hierro", "group": "Desgaste", "points": 5}]'
     - Legacy: List of strings: ["Hierro", "Cobre"]
-    
+
     Args:
         breached_value: Raw value from sample['breached_essays']
-    
+
     Returns:
         List of essay names (strings)
     """
     if breached_value is None or (isinstance(breached_value, float) and pd.isna(breached_value)):
         return []
-    
+
     # If it's a string, try to parse as JSON
     if isinstance(breached_value, str):
         try:
@@ -63,7 +71,7 @@ def normalize_breached_essays(breached_value):
             return []
         except (json.JSONDecodeError, TypeError):
             return []
-    
+
     # If it's already a list
     if isinstance(breached_value, list):
         if len(breached_value) > 0 and isinstance(breached_value[0], dict):
@@ -72,8 +80,32 @@ def normalize_breached_essays(breached_value):
         else:
             # List of strings
             return breached_value
-    
+
     return []
+
+
+def parse_breached_entries(breached_value) -> list:
+    """The stored `breached_essays` as dicts, one per test that is outside its limits:
+    ``{'essay', 'threshold' ('Marginal' / 'Critico' / 'Condenatorio'), 'direction' ('upper' / 'lower'),
+    'limit', 'value', ...}``. The legacy format (a list of names) gives ``{'essay': name}`` only. The
+    one place the per-test severity of a report is stored, so every view reads it from here."""
+    if breached_value is None or (isinstance(breached_value, float) and pd.isna(breached_value)):
+        return []
+    parsed = breached_value
+    if isinstance(breached_value, str):
+        try:
+            parsed = json.loads(breached_value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    if not isinstance(parsed, (list, tuple)):
+        return []
+    entries = []
+    for item in parsed:
+        if isinstance(item, dict) and item.get('essay'):
+            entries.append(dict(item))
+        elif isinstance(item, str) and item:
+            entries.append({'essay': item})
+    return entries
 
 
 def _format_anomaly_type(anomaly_val):
@@ -111,7 +143,7 @@ def calculate_breached_essays_from_data(sample, limits, client, machine, compone
     """
     if not limits or not sample is not None:
         return []
-    
+
     # Use componentNameNormalized from the sample itself (most reliable)
     component_normalized = sample.get('componentNameNormalized', None)
     if not component_normalized or (isinstance(component_normalized, float) and pd.isna(component_normalized)):
@@ -122,16 +154,16 @@ def calculate_breached_essays_from_data(sample, limits, client, machine, compone
             if component_normalized.endswith(suffix):
                 component_normalized = component_normalized[:-len(suffix)].strip()
                 break
-    
+
     # Get limits for this specific component
     if client not in limits or machine not in limits[client] or component_normalized not in limits[client][machine]:
         return []
-    
+
     comp_limits = limits[client][machine][component_normalized]
-    
+
     # Get oil hour range from sample (v2.3)
     oil_hour_range = sample.get('oilHourRange', 'UNKNOWN')
-    
+
     # Metadata columns to exclude
     metadata_cols = {
         'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName',
@@ -145,22 +177,22 @@ def calculate_breached_essays_from_data(sample, limits, client, machine, compone
         'unitId_generated', 'componentName_generated', 'sampleDate_generated',
         'client_generated', 'sampleDate_str', 'oilHourRange', 'limit_source'
     }
-    
+
     # Add evolution_ratio columns to metadata (v2.3)
     metadata_cols.update({col for col in sample.index if col.startswith('evolution_ratio_')})
-    
+
     breached = []
-    
+
     # Check each essay
     for col in sample.index:
         if col in metadata_cols or is_eng_column(col):
             continue
-        
+
         try:
             value = float(sample[col]) if pd.notna(sample[col]) else None
             if value is None:
                 continue
-            
+
             # Get four-limit thresholds (LIC/LIM/LSM/LSC) with oil-hour stratification
             essay_limits = get_essay_limits_four(comp_limits, col, oil_hour_range)
             if not essay_limits or essay_limits.get('LSM') is None or essay_limits.get('LSC') is None:
@@ -176,18 +208,18 @@ def calculate_breached_essays_from_data(sample, limits, client, machine, compone
                 breached.append(col)
         except (ValueError, TypeError):
             continue
-    
+
     return breached
 
 
 def register_reports_callbacks(app):
     """
     Register callbacks for Reports Detail tab with 4-level hierarchy.
-    
+
     Args:
         app: Dash application instance
     """
-    
+
     # Level 2: Update Familia options when client changes (or navigation state changes)
     @app.callback(
         [Output('reports-familia-selector', 'options'),
@@ -199,22 +231,22 @@ def register_reports_callbacks(app):
     def update_familia_options(client, nav_state, current_familia):
         """Update familia (machine type) options."""
         logger.info(f"update_familia_options called: client={client}, nav_state={nav_state}, current={current_familia}")
-        
+
         if not client:
             return [], None
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        
+
         if not reports_file.exists():
             logger.error(f"File not found: {reports_file}")
             return [], None
-        
+
         try:
             df = load_oil_classified(client)
             familias = sorted(df['machineName'].dropna().unique().tolist())
             options = [{'label': f.title(), 'value': f} for f in familias]
-            
+
             # Check if navigation state provides a familia
             if nav_state and nav_state.get('familia'):
                 default_value = nav_state['familia']
@@ -227,14 +259,14 @@ def register_reports_callbacks(app):
                 # Auto-select first familia only on initial load
                 default_value = familias[0] if familias else None
                 logger.info(f"Auto-selecting first familia: {default_value}")
-            
+
             return options, default_value
-            
+
         except Exception as e:
             logger.exception(f"Error in update_familia_options: {e}")
             return [], None
-    
-    
+
+
     # Level 3: Update Equipo options when familia changes (or navigation state changes)
     @app.callback(
         [Output('reports-equipo-selector', 'options'),
@@ -248,23 +280,23 @@ def register_reports_callbacks(app):
     def update_equipo_options(familia, client, nav_state, current_equipo):
         """Update equipo (unitId) options."""
         logger.info(f"update_equipo_options called: familia={familia}, client={client}, nav_state={nav_state}, current={current_equipo}")
-        
+
         if not familia or not client:
             return [], None
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        
+
         if not reports_file.exists():
             return [], None
-        
+
         try:
             df = load_oil_classified(client)
             df = df[df['machineName'] == familia]
-            
+
             equipos = sorted(df['unitId'].dropna().unique().tolist())
             options = [{'label': e.upper(), 'value': e} for e in equipos]
-            
+
             # Check if navigation state provides an equipo
             if nav_state and nav_state.get('equipo'):
                 default_value = nav_state['equipo']
@@ -277,14 +309,14 @@ def register_reports_callbacks(app):
                 # Auto-select first equipo
                 default_value = equipos[0] if equipos else None
                 logger.info(f"Auto-selecting first equipo: {default_value}")
-            
+
             return options, default_value
-            
+
         except Exception as e:
             logger.exception(f"Error in update_equipo_options: {e}")
             return [], None
-    
-    
+
+
     # Level 4: Update Component options when equipo changes (or navigation state changes)
     @app.callback(
         [Output('reports-component-selector', 'options'),
@@ -300,23 +332,23 @@ def register_reports_callbacks(app):
     def update_component_options(equipo, familia, client, nav_state, current_component):
         """Update component options."""
         logger.info(f"update_component_options called: equipo={equipo}, familia={familia}, client={client}, nav_state={nav_state}, current={current_component}")
-        
+
         if not equipo or not familia or not client:
             return [], None, None
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        
+
         if not reports_file.exists():
             return [], None, None
-        
+
         try:
             df = load_oil_classified(client)
             df = df[(df['machineName'] == familia) & (df['unitId'] == equipo)]
-            
+
             components = sorted(df['componentName'].dropna().unique().tolist())
             options = [{'label': c.title(), 'value': c} for c in components]
-            
+
             # Check if navigation state provides a component
             if nav_state and nav_state.get('component'):
                 default_value = nav_state['component']
@@ -333,12 +365,12 @@ def register_reports_callbacks(app):
                 default_value = components[0] if components else None
                 logger.info(f"Auto-selecting first component: {default_value}")
                 return options, default_value, nav_state
-            
+
         except Exception as e:
             logger.exception(f"Error in update_component_options: {e}")
             return [], None, None
-    
-    
+
+
     # Level 5: Update Date options when component changes
     @app.callback(
         [Output('reports-date-selector', 'options'),
@@ -353,45 +385,45 @@ def register_reports_callbacks(app):
     def update_date_options(component, equipo, familia, client, current_date):
         """Update sample date options (most recent first)."""
         logger.info(f"update_date_options called: client={client}, familia={familia}, equipo={equipo}, component={component}, current={current_date}")
-        
+
         if not all([component, equipo, familia, client]):
             logger.warning(f"Missing parameters: component={component}, equipo={equipo}, familia={familia}, client={client}")
             return [], None
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
-        
+
         logger.info(f"Looking for file: {reports_file}")
-        
+
         if not reports_file.exists():
             logger.error(f"File not found: {reports_file}")
             return [], None
-        
+
         try:
             df = load_oil_classified(client)
             logger.info(f"Loaded {len(df)} rows from {reports_file}")
             logger.info(f"Columns: {df.columns.tolist()}")
             logger.info(f"Unique familias: {df['machineName'].unique().tolist()}")
             logger.info(f"Unique equipos: {df['unitId'].unique().tolist()}")
-            
-            df = df[(df['machineName'] == familia) & 
-                   (df['unitId'] == equipo) & 
+
+            df = df[(df['machineName'] == familia) &
+                   (df['unitId'] == equipo) &
                    (df['componentName'] == component)]
-            
+
             logger.info(f"After filtering: {len(df)} rows")
-            
+
             # Sort by date descending (most recent first)
             df = df.sort_values('sampleDate', ascending=False)
-            
+
             dates = df['sampleDate'].unique()
             logger.info(f"Found {len(dates)} unique dates")
-            
-            options = [{'label': pd.to_datetime(d).strftime('%Y-%m-%d'), 'value': str(d)} 
+
+            options = [{'label': pd.to_datetime(d).strftime('%Y-%m-%d'), 'value': str(d)}
                       for d in dates]
-            
+
             # Get string representations for comparison
             date_strs = [str(d) for d in dates]
-            
+
             # Preserve current selection if it's still valid
             if current_date and current_date in date_strs:
                 default_value = current_date
@@ -400,15 +432,15 @@ def register_reports_callbacks(app):
                 # Auto-select most recent date (index 0)
                 default_value = str(dates[0]) if len(dates) > 0 else None
                 logger.info(f"Auto-selecting most recent date: {default_value}")
-            
+
             logger.info(f"Returning {len(options)} date options, default={default_value}")
             return options, default_value
-            
+
         except Exception as e:
             logger.exception(f"Error in update_date_options: {e}")
             return [], None
-    
-    
+
+
     # Main display callback: Update all content when date changes
     @app.callback(
         [Output('reports-identity-display', 'children'),
@@ -428,14 +460,14 @@ def register_reports_callbacks(app):
     def update_report_display(sample_date, component, equipo, familia, client):
         """Update all report displays with OIL-R compliant sections."""
         from plotly.graph_objects import Figure
-        
+
         logger.info(f"update_report_display called: client={client}, familia={familia}, equipo={equipo}, component={component}, date={sample_date}")
-        
+
         if not all([sample_date, component, equipo, familia, client]):
             logger.warning(f"Missing parameters in update_report_display")
-            return (html.Div(), html.P(t("reports_callbacks.seleccionar_filtros")), html.Div(), 
+            return (html.Div(), html.P(t("reports_callbacks.seleccionar_filtros")), html.Div(),
                    html.P(t("oil_machine_detail.sin_datos")), [], None, html.Div())
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
@@ -450,65 +482,65 @@ def register_reports_callbacks(app):
         try:
             df = load_oil_classified(client)
             limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
-            
+
             logger.info(f"Loaded {len(df)} rows, filtering for: familia={familia}, equipo={equipo}, component={component}, date={sample_date}")
-            
+
             # Convert sample_date string to just date part for comparison
             sample_date_only = pd.to_datetime(sample_date).strftime('%Y-%m-%d')
             df['sampleDate_str'] = pd.to_datetime(df['sampleDate']).dt.strftime('%Y-%m-%d')
-            
+
             # Find the sample
-            sample_df = df[(df['machineName'] == familia) & 
-                          (df['unitId'] == equipo) & 
+            sample_df = df[(df['machineName'] == familia) &
+                          (df['unitId'] == equipo) &
                           (df['componentName'] == component) &
                           (df['sampleDate_str'] == sample_date_only)]
-            
+
             logger.info(f"Found {len(sample_df)} matching samples")
-            
+
             if sample_df.empty:
                 logger.warning(f"No sample found after filtering")
                 return (html.Div(), html.P(t("reports_callbacks.no_se_encontro_muestra")), html.Div(),
                        html.P(t("oil_machine_detail.sin_datos")), [], None, html.Div())
-            
+
             sample = sample_df.iloc[0]
             logger.info(f"Sample found: {sample.get('sampleNumber', 'N/A')}")
-            
+
             # 1. Report Identity (OIL-R-01)
             identity = create_report_identity_display(sample)
-            
+
             # 2. Decision Summary (OIL-R-02) - with data quality check
             decision_summary = create_decision_summary(sample, limits, client, familia, component)
-            
+
             # 3. Evidence Tables only (radar removed July 2026)
             evidence_container = create_evidence_tables_only(sample, limits, df)
-            
+
             # 4. AI Recommendation (OIL-R-04) - Plain text display
             ai_recommendation, _ = create_ai_diagnosis_and_action(sample)
-            
+
             # 5. Essay selector options and pre-selection (OIL-R-05)
             essay_options = get_essay_options(df)
-            
+
             # Pre-select breached essays (up to 6) - use calculated if stored is empty
             breached_essays = normalize_breached_essays(sample.get('breached_essays'))
-            
+
             # Fallback: calculate from data if empty
             if not breached_essays and limits:
                 breached_essays = calculate_breached_essays_from_data(sample, limits, client, familia, component)
-            
+
             breached_essays = breached_essays[:6]  # Limit to 6 for display
-            
+
             # 6. Delta Summary (OIL-R-06)
             delta_summary = create_delta_summary(sample, df, equipo, component, limits, client, familia)
-            
+
             logger.info("Successfully generated all report components")
             return identity, decision_summary, evidence_container, ai_recommendation, essay_options, breached_essays, delta_summary
-            
+
         except Exception as e:
             logger.exception(f"Error in update_report_display: {e}")
             return (html.Div(), t("component_hours_callbacks.error", str_e=str(e)), html.Div(),
                    t("reports_callbacks.error"), [], None, html.Div())
-    
-    
+
+
     # Time series callback - Create subplot for each essay
     @app.callback(
         Output('reports-time-series-chart', 'figure'),
@@ -523,13 +555,13 @@ def register_reports_callbacks(app):
         from plotly.graph_objects import Figure
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
-        
+
         if not all([essays, component, equipo, client]) or not essays:
             return Figure()
-        
+
         # Limit to 6 essays for readability
         essays = essays[:6]
-        
+
         settings = get_settings()
         reports_file = settings.get_classified_reports_path(client)
         limits_file = settings.get_stewart_limits_four_path(client)
@@ -540,22 +572,22 @@ def register_reports_callbacks(app):
         try:
             df = load_oil_classified(client)
             limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
-            
+
             # Filter to this equipment and component
             history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate')
-            
+
             if history.empty:
                 return Figure()
-            
+
             # Create subplots - one row per essay, shared x-axis
             fig = make_subplots(
                 rows=len(essays),
                 cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.05,
-                subplot_titles=[vocab(essay) for essay in essays]
+                subplot_titles=[essay_label(vocab(essay)) for essay in essays]
             )
-            
+
             # Get limits for this component (use normalized name for lookup)
             if limits:
                 familia = history.iloc[0]['machineName']
@@ -567,27 +599,27 @@ def register_reports_callbacks(app):
             else:
                 comp_limits = {}
                 oil_hour_range = 'UNKNOWN'
-            
+
             # Add trace for each essay
             for idx, essay in enumerate(essays, 1):
                 # Extract values
                 essay_values = history[essay].dropna()
                 essay_dates = history.loc[essay_values.index, 'sampleDate']
-                
+
                 # Add actual values line
                 fig.add_trace(
                     go.Scatter(
                         x=essay_dates,
                         y=essay_values,
                         mode='lines+markers',
-                        name=vocab(essay),
+                        name=essay_label(vocab(essay)),
                         line=dict(color='#1f77b4', width=2),
                         marker=dict(size=6),
                         showlegend=False
                     ),
                     row=idx, col=1
                 )
-                
+
                 # Add four-limit (LIC/LIM/LSM/LSC) reference lines if available.
                 # Equal/near-equal limits are consolidated into one line with a
                 # user-friendly label (never plotted as duplicated overlapping
@@ -620,13 +652,13 @@ def register_reports_callbacks(app):
                             ),
                             row=idx, col=1
                         )
-                
+
                 # Update y-axis label
                 fig.update_yaxes(title_text="ppm", row=idx, col=1)
-            
+
             # Update x-axis label (only last one)
             fig.update_xaxes(title_text=t("tab_mantenciones_general.fecha"), row=len(essays), col=1)
-            
+
             # Update layout
             fig.update_layout(
                 height=300 * len(essays),
@@ -641,9 +673,9 @@ def register_reports_callbacks(app):
                     x=1
                 )
             )
-            
+
             return fig
-            
+
         except Exception as e:
             logger.exception(f"Error in update_time_series: {e}")
             return Figure()
@@ -653,20 +685,60 @@ def register_reports_callbacks(app):
     # ========================================
 
     @app.callback(
+        [Output('reports-date-range-picker', 'start_date'),
+         Output('reports-date-range-picker', 'end_date'),
+         Output('reports-date-range-picker', 'max_date_allowed'),
+         Output('reports-date-range-picker', 'initial_visible_month')],
+        [Input('reports-date-selector', 'value', allow_optional=True),
+         Input('reports-component-selector', 'value', allow_optional=True),
+         Input('reports-equipo-selector', 'value', allow_optional=True)],
+        [State('client-selector', 'value', allow_optional=True)],
+        prevent_initial_call=True
+    )
+    def reset_time_series_range(sample_date, component, equipo, client):
+        """Re-evaluate the time-series range for the examined sample.
+
+        Whenever the sample changes (Fecha Muestra, another component or unit, the first load) the
+        range goes back to the default for that sample - the last 6 months or the last 3 samples,
+        whichever holds more, counting only the unit's reports up to that sample - ending on its
+        date, and the picker cannot reach past that date: an older sample must not show the newer
+        ones. A range the user typed in for the previous sample is deliberately dropped. The same
+        rule, on the same history, draws the PDF's charts (oil_report_pdf_callbacks).
+        """
+        empty = (None, None, None, None)
+        if not all([sample_date, component, equipo, client]):
+            return empty
+        try:
+            reports_file = get_settings().get_classified_reports_path(client)
+            if not reports_file.exists():
+                return empty
+            history = unit_history(load_oil_classified(client), equipo, component)
+        except Exception:
+            logger.exception("Could not resolve the time-series range for %s / %s / %s", client, equipo, component)
+            return empty
+        start, end = default_time_series_window(sample_date, history['sampleDate'])
+        if end is None:
+            return empty
+        end_text = end.strftime('%Y-%m-%d')
+        return start.strftime('%Y-%m-%d'), end_text, end_text, end_text
+
+    @app.callback(
         Output('reports-time-series-grid', 'children'),
         [Input('reports-component-selector', 'value', allow_optional=True),
          Input('reports-equipo-selector', 'value', allow_optional=True),
          Input('reports-date-range-picker', 'start_date', allow_optional=True),
          Input('reports-date-range-picker', 'end_date', allow_optional=True),
          Input('client-selector', 'value', allow_optional=True)],
+        # Not an Input: a new sample resets the picker (above), and that is what refreshes the grid.
+        [State('reports-date-selector', 'value', allow_optional=True)],
         prevent_initial_call=True
     )
-    def update_time_series_grid(component, equipo, start_date, end_date, client):
+    def update_time_series_grid(component, equipo, start_date, end_date, client, sample_date):
         """
         Generate 9-chart time series grid for oil analysis trends.
 
-        Uses DatePickerRange for filtering. Shows LSC (upper) always, and
-        LIC (lower) only for essays where the four-limit contract provides it.
+        Uses DatePickerRange for filtering, never past the examined sample's date. Shows LSC
+        (upper) always, and LIC (lower) only for essays where the four-limit contract provides it.
         """
         if not all([component, equipo, client]):
             return html.P(t("reports_callbacks.seleccione_equipo_y_componente_para_ver"), className="text-muted")
@@ -683,18 +755,17 @@ def register_reports_callbacks(app):
             limits = load_stewart_limits_four(limits_file) if limits_file.exists() else None
 
             # Filter to equipment + component
-            history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].copy()
+            history = unit_history(df, equipo, component)
             if history.empty:
                 return html.P(t("reports_callbacks.sin_historial_para_este_equipo_componente"), className="text-muted")
 
-            history['sampleDate'] = pd.to_datetime(history['sampleDate'])
-            history = history.sort_values('sampleDate')
-
-            # Apply date range filter
-            if start_date:
-                history = history[history['sampleDate'] >= pd.to_datetime(start_date)]
-            if end_date:
-                history = history[history['sampleDate'] <= pd.to_datetime(end_date)]
+            # Apply date range filter. The end is capped at the examined sample (the picker already
+            # refuses later dates; this also covers the moment between a sample change and the
+            # picker's reset), a missing start is the default range of that sample (computed on the
+            # unit's full history), and the whole day counts: a sample taken at 14:00 on the last
+            # day is in.
+            start, end = resolve_time_series_window(sample_date, start_date, end_date, history['sampleDate'])
+            history = clip_history_to_window(history, start, end)
 
             if history.empty:
                 return html.P(t("reports_callbacks.sin_datos_en_el_rango_seleccionado"), className="text-muted")
@@ -913,7 +984,7 @@ def register_reports_callbacks(app):
                           'Índice PQ', 'Numero Total Basico', 'Oxidación', 'Agua',
                           'Refrigerante', 'Combustible', 'Hollín']
             available = [c for c in essay_cols if c in history.columns and history[c].notna().any()]
-            return [{'label': c, 'value': c} for c in available]
+            return [{'label': essay_label(c), 'value': c} for c in available]
         except:
             return []
 
@@ -990,7 +1061,7 @@ def register_reports_callbacks(app):
                 color = colors_cycle[idx % len(colors_cycle)]
 
                 fig.add_trace(go.Scatter(
-                    x=dates, y=vals, mode='lines+markers', name=vocab(var),
+                    x=dates, y=vals, mode='lines+markers', name=essay_label(vocab(var)),
                     line=dict(color=color, width=2), marker=dict(size=5)
                 ))
 
@@ -1041,12 +1112,12 @@ def create_sample_info_card(sample):
         'Alerta': 'warning',
         'Normal': 'success'
     }.get(sample.get('report_status', 'Normal'), 'secondary')
-    
+
     # Apply title() to equipment and component names
     equipo_display = str(sample.get('unitId', 'N/A')).title()
     component_display = str(sample.get('componentName', 'N/A')).title()
     familia_display = str(sample.get('machineName', 'N/A')).title()
-    
+
     return dbc.Card([
         dbc.CardBody([
             html.H5(t("reports_callbacks.sample", sample_get_samplen=sample.get('sampleNumber', 'N/A')), className="mb-3"),
@@ -1061,10 +1132,10 @@ def create_sample_info_card(sample):
                 ], width=6),
                 dbc.Col([
                     html.P([
-                        html.Strong(t("reports_callbacks.sample_date")), 
-                        f"{pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'}", 
+                        html.Strong(t("reports_callbacks.sample_date")),
+                        f"{pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'}",
                         html.Br(),
-                        html.Strong(t("reports_callbacks.status")), 
+                        html.Strong(t("reports_callbacks.status")),
                         html.Span(
                             sample.get('report_status', 'N/A'),
                             className=f"badge bg-{status_class} ms-2"
@@ -1082,42 +1153,42 @@ def create_historical_comparison(sample, df, equipo, component):
     """Create historical comparison table."""
     # Get history for this equipment and component
     history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate', ascending=False)
-    
+
     if len(history) < 2:
         return dbc.Alert(t("reports_callbacks.need_at_least_2_reports_for"), color="info")
-    
+
     # Get current and previous report
     current = history.iloc[0]
     previous = history.iloc[1]
-    
+
     # Compare dates
     current_date = pd.to_datetime(current['sampleDate']).strftime('%Y-%m-%d')
     previous_date = pd.to_datetime(previous['sampleDate']).strftime('%Y-%m-%d')
-    
+
     # Get metadata columns to exclude
-    metadata_cols = {'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName', 
+    metadata_cols = {'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName',
                     'machineModel', 'machineBrand', 'machineHours', 'machineSerialNumber',
                     'componentName', 'componentHours', 'componentSerialNumber',
                     'oilMeter', 'oilBrand', 'oilType', 'oilWeight',
                     'previousSampleNumber', 'previousSampleDate', 'daysSincePrevious',
                     'group_element', 'essays_broken', 'severity_score', 'report_status',
                     'breached_essays', 'ai_recommendation', 'ai_generated_at',
-                    'unitId_generated', 'componentName_generated', 'sampleDate_generated', 
+                    'unitId_generated', 'componentName_generated', 'sampleDate_generated',
                     'client_generated', 'sampleDate_str'}
-    
+
     # Build comparison data
     comparison_data = []
-    
+
     for col in current.index:
         if col not in metadata_cols and not is_eng_column(col) and pd.notna(current[col]):
             try:
                 current_val = float(current[col])
                 previous_val = float(previous[col]) if col in previous.index and pd.notna(previous[col]) else None
-                
+
                 if previous_val is not None:
                     change = current_val - previous_val
                     change_pct = (change / previous_val * 100) if previous_val != 0 else 0
-                    
+
                     # Determine trend
                     if abs(change_pct) < 5:
                         trend = '→'
@@ -1128,7 +1199,7 @@ def create_historical_comparison(sample, df, equipo, component):
                     else:
                         trend = '↓'
                         trend_color = 'background-color: #e8f5e9' if change_pct < -20 else ''
-                    
+
                     comparison_data.append({
                         'essay': col,
                         'current': round(current_val, 2),
@@ -1140,14 +1211,14 @@ def create_historical_comparison(sample, df, equipo, component):
                     })
             except:
                 continue
-    
+
     if not comparison_data:
         return html.P(t("reports_callbacks.no_comparison_data_available"), className="text-muted")
-    
+
     # Sort by absolute change percentage (descending)
     comparison_data.sort(key=lambda x: abs(x['change_pct']), reverse=True)
     comparison_data = comparison_data[:20]  # Top 20 changes
-    
+
     # Create info cards
     info_cards = dbc.Row([
         dbc.Col([
@@ -1169,7 +1240,7 @@ def create_historical_comparison(sample, df, equipo, component):
             ])
         ], width=6)
     ], className="mb-3")
-    
+
     # Create comparison table
     table = dash_table.DataTable(
         columns=[
@@ -1196,20 +1267,20 @@ def create_historical_comparison(sample, df, equipo, component):
         ],
         page_size=10
     )
-    
+
     return html.Div([info_cards, table])
 
 
 def create_ai_recommendation_display(sample):
     """DEPRECATED: Use create_ai_diagnosis_and_action instead."""
     ai_rec = sample.get('ai_recommendation', t("reports_callbacks.no_ai_recommendation_available_for_this"))
-    
+
     status_color = {
         'Anormal': 'danger',
         'Alerta': 'warning',
         'Normal': 'success'
     }.get(sample.get('report_status', 'Normal'), 'light')
-    
+
     return dbc.Alert([
         html.H6(t("reports_callbacks.ai_analysis"), className="alert-heading"),
         html.Hr(),
@@ -1219,7 +1290,7 @@ def create_ai_recommendation_display(sample):
 
 def get_essay_options(df):
     """Get essay column options for time series."""
-    metadata_cols = {'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName', 
+    metadata_cols = {'client', 'sampleNumber', 'sampleDate', 'unitId', 'machineName',
                     'machineModel', 'machineBrand', 'machineHours', 'machineSerialNumber',
                     'componentName', 'componentHours', 'componentSerialNumber',
                     'oilMeter', 'oilBrand', 'oilType', 'oilWeight',
@@ -1228,112 +1299,96 @@ def get_essay_options(df):
                     'breached_essays', 'ai_recommendation', 'ai_generated_at',
                     'unitId_generated', 'componentName_generated', 'sampleDate_generated', 'client_generated'}
     essays = [col for col in df.columns if col not in metadata_cols and not is_eng_column(col)]
-    return [{'label': e, 'value': e} for e in sorted(essays)]
+    return [{'label': essay_label(e), 'value': e} for e in sorted(essays)]
 
 
 # ============================================================================
 # NEW HELPER FUNCTIONS FOLLOWING OIL-R REQUIREMENTS
 # ============================================================================
 
+def format_component_hours(sample) -> str:
+    """The component hour meter as the report header shows it ("27,275 hrs"); 'N/A' without one."""
+    value = sample.get('componentHours')
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 'N/A'
+    try:
+        return f"{float(value):,.0f} hrs"
+    except (ValueError, TypeError):
+        return 'N/A'
+
+
+def format_oil_hours(sample) -> str:
+    """The oil hour meter as the decision summary shows it ("512.0 hrs"); 'N/A' without one."""
+    value = sample.get('oilMeter')
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return 'N/A'
+    return f"{float(value):.1f} hrs"
+
+
 def create_report_identity_display(sample):
     """
-    Create sticky report identity display (OIL-R-01).
-    
-    Shows: client, machine/unit, component, sample date, report status, severity score.
-    Includes component horómetro when available.
+    Create the report header (OIL-R-01) as a status banner (ui_notes_improved.md §4).
+
+    One status value - the report's - drives the banner's background, text and badge: Normal is a
+    quiet white banner with a green badge, Alerta the orange tier, Anormal the deep red one.
+    Shows: client, unit, component, component hour meter, sample date and the report status.
     """
     if sample is None or sample.empty:
         return html.Div()
-    
-    status_color = {
-        'Anormal': 'danger',
-        'Alerta': 'warning',
-        'Normal': 'success'
-    }.get(sample.get('report_status', 'Normal'), 'secondary')
-    
-    # Build component hours display
-    comp_hours_display = 'N/A'
-    comp_hours_val = sample.get('componentHours')
-    if comp_hours_val is not None and not (isinstance(comp_hours_val, float) and pd.isna(comp_hours_val)):
-        try:
-            comp_hours_display = f"{float(comp_hours_val):,.0f} hrs"
-        except (ValueError, TypeError):
-            comp_hours_display = 'N/A'
-    
-    return dbc.Row([
-        dbc.Col([
-            html.Div([
-                html.Small(t("reports_callbacks.cliente"), className="text-muted d-block"),
-                html.Strong(str(sample.get('client', 'N/A')).upper())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("tab_mantenciones_general.equipo"), className="text-muted d-block"),
-                html.Strong(str(sample.get('unitId', 'N/A')).upper())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("tab_mantenciones_general.componente"), className="text-muted d-block"),
-                html.Strong(str(sample.get('componentName', 'N/A')).title())
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("reports_callbacks.horometro_comp"), className="text-muted d-block"),
-                html.Strong(comp_hours_display, style={'color': '#17a2b8'})
-            ])
-        ], width=1),
-        dbc.Col([
-            html.Div([
-                html.Small(t("component_hours_callbacks.fecha_de_muestra"), className="text-muted d-block"),
-                html.Strong(pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A')
-            ])
-        ], width=2),
-        dbc.Col([
-            html.Div([
-                html.Small(t("fleet_overview.col_status"), className="text-muted d-block"),
-                html.Span(sample.get('report_status', 'N/A'), className=f"badge bg-{status_color}")
-            ])
-        ], width=3)
-    ], className="mt-2")
+
+    comp_hours_display = format_component_hours(sample)
+
+    sample_date = pd.to_datetime(sample.get('sampleDate')).strftime('%Y-%m-%d') if sample.get('sampleDate') is not None else 'N/A'
+    return html.Div(status_banner(
+        sample.get('report_status', 'Normal'),
+        eyebrow=t("reports_callbacks.reporte_de_aceite"),
+        title=str(sample.get('unitId', 'N/A')).upper(),
+        subtitle=f"{t('tab_mantenciones_general.componente')}: {str(sample.get('componentName', 'N/A')).title()}",
+        fields=[
+            (t("reports_callbacks.cliente"), str(sample.get('client', 'N/A')).upper()),
+            (t("reports_callbacks.horometro_comp"), comp_hours_display),
+            (t("component_hours_callbacks.fecha_de_muestra"), sample_date),
+        ],
+    ), className="mt-2")
+
+
+def resolve_breached_essays(sample, limits, client, machine, component):
+    """The essays a report lists as "Ensayos críticos", and how many it counts as out of limit.
+
+    Returns ``(breached_essays, essays_broken_count, data_quality_warning)``: the stored
+    `breached_essays` unless it is empty while the limits say otherwise (then the ones calculated
+    from the sample's values), the stored `essays_broken` count, and whether that count is above
+    zero with no essay to show for it. The decision summary and the PDF report both read it here.
+    """
+    # Parse stored breached essays
+    stored_breached_essays = normalize_breached_essays(sample.get('breached_essays'))
+
+    # Calculate breached essays from actual data
+    calculated_breached_essays = calculate_breached_essays_from_data(sample, limits, client, machine, component) if limits else []
+
+    # Use calculated if stored is empty or inconsistent
+    essays_broken_count = int(sample.get('essays_broken', 0))
+    if not stored_breached_essays and calculated_breached_essays:
+        # Successfully filled missing data with calculated values - no warning needed
+        return calculated_breached_essays, essays_broken_count, False
+    # Only warn if we have essays_broken > 0 but can't show any breached essays at all
+    return stored_breached_essays, essays_broken_count, (essays_broken_count > 0 and len(stored_breached_essays) == 0)
 
 
 def create_decision_summary(sample, limits, client, machine, component):
     """
     Create decision summary section (OIL-R-02).
-    
+
     Simplified to show: Report Status | Essays Broken | Breached Essays
     """
     if sample is None or len(sample) == 0:
         return html.P(t("reports_callbacks.no_hay_datos_disponibles"), className="text-muted")
-    
-    status_color = {
-        'Anormal': 'danger',
-        'Alerta': 'warning',
-        'Normal': 'success'
-    }.get(sample.get('report_status', 'Normal'), 'secondary')
-    
-    # Parse stored breached essays
-    stored_breached_essays = normalize_breached_essays(sample.get('breached_essays'))
-    
-    # Calculate breached essays from actual data
-    calculated_breached_essays = calculate_breached_essays_from_data(sample, limits, client, machine, component) if limits else []
-    
-    # Use calculated if stored is empty or inconsistent
-    essays_broken_count = int(sample.get('essays_broken', 0))
-    if not stored_breached_essays and calculated_breached_essays:
-        # Successfully filled missing data with calculated values - no warning needed
-        breached_essays = calculated_breached_essays
-        data_quality_warning = False
-    else:
-        breached_essays = stored_breached_essays
-        # Only warn if we have essays_broken > 0 but can't show any breached essays at all
-        data_quality_warning = (essays_broken_count > 0 and len(breached_essays) == 0)
-    
+
+    breached_essays, essays_broken_count, data_quality_warning = resolve_breached_essays(
+        sample, limits, client, machine, component)
+
     breached_text = ", ".join(breached_essays) if breached_essays else t("tab_alerts_detail.ninguno")
-    
+
     # Previous sample context
     prev_date = "N/A"
     days_since = "N/A"
@@ -1343,11 +1398,11 @@ def create_decision_summary(sample, limits, client, machine, component):
                     and pd.notna(prev_sample_date))
     if has_previous:
         prev_date = pd.to_datetime(prev_sample_date).strftime('%Y-%m-%d')
-    
+
     days_prev = sample.get('daysSincePrevious')
     if has_previous and days_prev is not None and not (isinstance(days_prev, float) and pd.isna(days_prev)):
         days_since = t("reports_callbacks.dias", int_days_prev=int(days_prev))
-    
+
     main_summary = dbc.Row([
         # Simplified metrics: Status | Anomaly | Essays Broken | Breached Essays
         dbc.Col([
@@ -1359,15 +1414,16 @@ def create_decision_summary(sample, limits, client, machine, component):
                             html.Small(t("reports_callbacks.id_reporte_2"), className="text-muted me-1"),
                             html.Strong(str(sample.get('sampleNumber', 'N/A')), className="me-3"),
                             html.Small(t("reports_callbacks.horometro_aceite"), className="text-muted me-1"),
-                            html.Strong(f"{float(sample.get('oilMeter', 0)):.1f} hrs" if sample.get('oilMeter') is not None and not (isinstance(sample.get('oilMeter'), float) and pd.isna(sample.get('oilMeter'))) else 'N/A')
+                            html.Strong(format_oil_hours(sample))
                         ], className="d-inline-block float-end", style={'fontSize': '0.85rem'})
                     ], className="mb-3 clearfix"),
                     dbc.Row([
                         dbc.Col([
                             html.Div([
                                 html.Small(t("reports_callbacks.estado_del_reporte"), className="text-muted d-block mb-1"),
-                                html.H4(html.Span(sample.get('report_status', 'N/A'), 
-                                       className=f"badge bg-{status_color}"))
+                                # The status is a chip (shape + word). The counts below are neutral: no
+                                # severity threshold is defined for them, so they take no alarm color.
+                                html.Div(status_chip(sample.get('report_status', 'N/A'), solid=True), className="mt-1")
                             ])
                         ], width=3),
                         dbc.Col([
@@ -1383,14 +1439,13 @@ def create_decision_summary(sample, limits, client, machine, component):
                         dbc.Col([
                             html.Div([
                                 html.Small(t("reports_callbacks.ensayos_fuera_de_limite"), className="text-muted d-block mb-1"),
-                                html.H3(f"{essays_broken_count}", 
-                                       className=f"text-{status_color}")
+                                html.H3(f"{essays_broken_count}", className="fw-bold mb-0")
                             ])
                         ], width=3),
                         dbc.Col([
                             html.Div([
                                 html.Small(t("reports_callbacks.ensayos_criticos"), className="text-muted d-block mb-1"),
-                                html.P(breached_text, className="mb-0", 
+                                html.P(breached_text, className="mb-0",
                                       style={'fontSize': '0.9rem', 'fontWeight': 'bold'})
                             ])
                         ], width=3)
@@ -1415,7 +1470,7 @@ def create_decision_summary(sample, limits, client, machine, component):
             ], color="light")
         ], width=4)
     ], className="mb-2")
-    
+
     if data_quality_warning:
         return html.Div([
             main_summary,
@@ -1432,7 +1487,7 @@ def create_decision_summary(sample, limits, client, machine, component):
 def create_evidence_tables(sample, limits, df):
     """
     Create evidence tables grouped by essay category (OIL-R-03).
-    
+
     Replaces radar charts with clear tabular evidence showing:
     - Essay name
     - Current value
@@ -1441,52 +1496,52 @@ def create_evidence_tables(sample, limits, df):
     - Whether it contributes to breached evidence
     """
     from pathlib import Path
-    
+
     # Load essays_elements to get GroupElement mapping
     essays_file = _data_path("oil", "essays_elements.xlsx")
     if not essays_file.exists():
         return html.P(t("reports_callbacks.essays_elements_xlsx_not_found"), className="text-muted")
-    
+
     try:
         essays_df = load_essays_mapping(essays_file)
-        
+
         # Group essays by GroupElement
         group_mapping = essays_df.groupby('GroupElement')['ElementNameSpanish'].apply(list).to_dict()
-        
+
         # Order groups: Desgaste first, then others alphabetically
         priority_groups = ['Desgaste', 'Contaminacion', 'Aditivos']
         ordered_groups = []
-        
+
         for group in priority_groups:
             if group in group_mapping:
                 ordered_groups.append(group)
-        
+
         remaining_groups = sorted([g for g in group_mapping.keys() if g not in priority_groups])
         ordered_groups.extend(remaining_groups)
-        
+
         # Get limits for this component
         machine = sample.get('machineName', '')
         component = sample.get('componentName', '')
         component_normalized = sample.get('componentNameNormalized', component)
         client = sample.get('client', '')
-        
+
         if not (limits and client in limits and machine in limits[client] and component_normalized in limits[client][machine]):
             return html.P(t("reports_callbacks.no_hay_limites_disponibles_para_tablas"), className="text-muted")
-        
+
         comp_limits = limits[client][machine][component_normalized]
-        
+
         # Get oil hour range from sample (v2.3)
         oil_hour_range = sample.get('oilHourRange', 'UNKNOWN')
-        
+
         # Parse breached essays
         breached_essays = normalize_breached_essays(sample.get('breached_essays'))
-        
+
         # Create evidence tables by group
         tables = []
-        
+
         for group_name in ordered_groups:
             essays = group_mapping[group_name]
-            
+
             # Filter essays that exist in sample and have limits
             valid_essays = []
             for e in essays:
@@ -1518,7 +1573,7 @@ def create_evidence_tables(sample, limits, df):
                 is_breached = essay in breached_essays
 
                 table_data.append({
-                    'essay': essay,
+                    'essay': essay_label(essay),
                     'value': round(value, 2),
                     'lic': _fmt_limit(lic),
                     'lim': _fmt_limit(lim),
@@ -1566,7 +1621,7 @@ def create_evidence_tables(sample, limits, df):
                 page_size=15,
                 style_table={'overflowX': 'auto'}
             )
-            
+
             # Add section for this group
             tables.append(
                 html.Div([
@@ -1574,9 +1629,9 @@ def create_evidence_tables(sample, limits, df):
                     group_table
                 ], className="mb-4")
             )
-        
+
         return html.Div(tables) if tables else html.P(t("reports_callbacks.no_hay_datos_de_evidencia_disponibles"), className="text-muted")
-        
+
     except Exception as e:
         logger.exception(f"Error creating evidence tables: {e}")
         return html.P(t("component_hours_callbacks.error", str_e=str(e)), className="text-danger")
@@ -1620,11 +1675,25 @@ def _parse_oil_ai_sections(ai_rec: str) -> dict:
     return sections
 
 
+def _split_actions(text: str) -> list:
+    """The items of an AI "Acción" text: one per line (bullets and numbering removed) or, when it is a
+    single paragraph, one per sentence. An empty or missing text has no items."""
+    if not text or not str(text).strip():
+        return []
+    lines = [re.sub(r'^\s*(?:[-•*·]|\d+[.)])\s*', '', line).strip()
+             for line in re.split(r'[\r\n]+', str(text))]
+    lines = [line for line in lines if line]
+    if len(lines) == 1:
+        sentences = re.split(r'(?<=[.;])\s+(?=[A-ZÁÉÍÓÚÑ¿¡0-9])', lines[0])
+        lines = [sentence.strip() for sentence in sentences if sentence.strip()]
+    return lines
+
+
 def create_ai_diagnosis_and_action(sample):
     """
-    Create AI analysis display, matching the "Análisis Inteligente" styling
-    used in Alertas → Detalle (dashboard/callbacks/alerts_callbacks.py::_alert_case_header):
-    the comment is split into labeled boxes rather than shown as one paragraph.
+    Create AI analysis display: the comment is split into a Diagnóstico box and an Acciones box
+    (the same split "Análisis Inteligente" uses in Alertas -> Detalle). The actions are a real
+    checklist a technician can tick off (ui_notes_improved.md §6); without actions the box says so.
 
     Returns: (full_recommendation_element, empty_element)
     """
@@ -1636,74 +1705,76 @@ def create_ai_diagnosis_and_action(sample):
 
     sections = _parse_oil_ai_sections(ai_rec)
 
-    def _section_box(title, icon, text):
-        return dbc.Col([
-            html.Div([
-                html.H6([html.I(className=f'fas {icon} me-2'), title], className='text-dark mb-2'),
-                html.P(text or t("tab_alerts_detail.no_disponible"), className='mb-0', style={
-                    'whiteSpace': 'pre-wrap',
-                    'fontSize': '1rem',
-                    'lineHeight': '1.6',
-                    'color': '#333'
-                })
-            ], className='p-3 bg-light rounded h-100')
-        ], md=6)
+    def _box(title, icon, content):
+        return dbc.Col(
+            html.Div([html.H6([html.I(className=f'fas {icon} me-2', **{"aria-hidden": "true"}), title]), content],
+                     className='oil-ai-box'),
+            md=6)
+
+    diagnosis = html.P(sections['diagnostico'] or t("tab_alerts_detail.no_disponible"))
+    actions = action_checklist(
+        _split_actions(sections['accion']), 'reports-ai-actions', t("reports_callbacks.acciones_no_disponibles"))
 
     recommendation = dbc.Row([
-        _section_box(t("reports_callbacks.diagnostico"), 'fa-search', sections['diagnostico']),
-        _section_box(t("reports_callbacks.accion"), 'fa-wrench', sections['accion']),
+        _box(t("reports_callbacks.diagnostico"), 'fa-search', diagnosis),
+        _box(t("reports_callbacks.acciones"), 'fa-wrench', actions),
     ], className='g-3')
 
     return recommendation, html.Div()
 
 
+def compare_reports(current, previous, limits, client, machine, component) -> dict:
+    """What changed between two consecutive reports of one unit/component (OIL-R-06).
+
+    Breached essays are calculated from each report's values against the limits (more reliable
+    than the stored lists). `new_breaches` are critical in `current` and not in `previous`,
+    `resolved_breaches` the reverse, `unchanged_critical` critical in both. The delta panel
+    compares the two most recent reports; the PDF compares the examined one with its predecessor.
+    """
+    current_breached = calculate_breached_essays_from_data(current, limits, client, machine, component) if limits else []
+    previous_breached = calculate_breached_essays_from_data(previous, limits, client, machine, component) if limits else []
+
+    return {
+        'new_breaches': [e for e in current_breached if e not in previous_breached],
+        'resolved_breaches': [e for e in previous_breached if e not in current_breached],
+        'unchanged_critical': [e for e in current_breached if e in previous_breached],
+        'current_status': current.get('report_status', 'N/A'),
+        'previous_status': previous.get('report_status', 'N/A'),
+        'current_date': pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d'),
+        'previous_date': pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d'),
+    }
+
+
 def create_delta_summary(sample, df, equipo, component, limits, client, machine):
     """
     Create delta summary showing changes from previous report (OIL-R-06).
-    
+
     Shows:
     - Worsening essays
     - Improving essays
     - Unchanged critical essays
     - Net status change
     - Major severity deltas
-    
+
     Uses dynamically calculated breached essays for accuracy.
     """
     # Get history for this equipment and component
     history = df[(df['unitId'] == equipo) & (df['componentName'] == component)].sort_values('sampleDate', ascending=False)
-    
+
     if len(history) < 2:
-        return dbc.Alert(t("reports_callbacks.se_necesitan_al_menos_2_reportes"), 
+        return dbc.Alert(t("reports_callbacks.se_necesitan_al_menos_2_reportes"),
                         color="info", className="mb-0")
-    
+
     # Get current and previous report
     current = history.iloc[0]
     previous = history.iloc[1]
-    
-    # Calculate breached essays dynamically for both (more reliable than stored values)
-    current_breached = calculate_breached_essays_from_data(current, limits, client, machine, component) if limits else []
-    previous_breached = calculate_breached_essays_from_data(previous, limits, client, machine, component) if limits else []
-    
-    # Identify worsening, improving, unchanged critical
-    new_breaches = [e for e in current_breached if e not in previous_breached]
-    resolved_breaches = [e for e in previous_breached if e not in current_breached]
-    unchanged_critical = [e for e in current_breached if e in previous_breached]
-    
-    # Status change
-    current_status = current.get('report_status', 'N/A')
-    previous_status = previous.get('report_status', 'N/A')
-    status_changed = current_status != previous_status
-    
-    # Date context
-    current_date = pd.to_datetime(current.get('sampleDate')).strftime('%Y-%m-%d')
-    previous_date = pd.to_datetime(previous.get('sampleDate')).strftime('%Y-%m-%d')
-    
-    # Calculate badge colors
-    status_colors = {'Normal': 'success', 'Alerta': 'warning', 'Anormal': 'danger'}
-    current_badge_color = status_colors.get(current_status, 'secondary')
-    previous_badge_color = status_colors.get(previous_status, 'secondary')
-    
+
+    delta = compare_reports(current, previous, limits, client, machine, component)
+    new_breaches = delta['new_breaches']
+    resolved_breaches = delta['resolved_breaches']
+    current_status, previous_status = delta['current_status'], delta['previous_status']
+    current_date, previous_date = delta['current_date'], delta['previous_date']
+
     # Build summary
     return dbc.Row([
         # Left - Overview
@@ -1715,14 +1786,12 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
                         dbc.Col([
                             html.Small(t("reports_callbacks.reporte_actual"), className="text-muted d-block"),
                             html.Strong(current_date, className="d-block"),
-                            html.Span(current_status, 
-                                     className=f"badge bg-{current_badge_color}")
+                            status_chip(current_status)
                         ], width=6),
                         dbc.Col([
                             html.Small(t("reports_callbacks.reporte_anterior"), className="text-muted d-block"),
                             html.Strong(previous_date, className="d-block"),
-                            html.Span(previous_status,
-                                     className=f"badge bg-{previous_badge_color}")
+                            status_chip(previous_status)
                         ], width=6)
                     ])
                 ])
@@ -1732,7 +1801,7 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6(t("reports_callbacks.empeorando"), className="mb-2 text-danger"),
+                    html.H6(t("reports_callbacks.empeorando"), className="mb-2", style={'color': SEVERITY_TIERS['alto']['text']}),
                     html.P(t("reports_callbacks.nuevos_ensayos_criticos", len_new_breaches=len(new_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
                     html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in new_breaches[:5]]) if new_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])
@@ -1742,7 +1811,7 @@ def create_delta_summary(sample, df, equipo, component, limits, client, machine)
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
-                    html.H6(t("reports_callbacks.mejorando"), className="mb-2 text-success"),
+                    html.H6(t("reports_callbacks.mejorando"), className="mb-2", style={'color': SEVERITY_TIERS['bajo']['text']}),
                     html.P(t("reports_callbacks.ensayos_resueltos", len_resolved_breac=len(resolved_breaches)), className="mb-1", style={'fontSize': '0.9rem'}),
                     html.Ul([html.Li(essay, style={'fontSize': '0.85rem'}) for essay in resolved_breaches[:5]]) if resolved_breaches else html.P(t("tab_alerts_detail.ninguno"), className="text-muted mb-0", style={'fontSize': '0.9rem'})
                 ])

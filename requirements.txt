@@ -50,6 +50,11 @@ tqdm>=4.66.0
 weasyprint==70.0
 jsonschema>=4.0
 
+# PDF del reporte de aceite (dashboard/components/oil_report_pdf.py): Monitoreo > Aceite > Detalle de
+# reporte > "Descargar reporte en PDF". Python puro, sin librerias de sistema: corre igual en Windows
+# y en la imagen Docker (WeasyPrint, arriba, necesita Pango y no se puede probar en un equipo Windows).
+reportlab>=4.2
+
 # S3 Interaction (pinned to avoid pip backtracking; must support S3 conditional
 # writes (IfMatch/IfNoneMatch on PutObject, used by config/client_services.py) -
 # 1.35.0 predates that feature, this pin matches what's verified working)

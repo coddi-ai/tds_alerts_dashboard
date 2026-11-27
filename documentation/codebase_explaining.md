@@ -79,7 +79,7 @@ actually contain the expected file, and (2) does the logged-in user's client lis
 | `config/` | Runtime settings (`settings.py`) and user accounts (`users.py`) | Yes, for config/access changes |
 | `src/` | Data access layer: loaders, transformers, schemas, S3 sync, logging | Yes, when data-loading logic needs to change |
 | `data/` | Local copy of Gold/Silver-layer files, organized by technique/layer/client | Usually not — this is synced/mounted data, not source |
-| `scripts/` | Operational scripts. `partition_alerts.py` builds the partitioned alerts and the partitioned alert telemetry (§5) | Yes, when the partitioning/schedule changes |
+| `scripts/` | Operational scripts. `partition_alerts.py` builds the partitioned alerts and the partitioned alert telemetry (§5); it is a manual tool, the app schedules it (`src/data/partition_scheduler.py`) | Yes, when the partitioning/schedule changes |
 | `documentation/` | Per-technique data contracts and design docs (source of truth for data shape) | Read frequently, edit when contracts/features change |
 | `ai_docs/` | Dev-authored implementation notes/specs from past feature work | Read for historical context; treat as informal, may be stale |
 | `notebooks/` | Jupyter notebooks used for one-off data exploration | Don't treat as production code; not imported by the app |
@@ -195,8 +195,8 @@ evidence included). When the client has partitions but none overlaps the window 
 days" message) stays distinct from "the client has no alert data" (`client_has_alert_partitions`).
 
 **Freshness change.** These consumers used to show the CSV as it was at that moment; they now show
-the data of the last partition run: Wednesday 04:00 for capstone and cda, **every day 10:30 for EMIN**
-(its data updates daily, and its e-mail goes out daily at 12:00). This was accepted as a decision (see
+the data of the last partition run: **Wednesday 08:00 for every client, and every day 11:30 for EMIN**
+(its data updates daily, and its e-mail goes out daily at 12:00; the app runs both itself, see §5). This was accepted as a decision (see
 `change_summary.md`). A running dashboard also needs the new partitions on its disk (shared data
 volume or the next startup sync, §2); the scheduled e-mail gets them from its pre-send S3 sync.
 
@@ -414,7 +414,8 @@ backtest/, state/, other *.csv              untouched by the partitioner
   with it the order of alerts that share a timestamp — without an extra column.
 - **Code**: `src/data/alert_partitions.py` (layout + read; no S3 imports),
   `src/data/alert_partition_builder.py` (build, validation), `src/data/alert_partition_s3.py`
-  (sync), `scripts/partition_alerts.py` (CLI + scheduler).
+  (sync), `scripts/partition_alerts.py` (manual CLI, **no schedule**), `src/data/partition_scheduler.py`
+  (the in-app schedule that runs the script, below).
 
 **The script — `python scripts/partition_alerts.py`**
 
@@ -424,15 +425,50 @@ backtest/, state/, other *.csv              untouched by the partitioner
 | `--backfill` | The first execution, over all history. **Local only**; S3 sync is **off unless `--sync-s3`** is passed. `--validate` runs by default: row totals, column names, dtypes, values and week/unit placement are compared with the CSV before anything is pushed. |
 | `--backfill --sync-s3` | After validating locally: pushes the full history and writes `_backfill_complete.json`. |
 | `--verify-s3` | Read-only: compares S3 with the local partitions (keys, sizes, hashes, row counts). |
-| `--schedule` | Foreground loop. **Every client except the daily ones runs every Wednesday 04:00**; the *daily clients* (`ALERT_PARTITIONS_DAILY_CLIENTS`, default **`emin`**, `none` for no one) run every day at `ALERT_PARTITIONS_DAILY_TIME` (default **10:30**: EMIN's update ends at 10:00, its e-mail goes at 12:00). Time zone `ALERT_PARTITIONS_TIMEZONE` (default **`America/Santiago`**, explicit — not the container's zone; weekday/time via `ALERT_PARTITIONS_WEEKDAY` / `ALERT_PARTITIONS_TIME`). `--client` limits both. |
 
-- **Where it runs**: `docker-compose.yml` has an `alerts-partitioner` service (`--schedule`, the
-  only one that mounts `data/` read-write). In ECS use an EventBridge Scheduler rule
-  `cron(0 4 ? * WED *)` with timezone `America/Santiago` that runs the same image with the command
-  `python scripts/partition_alerts.py`, plus a second rule `cron(30 10 ? * * *)` for the daily clients
-  (`python scripts/partition_alerts.py --client emin`), and give the task write access to the dashboard's
-  data volume and S3 `List/Get/Put/DeleteObject` on the prefix. The partitioner reads the CSV from its own
-  volume: the fresh CSV (EMIN's, daily) must be there before the run (EMIN's by 10:30).
+- **Where it runs — inside the app, not in a container.** The partitioner is an internal job of the
+  dashboard process (`src/data/partition_scheduler.py`, started from `dashboard/app.py` right after the
+  mailing scheduler and with the same rules: **production only** — `DEPLOY_STATUS` = POC/production —,
+  a daemon thread polling every 30 s, `ALERT_PARTITIONS_SCHEDULER_ENABLED=false` switches it off). It is
+  **not** scheduled anywhere else: the `alerts-partitioner` service was removed from `docker-compose.yml`
+  (the Dockerfiles never carried a partitioner entry point) and the ECS/EventBridge rules
+  `cron(0 4 ? * WED *)` and `cron(30 10 ? * * *)` must not exist (they are AWS-side; nothing in the repo
+  creates them). `scripts/partition_alerts.py` has no `--schedule` any more: it is **only the manual
+  tool** (`--backfill`, `--validate`, `--sync-s3`, `--verify-s3`, `--client`, `--dataset`, or one run now).
+- **Schedule** (`America/Santiago`, every value an environment variable of the app):
+
+  | Job | When | Clients | Variables (default) |
+  |---|---|---|---|
+  | weekly | **Wednesday 08:00** — one hour after the 07:00 alert creation | every client found | `ALERT_PARTITIONS_WEEKDAY` (`wednesday`), `ALERT_PARTITIONS_TIME` (`08:00`), `ALERT_PARTITIONS_TIMEZONE` |
+  | daily | **every day 11:30**, after EMIN's CSV reaches S3 (~11:10) and before its 12:00 e-mail | the daily clients | `ALERT_PARTITIONS_DAILY_CLIENTS` (`emin`; `none` = no daily job), `ALERT_PARTITIONS_DAILY_TIME` (`11:30`) |
+
+  A run is due from its scheduled moment until `ALERT_PARTITIONS_GRACE_MINUTES` (15) later (a quick
+  restart still runs it; a longer outage is a missed run, never a catch-up). Also:
+  `ALERT_PARTITIONS_TIMEOUT_SECONDS` (3600), `ALERT_PARTITIONS_STATE_DIR` (`logs/partitions`).
+- **How a run happens.** The job starts `python scripts/partition_alerts.py` (the normal weekly run: rebuild
+  what changed, then sync to S3; the daily job adds `--client emin`) **in a subprocess**, so the heavy CSV
+  rebuild neither holds the GIL nor adds memory to the process serving requests: a dashboard request is never
+  blocked. Its log lines go into the app log (`partitioner | …`; `ERROR` lines as errors) and its exit status
+  (0 ok · 1 build/validation · 2 S3 sync) is the outcome. S3 credentials/bucket/prefix come from the app's
+  environment (`BUCKET_NAME`, `ACCESS_KEY`/`SECRET_KEY` or the task role, `ALERT_PARTITIONS_S3_*`); the task
+  needs write access to the data volume and S3 `List/Get/Put/DeleteObject` on the prefix. The script's own
+  per-client lock file also keeps a manual run from overlapping a scheduled one.
+- **Exactly once, and the run status.** Each run claims a marker file
+  `logs/partitions/partitions_{weekly|daily}_{date}.json` (`O_CREAT | O_EXCL`, like the mailer's): whichever
+  worker/thread creates it runs the job, the others skip. The marker is then updated to `ok` / `failed`
+  (+ exit code) — this is the **run status** the e-mail reads. It protects workers and restarts that share
+  the `logs/` volume (one gunicorn process with 8 threads today); app tasks that do **not** share it would
+  each run the job (and each send the mailer's e-mail, which has the same limit).
+- **The e-mail waits for it.** The scheduled alert-summary e-mail (**capstone Wednesday 08:30**; EMIN daily
+  12:00) checks, before building anything, that this period's run finished `ok`
+  (`config.MAILING_PARTITION_DEPENDENCY`: capstone → the weekly run of its week, EMIN → the daily run of that
+  day) — it does not rely on the time gap. If the run failed, is still running (or was interrupted) or never
+  ran, the e-mail is **not sent**, the reason is logged as an ERROR and recorded in the mailer's marker; no
+  retry, no alternative path. **Capstone's e-mail also needs alerts** (`config.MAILING_REQUIRE_ALERTS`): after that check and
+  the pre-send sync it counts the alerts of its period in the partitions and, if there are none, is not built or sent (ERROR
+  `… no alerts generated …`; also when the data cannot be read). EMIN is exempt: it generates alerts daily and not every day
+  has alerts. After a failed run, fix the cause and re-run `partition_alerts.py` by hand; the
+  missed e-mail is a manual send from the Mailing admin page.
 - **Idempotent and atomic**: a partition is rewritten only if its new bytes differ; it is written to
   a temp name and swapped in with `os.replace`, and the reader opens exactly
   `{week}/file.parquet` (never a glob), so a dashboard sees a whole old file or a whole new
@@ -451,7 +487,7 @@ backtest/, state/, other *.csv              untouched by the partitioner
   `_backfill_complete.json` is not in S3. Order of operations: backfill locally → validate → backfill
   with `--sync-s3` → the schedule can go live.
 - **Freshness**: the views change only when the script runs. An alert added to the CSV appears after
-  the next run (Wednesday, or the next day for EMIN). And the dashboard mirrors S3 into `data/` only at startup (§2), so a
+  the next run (Wednesday 08:00, or 11:30 the same day for EMIN). And the dashboard mirrors S3 into `data/` only at startup (§2), so a
   running dashboard picks up new partitions when the script shares its data volume, or on its next
   start.
 
@@ -487,8 +523,8 @@ _telemetry_backfill_complete.json           (S3 only) written when the telemetry
   `src/data/telemetry_partition_builder.py` (build, validation; the script passes it the source file
   name), `src/data/alert_partition_s3.py` (`TELEMETRY_DATASET`: same sync/verify code, own marker and
   keys), `scripts/partition_alerts.py` (one run for both datasets).
-- **Script behaviour** (same run, schedule and time zone as the alerts: Wednesday 04:00
-  `America/Santiago`): per client the alerts half runs first and the telemetry half second, each
+- **Script behaviour** (same run, schedule and time zone as the alerts: Wednesday 08:00
+  `America/Santiago`, started by the app): per client the alerts half runs first and the telemetry half second, each
   with its own build, validation, S3 sync and exit-status contribution (a failure of one never stops
   the other). Only partitions whose bytes changed are rewritten (the in-progress week included),
   partitions the source no longer yields are removed, files are swapped in with `os.replace`, a
@@ -620,7 +656,7 @@ plus live-reload mounts for `./dashboard`, `./config`, `./src`).
   app's code.
 - **No dashboard section, e-mail or assistant reads `consolidated_alerts.csv`.** If an Alertas, Hot Sheet, Menace Control,
   Fleet overview or Unit summary page looks stale after the CSV changed, the partitions haven't been
-  regenerated (`scripts/partition_alerts.py`, Wednesdays 04:00, EMIN every day); if it shows nothing, check
+  regenerated (`scripts/partition_alerts.py`, started by the app: Wednesdays 08:00, EMIN every day 11:30; look for `partitioner |` lines and the `logs/partitions/` status); if it shows nothing, check
   `data/alerts/golden/{client}/{week}/file.parquet` and `_alert_index.parquet`, not the CSV. Tests
   that feed alerts to the sections must build partitions (`tests/alert_partition_support.py`).
 - **No runtime code reads the wide telemetry CSV either.** If *Evidencia de Telemetría* says there is
