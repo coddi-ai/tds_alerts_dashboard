@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 
 from dashboard.auth import allowed_clients
 from dashboard.components.emin_beta import (
-    _t, date_caption, evidence_page, fleet_intro, fleet_table, unit_records_page, unit_story,
+    _t, date_caption, evidence_page, fleet_intro, fleet_table, unit_record_weeks, unit_records_page, unit_story,
 )
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
@@ -146,23 +146,50 @@ def _register_unit_records_table(table):
         Output(f"{prefix}-page", "data"),
         Output(f"{prefix}-previous", "disabled"),
         Output(f"{prefix}-next", "disabled"),
+        Output(f"{prefix}-week", "data"),
+        Output(f"{prefix}-week-label", "children"),
+        Output(f"{prefix}-week-select", "options"),
+        Output(f"{prefix}-week-select", "value"),
+        Output(f"{prefix}-week-select", "disabled"),
         Input("emin-history-unit", "value"),
         Input("emin-history-view-tabs", "value"),
         Input("emin-beta-package", "data"),
         Input(f"{prefix}-previous", "n_clicks"),
         Input(f"{prefix}-next", "n_clicks"),
+        Input(f"{prefix}-chart", "clickData", allow_optional=True),
+        Input(f"{prefix}-week-select", "value"),
         *filters,
+        State(f"{prefix}-week", "data"),
         State(f"{prefix}-page", "data"),
         State("client-selector", "value"),
         State("user-info-store", "data"),
     )
-    def update_table(unit, tab, package, previous, following, *values):
+    def update_table(unit, tab, package, previous, following, click, selected_week, *values):
         if tab != "unit":
-            return None, 0, True, True
-        page, client, user_data = values[-3:]
+            return None, 0, True, True, None, None, [], "__all__", True
+        selection, page, client, user_data = values[-4:]
         report = _get_report(client, user_data, package)
         if not report:
-            return None, 0, True, True
+            return None, 0, True, True, None, None, [], "__all__", True
         direction = {f"{prefix}-previous": -1, f"{prefix}-next": 1}.get(ctx.triggered_id)
         requested = (page or 0) + direction if direction else 0
-        return unit_records_page(report, unit, table, bool(values[0]) if filters else False, requested)
+        week = selection.get("week") if isinstance(selection, dict) and selection.get("unit") == unit else None
+        if ctx.triggered_id in {"emin-history-unit", "emin-beta-package"}:
+            week = None
+        elif ctx.triggered_id == f"{prefix}-week-select":
+            week = selected_week
+        elif ctx.triggered_id == f"{prefix}-chart" and isinstance(click, dict):
+            points = click.get("points")
+            point = points[0].get("customdata") if isinstance(points, list) and points and isinstance(points[0], dict) else None
+            if isinstance(point, list) and point and point[-1] == unit and isinstance(point[0], str):
+                week = point[0]
+        weeks = unit_record_weeks(report, unit, table)
+        if week not in {entry[0] for entry in weeks}:
+            week = None
+        options = [{"label": _t("clear_chart_week"), "value": "__all__"}]
+        options.extend({"label": _t("table_week_option", week=iso, monday=monday), "value": iso}
+                       for iso, monday in weeks)
+        result = unit_records_page(report, unit, table, bool(values[0]) if filters else False, requested, week)
+        return (*result, {"unit": unit, "week": week} if week else None,
+                _t("selected_chart_week", week=week) if week else _t("choose_chart_week") if weeks else None,
+                options, week or "__all__", not weeks)

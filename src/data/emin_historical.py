@@ -214,6 +214,20 @@ def _validate_beta_report(report, metadata):
                     or (comparable and (not isinstance(threshold, (int, float)) or not 1 <= threshold < float("inf")))
                     or (not comparable and threshold is not None)):
                 raise ValueError
+        scoring_counts = report.get("scoring_coverage")
+        if scoring_counts is not None and (
+            report.get("scoring_review_version") != 1 or not isinstance(scoring_counts, dict)
+            or set(scoring_counts) != {"verified", "preliminary", "insufficient"}
+            or any(type(value) is not int or value < 0 for value in scoring_counts.values())
+            or sum(scoring_counts.values()) != len(report["rows"])
+        ):
+            raise ValueError
+        weekly_order = report.get("weekly_review_order")
+        if weekly_order is not None:
+            candidates = {row["unit"] for row in report["rows"] if row["scoring_review"]["finding_id"] is not None}
+            if (report.get("scoring_review_version") != 1 or not isinstance(weekly_order, list)
+                    or len(weekly_order) != len(candidates) or set(weekly_order) != candidates):
+                raise ValueError
         for row in report["rows"]:
             unit = report["units"][row["unit"]]
             comparison = row["comparison"]
@@ -222,6 +236,27 @@ def _validate_beta_report(report, metadata):
                     or not isinstance(row["domains"], dict) or not isinstance(row["groups"], list)
                     or not all(isinstance(unit[key], list) for key in ("records", "headline", "oil", "timeline"))):
                 raise ValueError
+            if report.get("scoring_review_version") == 1:
+                review = row["scoring_review"]
+                coverage = review["coverage"]
+                finding = review["finding_id"]
+                if (coverage["state"] not in {"verified", "preliminary", "insufficient"}
+                        or review["level"] not in {"high", "low", None}
+                        or any(type(coverage[key]) is not int or coverage[key] < 0
+                               for key in ("verified_current_days", "verified_prior_weeks"))
+                        or (finding is not None and (type(finding) is not int or not any(
+                            record["id"] == finding and record["week"] == cutoff["week"]
+                            for record in unit["records"])))):
+                    raise ValueError
+                history = review.get("finding_history")
+                if history is not None:
+                    weeks, oil, safety, both = (history[key] for key in ("weeks", "oil_weeks", "safety_weeks", "both_weeks"))
+                    latest = history["latest_week"]
+                    if (any(type(value) is not int or value < 0 for value in (weeks, oil, safety, both))
+                            or both > min(oil, safety) or weeks != oil + safety - both
+                            or (weeks == 0 and latest is not None)
+                            or (weeks > 0 and (not _WEEK_PATTERN.fullmatch(str(latest)) or latest > cutoff["week"]))):
+                        raise ValueError
             if scoped and not isinstance(unit["milestone_ids"], list):
                 raise ValueError
             if zones is not None and not comparison["missing"] and comparison.get("quadrant") not in _BETA_QUADRANTS:

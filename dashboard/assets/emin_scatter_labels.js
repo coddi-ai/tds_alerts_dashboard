@@ -134,6 +134,7 @@
         if (graph && active?.graph === graph) {
             if (!active.hasListener && typeof graph.on === "function") {
                 graph.on("plotly_afterplot", active.afterPlot);
+                graph.on("plotly_click", active.onClick);
                 active.hasListener = true;
                 schedule(active);
             }
@@ -142,6 +143,7 @@
         if (active) {
             active.resize.disconnect();
             active.graph.removeListener?.("plotly_afterplot", active.afterPlot);
+            active.graph.removeListener?.("plotly_click", active.onClick);
             active.overlay.remove();
             active = null;
         }
@@ -151,10 +153,24 @@
         const state = {graph, host, overlay};
         active = state;
         state.afterPlot = () => schedule(state);
+        state.onClick = (event) => {
+            const unit = event?.points?.[0]?.customdata?.[0];
+            if (!unit) return;
+            const page = host.closest(".emin-beta-page");
+            const row = page?.querySelector(`[data-emin-fleet-unit="${CSS.escape(unit)}"]`);
+            const status = page?.querySelector(".emin-beta-plot-status");
+            if (status) status.textContent = row ? "" : `${unit} · ${status.dataset.missingText}`;
+            if (!row) return;
+            page.querySelector(".emin-beta-fleet-selected")?.classList.remove("emin-beta-fleet-selected");
+            row.classList.add("emin-beta-fleet-selected");
+            row.querySelector("a")?.focus({preventScroll: true});
+            row.scrollIntoView({block: "center", inline: "nearest"});
+        };
         state.resize = new ResizeObserver(state.afterPlot);
         state.resize.observe(graph);
         if (typeof graph.on === "function") {
             graph.on("plotly_afterplot", state.afterPlot);
+            graph.on("plotly_click", state.onClick);
             state.hasListener = true;
         }
         schedule(state);

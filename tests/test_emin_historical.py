@@ -271,6 +271,11 @@ def test_beta_weekly_fact_links_to_exact_record_and_does_not_promote_an_old_aler
         "CT-2": {"records": [older]},
     }}
     assert _weekly_facts(report) == {"CT-1": recorded}
+    finding = dict(recorded, id=9, kind="oil", category="oil", state="abnormal", description="Aceite reciente")
+    report["units"]["CT-1"]["records"].append(finding)
+    report["rows"] = [{"unit": "CT-1", "scoring_review": {"finding_id": 9}}]
+    report["scoring_review_version"] = 1
+    assert _weekly_facts(report) == {"CT-1": finding}
     summary = _visible(unit_story(report, "CT-1", {"unit": "CT-1", "record": 8})[0])
     assert "Presión baja" in summary and "Aceite anterior" not in summary
     assert "Registro que abriste desde la flota" in summary and "OT-10" in summary
@@ -282,10 +287,13 @@ def test_beta_dedicated_tables_use_sample_states_and_full_milestone_ids():
     intervention = dict(row, id=7, category="downtime", kind="downtime_record", state="recorded",
                         reference="OT-1", description="Detención", corrected_from="2014-11-11")
     report = {"units": {"CT-1": {"records": [
-        dict(row, state="abnormal"), dict(row, id=4, state="alert", reference="M-101"), intervention,
+        dict(row, state="abnormal", week="2024-W01"),
+        dict(row, id=4, state="alert", reference="M-101", week="2024-W02"), intervention,
     ], "milestone_ids": [7]}}}
     oil = _visible(unit_records_page(report, "CT-1", "oil", True, 0)[0])
     assert "M-100" in oil and "M-101" not in oil and "OT-1" not in oil
+    week = _visible(unit_records_page(report, "CT-1", "oil", False, 0, "2024-W02")[0])
+    assert "M-101" in week and "M-100" not in week
     milestones = _visible(unit_records_page(report, "CT-1", "milestones", False, 0)[0])
     assert "OT-1" in milestones and "M-100" not in milestones and "Fecha de origen corregida" in milestones
 

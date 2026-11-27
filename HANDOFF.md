@@ -244,3 +244,38 @@ Con la publicación real W48, Playwright Edge comprobó la semana del 23 al 25-1
 La navegación identifica Beta. La tabla informa cuántos equipos coinciden y marca los extremos de cinco filas con su puesto publicado. El historial destaca solamente el registro abierto desde la flota y mantiene las tablas de hitos y aceite, con sus gráficos.
 
 El perfil offline descrito arriba pasó 17 pruebas, incluidos el filtro vacío, el puesto conservado, la unidad sin muestras y el enlace exacto. Playwright Edge confirmó 50 filas, 5 marcas por extremo, 44 nombres a 320, 390 y 1440 px, el registro de antivuelco de CT-230 y las seis muestras anormales de CT-187 con filtro conservado al volver. El paquete local 20261126T0000-0300-b081d2dcdb6b4f4600a142eac60efc6f38b53cf9e103c36d77f6385a7fc30a00 agrega el ejemplo de puestos empatados, con los demás contenidos del modelo idénticos al corte W48 de S3. Integrar las ramas y publicar la documentación actualizada en el entorno compartido sigue pendiente.
+
+## Cobertura y hallazgo semanal
+
+La vista muestra cobertura verificada o preliminar y el nivel relativo por separado de la variación de la tabla. El productor elige el hallazgo semanal y su referencia. El lector admite el contrato previo y valida el nuevo bloque opcional. El espejo local usa el run c6187ae8 del corte real W48. Se mantiene el ranking vigente. Queda pendiente revisar la disponibilidad y cobertura en origen antes de integrar una escala distinta.
+
+- Perfil offline descrito arriba en el dashboard y `git diff --check`.
+- En W48 se verificó CT-197 con nivel relativo bajo y subida de señal y CT-230 con el registro de antivuelco del 25-11-2026. Cambios locales sin commit ni publicación remota.
+
+Validación final: el perfil offline dio 17 pruebas aprobadas. Playwright Edge confirmó en la tabla la comparación preliminar, señal relativa baja y empeoramiento de CT-197. El enlace de CT-230 mostró el registro exacto. La ruta habitual respondió HTTP 200.
+
+## Cruce con feedback del panorama y detalle
+
+El scatter destaca la fila de la unidad sin cambiar el filtro. El ranking histórico tiene su propio encabezado. El paquete indica si cada grupo tuvo señales en el corte o solo antes, vincula el registro semanal del grupo y muestra recurrencia y una intervención intermedia únicamente cuando coincide el componente publicado. Los dos gráficos de detalle filtran su tabla por semana ISO y permiten restaurarla.
+
+Perfil offline anterior 17 pruebas aprobadas, node --check dashboard/assets/emin_scatter_labels.js y git diff --check correctos. Playwright Edge sobre W48 comprobó scatter a CT-187, Frenos con 13 coincidencias actuales y 19 históricas, aceite W20, hitos W43 (1 fila, luego 30 al limpiar) y conservación de Frenos al volver. Paquete espejo f0951bc8. Estado local sin commit ni publicación. La adopción de la escala experimental sigue a la espera de cobertura certificada y revisión operativa.
+
+## Cobertura visible y semanas con hallazgos graves
+
+El panorama muestra la cobertura del conjunto. La tabla de ranking agrega semanas con hallazgos graves registrados, su última semana y el desglose por tipo al pasar el cursor. Conserva la lectura de paquetes anteriores. El espejo determinista de W48 usa el run 9e834905 sin alterar la posición o el puntaje vigente de ninguna unidad. Perfil Docker offline anterior: 17 pruebas aprobadas. Cambios locales sin publicación.
+
+## Hallazgos semanales por gravedad y fecha
+
+Flota presenta tres tarjetas y acceso a las restantes, ordenadas como publica el productor. Se muestra la severidad junto al evento y se preserva el enlace al registro aun para equipos fuera del top histórico. La vista local usa el paquete real W48 77e8112a. Playwright confirmó tres tarjetas iniciales, siete adicionales, ancho móvil sin desbordamiento y enlace del puesto 32 (CT-197) al antivuelco del 24-11-2026. Perfil offline anterior: 17 pruebas aprobadas. Cambios locales sin publicar.
+
+## Explicación del puntaje histórico en el detalle
+
+Sección plegable de aportes por dominio con evidencia fechada cuando el productor puede vincularla a una contribución aplicada. No vuelve a calcular puntos. El espejo local usa el corte real W48, run 7e3b200a. Playwright comprobó en CT-230 Rodado 3,6, Seguridad 3,2, Tribología 0,2 y Motor 0,1 con ejemplos de evento y aceite, sin desplazar el hallazgo semanal de antivuelco. Sin desbordamiento a 390 px. El perfil offline dio 17 pruebas aprobadas. Cambios locales.
+
+## Filtro semanal accesible en el detalle
+
+Hitos y aceite permiten filtrar por semana desde un selector nativo junto a la tabla. El selector y el gráfico comparten la selección. Se puede volver a todas las semanas con teclado y cambiar de equipo sin arrastrar otra selección. Se conserva el filtro de muestras anormales. Perfil offline anterior: 17 pruebas aprobadas. Playwright Edge y el paquete real W48 verificaron en CT-187 la selección por flecha de 2026-W44, el retorno a todas con Inicio y el clic en el gráfico que sincronizó 2025-W20 y mostró tres muestras. El selector de hitos mostró 84 opciones, incluida Todas. Cambios locales. Fórmula y paquete de datos conservados.
+
+## Auditoría de cierre del feedback
+
+Sobre el paquete real 7e3b200a, Playwright confirmó 50 unidades, 5 marcas de cada extremo, cuatro cuadrantes y 44 nombres a 320, 390 y 1440 px sin desplazamiento horizontal. Se abrió la metodología, se aplicó Frenos (13 señales en W48 y 19 históricas), se abrió CT-187 con seis muestras anormales y selector semanal disponible, se verificó la ausencia de acumulado y se volvió conservando el filtro. Perfil Docker offline anterior: 17 pruebas aprobadas. node --check dashboard/assets/emin_history.js, node --check dashboard/assets/emin_scatter_labels.js y git diff --check aprobaron. Cierre técnico local; publicación pendiente.

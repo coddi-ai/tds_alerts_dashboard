@@ -121,12 +121,22 @@ def _weekly_facts(report):
                 selected = record
         if selected is not None:
             facts[unit] = selected
+    if report.get("scoring_review_version") == 1:
+        for row in report["rows"]:
+            unit = row["unit"]
+            finding = row.get("scoring_review", {}).get("finding_id")
+            if finding is not None:
+                record = next((item for item in report["units"][unit]["records"] if item["id"] == finding), None)
+                if record is not None:
+                    facts[unit] = record
     return facts
 
 
 def _fact_snippet(record):
     return html.Div([
         html.Strong(_fact_title(record)),
+        html.Small(_state(record), className="d-block text-muted")
+        if record["category"] == "event" and record["state"] in {"critical", "high"} else None,
         html.Div(_fact_body(record), className="emin-beta-fact-excerpt"),
         html.Small(f"{_label_day(record['day'])} · {_t('source_' + record['kind'])}",
                    className="d-block text-muted"),
@@ -151,18 +161,29 @@ def date_caption(report):
               start=_label_day(report["start"]))
 
 
-def _graph(figure):
-    return dcc.Graph(figure=figure, config={"displayModeBar": False}, responsive=True,
+def _graph(figure, graph_id=None):
+    props = {"id": graph_id} if graph_id else {}
+    return dcc.Graph(figure=figure, **props, config={"displayModeBar": False}, responsive=True,
                      style={"height": f"{figure.layout.height}px", "width": "100%"})
 
 
 def fleet_intro(report):
     zones = report["quadrants"]
     facts = _weekly_facts(report)
-    review = [row for row in report["rows"] if row["unit"] in facts
-              and row["comparison"].get("quadrant") in {"critical", "recent_worsening"}]
-    review.sort(key=lambda row: not _urgent_fact(facts[row["unit"]]))
-    review = review[:3]
+    ordered = report.get("weekly_review_order")
+    if ordered is None:
+        legacy = [row["unit"] for row in report["rows"] if row["unit"] in facts
+                  and row["comparison"].get("quadrant") in {"critical", "recent_worsening"}]
+        finding_units = [row["unit"] for row in report["rows"]
+                         if row.get("scoring_review", {}).get("finding_id") is not None]
+        ordered = list(dict.fromkeys(finding_units + sorted(legacy, key=lambda unit: not _urgent_fact(facts[unit]))))[:3]
+
+    def review_cards(units):
+        return html.Ul([
+            html.Li([_unit_link(unit, facts[unit]), _fact_snippet(facts[unit])],
+                    className="emin-beta-review-unit") for unit in units
+        ], className="emin-beta-review-list")
+
     cutoff = date.fromisoformat(report["cutoff"]["cutoff"])
     monday = cutoff - timedelta(days=cutoff.weekday())
     summary = html.Dl([
@@ -178,25 +199,32 @@ def fleet_intro(report):
         if gaps:
             missing["both" if len(gaps) == 2 else gaps[0]].append(row["unit"])
     graph = fleet_figure(report, facts)
+    coverage = report.get("scoring_coverage")
     return [
         _section(_t("week_review_title"), "fas fa-clipboard-check", [
-            html.P(_t("week_review_note", start=_label_day(monday.isoformat()), end=_label_day(cutoff.isoformat())),
+            html.P(_t("week_review_note" if "weekly_review_order" in report else "week_review_legacy_note", start=_label_day(monday.isoformat()), end=_label_day(cutoff.isoformat())),
                    className="small text-muted mb-2"),
-            html.Ul([
-                html.Li([
-                    _unit_link(row["unit"], facts[row["unit"]]),
-                    _fact_snippet(facts[row["unit"]]),
-                ], className="emin-beta-review-unit") for row in review
-            ], className="emin-beta-review-list") if review else html.P(_t("week_review_empty"), className="mb-0"),
+            review_cards(ordered[:3]) if ordered else html.P(_t("week_review_empty"), className="mb-0"),
+            html.Details([
+                html.Summary(_t("week_review_more", count=len(ordered) - 3), className="mb-2"),
+                review_cards(ordered[3:]),
+            ], className="mt-3") if len(ordered) > 3 else None,
         ]),
         _section(_t("fleet_title"), "fas fa-chart-area", [
             summary,
+            html.P(_t("scoring_reference_note"), className="small text-muted mb-2")
+            if report.get("scoring_review_version") == 1 else None,
+            dbc.Alert(_t("coverage_fleet_summary", **coverage), color="light", className="small py-2 mb-2")
+            if coverage is not None else None,
             html.Div([
                 html.P(_t("compare_explanation", current_start=_label_day(monday.isoformat()),
                          current_end=_label_day(cutoff.isoformat()), historical_start=_label_day(report["start"]),
                          historical_end=_label_day((monday - timedelta(days=1)).isoformat())),
                        className="small text-muted mb-1"),
+                html.P(_t("plot_row_note"), className="small text-muted mb-1"),
                 html.Div(_graph(graph), className="emin-beta-fleet-plot"),
+                html.P(className="emin-beta-plot-status small text-muted", role="status",
+                       **{"data-missing-text": _t("plot_unit_filtered")}),
             ]) if graph is not None else None,
             dbc.Alert(_t("no_comparable"), color="light") if graph is None else None,
             html.Div([
@@ -277,26 +305,66 @@ def fleet_figure(report, facts=None):
     return figure
 
 
+def _coverage_note(review):
+    coverage = review.get("coverage")
+    if not coverage:
+        return None
+    label = _t("coverage_" + coverage["state"])
+    details = _t("verified_coverage", days=coverage["verified_current_days"], weeks=coverage["verified_prior_weeks"])
+    comparison = (_t("verified_trend", movement=_movement(coverage["change"]),
+                     previous=_points(coverage["previous_average"]), current=_points(coverage["current_average"]))
+                  if coverage["state"] == "verified" and coverage.get("change") else None)
+    return html.Small([f"{label} · {details}", html.Br() if comparison else None, comparison],
+                      className="d-block text-muted")
+
+
 def fleet_table(report, group):
     rows = [row for row in report["rows"] if group in ("__all__", None) or group in row["groups"]]
     if not rows:
         return dbc.Alert(_t("empty_filter"), color="light", class_name="mb-0")
     domains = report["domains"]
     facts = _weekly_facts(report)
-    headers = [_t("rank"), _t("team"), _t("weekly_record"), _t("movement"), _t("historical_points"), _t("baseline"),
+    show_history = any("finding_history" in row.get("scoring_review", {}) for row in rows)
+    headers = [_t("rank"), _t("team"), _t("weekly_record"), _t("movement"),
+               *([_t("finding_history_header")] if show_history else []), _t("historical_points"), _t("baseline"),
                _t("latest_week"), _t("delta"), *domains]
     body = []
     for row in rows:
         status = row["comparison"]
         priority = row.get("priority")
-        link = _unit_link(row["unit"], facts.get(row["unit"]))
+        review = row.get("scoring_review", {})
+        unit_view = report["units"].get(row["unit"], {})
+        group_weeks = unit_view.get("group_weeks")
+        fact = facts.get(row["unit"])
+        scope = None
+        if group not in ("__all__", None) and group_weeks is not None:
+            weeks = group_weeks.get(group, [])
+            scope = (_t("group_result_current") if report["cutoff"]["week"] in weeks
+                     else _t("group_result_history") if weeks else _t("group_result_record_only"))
+        current_group_records = unit_view.get("current_group_records")
+        if group not in ("__all__", None) and current_group_records is not None:
+            index = current_group_records.get(group)
+            fact = next((record for record in unit_view["records"] if record["id"] == index), None) if index is not None else None
+        link = _unit_link(row["unit"], fact)
+        history = review.get("finding_history")
+        history_cell = html.Div([
+            html.Strong(history["weeks"]),
+            html.Small(_t("finding_history_latest", week=history["latest_week"]), className="d-block text-muted")
+            if history["latest_week"] else html.Small(_t("finding_history_empty"), className="d-block text-muted"),
+        ], title=_t("finding_history_breakdown", oil=history["oil_weeks"], safety=history["safety_weeks"],
+                    both=history["both_weeks"])) if history else "—"
         score = _points(row["points"]) if row["points"] is not None else _t("no_data")
         values = [
             row["rank"] or "—",
-            html.Div([link, html.Small(_t(f"priority_{priority}"), className="d-block text-muted") if priority else None]),
-            _fact_snippet(facts[row["unit"]]) if row["unit"] in facts else
-            html.Small(_week_without_fact(status), className="text-muted"),
-            html.Span(_movement(status["status"]), className=f"emin-beta-{status['status']} fw-semibold"),
+            html.Div([link, html.Small(_t(f"priority_{priority}"), className="d-block text-muted") if priority else None,
+                      html.Small(scope, className="d-block text-muted") if scope and fact else None]),
+            _fact_snippet(fact) if fact else html.Small(scope or _week_without_fact(status), className="text-muted"),
+            html.Div([
+                html.Span(_movement(status["status"]), className=f"emin-beta-{status['status']} fw-semibold"),
+                html.Small(_t("signal_" + review["level"]), className="d-block") if review.get("level") else None,
+                _coverage_note(review),
+            ]),
+            *([history_cell] if show_history else []),
             html.Div([html.Strong(score), html.Small(_t("weeks", count=row["observed_weeks"]),
                                                    className="d-block text-muted") if row["observed_weeks"] else None]),
             _points(status["previous_average"]), _points(status["current_average"]),
@@ -305,7 +373,8 @@ def fleet_table(report, group):
         ]
         body.append(html.Tr([html.Th(value, scope="row") if index == 1 else html.Td(value)
                              for index, value in enumerate(values)],
-                            className=f"emin-beta-priority-{priority}" if priority else ""))
+                            className=f"emin-beta-priority-{priority}" if priority else "",
+                            **{"data-emin-fleet-unit": row["unit"]}))
     return html.Div([
         html.P(_t("fleet_matches", count=len(rows), total=len(report["rows"])), className="small text-muted mb-2"),
         html.Div(dbc.Table([
@@ -329,7 +398,7 @@ def _history_axis(figure, report):
                         tickangle=-35, automargin=True, title_text=_t("axis_weeks"), hoverformat="%d/%m/%Y")
 
 
-def _timeline_figure(view, report, records):
+def _timeline_figure(view, report, records, unit=None):
     figure = go.Figure()
     for category in CATEGORIES[:-1]:
         items = [item for item in view["timeline"] if item["category"] == category]
@@ -344,7 +413,7 @@ def _timeline_figure(view, report, records):
                     "size": [min(19, 7 + item["count"] ** .5) for item in items],
                     "symbol": ["diamond-open" if item["state"] == "indication" else "circle" for item in items]},
             customdata=[[item["week"], item["count"], _t(f"state_{item['state']}"),
-                         "<br>".join(escape(_description(records[index])) for index in item["example_ids"])]
+                         "<br>".join(escape(_description(records[index])) for index in item["example_ids"]), unit]
                         for item in items],
             hovertemplate="<b>%{x|%d/%m/%Y}</b> · %{customdata[2]} · %{customdata[1]}<br>%{customdata[3]}<extra></extra>",
         ))
@@ -356,7 +425,7 @@ def _timeline_figure(view, report, records):
     return figure
 
 
-def _oil_figure(view, report):
+def _oil_figure(view, report, unit=None):
     figure = go.Figure()
     by_series = {}
     for item in view["oil"]:
@@ -368,7 +437,7 @@ def _oil_figure(view, report):
             x=[item["week_start"] for item in rows],
             y=[label] * len(rows), mode="markers", name=label,
             marker={"color": OIL_COLORS[state], "size": [min(20, 8 + item["count"] * 2) for item in rows]},
-            customdata=[[item["week"], item["count"]] for item in rows],
+            customdata=[[item["week"], item["count"], unit] for item in rows],
             hovertemplate=component + " · %{customdata[1]}<extra>" + label + "</extra>",
         ))
     apply_dashboard_theme(figure, title="", height=280)
@@ -377,6 +446,24 @@ def _oil_figure(view, report):
                         automargin=True)
     _history_axis(figure, report)
     return figure
+
+
+def _score_details(drivers, records):
+    if not drivers:
+        return None
+    items = []
+    for item in drivers:
+        record = records.get(item["example_id"])
+        items.append(html.Li([
+            html.Strong(_t("driver_points", domain=item["domain"], points=_points(item["points"]))),
+            html.Small([_label_day(record["day"]), " · ", _fact_body(record), " · ", _record_reference(record)],
+                       className="d-block text-muted") if record else None,
+        ]))
+    return html.Details([
+        html.Summary(_t("drivers_title")),
+        html.P(_t("drivers_note"), className="small text-muted mt-2 mb-1"),
+        html.Ul(items, className="mb-0"),
+    ], className="emin-beta-disclosure mt-3")
 
 
 def unit_story(report, unit, focus=None):
@@ -399,24 +486,41 @@ def unit_story(report, unit, focus=None):
             html.Small(_record_reference(record), className="text-muted"),
         ], style={"borderInlineStartColor": OIL_COLORS.get(record["state"], CATEGORY_COLORS[category])},
             className="emin-beta-selected-record")
+    recurrence = []
+    group_weeks = view.get("group_weeks", {})
+    for group, weeks in sorted(group_weeks.items(), key=lambda item: (-len(item[1]), item[0]))[:3]:
+        if len(weeks) < 2:
+            continue
+        intervention = records.get(view.get("recurring_interventions", {}).get(group))
+        recurrence.append(html.Li([
+            _t("recurring_group", group=group, count=len(weeks), latest=weeks[-1]),
+            html.Small(_t("intervention_between", date=_label_day(intervention["day"]),
+                          source=_record_reference(intervention)), className="d-block text-muted")
+            if intervention else None,
+        ]))
     return (
         _section(_t("unit_summary", unit=unit), "fas fa-clipboard-list", [
             html.P(_t("unit_coverage", start=_label_day(view["records"][-1]["day"]),
                       end=_label_day(view["records"][0]["day"])), className="small text-muted mb-2")
             if view["records"] else None,
             html.Ul([highlighted], className="emin-beta-facts") if highlighted else None,
+            html.Div([
+                html.Strong(_t("recurring_groups")),
+                html.Ul(recurrence, className="mb-1"),
+            ], className="mt-2") if recurrence else None,
             html.Nav([
                 html.A(_t("jump_milestones"), href="#emin-beta-milestones-heading"),
                 html.A(_t("jump_oil"), href="#emin-beta-oil-heading"),
             ], className="emin-beta-quick-links mt-3", **{"aria-label": _t("unit_quick_links")}),
+            _score_details(view.get("score_drivers"), records),
         ]),
         [
             html.P(_t("timeline_note"), className="small text-muted mb-1"),
-            _graph(_timeline_figure(view, report, records)) if view["timeline"] else html.P(_t("no_milestones"), className="mb-0"),
+            _graph(_timeline_figure(view, report, records, unit), "emin-beta-milestones-chart") if view["timeline"] else html.P(_t("no_milestones"), className="mb-0"),
         ],
         [
             html.P(_t("oil_note"), className="small text-muted mb-1"),
-            _graph(_oil_figure(view, report)) if view["oil"] else html.P(_t("no_oil"), className="mb-0"),
+            _graph(_oil_figure(view, report, unit), "emin-beta-oil-chart") if view["oil"] else html.P(_t("no_oil"), className="mb-0"),
         ],
     )
 
@@ -433,9 +537,16 @@ def evidence_page(report, unit, category, query, requested_page):
     return _evidence_rows(matches, columns, "records", requested_page)
 
 
-def unit_records_page(report, unit, table, red_only, page):
+def unit_record_weeks(report, unit, table):
+    series = report["units"].get(unit, {}).get("oil" if table == "oil" else "timeline", [])
+    return sorted({(item["week"], item["week_start"]) for item in series}, reverse=True)
+
+
+def unit_records_page(report, unit, table, red_only, page, week=None):
     view = report["units"].get(unit, {})
     evidence = view.get("records", [])
+    if week:
+        evidence = [record for record in evidence if record.get("week") == week]
     if table == "oil":
         rows = [row for row in evidence if row["category"] == "oil" and (not red_only or row["state"] == "abnormal")]
         columns = ("date", "compartment", "condition", "anomaly", "reference")
