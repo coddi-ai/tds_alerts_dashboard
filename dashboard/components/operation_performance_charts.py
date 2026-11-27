@@ -4,7 +4,8 @@ Pure functions: DataFrames in, a Plotly figure out (the data rules live in
 src/data/operation_performance.py). Titles and "how to read" notes are rendered by the panel card
 around each figure (dashboard/components/operation_performance_views.py), so figures carry no title.
 
-On the page today: ranking, ramp map, curve and ramp boxes. The diagnosis (causes, lost minutes,
+On the page today: ranking, fleet map (demand + performance), ramp boxes (Flota view); curve, the
+unit's weeks and the unit-vs-fleet map (Evidencia por unidad view). The diagnosis (causes, lost minutes,
 power, exhaust), trend, descent (retarder, brakes) and data-quality figures are off the page for now
 and kept here, tested, to be brought back.
 
@@ -316,7 +317,7 @@ FORCE_TICKS = (5, 10, 15, 20, 30, 40, 60, 80, 100, 150, 200)
 
 
 def curve_figure(pasadas: Optional[pd.DataFrame], curvas: Optional[pd.DataFrame], model: Optional[str],
-                 highlight: Sequence[str] = ()) -> go.Figure:
+                 highlight: Sequence[str] = (), height: int = 500) -> go.Figure:
     """Loaded full-throttle climbs (required force vs real speed) over the model's propulsion curve."""
     climbs = op.base_climbs(pasadas)
     if model:
@@ -356,14 +357,14 @@ def curve_figure(pasadas: Optional[pd.DataFrame], curvas: Optional[pd.DataFrame]
                     "line": {"color": "#ffffff", "width": 1}},
             customdata=custom(part), hovertemplate=point_hover,
         ))
-    return _style(fig, height=500, x=t("opp.axis.speed"), y=t("opp.axis.force_log"),
+    return _style(fig, height=height, x=t("opp.axis.speed"), y=t("opp.axis.force_log"),
                   xaxis={"range": [0, x_max]},
                   # Whole values on the log axis (plotly's default labels minor ticks "9, 8, 6..." for 90, 80, 60).
                   yaxis={"type": "log", "tickvals": FORCE_TICKS, "ticktext": [fmt(v, 0) for v in FORCE_TICKS]})
 
 
 def ramp_box_figure(climbs: pd.DataFrame, camiones: Optional[pd.DataFrame], metric: str = "hp_pendiente",
-                    selected: Optional[str] = None) -> go.Figure:
+                    selected: Optional[str] = None, height: int = 460) -> go.Figure:
     """One box per truck on a ramp (natural unit order), colored by the truck's decision; fleet median marked.
     The selected unit's box is drawn bold, with its own legend entry."""
     climbs = climbs.dropna(subset=[metric]) if not climbs.empty else climbs
@@ -398,7 +399,7 @@ def ramp_box_figure(climbs: pd.DataFrame, camiones: Optional[pd.DataFrame], metr
     median = float(df[metric].median())
     value = fmt(median, 0) if metric == "hp_pendiente" else fmt(median, 3)
     _reference_line(fig, units, median, f'{t("opp.annotation.fleet_median")} ({value})')
-    _style(fig, height=460, x=t("opp.axis.unit"), y=label,
+    _style(fig, height=height, x=t("opp.axis.unit"), y=label,
            xaxis={"categoryorder": "array", "categoryarray": units, "type": "category"})
     fig.update_layout(boxmode="overlay")
     return fig
@@ -498,18 +499,28 @@ def ramp_map_figure(segments: pd.DataFrame, mode: str = "pendiente", base: str =
         + value_hover + "<br>" + t("opp.map.hover_click") + "<extra></extra>",
     ))
 
-    # Ramp ids at the top of each path, so a ramp named in a list can be found on the map. The trace
-    # carries an invisible marker on purpose: with mode="text" alone plotly.js computes the label
-    # offset from a missing marker size (NaN), MapLibre rejects the layer and the map then ignores
-    # every later update (coloring, base map, selected ramp).
+    _ramp_labels(fig, segments, base)
+    return _map_layout(fig, segments, base, "opp-map")
+
+
+def _ramp_labels(fig: go.Figure, segments: pd.DataFrame, base: str, labels: Optional[dict] = None) -> None:
+    """Ramp ids at the top of each path, so a ramp named in a list can be found on the map. The trace
+    carries an invisible marker on purpose: with mode="text" alone plotly.js computes the label
+    offset from a missing marker size (NaN), MapLibre rejects the layer and the map then ignores
+    every later update (coloring, base map, selected ramp)."""
     tops = segments.sort_values("k").groupby("rampa_id", sort=False).tail(1)
+    text = [labels.get(r, r) for r in tops["rampa_id"]] if labels else tops["rampa_id"]
     fig.add_trace(go.Scattermap(
-        lat=tops["lat"], lon=tops["lon"], mode="markers+text", text=tops["rampa_id"], showlegend=False,
+        lat=tops["lat"], lon=tops["lon"], mode="markers+text", text=text, showlegend=False,
         marker={"size": 6, "opacity": 0},
         textfont={"size": 11, "color": "#ffffff" if base == "satelite" else INK}, textposition="top right",
         hoverinfo="skip",
     ))
 
+
+def _map_layout(fig: go.Figure, segments: pd.DataFrame, base: str, revision: str,
+                legend: bool = False) -> go.Figure:
+    """Base map (satellite or streets), a view that fits every path, and the shared look."""
     view = _map_view(segments["lat"], segments["lon"])
     if base == "satelite":
         map_layout = {"style": "white-bg", "layers": [{
@@ -520,10 +531,513 @@ def ramp_map_figure(segments: pd.DataFrame, mode: str = "pendiente", base: str =
     fig.update_layout(
         map={**map_layout, **view}, height=MAP_HEIGHT, margin={"l": 0, "r": 0, "t": 0, "b": 0},
         separators=separators(), font={"family": FONT_FAMILY, "size": 12, "color": INK},
-        hoverlabel={"bgcolor": "#ffffff", "bordercolor": BRAND_AXIS}, showlegend=False,
+        hoverlabel={"bgcolor": "#ffffff", "bordercolor": BRAND_AXIS}, showlegend=legend,
+        legend={"x": 0.01, "y": 0.99, "xanchor": "left", "yanchor": "top", "bgcolor": "rgba(255,255,255,0.88)",
+                "bordercolor": BRAND_AXIS, "borderwidth": 1, "font": {"size": 11},
+                "title": {"text": t("opp.map.legend_demand"), "font": {"size": 11}}},
         # Keep the user's pan and zoom when the coloring, the unit or the selected ramp change.
-        uirevision="opp-map",
+        uirevision=revision,
     )
+    return fig
+
+
+# Demand of a 100 m stretch (its median grade): the band drawn under the path, wider and darker the
+# steeper. (lower bound, label key, color, width in px)
+DEMAND_BANDS = (
+    (0.0, "opp.map.band.low", GRADE_SCALE[0][1], 7),
+    (6.0, "opp.map.band.mid", GRADE_SCALE[1][1], 11),
+    (8.0, "opp.map.band.high", GRADE_SCALE[2][1], 15),
+    (10.0, "opp.map.band.top", GRADE_SCALE[3][1], 20),
+)
+DEMANDING_RAMPS = 3         # ramps named as the most demanding in the caption
+
+
+def demand_band(grade: float) -> int:
+    """Index in DEMAND_BANDS of a stretch's grade (%)."""
+    index = 0
+    for i, (low, *_rest) in enumerate(DEMAND_BANDS):
+        if grade >= low:
+            index = i
+    return index
+
+
+def ramp_demand(segments: pd.DataFrame) -> pd.DataFrame:
+    """Per ramp: median grade of its stretches, length drawn (km), fleet IV; most demanding first."""
+    if segments is None or segments.empty:
+        return pd.DataFrame(columns=["rampa_id", "nombre", "pend_pct", "km", "iv_rampa"])
+    table = segments.groupby("rampa_id", sort=False).agg(
+        nombre=("nombre", "first"), pend_pct=("pend_pct", "median"), tramos=("k", "size"),
+        iv_rampa=("iv_rampa", "first"))
+    table["km"] = table["tramos"] / 10
+    return table.drop(columns="tramos").sort_values("pend_pct", ascending=False).reset_index()
+
+
+def fleet_ramp_map_figure(segments: pd.DataFrame, base: str = "satelite",
+                          selected_ramp: Optional[str] = None) -> go.Figure:
+    """Demand and fleet performance on one map. Under each climb ramp's real path, a band as steep as
+    each 100 m stretch is (wider and darker = more demanding); on top of it, the path itself colored by
+    the fleet's median IV on that ramp (red = slower than the manufacturer curve, blue = faster), and
+    the ramp labelled with that IV. The selected ramp is outlined in black. `customdata[0]` of every
+    path point is its ramp id (a click selects that ramp)."""
+    if segments is None or segments.empty:
+        return empty_figure(t("opp.empty.no_ramp_paths"), height=520)
+    fig = go.Figure()
+    if selected_ramp in set(segments["rampa_id"]):
+        part = segments[segments["rampa_id"] == selected_ramp]
+        fig.add_trace(go.Scattermap(lat=part["lat"], lon=part["lon"], mode="lines", hoverinfo="skip",
+                                    showlegend=False, line={"color": "#111827", "width": 30}))
+
+    # One trace per demand band, its stretches separated by gaps (None), so each band is one legend entry.
+    bands = {i: ([], []) for i in range(len(DEMAND_BANDS))}
+    for _, part in segments.groupby("rampa_id", sort=False):
+        part = part.sort_values("k")
+        rows = list(part.itertuples())
+        for here, there in zip(rows, rows[1:]):
+            if there.k != here.k + 1:
+                continue
+            lat, lon = bands[demand_band((here.pend_pct + there.pend_pct) / 2)]
+            lat += [here.lat, there.lat, None]
+            lon += [here.lon, there.lon, None]
+    for index, (low, key, color, width) in enumerate(DEMAND_BANDS):
+        lat, lon = bands[index]
+        fig.add_trace(go.Scattermap(
+            lat=lat or [None], lon=lon or [None], mode="lines", name=t(key), hoverinfo="skip",
+            line={"color": color, "width": width}, opacity=0.9, showlegend=True,
+        ))
+
+    fig.add_trace(go.Scattermap(
+        lat=segments["lat"], lon=segments["lon"], mode="markers", showlegend=False,
+        marker={"size": 8, "color": segments["iv_rampa"], "colorscale": PERFORMANCE_SCALE,
+                "cmin": 1 - PERFORMANCE_SPAN, "cmax": 1 + PERFORMANCE_SPAN,
+                "colorbar": {"title": {"text": t("opp.map.colorbar_fleet"), "side": "right"}, "thickness": 12,
+                             "len": 0.75, "bgcolor": "rgba(255,255,255,0.85)", "x": 1.0, "xanchor": "right"}},
+        customdata=np.column_stack([
+            segments["rampa_id"], segments["nombre"],
+            [f"{100 * k:,}–{100 * (k + 1):,} m".replace(",", ".") for k in segments["k"]],
+            segments["pend_pct"], segments["iv_rampa"], segments["v_kmh"], segments["pasadas"],
+            segments["pasadas_rampa"],
+        ]),
+        hovertemplate="<b>%{customdata[0]}</b> · %{customdata[1]}<br>"
+        + t("opp.map.hover_stretch") + " %{customdata[2]} · " + t("opp.hover.slope") + " %{customdata[3]:.1f} %"
+        + " · %{customdata[5]:.1f} km/h<br>"
+        + t("opp.map.hover_fleet") + " <b>%{customdata[4]:.2f}</b> (%{customdata[7]} " + t("opp.hover.climbs") + ")<br>"
+        + t("opp.map.hover_click") + "<extra></extra>",
+    ))
+    ramps = ramp_demand(segments)
+    labels = {r.rampa_id: f"{r.rampa_id} · {fmt(r.iv_rampa)}" for r in ramps.itertuples()}
+    _ramp_labels(fig, segments, base, labels)
+    return _map_layout(fig, segments, base, "opp-map", legend=True)
+
+
+# ------------------------------------------------------------------------------------------------
+# Estrés operacional por unidad
+# ------------------------------------------------------------------------------------------------
+
+STRESS_DECIMALS = {"viajes": 0, "km_rampa": 0, "carga_t": 0, "h_carga_alta": 1, "carga_motor": 0,
+                   "potencia_hp": 0, "rpm": 0, "combustible_l_km": 1, "pend_subida": 1, "iv_rel_p50": 2,
+                   "iv_p50": 2, "s_perdidos_viaje": 0, "indice_estres": 2, "pend_pct": 1,
+                   "carga_motor_pct_media": 0, "rpm_media": 0, "potencia_hp_media": 0}
+# Less worked than its fleet (blue) - like it (white) - more worked (orange): no good/bad reading.
+STRESS_SCALE = [[0.0, CAUSE_COLORS[0]], [0.5, "#f8fafc"], [1.0, "#c2410c"]]
+STRESS_SPAN = 0.3           # the heat map runs 0,70 - 1,30 x the fleet median
+
+
+def stress_label(metric: str, measured_payload: bool = True) -> str:
+    """Display name of a stress, performance or load variable. The load is the measured payload
+    (CDA) or the apparent mass the pipeline estimates (Capstone)."""
+    if metric == "carga_t" and not measured_payload:
+        return t("opp.stress.metric.carga_t_estimated")
+    return t(f"opp.stress.metric.{metric}")
+
+
+def _selected_line(units: Sequence[str], selected: Optional[str]) -> list:
+    return [INK if u == selected else "rgba(0,0,0,0)" for u in units]
+
+
+def stress_heatmap_figure(stress: pd.DataFrame, measured_payload: bool = True,
+                          selected: Optional[str] = None) -> go.Figure:
+    """Units (rows, most worked on top) by stress figure (columns): each cell is the unit's value over
+    its fleet's median (orange = worked more, blue = less) and shows the value itself. The last column is
+    the stress index (the mean of those ratios). `customdata` of every cell is its unit id."""
+    metrics = op.stress_metrics(stress)
+    if stress is None or stress.empty or not metrics:
+        return empty_figure(t("opp.empty.no_stress"))
+    df = stress.sort_values("indice_estres", ascending=True).reset_index(drop=True)
+    columns = metrics + ["indice_estres"]
+    ratios = []
+    for metric in metrics:
+        median = df.groupby("flota")[metric].transform("median")
+        ratios.append((df[metric] / median.where(median > 0)).to_numpy())
+    ratios.append(df["indice_estres"].to_numpy())
+    z = np.column_stack(ratios)
+    text = np.column_stack([[fmt(v, STRESS_DECIMALS.get(m, 1)) for v in df[m]] for m in columns])
+    labels = [stress_label(m, measured_payload) for m in columns]
+    units = df["unidad"].tolist()
+    fig = go.Figure(go.Heatmap(
+        z=z, x=labels, y=units, zmid=1, zmin=1 - STRESS_SPAN, zmax=1 + STRESS_SPAN, colorscale=STRESS_SCALE,
+        text=text, texttemplate="%{text}", textfont={"size": 11}, xgap=2, ygap=2,
+        customdata=np.array([[u] * len(columns) for u in units]),
+        colorbar={"title": {"text": t("opp.stress.colorbar"), "side": "right"}, "thickness": 12, "len": 0.5},
+        hovertemplate="<b>%{y}</b> · %{x}<br>%{text} · %{z:.2f}× " + t("opp.stress.vs_fleet_median")
+        + "<extra></extra>",
+    ))
+    ticktext = [f"<b>▶ {u}</b>" if u == selected else u for u in units]
+    _style(fig, height=_rows_height(len(units), per_row=24, base=140, minimum=320), legend=False,
+           xaxis={"side": "top", "showgrid": False, "tickangle": 0, "automargin": True},
+           yaxis={"showgrid": False, "type": "category", "tickvals": units, "ticktext": ticktext})
+    fig.update_layout(margin={"l": 70, "r": 24, "t": 72, "b": 16}, uirevision="opp-stress")
+    return fig
+
+
+PERFORMANCE_COLUMNS = ("iv_rel_p50", "iv_p50")      # colored against 1 (red slower, blue faster)
+DECISION_TINT = {op.CONFORME: SEVERITY_TIERS["bajo"]["bg"], op.SEGUIMIENTO: SEVERITY_TIERS["atencion"]["bg"],
+                 op.REVISAR: SEVERITY_TIERS["alto"]["bg"], op.SIN_DATOS: "#e2e8f0"}
+
+
+def _discrete_scale(colors: Sequence[str]) -> list:
+    """A colorscale with one flat band per category (z = 0..n-1, zmin -0.5, zmax n-0.5)."""
+    n = len(colors)
+    scale = []
+    for i, color in enumerate(colors):
+        scale += [[i / n, color], [(i + 1) / n, color]]
+    return scale
+
+
+def _header(label: str) -> str:
+    """A column title on two lines ("Masa aparente<br>(t, estimada)"), so neighbours never overlap."""
+    return label.replace(" (", "<br>(", 1)
+
+
+def fleet_heatmap_figure(stress: pd.DataFrame, columns: Sequence[str], measured_payload: bool = True) -> go.Figure:
+    """Who goes to the bottom of the pit: one row per unit, best relative IV on top. The first column is
+    the unit's decision (its tint and word); IV columns are colored against 1 (red = slower than the
+    reference, blue = faster); load and operation columns against the unit's fleet median (orange =
+    more than its fleet, blue = less). Every cell shows its value; `customdata` of every cell is its
+    unit id (a click opens that unit's evidence).
+
+    One trace per column on a numeric x axis (column i spans i ± 0,5): heat maps of different color
+    scales on one categorical axis are not placed column by column, so cells and their text drift.
+    The axes are fixed: the figure is read, not zoomed."""
+    columns = [c for c in columns if c in getattr(stress, "columns", [])]
+    if stress is None or stress.empty:
+        return empty_figure(t("opp.empty.no_stress"))
+    df = stress.sort_values(["iv_rel_p50", "unidad"], ascending=[False, True], na_position="last").reset_index(drop=True)
+    units = df["unidad"].tolist()
+    rows = np.arange(len(units))
+    custom = np.array(units, dtype=object).reshape(-1, 1)
+    fig = go.Figure()
+
+    def column(i: int, z, text, **style) -> go.Heatmap:
+        return go.Heatmap(
+            z=np.asarray(z, dtype=float).reshape(-1, 1), x=[i], y=rows, text=np.asarray(text, dtype=object).reshape(-1, 1),
+            texttemplate="%{text}", textfont={"size": 12}, xgap=2, ygap=2, customdata=custom, **style)
+
+    order = list(op.DECISIONS)
+    codes = df["decision"].map({d: i for i, d in enumerate(order)}).fillna(order.index(op.SIN_DATOS))
+    fig.add_trace(column(
+        0, codes, df["decision"], zmin=-0.5, zmax=len(order) - 0.5, showscale=False,
+        colorscale=_discrete_scale([DECISION_TINT[d] for d in order]),
+        hovertemplate="<b>%{customdata}</b> · %{text}<extra></extra>"))
+    shown = {"perf": False, "stress": False}
+    for i, metric in enumerate(columns, start=1):
+        label = stress_label(metric, measured_payload)
+        text = [fmt(v, STRESS_DECIMALS.get(metric, 2)) for v in df[metric]]
+        if metric in PERFORMANCE_COLUMNS:
+            fig.add_trace(column(i, df[metric], text, coloraxis="coloraxis",
+                                 hovertemplate="<b>%{customdata}</b> · " + label + " %{text}<extra></extra>"))
+            shown["perf"] = True
+            continue
+        if metric == "indice_estres":
+            ratio = df[metric]
+        else:
+            median = df.groupby("flota")[metric].transform("median")
+            ratio = df[metric] / median.where(median > 0)
+        fig.add_trace(column(i, ratio, text, coloraxis="coloraxis2",
+                             hovertemplate="<b>%{customdata}</b> · " + label + " %{text} · %{z:.2f}× "
+                             + t("opp.stress.vs_fleet_median") + "<extra></extra>"))
+        shown["stress"] = True
+
+    headers = [t("opp.heatmap.decision")] + [_header(stress_label(m, measured_payload)) for m in columns]
+    colorbar = {"thickness": 10, "len": 0.42, "yanchor": "middle", "x": 1.01, "xanchor": "left"}
+    fig.update_layout(
+        coloraxis={"colorscale": PERFORMANCE_SCALE, "cmid": 1, "cmin": 1 - PERFORMANCE_SPAN, "cmax": 1 + PERFORMANCE_SPAN,
+                   "showscale": shown["perf"],
+                   "colorbar": {**colorbar, "y": 0.78, "title": {"text": t("opp.heatmap.colorbar_iv"), "side": "right"}}},
+        coloraxis2={"colorscale": STRESS_SCALE, "cmid": 1, "cmin": 1 - STRESS_SPAN, "cmax": 1 + STRESS_SPAN,
+                    "showscale": shown["stress"],
+                    "colorbar": {**colorbar, "y": 0.26, "title": {"text": t("opp.stress.colorbar"), "side": "right"}}},
+    )
+    _style(fig, height=_rows_height(len(units), per_row=26, base=120, minimum=320), legend=False,
+           xaxis={"side": "top", "showgrid": False, "zeroline": False, "tickvals": list(range(len(headers))),
+                  "ticktext": headers, "range": [-0.5, len(headers) - 0.5], "fixedrange": True, "tickfont": {"size": 12}},
+           yaxis={"showgrid": False, "zeroline": False, "tickvals": rows, "ticktext": units, "autorange": "reversed",
+                  "fixedrange": True, "tickfont": {"size": 12}})
+    fig.update_layout(margin={"l": 64, "r": 90, "t": 70, "b": 12}, uirevision="opp-heatmap", dragmode=False)
+    return fig
+
+
+def stress_scatter_figure(stress: pd.DataFrame, x: str, y: str, measured_payload: bool = True,
+                          selected: Optional[str] = None) -> go.Figure:
+    """One bubble per unit: how hard it was worked (x) against how it performed (y), sized by its trips
+    and colored by its decision; the fleet medians split the plane in four. `customdata[0]` = unit."""
+    if stress is None or stress.empty or x not in stress or y not in stress:
+        return empty_figure(t("opp.empty.no_stress"))
+    df = stress.dropna(subset=[x, y])
+    if df.empty:
+        return empty_figure(t("opp.empty.no_stress"))
+    trips = pd.to_numeric(df.get("viajes", pd.Series(1, index=df.index)), errors="coerce").fillna(1)
+    size_ref = 2.0 * max(float(trips.max()), 1.0) / 34 ** 2
+    xl, yl = stress_label(x, measured_payload), stress_label(y, measured_payload)
+    xf, yf = STRESS_DECIMALS.get(x, 1), STRESS_DECIMALS.get(y, 2)
+    fig = go.Figure()
+    for decision in _present_decisions(df["decision"]):
+        part = df[df["decision"] == decision]
+        fig.add_trace(go.Scatter(
+            x=part[x], y=part[y], mode="markers+text", name=decision, text=part["unidad"],
+            textposition="top center", textfont={"size": 10, "color": BRAND_MUTED},
+            marker={"color": decision_color(decision), "size": trips.loc[part.index], "sizemode": "area",
+                    "sizeref": size_ref, "sizemin": 6, "opacity": 0.85,
+                    "line": {"color": _selected_line(part["unidad"], selected),
+                             "width": [3 if u == selected else 0 for u in part["unidad"]]}},
+            customdata=np.column_stack([part["unidad"], trips.loc[part.index]]),
+            hovertemplate="<b>%{customdata[0]}</b> · " + decision + "<br>" + xl + f" %{{x:,.{xf}f}}<br>" + yl
+            + f" %{{y:,.{yf}f}}<br>%{{customdata[1]:.0f}} " + t("opp.stress.trips") + "<extra></extra>",
+        ))
+    fig.add_vline(x=float(df[x].median()), line={"color": BRAND_MUTED, "width": 1, "dash": "dash"})
+    fig.add_hline(y=float(df[y].median()), line={"color": BRAND_MUTED, "width": 1, "dash": "dash"})
+    if y == "iv_rel_p50":
+        fig.add_hline(y=op.IV_REL_REVIEW, line={"color": decision_color(op.REVISAR), "width": 1.5, "dash": "dot"})
+    elif y == "iv_p50":
+        # 1,00 = the truck climbs at what its manufacturer curve says.
+        fig.add_hline(y=1.0, line={"color": INK, "width": 1.5},
+                      annotation={"text": t("opp.scatter.curve_line"), "font": {"size": 11, "color": INK}},
+                      annotation_position="bottom left")
+    return _style(fig, height=520, x=xl, y=yl)
+
+
+def stress_bars_figure(stress: pd.DataFrame, metric: str, measured_payload: bool = True,
+                       selected: Optional[str] = None) -> go.Figure:
+    """One bar per unit for one stress figure, most worked first, colored by decision; its fleet's
+    median marked. `customdata[0]` of every bar is its unit id."""
+    if stress is None or stress.empty or metric not in stress or stress[metric].notna().sum() == 0:
+        return empty_figure(t("opp.empty.no_stress"))
+    df = stress.dropna(subset=[metric]).sort_values(metric, ascending=False)
+    units = df["unidad"].tolist()
+    label = stress_label(metric, measured_payload)
+    decimals = STRESS_DECIMALS.get(metric, 1)
+    fig = go.Figure()
+    for decision in _present_decisions(df["decision"]):
+        part = df[df["decision"] == decision]
+        fig.add_trace(go.Bar(
+            x=part["unidad"], y=part[metric], name=decision,
+            marker={"color": decision_color(decision), "line": {"color": _selected_line(part["unidad"], selected),
+                                                                "width": [3 if u == selected else 0 for u in part["unidad"]]}},
+            customdata=np.column_stack([part["unidad"], part["flota"]]),
+            hovertemplate="<b>%{x}</b> · %{customdata[1]} · " + decision + "<br>" + label
+            + f" %{{y:,.{decimals}f}}<extra></extra>",
+        ))
+    median = float(df[metric].median())
+    _reference_line(fig, units, median, f'{t("opp.annotation.fleet_median")} ({fmt(median, decimals)})')
+    ticktext = [f"<b>▶ {u}</b>" if u == selected else u for u in units]
+    _style(fig, height=460, y=label,
+           xaxis={"categoryorder": "array", "categoryarray": units, "type": "category", "tickvals": units,
+                  "ticktext": ticktext, "tickangle": -45 if len(units) > 20 else 0})
+    fig.update_layout(barmode="overlay", bargap=0.25)
+    return fig
+
+
+def load_performance_figure(bins: pd.DataFrame, variable: str, metric: str, unit: Optional[str] = None,
+                            measured_payload: bool = True) -> go.Figure:
+    """Performance against how loaded (or how pushed) the truck was, climb by climb: the fleet's
+    median and middle half in each sixth of the load variable, and the unit's median in the same bins."""
+    if bins is None or bins.empty:
+        return empty_figure(t("opp.empty.no_stress"))
+    xl, yl = stress_label(variable, measured_payload), stress_label(metric, measured_payload)
+    yf = 0 if metric == "s_perdidos_viaje" else 3
+    if metric == "s_perdidos_viaje":
+        yl = t("opp.stress.metric.s_perdidos_subida")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=bins["x"], y=bins["p25"], mode="lines", line={"width": 0}, hoverinfo="skip",
+                             showlegend=False))
+    fig.add_trace(go.Scatter(
+        x=bins["x"], y=bins["p75"], mode="lines", line={"width": 0}, fill="tonexty",
+        fillcolor="rgba(163,172,185,0.3)", name=t("opp.stress.fleet_band"), hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=bins["x"], y=bins["p50"], mode="lines+markers", name=t("opp.legend.fleet_median"),
+        line={"color": INK, "width": 2, "dash": "dash"}, marker={"size": 7},
+        customdata=bins["n"],
+        hovertemplate=xl + " %{x:,.1f}<br>" + t("opp.legend.fleet_median") + f" %{{y:,.{yf}f}}"
+        + "<br>%{customdata} " + t("opp.hover.climbs") + "<extra></extra>",
+    ))
+    if unit and bins["unidad"].notna().any():
+        fig.add_trace(go.Scatter(
+            x=bins["x"], y=bins["unidad"], mode="lines+markers", name=t("opp.legend.truck", unidad=unit),
+            line={"color": CAUSE_COLORS[0], "width": 3}, marker={"size": 10},
+            customdata=bins["n_unidad"],
+            hovertemplate="<b>" + unit + "</b> · " + xl + " %{x:,.1f}<br>" + yl + f" %{{y:,.{yf}f}}"
+            + "<br>%{customdata} " + t("opp.hover.climbs") + "<extra></extra>",
+        ))
+    if metric == "iv_p50":
+        fig.add_hline(y=1.0, line={"color": BRAND_MUTED, "width": 1})
+    elif metric == "iv_rel_p50":
+        fig.add_hline(y=op.IV_REL_OK, line={"color": BRAND_MUTED, "width": 1})
+    return _style(fig, height=520, x=xl, y=yl)
+
+
+# ------------------------------------------------------------------------------------------------
+# Evidencia por unidad: semanas anteriores
+# ------------------------------------------------------------------------------------------------
+
+HISTORY_METRIC = "iv_rel_p50"
+ROLLING_WINDOW = "3D"       # moving window of the history (calendar days)
+
+
+def _rolling(days: pd.DataFrame, metric: str) -> pd.Series:
+    """3-day moving mean of a daily value, each day weighted by its climbs (a day with few climbs is
+    noisy). Indexed by day."""
+    days = days.dropna(subset=[metric]).sort_values("dia")
+    if days.empty:
+        return pd.Series(dtype=float)
+    weight = pd.to_numeric(days["pasadas"], errors="coerce").fillna(1) if "pasadas" in days else pd.Series(1.0, index=days.index)
+    frame = pd.DataFrame({"v": days[metric].to_numpy() * weight.to_numpy(), "w": weight.to_numpy()},
+                         index=pd.DatetimeIndex(days["dia"]))
+    frame = frame.groupby(level=0).sum()
+    rolled = frame.rolling(ROLLING_WINDOW).sum()
+    return rolled["v"] / rolled["w"].where(rolled["w"] > 0)
+
+
+def unit_history_figure(weekly: pd.DataFrame, daily: Optional[pd.DataFrame], unit: Optional[str],
+                        metric: str = HISTORY_METRIC, current: Optional[op.Week] = None) -> go.Figure:
+    """A unit's weeks, day by day: the 3-day moving mean of the unit (days weighted by their climbs)
+    against the same moving mean of its fleet's daily median. The selected week is shaded; the
+    decision thresholds are marked; each week labelled on the axis."""
+    if daily is None or daily.empty or not unit or metric not in daily:
+        return empty_figure(t("opp.empty.no_history"))
+    mine = daily[daily["unidad"] == unit].dropna(subset=[metric])
+    if mine.empty:
+        return empty_figure(t("opp.empty.no_unit_history", unidad=unit))
+    flota = mine["flota"].iloc[-1] if "flota" in mine else None
+    fleet_days = daily[(daily["flota"] == flota)] if flota is not None else daily
+    fleet_median = fleet_days.dropna(subset=[metric]).groupby("dia")[metric].median().sort_index()
+    fleet_median.index = pd.DatetimeIndex(fleet_median.index)
+    fleet_line = fleet_median.rolling(ROLLING_WINDOW).mean()
+    unit_line = _rolling(mine, metric)
+    label = t(f"opp.metric.{metric}")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=fleet_line.index, y=fleet_line.values, mode="lines", name=t("opp.legend.fleet_rolling", flota=flota or "—"),
+        line={"color": BRAND_MUTED, "width": 2, "dash": "dash"},
+        hovertemplate="%{x|%d-%m-%Y}<br>" + t("opp.legend.fleet_median") + " %{y:.3f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=unit_line.index, y=unit_line.values, mode="lines", name=t("opp.legend.unit_rolling", unidad=unit),
+        line={"color": CAUSE_COLORS[0], "width": 3, "shape": "spline", "smoothing": 0.6},
+        hovertemplate="<b>" + unit + "</b> · %{x|%d-%m-%Y}<br>" + label + " %{y:.3f}<extra></extra>",
+    ))
+    if metric == "iv_rel_p50":
+        fig.add_hline(y=op.IV_REL_OK, line={"color": INK, "width": 1})
+        fig.add_hline(y=op.IV_REL_REVIEW, line={"color": decision_color(op.REVISAR), "width": 1.5, "dash": "dot"})
+    else:
+        fig.add_hline(y=1.0, line={"color": INK, "width": 1})
+    if current is not None:
+        start = pd.Timestamp(current.monday)
+        fig.add_vrect(x0=start, x1=start + pd.Timedelta(days=7), fillcolor="#1e3a5f", opacity=0.06,
+                      line_width=0, layer="below")
+    xaxis = {"showgrid": False, "tickformat": "%d-%m"}
+    if weekly is not None and not weekly.empty and "mitad" in weekly:
+        weeks = weekly.drop_duplicates("mitad").sort_values("mitad")
+        xaxis.update(tickvals=weeks["mitad"], ticktext=[t("opp.axis.week_short", n=n) for n in weeks["semana_n"]],
+                     range=[weeks["lunes"].min(), weeks["lunes"].max() + pd.Timedelta(days=7)])
+    values = pd.concat([unit_line, fleet_line]).dropna()
+    low, high = (float(values.min()), float(values.max())) if not values.empty else (0.9, 1.1)
+    if metric == "iv_rel_p50":
+        low, high = min(low, op.IV_REL_REVIEW), max(high, op.IV_REL_OK)
+    pad = max(0.02, (high - low) * 0.15)
+    return _style(fig, height=420, y=label, xaxis=xaxis, yaxis={"range": [low - pad, high + pad]})
+
+
+# ------------------------------------------------------------------------------------------------
+# Evidencia por unidad: la unidad en sus rampas
+# ------------------------------------------------------------------------------------------------
+
+# How each 100 m of the unit can be colored: its IV against the curve, or how hard the engine works.
+UNIT_MAP_COLORS = ("iv", "carga_motor", "rpm", "potencia_hp")
+EFFORT_SCALE = [[0.0, "#f1f5f9"], [0.5, "#a78bfa"], [1.0, "#4c1d95"]]     # light to deep violet
+
+
+def _demand_of(pend: float) -> tuple:
+    _low, key, color, width = DEMAND_BANDS[demand_band(pend)]
+    return key, color, width
+
+
+def unit_ramp_map_figure(segments: pd.DataFrame, stretches: pd.DataFrame, ramps: pd.DataFrame,
+                         unit: Optional[str], color_by: str = "iv", selected_ramp: Optional[str] = None) -> go.Figure:
+    """The unit on its ramps over satellite imagery. Each ramp is a band colored (and widened) by how
+    demanding it is (its median grade, the same bands as the fleet map); on it, each 100 m the unit
+    climbed is a point colored by its IV against the manufacturer curve (or by engine load, rpm or
+    power). With a ramp selected, only that ramp carries data and the view fits it; the unit's other
+    ramps stay as a faint line. `customdata[0]` of every point is its ramp id."""
+    if segments is None or segments.empty or stretches is None or stretches.empty or ramps is None or ramps.empty:
+        return empty_figure(t("opp.empty.no_unit_paths", unidad=unit or "—"), height=520)
+    shown_ramps = [r for r in ramps["rampa_id"] if r in set(stretches["rampa_id"]) and r in set(segments["rampa_id"])]
+    if not shown_ramps:
+        return empty_figure(t("opp.empty.no_unit_paths", unidad=unit or "—"), height=520)
+    focus = [selected_ramp] if selected_ramp in shown_ramps else shown_ramps
+    grade = dict(zip(ramps["rampa_id"], ramps["pend_pct"]))
+    paths = segments[segments["rampa_id"].isin(shown_ramps)]
+    fig = go.Figure()
+
+    for rampa_id, part in paths.groupby("rampa_id", sort=False):
+        if rampa_id not in focus:
+            fig.add_trace(go.Scattermap(lat=part["lat"], lon=part["lon"], mode="lines", hoverinfo="skip",
+                                        showlegend=False, line={"color": "rgba(255,255,255,0.55)", "width": 3}))
+    if selected_ramp in focus and len(focus) == 1:
+        part = paths[paths["rampa_id"] == selected_ramp]
+        fig.add_trace(go.Scattermap(lat=part["lat"], lon=part["lon"], mode="lines", hoverinfo="skip",
+                                    showlegend=False, line={"color": "#111827", "width": 32}))
+    # One trace per demand band (one legend entry each); a ramp takes the band of its median grade.
+    for index, (_low, key, color, width) in enumerate(DEMAND_BANDS):
+        lat, lon = [], []
+        for rampa_id in focus:
+            if demand_band(grade.get(rampa_id, 0.0)) != index:
+                continue
+            part = paths[paths["rampa_id"] == rampa_id].sort_values("k")
+            lat += part["lat"].tolist() + [None]
+            lon += part["lon"].tolist() + [None]
+        fig.add_trace(go.Scattermap(lat=lat or [None], lon=lon or [None], mode="lines", name=t(key),
+                                    hoverinfo="skip", line={"color": color, "width": width}, opacity=0.9))
+
+    points = stretches[stretches["rampa_id"].isin(focus)].merge(
+        segments[["rampa_id", "k", "lat", "lon", "pend_pct", "nombre"]], on=["rampa_id", "k"], how="inner")
+    color_by = color_by if color_by in UNIT_MAP_COLORS and points[color_by].notna().any() else "iv"
+    values = points[color_by]
+    if color_by == "iv":
+        marker = {"colorscale": PERFORMANCE_SCALE, "cmin": 1 - PERFORMANCE_SPAN, "cmax": 1 + PERFORMANCE_SPAN}
+    else:
+        low, high = np.nanpercentile(values, [5, 95]) if values.notna().sum() > 1 else (0, 1)
+        marker = {"colorscale": EFFORT_SCALE, "cmin": float(low), "cmax": float(max(high, low + 1e-6))}
+    title = t(f"opp.unit_map.colorbar.{color_by}", unidad=unit)
+    fig.add_trace(go.Scattermap(
+        lat=points["lat"], lon=points["lon"], mode="markers", showlegend=False,
+        marker={"size": 11, "color": values, **marker,
+                "colorbar": {"title": {"text": title, "side": "right"}, "thickness": 12, "len": 0.7,
+                             "bgcolor": "rgba(255,255,255,0.85)", "x": 1.0, "xanchor": "right"}},
+        customdata=np.column_stack([
+            points["rampa_id"], points["nombre"],
+            [f"{100 * k:,}–{100 * (k + 1):,} m".replace(",", ".") for k in points["k"]],
+            points["pend_pct"], points["iv"], points["carga_motor"], points["rpm"], points["pasadas"],
+        ]),
+        hovertemplate="<b>%{customdata[0]}</b> · %{customdata[1]}<br>"
+        + t("opp.map.hover_stretch") + " %{customdata[2]} · " + t("opp.hover.slope") + " %{customdata[3]:.1f} %<br>"
+        + t("opp.unit_map.hover_iv", unidad=unit) + " <b>%{customdata[4]:.2f}</b><br>"
+        + t("opp.unit_map.hover_effort") + " %{customdata[5]:.0f} % · %{customdata[6]:.0f} rpm<br>"
+        + "%{customdata[7]} " + t("opp.hover.climbs") + "<extra></extra>",
+    ))
+    labels = {r: f"{r} · {fmt(grade.get(r), 1)} %" for r in focus}
+    _ramp_labels(fig, paths[paths["rampa_id"].isin(focus)], "satelite", labels)
+    fig = _map_layout(fig, paths[paths["rampa_id"].isin(focus)], "satelite",
+                      f"opp-unit-map-{unit}-{selected_ramp or 'todas'}", legend=True)
     return fig
 
 

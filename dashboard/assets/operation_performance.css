@@ -97,25 +97,39 @@
 #opp-ranking-card { border-top: 3px solid #1e3a5f; }
 #opp-ranking-card .opp-panel__title { font-size: 18px; }
 
-/* The unit card stays in view while the (tall) ranking scrolls past it. */
-.opp-sticky { position: sticky; top: 76px; }
-@media (max-width: 1199.98px) { .opp-sticky { position: static; } }
+/* ---- Rows of cards: each card fills its row's height, so neighbours line up ------------------ */
+.opp-row > [class*="col"] { display: flex; flex-direction: column; }
+.opp-row > [class*="col"] > .opp-panel { flex: 1 1 auto; }
 
-.opp-focus__head {
+/* Tall figures (a row per unit) and wide ones (a box per unit) scroll inside their card. */
+.opp-scroll-y { overflow-y: auto; overflow-x: hidden; border-radius: 6px; }
+.opp-scroll-x { overflow-x: auto; overflow-y: hidden; }
+.opp-scroll-y::-webkit-scrollbar, .opp-scroll-x::-webkit-scrollbar { width: 8px; height: 8px; }
+.opp-scroll-y::-webkit-scrollbar-thumb, .opp-scroll-x::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+
+/* The decision table scrolls with its header in view. */
+#opp-decision-table-wrap th { position: sticky; top: 0; z-index: 2; }
+
+/* ---- The unit under analysis: one horizontal strip ------------------------------------------- */
+.opp-focus-card__top {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: flex-end;
     justify-content: space-between;
-    gap: 12px;
+    gap: 12px 24px;
     padding-bottom: 12px;
-    margin-bottom: 12px;
     border-bottom: 1px solid var(--oil-line, #e2e8f0);
 }
-.opp-focus__unit { font-size: 26px; font-weight: 800; line-height: 1.1; color: var(--oil-ink, #0f172a); }
+.opp-focus__unit { font-size: 30px; font-weight: 800; line-height: 1.1; color: var(--oil-ink, #0f172a); }
 .opp-focus__rank { font-size: 13px; color: var(--oil-muted, #475569); }
-.opp-focus__head .kpi-chip { font-size: 13px; padding: 4px 12px; }
+.opp-focus__who .kpi-chip { font-size: 13px; padding: 4px 12px; }
 .opp-focus__cause { font-size: 14px; font-weight: 600; color: var(--oil-ink, #0f172a); }
 
-.opp-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+.opp-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 767.98px) { .opp-stats { grid-template-columns: 1fr 1fr; } }
 .opp-stat { padding: 10px 12px; border-radius: 8px; background: #f8fafc; }
 .opp-stat__label {
     font-size: 11px;
@@ -145,6 +159,57 @@
 .opp-ramp-btn__id { font-weight: 700; color: #1e3a5f; }
 .opp-ramp-btn__name { font-size: 13px; color: var(--oil-ink, #0f172a); }
 .opp-ramp-btn__value { grid-column: 2; font-size: 12px; color: var(--oil-muted, #475569); }
+
+/* The unit's ramps next to its map: a swatch of the ramp's demand band, the selected one marked. */
+.opp-unit-ramps { padding-right: 4px; }
+.opp-unit-ramps .opp-ramp-btn { grid-template-columns: 14px 1fr; align-items: start; }
+.opp-unit-ramps .opp-ramp-btn--all { grid-template-columns: 1fr; font-weight: 600; color: #1e3a5f; }
+.opp-unit-ramps .opp-ramp-btn.is-active {
+    border-color: #1e3a5f;
+    box-shadow: inset 3px 0 0 #1e3a5f;
+    background: var(--oil-soft, #f1f5f9);
+}
+.opp-ramp-btn__swatch {
+    width: 12px;
+    height: 12px;
+    margin-top: 4px;
+    border-radius: 3px;
+    border: 1px solid rgba(15, 23, 42, .25);
+}
+.opp-ramp-btn__name { display: block; }
+.opp-ramp-btn__flag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* A figure's change against the unit's earlier weeks: a chip in its tier's tint under the value (the
+   color lives in the chip, never on an edge: ui_notes_improved.md §2). */
+.opp-stat__trend { margin: 2px 0 2px; }
+.opp-stat__trend .kpi-chip { font-size: 11px; padding: 1px 8px; }
+
+/* The unit's card: eight figures on one row at desktop width. */
+.opp-stats--wide { grid-template-columns: repeat(4, 1fr); }
+@media (min-width: 1400px) { .opp-stats--wide { grid-template-columns: repeat(8, 1fr); } }
+
+/* Ranking: the hint and "Ver evidencia de <unidad>" share a row. */
+.opp-ranking-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-bottom: 4px;
+}
+.opp-ranking-actions .opp-hint { flex: 1 1 260px; margin: 0; }
+
+/* The unit's card has eight figures: two rows of four. */
+.opp-focus-card .opp-stat__value { font-size: 20px; }
 
 /* A hint next to a panel control takes the rest of the row and wraps under it on narrow screens. */
 .opp-panel__controls .opp-hint {

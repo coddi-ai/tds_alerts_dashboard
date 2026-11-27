@@ -24,11 +24,18 @@ canal correspondiente.
     y remite a Monitoreo > Aceite > Laboratorio para verlo en pantalla.
   - **Operación y rendimiento** (solo empresas con este módulo, hoy CDA y Capstone): compara cada
     camión de extracción con la curva del fabricante (rimpull en subida, retardo en bajada) y
-    decide qué camión está conforme y cuál se revisa, según su índice de velocidad. Es una sola
-    página con filtros de semana y flota: indicadores de la semana, ranking de desempeño en subida
-    por unidad (al hacer clic en una unidad se analiza en el resto de la página), mapa satelital de
-    las rampas por pendiente o desempeño, curva del fabricante (con selector para comparar
-    unidades), potencia por rampa y tabla de decisión por camión.
+    decide qué camión está conforme (candidato a fondo de mina) y cuál se revisa, según su índice
+    de velocidad. Filtros de semana y flota y dos pestañas. **Flota**: indicadores operacionales de
+    la semana (minutos perdidos, índice de velocidad de la flota, horas de motor a carga alta,
+    distancia subida cargado; cada uno con color según cómo se compara con las semanas anteriores),
+    una tarjeta con selector entre el mapa de calor "¿Quién va a fondo de mina?" (decisión, carga e
+    índice por unidad) y el gráfico de carga contra índice de velocidad (al hacer clic en una unidad
+    se abre su evidencia), y el mapa satelital de exigencia y
+    desempeño por rampa junto a la potencia por rampa. **Evidencia por unidad** (un selector de unidad
+    arriba a la izquierda): ficha de la unidad (decisión, índices, viajes, carga de motor), semanas
+    anteriores (media móvil de 3 días contra la mediana de su flota), subidas sobre la curva del
+    fabricante, y la lista de sus rampas por pendiente junto al mapa de la unidad en ellas (cada tramo
+    con su índice de velocidad contra la curva, o la carga de motor).
 - **Predictivo** (solo visible para empresas con este módulo habilitado)
   - Vistas por componente (por ejemplo Motor, Transmisión) con riesgo de falla y evidencia asociada.
 - **Campbell AI**
