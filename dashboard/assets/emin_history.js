@@ -1,10 +1,10 @@
-/* Keep the fleet position when an equipment link opens the detail tab. */
+/* Keep the fleet table and its filter in place while reviewing an equipment record. */
 (function () {
     "use strict";
 
     let origin;
-    let activeView;
     let activePage;
+    let activeView;
 
     function scrollPositions(element) {
         const positions = [];
@@ -16,88 +16,44 @@
         return positions;
     }
 
-    function openChronology(kind, query) {
-        const setProps = window.dash_clientside?.set_props;
-        if (!setProps) return;
-        setProps("emin-history-record-type", {value: kind});
-        setProps("emin-history-record-search", {value: query});
-        const type = document.getElementById("emin-history-record-type");
-        type?.focus({preventScroll: true});
-        type?.scrollIntoView({block: "center"});
-    }
-
     document.addEventListener("click", (event) => {
-        const button = event.target.closest("[data-emin-open-unit], [data-emin-back], [data-emin-movement-filter], [data-emin-group-filter], [data-emin-record-filter]");
+        const action = event.target.closest("[data-emin-open-unit], [data-emin-back]");
         const setProps = window.dash_clientside?.set_props;
-        if (!button || !setProps) return;
+        if (!action || !activePage?.contains(action) || !setProps) return;
+        event.preventDefault();
 
-        if (button.hasAttribute("data-emin-record-filter")) {
-            openChronology(button.dataset.eminRecordFilter, button.dataset.eminRecordQuery || "");
-            return;
-        }
-
-        if (button.hasAttribute("data-emin-movement-filter") || button.hasAttribute("data-emin-group-filter")) {
-            if (button.hasAttribute("data-emin-movement-filter")) {
-                setProps("emin-history-movement-filter", {value: button.dataset.eminMovementFilter});
-            } else {
-                setProps("emin-history-group", {value: button.dataset.eminGroupFilter});
-            }
-            const ranking = document.getElementById("emin-history-ranking-heading");
-            ranking?.focus({preventScroll: true});
-            ranking?.scrollIntoView({block: "start"});
-            return;
-        }
-
-        if (button.hasAttribute("data-emin-back")) {
+        if (action.hasAttribute("data-emin-back")) {
             setProps("emin-history-view-tabs", {value: "fleet"});
-            return;
+        } else {
+            origin = {action, positions: scrollPositions(action)};
+            const unit = action.dataset.eminOpenUnit;
+            const record = action.dataset.eminOpenRecord;
+            setProps("emin-beta-focused-record", {data: record === undefined ? null : {unit, record: Number(record)}});
+            setProps("emin-history-unit", {value: unit});
+            setProps("emin-history-view-tabs", {value: "unit"});
         }
-        origin = {button, positions: scrollPositions(button)};
-        const unit = button.dataset.eminOpenUnit;
-        const period = button.dataset.eminPeriod;
-        setProps("emin-history-evidence-context", {data: {unit, period: button.dataset.eminPeriod}});
-        setProps("emin-history-unit", {value: unit});
-        if (["week", "month", "quarter", "history"].includes(period)) {
-            setProps("emin-history-trend-window", {value: period});
-        }
-        setProps("emin-history-view-tabs", {value: "unit"});
     });
 
     window.dash_clientside = window.dash_clientside || {};
     window.dash_clientside.eminHistory = {
-        openFleetUnit(clickData) {
-            const unit = clickData?.points?.[0]?.customdata?.[0];
-            if (typeof unit !== "string" || !unit) {
-                return [window.dash_clientside.no_update, window.dash_clientside.no_update, window.dash_clientside.no_update];
-            }
-            const period = clickData?.points?.[0]?.customdata?.[4];
-            return [unit, "unit", ["week", "month", "quarter", "history"].includes(period) ? period : "week"];
-        },
-        openTrendDay(clickData) {
-            const day = String(clickData?.points?.[0]?.x || "").slice(0, 10);
-            if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-                openChronology("all", day);
-            }
-            return window.dash_clientside.no_update;
-        },
         switchView(value) {
-            const page = document.querySelector(".emin-history-page");
+            const page = document.querySelector(".emin-beta-page");
             if (page !== activePage) {
                 activePage = page;
                 activeView = undefined;
-                if (!page?.contains(origin?.button)) origin = undefined;
+                if (!page?.contains(origin?.action)) origin = undefined;
             }
             const detail = value === "unit";
             if (value !== activeView) {
                 activeView = value;
                 requestAnimationFrame(() => requestAnimationFrame(() => {
-                    if (!page?.isConnected || activeView !== value) return;
-                    if (detail && origin) {
+                    if (!page?.isConnected || activeView !== value || !origin) return;
+                    if (detail) {
                         const heading = document.getElementById("emin-history-detail-heading");
                         heading?.focus({preventScroll: true});
                         heading?.scrollIntoView({block: "start"});
-                    } else if (!detail && origin) {
-                        if (origin.button.isConnected) origin.button.focus({preventScroll: true});
+                    } else {
+                        origin.action.focus({preventScroll: true});
                         for (const [node, left, top] of origin.positions) {
                             if (node.isConnected) node.scrollTo(left, top);
                         }
@@ -106,6 +62,6 @@
                 }));
             }
             return [{display: detail ? "none" : "block"}, {display: detail ? "block" : "none"}];
-        }
+        },
     };
 }());

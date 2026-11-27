@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from dashboard.components.emin_historical import _fleet_movement_trend, _fleet_point_label_position, build_historical_view, filter_options, fleet_criticality_top
 from dashboard.callbacks import emin_historical_callbacks
 from dashboard.callbacks.emin_historical_callbacks import _trend_figure_from_view
+from dashboard.components.emin_beta import _weekly_facts, evidence_page, fleet_figure, fleet_table, unit_records_page, unit_story
 from dashboard.components.predictive_state import STATE_ZONE_FILL
 from dashboard.tabs.tab_emin_historical import create_layout as create_emin_historical_layout
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
@@ -215,14 +216,85 @@ def _walk_components(component):
     yield from _walk_components(getattr(component, "children", None))
 
 
-def test_fleet_overview_omits_quarter_period_but_unit_detail_keeps_it():
+def test_beta_has_static_cutoff_and_a_single_fleet_table_filter():
     components = list(_walk_components(create_emin_historical_layout()))
     tabs = {component.id: component for component in components if isinstance(component, dcc.Tabs)}
+    ids = {getattr(component, "id", None) for component in components}
+    assert [tab.value for tab in tabs["emin-history-view-tabs"].children] == ["fleet", "unit"]
+    assert len(tabs) == 1
+    assert {"emin-beta-cutoff", "emin-beta-group", "emin-beta-ranking", "emin-beta-story"} <= ids
+    assert {"emin-beta-milestones-graph", "emin-beta-milestones-rows", "emin-beta-oil-graph",
+            "emin-beta-oil-rows", "emin-beta-oil-red"} <= ids
+    assert "emin-history-cutoff" not in ids
+    assert "emin-history-cumulative-score" not in ids
 
-    assert [tab.value for tab in tabs["emin-history-fleet-window"].children] == ["week", "month", "history"]
-    assert [tab.value for tab in tabs["emin-history-trend-window"].children] == [
-        "week", "month", "quarter", "history",
+
+def test_beta_retains_labels_for_coincident_units_and_preserves_filtered_rank():
+    common = dict(points=5.5, rank=2, domains={"Motor": 5.5}, observed_weeks=3,
+                  comparison=dict(previous_average=5, current_average=6, delta=1, previous_bucket="2026-W45",
+                                  current_bucket="2026-W48", status="stable", missing=[], quadrant="recent_worsening"))
+    report = {"cutoff": {"week": "2026-W48"}, "units": {}, "domains": ["Motor"], "quadrants": {"threshold": 5}, "rows": [
+        dict(common, unit="CT-1", groups=["Motor / Emisiones"]),
+        dict(common, unit="CT-2", groups=["Seguridad / Frenos"]),
+    ]}
+    figure = fleet_figure(report)
+    assert [(point["unit"], point["x"], point["y"]) for point in figure.layout.meta["fleetLabels"]] == [
+        ("CT-1", 6, 5), ("CT-2", 6, 5),
     ]
+    assert sum(shape.type == "rect" for shape in figure.layout.shapes) == 4
+    filtered = _visible(fleet_table(report, "Seguridad / Frenos"))
+    assert "CT-1" not in filtered and "CT-2" in filtered and "5.5" in filtered
+    assert "1 de 2 equipos" in filtered
+    assert "No hay equipos" in _visible(fleet_table(report, "Grupo inexistente"))
+
+
+def test_beta_abnormal_oil_filter_uses_the_original_condition():
+    row = dict(id=3, category="oil", kind="oil", day="2024-01-01", component="Motor",
+               description="Metales altos", severity="", reference="M-100", hours=None, failures=None)
+    report = {"units": {"CT-1": {"records": [
+        dict(row, state="abnormal"), dict(row, id=4, state="alert", reference="M-101"),
+    ]}}}
+    result, page, at_start, at_end = evidence_page(report, "CT-1", "abnormal_oil", "", 0)
+    text = _visible(result)
+    assert "M-100" in text and "Anormal" in text and "M-101" not in text
+    assert page == 0 and at_start and at_end
+
+
+def test_beta_weekly_fact_links_to_exact_record_and_does_not_promote_an_old_alert():
+    recorded = dict(id=8, kind="event", category="event", day="2026-11-25", week="2026-W48",
+                    state="high", component="Frenos", description="Presión baja", severity="Alta",
+                    reference="OT-10", hours=None, failures=None)
+    older = dict(recorded, id=7, kind="oil", category="oil", day="2026-11-19", week="2026-W47",
+                 state="abnormal", description="Aceite anterior")
+    report = {"cutoff": {"week": "2026-W48"}, "units": {
+        "CT-1": {"records": [recorded, older], "headline": [7], "timeline": [], "oil": []},
+        "CT-2": {"records": [older]},
+    }}
+    assert _weekly_facts(report) == {"CT-1": recorded}
+    summary = _visible(unit_story(report, "CT-1", {"unit": "CT-1", "record": 8})[0])
+    assert "Presión baja" in summary and "Aceite anterior" not in summary
+    assert "Registro que abriste desde la flota" in summary and "OT-10" in summary
+
+
+def test_beta_dedicated_tables_use_sample_states_and_full_milestone_ids():
+    row = dict(id=3, category="oil", kind="oil", day="2024-01-01", component="Motor",
+               description="Metales altos", severity="", reference="M-100", hours=None, failures=None)
+    intervention = dict(row, id=7, category="downtime", kind="downtime_record", state="recorded",
+                        reference="OT-1", description="Detención", corrected_from="2014-11-11")
+    report = {"units": {"CT-1": {"records": [
+        dict(row, state="abnormal"), dict(row, id=4, state="alert", reference="M-101"), intervention,
+    ], "milestone_ids": [7]}}}
+    oil = _visible(unit_records_page(report, "CT-1", "oil", True, 0)[0])
+    assert "M-100" in oil and "M-101" not in oil and "OT-1" not in oil
+    milestones = _visible(unit_records_page(report, "CT-1", "milestones", False, 0)[0])
+    assert "OT-1" in milestones and "M-100" not in milestones and "Fecha de origen corregida" in milestones
+
+
+def test_beta_unit_without_oil_shows_missing_evidence():
+    report = {"units": {"CT-1": {"records": [], "headline": [], "timeline": [], "oil": []}}}
+    story = _visible(unit_story(report, "CT-1"))
+    assert "no tiene muestras de aceite" in story
+    assert "Ver muestras de aceite en rojo" not in story
 
 
 def test_loads_current_package_and_resolves_only_inside_data_root(tmp_path):
@@ -235,8 +307,8 @@ def test_loads_current_package_and_resolves_only_inside_data_root(tmp_path):
     assert bundle.observed[0]["details"]["Evento"] == "Mantención preventiva"
 
 
-def test_selects_newest_capture_across_iso_week_folders(tmp_path):
-    _make_package(tmp_path)
+def test_selects_latest_iso_week_even_if_an_older_week_is_republished(tmp_path):
+    _make_package(tmp_path, published_at="2026-12-04T12:00:00Z")
     newer_run = "20261201T0000-0300-" + "b" * 64
     _make_package(tmp_path, run=newer_run, week="2026-W49", published_at="2026-12-01T12:00:00Z")
 

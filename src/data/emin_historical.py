@@ -6,6 +6,7 @@ import json
 import gzip
 import re
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from src.data.catalog import dashboard_data_root
 _RUN_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{4}[+-][0-9]{4}-[0-9a-f]{64}$")
 _WEEK_PATTERN = re.compile(r"^[0-9]{4}-W[0-9]{2}$")
 _REQUIRED_DAILY_FIELDS = {"cutoff", "day", "unit", "rank", "points", "has_observation"}
+_BETA_STATUSES = {"worsened", "stable", "improved", "insufficient"}
+_BETA_QUADRANTS = {"healthy", "recent_improvement", "critical", "recent_worsening"}
 
 
 class InvalidHistoricalBundle(ValueError):
@@ -40,7 +43,7 @@ def load_emin_historical_bundle(
     """Load one complete immutable run below ``data/fleet_history/golden/emin``.
 
     Each ISO week has a ``latest.json`` pointer to versioned files in the same
-    folder. The dashboard chooses the pointer with the newest capture time and
+    folder. The dashboard chooses the newest ISO week and its current pointer, and
     only reads the locally synced data tree.
     """
     root = dashboard_data_root(data_root)
@@ -70,7 +73,7 @@ def load_emin_historical_bundle(
         pointers = [entry for entry in pointers if entry[2].get("run") == run_name]
     if not pointers:
         raise FileNotFoundError("No se encontró el paquete histórico EMIN seleccionado")
-    _, run_path, pointer = max(pointers, key=lambda entry: (entry[0], entry[1].name))
+    _, run_path, pointer = max(pointers, key=lambda entry: (entry[1].name, entry[0]))
     run_name = pointer.get("run")
     if not isinstance(run_name, str) or not _RUN_PATTERN.fullmatch(run_name):
         raise InvalidHistoricalBundle("El identificador del paquete EMIN no es válido")
@@ -117,6 +120,7 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
         "coddi.emin.historical-dashboard.v2",
         "coddi.emin.historical-dashboard.v3",
         "coddi.emin.historical-dashboard.v4",
+        "coddi.emin.historical-dashboard.v5",
     }
     contract = manifest.get("dashboard_contract") if isinstance(manifest, dict) else None
     if contract not in supported_contracts or not isinstance(dashboard, dict) or dashboard.get("contract") != contract:
@@ -132,6 +136,9 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
             raise InvalidHistoricalBundle("Los grupos de eventos del paquete EMIN son inválidos")
     if any(not isinstance(row, dict) for row in observed):
         raise InvalidHistoricalBundle("La evidencia observada del paquete EMIN es inválida")
+    report = dashboard.get("beta_report")
+    if report is not None:
+        _validate_beta_report(report, dashboard.get("metadata", {}))
 
     # Resolve package row references only. Scoring, classification and aggregation are
     # already materialized by the producer and are never recomputed in the dashboard.
@@ -168,3 +175,56 @@ def _load_run_cached(run_path: str, run_name: str, files: tuple[str, ...], signa
 def clear_emin_historical_cache() -> None:
     """Clear the package cache; exposed for deterministic unit tests."""
     _load_run_cached.cache_clear()
+
+
+def _validate_beta_report(report, metadata):
+    error = "El informe Beta de EMIN no coincide con su contrato"
+    if not isinstance(report, dict) or report.get("version") != 1:
+        raise InvalidHistoricalBundle(error)
+    cutoff, counts = report.get("cutoff"), report.get("counts")
+    if (
+        not isinstance(cutoff, dict) or not _WEEK_PATTERN.fullmatch(str(cutoff.get("week")))
+        or not isinstance(cutoff.get("complete"), bool)
+        or not isinstance(counts, dict) or set(counts) != _BETA_STATUSES
+        or any(not isinstance(count, int) or count < 0 for count in counts.values())
+        or not isinstance(report.get("methodology"), str)
+        or not isinstance(report.get("rows"), list) or not isinstance(report.get("units"), dict)
+        or not isinstance(metadata, dict) or not isinstance(metadata.get("variation_stability_tolerance"), (int, float))
+    ):
+        raise InvalidHistoricalBundle(error)
+    if any(not isinstance(report.get(key), list) or not all(isinstance(item, str) for item in report[key])
+           for key in ("domains", "groups")):
+        raise InvalidHistoricalBundle(error)
+    try:
+        start = date.fromisoformat(report["start"])
+        end = date.fromisoformat(cutoff["cutoff"])
+        if start > end or sum(counts.values()) != len(report["rows"]):
+            raise ValueError
+        scoped = "analysis_start" in report
+        if scoped and (date.fromisoformat(report["analysis_start"]) != start or start != date(2024, 1, 1)):
+            raise ValueError
+        zones = report.get("quadrants")
+        if zones is not None:
+            zone_counts = zones["counts"]
+            comparable = len(report["rows"]) - counts["insufficient"]
+            threshold = zones["threshold"]
+            if (not isinstance(zone_counts, dict) or set(zone_counts) != _BETA_QUADRANTS
+                    or any(not isinstance(count, int) or count < 0 for count in zone_counts.values())
+                    or sum(zone_counts.values()) != comparable
+                    or (comparable and (not isinstance(threshold, (int, float)) or not 1 <= threshold < float("inf")))
+                    or (not comparable and threshold is not None)):
+                raise ValueError
+        for row in report["rows"]:
+            unit = report["units"][row["unit"]]
+            comparison = row["comparison"]
+            if (comparison["status"] not in _BETA_STATUSES
+                    or not isinstance(comparison["missing"], list)
+                    or not isinstance(row["domains"], dict) or not isinstance(row["groups"], list)
+                    or not all(isinstance(unit[key], list) for key in ("records", "headline", "oil", "timeline"))):
+                raise ValueError
+            if scoped and not isinstance(unit["milestone_ids"], list):
+                raise ValueError
+            if zones is not None and not comparison["missing"] and comparison.get("quadrant") not in _BETA_QUADRANTS:
+                raise ValueError
+    except (KeyError, ValueError, TypeError):
+        raise InvalidHistoricalBundle(error) from None

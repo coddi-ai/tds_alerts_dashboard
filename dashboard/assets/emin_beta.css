@@ -1,0 +1,95 @@
+.emin-beta-page {
+    --emin-beta-border: #dce3eb;
+}
+.emin-beta-title .badge { font-size: .47em; vertical-align: middle; }
+.emin-beta-review-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .65rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.emin-beta-review-unit {
+    padding: .65rem .75rem;
+    border: 1px solid var(--emin-beta-border);
+    border-inline-start: 3px solid #a32d2d;
+    border-radius: .3rem;
+    background: #f7f8fb;
+    overflow-wrap: anywhere;
+}
+.emin-beta-review-unit > a { display: inline-block; text-decoration: underline; margin-bottom: .2rem; }
+.emin-beta-fact-excerpt {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+.emin-beta-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: .65rem;
+    margin: 0 0 .85rem;
+}
+.emin-beta-stat {
+    padding: .55rem .75rem;
+    border: 1px solid var(--emin-beta-border);
+    border-top: 3px solid currentColor;
+    border-radius: .35rem;
+    background: #fff;
+}
+.emin-beta-stat dt { font-size: .8rem; font-weight: 600; }
+.emin-beta-stat dd { font-size: 1.5rem; font-weight: 700; line-height: 1.1; margin: .15rem 0 0; }
+.emin-beta-worsened { color: #a32d2d; }
+.emin-beta-stable { color: #785700; }
+.emin-beta-improved { color: #11654d; }
+.emin-beta-insufficient { color: #526174; }
+.emin-beta-coverage { background: #f5f7fa; padding: .6rem .8rem; border-radius: .35rem; }
+.emin-beta-disclosure { padding: .65rem .9rem; background: #fff; border: 1px solid var(--emin-beta-border); border-radius: .4rem; }
+.emin-beta-disclosure > summary { cursor: pointer; font-weight: 600; }
+.emin-beta-method { max-width: 75rem; overflow-x: auto; }
+.emin-beta-method h1 { font-size: 1.3rem; }
+.emin-beta-method h2 { font-size: 1.05rem; margin-top: 1rem; }
+.emin-beta-method td, .emin-beta-method th { border: 1px solid var(--emin-beta-border); padding: .35rem .5rem; }
+.emin-beta-filter { max-width: 28rem; }
+.emin-beta-table-scroll { overflow: auto; max-width: 100%; }
+.emin-beta-fleet-table { max-height: 34rem; }
+.emin-beta-fleet-table thead th { position: sticky; top: 0; z-index: 1; }
+.emin-beta-fleet-table th:nth-child(3),
+.emin-beta-fleet-table td:nth-child(3) { min-width: 13rem; width: clamp(13rem, 23vw, 20rem); }
+.emin-beta-fleet-plot { min-width: 0; position: relative; }
+.emin-beta-scatter-labels { position: absolute; pointer-events: none; font: 11px Arial, sans-serif; }
+.emin-beta-table { font-size: .84rem; width: 100%; }
+.emin-beta-table th, .emin-beta-table td { padding: .55rem .65rem; min-width: 4.2rem; }
+.emin-beta-table thead th { background: #f0f3f8; border-bottom: 1px solid var(--emin-beta-border); }
+.emin-beta-table th[scope="row"] { min-width: 8.5rem; white-space: nowrap; }
+.emin-beta-table a { text-decoration: underline; text-underline-offset: .15em; }
+.emin-beta-priority-high > :first-child { border-left: 3px solid #d53e4f; }
+.emin-beta-priority-low > :first-child { border-left: 3px solid #599685; }
+.emin-beta-record-abnormal > :first-child { border-left: 3px solid #d53e4f; }
+.emin-beta-evidence-table td:nth-child(5) { min-width: 15rem; overflow-wrap: anywhere; }
+.emin-beta-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .65rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.emin-beta-facts li { background: #f6f8fb; padding: .65rem .8rem; border-inline-start: 3px solid; border-radius: .25rem; overflow-wrap: anywhere; }
+.emin-beta-facts li > div:nth-child(2) { margin: .2rem 0; }
+.emin-beta-facts li.emin-beta-selected-record { background: #eaf1fd; }
+.emin-beta-quick-links { display: flex; flex-wrap: wrap; gap: .6rem 1rem; }
+.emin-beta-quick-links a { text-underline-offset: .18em; }
+@media (max-width: 575px) {
+    .emin-beta-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .emin-beta-facts { grid-template-columns: minmax(0, 1fr); }
+    .emin-beta-review-list { grid-template-columns: minmax(0, 1fr); }
+    .emin-beta-page .card-body { padding: .75rem; }
+    .emin-beta-fleet-plot { margin-inline: -.6rem; }
+    .emin-beta-evidence-table td:nth-child(5) { min-width: 10rem; }
+    .emin-beta-fleet-table th:first-child, .emin-beta-fleet-table td:first-child { min-width: 3rem; width: 3rem; }
+    .emin-beta-fleet-table th:nth-child(2) { position: sticky; left: 0; background: #f4f6fa; z-index: 1; }
+    .emin-beta-fleet-table thead th:nth-child(2) { z-index: 2; }
+}

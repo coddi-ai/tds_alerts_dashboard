@@ -58,7 +58,7 @@ SERVICE_SECTIONS = [
 
 SERVICE_LABELS = {
     "overview-general": "General",
-    "overview-emin-historical": "Histórico de flota",
+    "overview-emin-historical": "Histórico de flota · Beta",
     "monitoring-alerts": "Alertas",
     "monitoring-telemetry": "Telemetría",
     "monitoring-oil": "Aceite",

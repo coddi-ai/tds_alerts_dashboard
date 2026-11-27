@@ -298,6 +298,19 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
         return dcc.Graph(id="emin-history-movement-trend", figure=figure,
                          config={"displayModeBar": False}, responsive=True,
                          style={"height": "430px", "width": "100%"})
+    if period == "history":
+        current_bucket = valid[0].get("current_bucket")
+        if not current_bucket or current_bucket == "history":
+            current_bucket = next((row.get("week") for row in bundle.dashboard.get("catalog", {}).get("iso_week_cutoffs", [])
+                                   if row.get("cutoff") == selected_day), selected_day or "")
+        comparison_legend = t("emin_history.history_legend_comparison", current=current_bucket)
+    else:
+        comparison = valid[0]
+        comparison_legend = t(
+            "emin_history.period_legend_comparison",
+            previous=comparison.get("previous_bucket") or t("emin_history.previous_period_hover"),
+            current=comparison.get("current_bucket") or t("emin_history.current_period_hover"),
+        )
     if valid:
         metadata = bundle.dashboard.get("metadata", {})
         tolerance = _number(metadata.get("variation_stability_tolerance"))
@@ -340,10 +353,23 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
         if not entries:
             continue
         plotted += len(entries)
+        if period == "history":
+            previous_label = t("emin_history.history_baseline_hover")
+            current_label = t("emin_history.history_cutoff_week_hover")
+            previous_coverage = t("emin_history.history_baseline_coverage_hover")
+            current_coverage = t("emin_history.history_cutoff_coverage_hover")
+            major_events_label = t("emin_history.history_cutoff_events_hover")
+        else:
+            previous_label = t("emin_history.previous_period_hover")
+            current_label = t("emin_history.current_period_hover")
+            previous_coverage = t("emin_history.previous_period_coverage_hover")
+            current_coverage = t("emin_history.current_period_coverage_hover")
+            major_events_label = t("emin_history.major_events_hover")
         figure.add_trace(go.Scatter(
             x=[item["previous_average"] for _, item in entries],
             y=[item["current_average"] for _, item in entries],
-            customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0), period]
+            customdata=[[unit, item.get("delta"), item.get("current_days"), item.get("major_event_count", 0), period,
+                         item.get("previous_bucket"), item.get("current_bucket"), item.get("previous_days")]
                         for unit, item in entries],
             text=[unit if unit in label_units else "" for unit, _ in entries],
             textposition=[_fleet_point_label_position(item["previous_average"], item["current_average"], index, extent)
@@ -353,20 +379,27 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
             marker={"color": _MOVEMENT_COLORS[state],
                     "size": [17 if unit in priority else 10 for unit, _ in entries],
                     "line": {"color": "white", "width": 1.5}, "opacity": 0.9},
-            hovertemplate=("<b>%{customdata[0]}</b><br>"
-                           + t("emin_history.previous_period_hover") + ": %{x:.2f}<br>"
-                           + t("emin_history.current_period_hover") + ": %{y:.2f}<br>"
-                           + t("emin_history.delta_hover") + ": %{customdata[1]:+.2f}<br>"
-                           + t("emin_history.coverage_hover") + ": %{customdata[2]}<br>"
-                           + t("emin_history.major_events_hover") + ": %{customdata[3]}<extra></extra>"),
+            hovertemplate=("<b>%{customdata[0]}</b><br><br>"
+                           + previous_label + " (%{customdata[5]}): <b>%{x:.2f}</b><br>"
+                           + current_label + " (%{customdata[6]}): <b>%{y:.2f}</b><br>"
+                           + t("emin_history.delta_hover") + ": <b>%{customdata[1]:+.2f}</b><br><br>"
+                           + previous_coverage + ": %{customdata[7]}<br>"
+                           + current_coverage + ": %{customdata[2]}<br>"
+                           + major_events_label + ": %{customdata[3]}<extra></extra>"),
         ))
     unavailable = max(0, len(units) - plotted)
-    figure.update_xaxes(title_text=t("emin_history.previous_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
-    figure.update_yaxes(title_text=t("emin_history.current_period_axis"), gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
+    previous_axis = t("emin_history.history_baseline_axis") if period == "history" else t("emin_history.previous_period_axis")
+    current_axis = t("emin_history.history_cutoff_week_axis") if period == "history" else t("emin_history.current_period_axis")
+    figure.update_xaxes(title_text=previous_axis, gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
+    figure.update_yaxes(title_text=current_axis, gridcolor="#ecf0f1", rangemode="tozero", automargin=True)
     figure = apply_dashboard_theme(figure, title=t("emin_history.variation_title"), height=485)
     figure.update_layout(hovermode="closest", showlegend=True,
-                         margin={"l": 62, "r": 28, "t": 82, "b": 112},
-                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.32, "yanchor": "top"},
+                         margin={"l": 62, "r": 28, "t": 82, "b": 126},
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.32, "yanchor": "top",
+                                 "font": {"size": 10}},
+                         hoverlabel={"bgcolor": "rgba(255,255,255,0.98)", "bordercolor": "#94a3b8",
+                                     "font": {"color": "#1f2937", "size": 12, "family": "Arial, sans-serif"},
+                                     "align": "left", "namelength": -1},
                          clickmode="event+select")
     coverage_note = t("emin_history.fleet_plot_coverage", shown=plotted, total=len(units), unavailable=unavailable)
     if period == "quarter" and plotted == 0:
@@ -374,6 +407,9 @@ def _fleet_movement_trend(bundle: EminHistoricalBundle, cutoff: str | None, peri
     figure.add_annotation(x=0.5, y=1.06, xref="paper", yref="paper", xanchor="center", yanchor="bottom",
                           text=coverage_note,
                           showarrow=False, bgcolor="rgba(255,255,255,.88)", font={"size": 11, "color": BRAND_MUTED})
+    figure.add_annotation(x=0.5, y=-0.17, xref="paper", yref="paper", xanchor="center", yanchor="top",
+                          text=comparison_legend, showarrow=False,
+                          font={"size": 10, "color": BRAND_MUTED})
     return dcc.Graph(id="emin-history-movement-trend", figure=figure,
                      config={"displayModeBar": False}, responsive=True,
                      style={"height": "485px", "width": "100%"})
@@ -549,15 +585,17 @@ def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | N
             marker={"color": color, "size": marker_sizes,
                     "line": {"color": "white", "width": 1.1}},
             opacity=0.92 if important else 0.38,
-            hovertemplate=("<b>%{customdata[0]}</b><br>%{x}<br>"
-                           + t("emin_history.cumulative_total_hover") + ": %{y:.2f}<br>"
+            hovertemplate=("<b>%{customdata[0]}</b><br>"
+                           + t("emin_history.iso_week_axis") + ": %{x}<br><br>"
+                           + t("emin_history.cumulative_total_hover") + ": <b>%{y:.2f}</b><br>"
                            + t("emin_history.cumulative_weekly_hover") + ": %{customdata[1]:.2f}<br>"
                            + t("emin_history.fleet_cumulative_mean") + ": %{customdata[5]:.2f}<br>"
-                           + t("emin_history.fleet_cumulative_difference") + ": %{customdata[6]:+.2f}<br>"
-                           + t("emin_history.unit_observed_weeks_hover") + ": %{customdata[7]}<br>"
-                           + t("emin_history.fleet_observed_weeks_hover") + ": %{customdata[8]}<br>"
+                           + t("emin_history.fleet_cumulative_difference") + ": <b>%{customdata[6]:+.2f}</b><br>"
                            + t("emin_history.fleet_relative_position_hover") + ": "
-                           + t(f"emin_history.{_FLEET_RELATIVE_LABELS[position]}") + "<extra></extra>"),
+                           + t(f"emin_history.{_FLEET_RELATIVE_LABELS[position]}") + "<br><br>"
+                           + t("emin_history.cumulative_coverage_hover") + ": %{customdata[2]} / %{customdata[3]}<br>"
+                           + t("emin_history.unit_observed_weeks_hover") + ": %{customdata[7]}<br>"
+                           + t("emin_history.fleet_observed_weeks_hover") + ": %{customdata[8]}<extra></extra>"),
             cliponaxis=False,
         ))
         plotted += 1
@@ -590,6 +628,13 @@ def _fleet_cumulative_score_figure(bundle: EminHistoricalBundle, cutoff: str | N
         clickmode="event+select",
         margin={"l": 62, "r": 26, "t": 54, "b": 84},
         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.28, "yanchor": "top"},
+        hoverlabel={
+            "bgcolor": "rgba(255,255,255,0.98)",
+            "bordercolor": "#94a3b8",
+            "font": {"color": "#1f2937", "size": 12, "family": "Arial, sans-serif"},
+            "align": "left",
+            "namelength": -1,
+        },
     )
     figure.update_xaxes(title_text=t("emin_history.iso_week_axis"), tickmode="array", tickvals=ticks,
                         ticktext=ticks, tickangle=-35, gridcolor="#ecf0f1", automargin=True,
@@ -748,64 +793,47 @@ def fleet_criticality_panel(bundle, day, period):
     entries = payload.get("entries", [])
     start, cutoff = payload.get("start"), payload.get("cutoff")
     span = payload.get("span_days", 0)
-    insufficient = payload.get("insufficient_units", 0)
     if not start:
         return html.P(t("emin_history.top_empty"), className="text-muted mb-0")
+    cutoff_view = bundle.dashboard.get("fleet", {}).get(payload.get("cutoff") or day, {})
+    period_variations = cutoff_view.get("period_variations", {}).get(period, {})
     cards = []
     for rank, entry in enumerate(entries, 1):
         unit = entry["unit"]
-        reason_data = entry.get("reason", {})
         critical_days = entry.get("critical_days", 0)
-        if reason_data.get("kind") == "critical_days":
-            reason = t("emin_history.top_critical_days", count=reason_data.get("count", 0))
-        elif reason_data.get("kind") == "intervention_days":
-            reason = t("emin_history.top_intervention_days", count=reason_data.get("count", 0))
-        else:
-            signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
-            average = reason_data.get("average")
-            average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
-            reason = f"{average_label} · {signal}" if period == "week" else f"{signal} · {average_label}"
+        average = _number(entry.get("average"))
+        average_label = (t("emin_history.top_average", score=f"{average:.1f}")
+                         if average is not None else t("emin_history.no_observed_scores"))
         main_group = entry.get("main_component")
+        period_movement = period_variations.get(unit, {"status": "insufficient"})
         card_body = [
             html.Div([
                 dbc.Badge(f"#{rank}", color="danger" if critical_days else "primary"),
                 _open_unit(unit, "criticality", period),
             ], className="d-flex align-items-center gap-2 mb-2"),
             html.Div([
-                dbc.Badge(reason, color="danger", class_name="text-wrap text-start") if critical_days else html.Strong(reason),
+                html.Strong(average_label),
                 html.Small(t("emin_history.top_main_component", component=main_group), className="d-block text-muted")
                 if main_group else None,
             ], className="mb-2"),
-            _movement_summary(payload.get("movement_by_unit", {}).get(unit, {"status": "insufficient"})),
-            html.Small([
-                t("emin_history.top_last_milestone"), ": ",
-                _day_label(entry["latest_milestone"]) if entry.get("latest_milestone") else "—",
-            ], className="d-block text-muted mt-2"),
+            _movement_badge(period_movement),
             html.Small([
                 t("emin_history.top_coverage"), ": ",
                 html.Strong(f"{entry.get('observed_days', 0)}/{span}"),
-            ], className="d-block text-muted"),
+            ], className="d-block text-muted") if entry.get("observed_days", 0) < span else None,
         ]
         cards.append(dbc.Col(
             dbc.Card(dbc.CardBody(card_body), class_name=(
                 "emin-history-top-unit-card h-100 "
                 + ("emin-history-top-unit-card--critical" if critical_days else "")
             )),
-            xs=12, sm=6, xl=4,
+            xs=12, sm=6, xl=4, xxl=2,
         ))
-    coverage = payload.get("covered_days", 0)
-    same_scores = payload.get("overlaps_short", False)
-    history_uses_signal = payload.get("history_signal_only", False)
     return html.Div([
         html.P(t(f"emin_history.top_question_{period}"), className="fw-semibold mb-1"),
         html.P(t("emin_history.top_window", start=_day_label(start), end=_day_label(cutoff)), className="small text-muted mb-1"),
-        html.P(t("emin_history.top_coverage_days", count=coverage, span=span), className="small text-muted mb-2"),
-        html.P(t("emin_history.top_overlap"), className="small text-muted mb-2") if same_scores else None,
-        html.P(t("emin_history.top_history_coverage"), className="small text-muted mb-2") if period == "history" else None,
-        html.P(t("emin_history.top_history_signal_only"), className="small text-muted mb-2") if history_uses_signal else None,
         dbc.Row(cards, class_name="g-2 mb-2")
         if cards else html.P(t("emin_history.top_empty"), className="text-muted mb-2"),
-        html.Small(t("emin_history.top_low_coverage", count=insufficient), className="text-muted"),
     ])
 
 
@@ -818,15 +846,9 @@ def _top_unit_context(bundle, cutoff, period, unit, trend_rows, evidence_rows):
     position, entry = match
     start, span = payload.get("start"), payload.get("span_days", 0)
     reason_data = entry.get("reason", {})
-    if reason_data.get("kind") == "critical_days":
-        reason = t("emin_history.top_critical_days", count=reason_data.get("count", 0))
-    elif reason_data.get("kind") == "intervention_days":
-        reason = t("emin_history.top_intervention_days", count=reason_data.get("count", 0))
-    else:
-        signal = t("emin_history.top_signal_count", count=reason_data.get("positive_days", 0), observed=reason_data.get("observed_days", 0))
-        average = reason_data.get("average")
-        average_label = t("emin_history.top_average", score=f"{average:.2f}") if average is not None else ""
-        reason = f"{average_label} · {signal}" if period == "week" else f"{signal} · {average_label}"
+    average = _number(entry.get("average", reason_data.get("average")))
+    reason = (t("emin_history.top_average", score=f"{average:.1f}")
+              if average is not None else t("emin_history.no_observed_scores"))
     context = [
         html.P(t("emin_history.top_unit_position", rank=position, period=t(f"emin_history.top_{period}")), className="mb-1 fw-semibold"),
         html.P(reason, className="mb-1"),

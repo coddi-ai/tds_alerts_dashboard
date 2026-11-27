@@ -1,11 +1,12 @@
-"""Callbacks for the EMIN historical fleet page."""
+"""Authorized EMIN Beta callbacks. Metrics and evidence classifications come from the package."""
 
-from dash import ClientsideFunction, Input, Output, State, callback, ctx, no_update
-import plotly.graph_objects as go
+from dash import ClientsideFunction, Input, Output, State, callback, ctx
 import dash_bootstrap_components as dbc
 
 from dashboard.auth import allowed_clients
-from dashboard.components.emin_historical import build_historical_view, chronology_page, filter_options, fleet_criticality_panel, fleet_highlights_panel
+from dashboard.components.emin_beta import (
+    _t, date_caption, evidence_page, fleet_intro, fleet_table, unit_records_page, unit_story,
+)
 from src.data.emin_historical import InvalidHistoricalBundle, load_emin_historical_bundle
 from src.i18n import t
 
@@ -16,209 +17,152 @@ def _authorized_emin(client: str | None, user_data: dict | None) -> bool:
     return any(str(allowed).strip().upper() == "EMIN" for allowed in allowed_clients(user_data))
 
 
-def _empty_figure(title: str, note: str) -> go.Figure:
-    figure = go.Figure()
-    figure.add_annotation(text=note, showarrow=False, font={"color": "#7f8c8d", "size": 13})
-    figure.update_layout(title=title, template="plotly_white", height=350)
-    return figure
-
-
-def _empty_outputs(note: str):
-    return (
-        dbc.Alert(note, color="light", class_name="mb-0"),
-        dbc.Alert(note, color="light", class_name="mb-0"),
-        None,
-        None,
-        dbc.Alert(note, color="light", class_name="mb-0"),
-        dbc.Alert(note, color="light", class_name="mb-0"),
-        _empty_figure(t("emin_history.trend_title", unit=t("emin_history.no_unit")), note),
-        _empty_figure(t("emin_history.cumulative_score_title", unit=t("emin_history.no_unit")), note),
-        dbc.Alert(note, color="light", class_name="mb-0"),
-        _empty_figure(t("emin_history.fleet_cumulative_score_title"), note),
-    )
-
-
 def _trend_figure_from_view(view: dict):
-    """Normalize legacy figures and v2 Graph wrappers to the Dash figure prop."""
+    """Normalize legacy figures for callers of the pre-Beta read model."""
     trend = view["trend"]
     return getattr(trend, "figure", trend)
 
 
+def _get_report(client, user_data, package):
+    if not _authorized_emin(client, user_data) or not isinstance(package, dict) or not package.get("run"):
+        return None
+    try:
+        return _scoped_report(load_emin_historical_bundle(run_name=package["run"]))
+    except (FileNotFoundError, InvalidHistoricalBundle, OSError):
+        return None
+
+
+def _scoped_report(bundle):
+    report = bundle.dashboard.get("beta_report")
+    return report if report and report.get("analysis_start") == "2024-01-01" and report.get("quadrants") else None
+
+
+def _message(label):
+    return dbc.Alert(label, color="light", class_name="mb-3")
+
+
 def register_emin_historical_callbacks(app):
-    """Register EMIN-only package filters, views, and internal tab navigation."""
+    app.clientside_callback(
+        ClientsideFunction(namespace="eminHistory", function_name="switchView"),
+        Output("emin-history-overview-panel", "style"),
+        Output("emin-history-detail-panel", "style"),
+        Input("emin-history-view-tabs", "value"),
+    )
 
     @callback(
-        [
-            Output("emin-history-cutoff", "options"),
-            Output("emin-history-cutoff", "value"),
-            Output("emin-history-group", "options"),
-            Output("emin-history-group", "value"),
-            Output("emin-history-unit", "options"),
-            Output("emin-history-unit", "value"),
-            Output("emin-history-package", "data"),
-        ],
+        Output("emin-beta-cutoff", "children"),
+        Output("emin-beta-package", "data"),
+        Output("emin-beta-fleet", "children"),
+        Output("emin-beta-group", "options"),
+        Output("emin-beta-group", "value"),
+        Output("emin-history-unit", "options"),
+        Output("emin-history-unit", "value"),
         Input("client-selector", "value"),
         Input("user-info-store", "data"),
     )
-    def load_emin_filter_options(client, user_data):
+    def load_report(client, user_data):
+        empty_controls = ([], "__all__", [], None)
         if not _authorized_emin(client, user_data):
-            return [], None, [], None, [], None, None
+            return None, None, _message(t("emin_history.emin_only")), *empty_controls
         try:
             bundle = load_emin_historical_bundle()
-        except (FileNotFoundError, InvalidHistoricalBundle):
-            return [], None, [], None, [], None, None
-        options = filter_options(bundle)
-        return (
-            options["days"],
-            options["default_day"],
-            options["groups"],
-            "__all__",
-            options["units"],
-            options["default_unit"],
-            {"run": bundle.run},
-        )
+        except FileNotFoundError:
+            return None, None, _message(t("emin_history.package_missing")), *empty_controls
+        except (InvalidHistoricalBundle, OSError):
+            return None, None, _message(t("emin_history.package_invalid")), *empty_controls
+        report = _scoped_report(bundle)
+        if not report:
+            return None, None, _message(_t("pending")), *empty_controls
+        groups = [{"label": _t("all_groups"), "value": "__all__"},
+                  *[{"label": group, "value": group} for group in report["groups"]]]
+        units = [{"label": unit, "value": unit} for unit in sorted(report["units"], key=str.casefold)]
+        return (date_caption(report), {"run": bundle.run}, fleet_intro(report),
+                groups, "__all__", units, report["rows"][0]["unit"] if report["rows"] else None)
 
-    app.clientside_callback(
-        ClientsideFunction(namespace="eminHistory", function_name="switchView"),
-        [
-            Output("emin-history-overview-panel", "style"),
-            Output("emin-history-detail-panel", "style"),
-        ],
-        Input("emin-history-view-tabs", "value"),
-    )
-    app.clientside_callback(
-        ClientsideFunction(namespace="eminHistory", function_name="openFleetUnit"),
-        [
-            Output("emin-history-unit", "value", allow_duplicate=True),
-            Output("emin-history-view-tabs", "value", allow_duplicate=True),
-            Output("emin-history-trend-window", "value", allow_duplicate=True),
-        ],
-        Input("emin-history-movement-trend", "clickData"),
-        prevent_initial_call=True,
-    )
-    app.clientside_callback(
-        ClientsideFunction(namespace="eminHistory", function_name="openFleetUnit"),
-        [
-            Output("emin-history-unit", "value", allow_duplicate=True),
-            Output("emin-history-view-tabs", "value", allow_duplicate=True),
-            Output("emin-history-trend-window", "value", allow_duplicate=True),
-        ],
-        Input("emin-history-fleet-cumulative-score", "clickData"),
-        prevent_initial_call=True,
-    )
-    app.clientside_callback(
-        ClientsideFunction(namespace="eminHistory", function_name="openTrendDay"),
-        Output("emin-history-trend-action", "data"),
-        Input("emin-history-trend", "clickData"),
-        prevent_initial_call=True,
-    )
     @callback(
-        Output("emin-history-criticality", "children"),
-        Input("client-selector", "value"),
-        Input("emin-history-package", "data"),
-        Input("emin-history-cutoff", "value"),
-        Input("emin-history-fleet-window", "value"),
+        Output("emin-beta-ranking", "children"),
+        Input("emin-beta-group", "value"),
+        Input("emin-beta-package", "data"),
+        State("client-selector", "value"),
         State("user-info-store", "data"),
     )
-    def update_fleet_criticality(client, package, day, period, user_data):
-        if not _authorized_emin(client, user_data):
-            return None
-        if not isinstance(package, dict) or not package.get("run"):
-            return dbc.Alert(t("emin_history.package_missing"), color="light", class_name="mb-0")
-        try:
-            bundle = load_emin_historical_bundle(run_name=package["run"])
-        except (FileNotFoundError, InvalidHistoricalBundle, OSError):
-            return dbc.Alert(t("emin_history.package_invalid"), color="light", class_name="mb-0")
-        return fleet_criticality_panel(bundle, day, period)
+    def update_ranking(group, package, client, user_data):
+        report = _get_report(client, user_data, package)
+        return fleet_table(report, group) if report else _message(_t("pending"))
 
     @callback(
-        [
-            Output("emin-history-meta", "children"),
-            Output("emin-history-highlights", "children"),
-            Output("emin-history-kpis", "children"),
-            Output("emin-history-groups", "children"),
-            Output("emin-history-ranking", "children"),
-            Output("emin-history-status", "children"),
-            Output("emin-history-trend", "figure"),
-            Output("emin-history-cumulative-score", "figure"),
-            Output("emin-history-evidence", "children"),
-            Output("emin-history-fleet-cumulative-score", "figure"),
-        ],
-        [
-            Input("client-selector", "value"),
-            Input("emin-history-package", "data"),
-            Input("emin-history-cutoff", "value"),
-            Input("emin-history-fleet-window", "value"),
-            Input("emin-history-trend-window", "value"),
-            Input("emin-history-group", "value"),
-            Input("emin-history-unit", "value"),
-            Input("emin-history-search", "value"),
-            Input("emin-history-movement-filter", "value"),
-            Input("emin-history-high-signal-only", "value"),
-            Input("emin-history-evidence-context", "data"),
-        ],
-        State("user-info-store", "data"),
-    )
-    def update_emin_historical_view(client, package, day, fleet_window, trend_window, group, unit, search, movement_filter, high_only, evidence_context, user_data):
-        if not _authorized_emin(client, user_data):
-            return _empty_outputs(t("emin_history.emin_only"))
-        if not isinstance(package, dict) or not package.get("run"):
-            return _empty_outputs(t("emin_history.package_missing"))
-        try:
-            bundle = load_emin_historical_bundle(run_name=package["run"])
-        except (FileNotFoundError, InvalidHistoricalBundle, OSError):
-            return _empty_outputs(t("emin_history.package_invalid"))
-        period = evidence_context.get("period") if isinstance(evidence_context, dict) and evidence_context.get("unit") == unit else None
-        view = build_historical_view(
-            bundle, day, group, unit, search, movement_filter, period,
-            include_chronology=False, require_high_signal=high_only is True,
-            trend_window=trend_window, fleet_window=fleet_window,
-        )
-        trend_figure = _trend_figure_from_view(view)
-        cumulative_score_figure = view["cumulative_score"].figure
-        triggers = set(ctx.triggered_prop_ids)
-        if triggers and triggers <= {"emin-history-unit.value", "emin-history-evidence-context.data"}:
-            return (no_update,) * 5 + (view["status"], trend_figure, cumulative_score_figure, view["evidence"], no_update)
-        return (
-            view["meta"],
-            fleet_highlights_panel(view["fleet_highlights"], view["daily_rows"], view["movements"]),
-            view["kpis"],
-            view["groups"],
-            view["ranking"],
-            view["status"],
-            trend_figure,
-            cumulative_score_figure,
-            view["evidence"],
-            view["fleet_cumulative_score"].figure,
-        )
-
-
-    @callback(
-        Output("emin-history-record-results", "children"),
-        Output("emin-history-record-page", "data"),
-        Output("emin-history-record-previous", "disabled"),
-        Output("emin-history-record-next", "disabled"),
-        Input("client-selector", "value"),
-        Input("emin-history-package", "data"),
-        Input("emin-history-cutoff", "value"),
+        Output("emin-beta-story", "children"),
+        Output("emin-beta-milestones-graph", "children"),
+        Output("emin-beta-oil-graph", "children"),
         Input("emin-history-unit", "value"),
-        Input("emin-history-record-type", "value"),
-        Input("emin-history-record-search", "value"),
-        Input("emin-history-record-previous", "n_clicks"),
-        Input("emin-history-record-next", "n_clicks"),
-        State("emin-history-record-page", "data"),
+        Input("emin-history-view-tabs", "value"),
+        Input("emin-beta-package", "data"),
+        Input("emin-beta-focused-record", "data"),
+        State("client-selector", "value"),
         State("user-info-store", "data"),
     )
-    def update_chronology(client, package, cutoff, unit, kind, query, previous, following, page, user_data):
-        if not _authorized_emin(client, user_data):
-            return None, 0, True, True
-        if not isinstance(package, dict) or not package.get("run"):
-            return t("emin_history.package_missing"), 0, True, True
-        try:
-            bundle = load_emin_historical_bundle(run_name=package["run"])
-        except (FileNotFoundError, InvalidHistoricalBundle, OSError):
-            return t("emin_history.package_invalid"), 0, True, True
+    def update_story(unit, tab, package, focus, client, user_data):
+        if tab != "unit":
+            return None, None, None
+        report = _get_report(client, user_data, package)
+        return unit_story(report, unit, focus) if report else (_message(_t("pending")), None, None)
 
-        delta = {"emin-history-record-previous": -1, "emin-history-record-next": 1}.get(ctx.triggered_id)
-        page = (page + delta) if delta is not None and isinstance(page, int) else 0
-        return chronology_page(bundle, unit, cutoff, kind, query, page)
+    for table in ("milestones", "oil"):
+        _register_unit_records_table(table)
+
+    @callback(
+        Output("emin-beta-records", "children"),
+        Output("emin-beta-record-page", "data"),
+        Output("emin-beta-record-previous", "disabled"),
+        Output("emin-beta-record-next", "disabled"),
+        Input("emin-history-unit", "value"),
+        Input("emin-history-view-tabs", "value"),
+        Input("emin-beta-record-category", "value"),
+        Input("emin-beta-record-search", "value"),
+        Input("emin-beta-record-previous", "n_clicks"),
+        Input("emin-beta-record-next", "n_clicks"),
+        Input("emin-beta-package", "data"),
+        State("emin-beta-record-page", "data"),
+        State("client-selector", "value"),
+        State("user-info-store", "data"),
+    )
+    def update_records(unit, tab, category, query, previous, following, package, page, client, user_data):
+        if tab != "unit":
+            return None, 0, True, True
+        report = _get_report(client, user_data, package)
+        if not report:
+            return _message(_t("pending")), 0, True, True
+        direction = {"emin-beta-record-previous": -1, "emin-beta-record-next": 1}.get(ctx.triggered_id)
+        requested = (page or 0) + direction if direction else 0
+        return evidence_page(report, unit, category, query, requested)
+
+
+def _register_unit_records_table(table):
+    prefix = f"emin-beta-{table}"
+    filters = [Input("emin-beta-oil-red", "value")] if table == "oil" else []
+
+    @callback(
+        Output(f"{prefix}-rows", "children"),
+        Output(f"{prefix}-page", "data"),
+        Output(f"{prefix}-previous", "disabled"),
+        Output(f"{prefix}-next", "disabled"),
+        Input("emin-history-unit", "value"),
+        Input("emin-history-view-tabs", "value"),
+        Input("emin-beta-package", "data"),
+        Input(f"{prefix}-previous", "n_clicks"),
+        Input(f"{prefix}-next", "n_clicks"),
+        *filters,
+        State(f"{prefix}-page", "data"),
+        State("client-selector", "value"),
+        State("user-info-store", "data"),
+    )
+    def update_table(unit, tab, package, previous, following, *values):
+        if tab != "unit":
+            return None, 0, True, True
+        page, client, user_data = values[-3:]
+        report = _get_report(client, user_data, package)
+        if not report:
+            return None, 0, True, True
+        direction = {f"{prefix}-previous": -1, f"{prefix}-next": 1}.get(ctx.triggered_id)
+        requested = (page or 0) + direction if direction else 0
+        return unit_records_page(report, unit, table, bool(values[0]) if filters else False, requested)
